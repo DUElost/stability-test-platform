@@ -101,32 +101,31 @@ export default function DeviceBulkActionBar({
         <div className="hidden h-9 w-px bg-border md:block" />
 
         <div className="flex flex-1 flex-wrap items-center gap-2 md:flex-none">
-          {canEditTags && (
-            <Button
-              size="sm"
-              variant="default"
-              data-testid="device-bulk-tags"
-              disabled={tagUpdatePending}
-              onClick={onEditTags}
-              className="gap-1"
-            >
-              <Tags className="h-3.5 w-3.5" />
-              {tagUpdatePending ? '更新中…' : '批量标签'}
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="default"
+            data-testid="device-bulk-tags"
+            disabled={!canEditTags || tagUpdatePending}
+            title={!canEditTags ? '需要管理员权限' : undefined}
+            onClick={onEditTags}
+            className="gap-1"
+          >
+            <Tags className="h-3.5 w-3.5" />
+            {tagUpdatePending ? '更新中…' : '批量标签'}
+          </Button>
 
-          {canAssignProject && (
-            <Button
-              size="sm"
-              variant="default"
-              data-testid="device-bulk-assign-project"
-              onClick={onAssignProject}
-              className="gap-1"
-            >
-              <FolderKanban className="h-3.5 w-3.5" />
-              归入项目
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="default"
+            data-testid="device-bulk-assign-project"
+            disabled={!canAssignProject}
+            title={!canAssignProject ? '需要管理员权限' : undefined}
+            onClick={onAssignProject}
+            className="gap-1"
+          >
+            <FolderKanban className="h-3.5 w-3.5" />
+            归入项目
+          </Button>
 
           {canSwipeTrail && (
             <>

@@ -129,7 +129,8 @@ describe('ExpandableDeviceTable', () => {
     expect(screen.getByText('88ms')).toBeInTheDocument();
     expect(screen.getByText('shanghai')).toBeInTheDocument();
     expect(screen.getByText('+1')).toBeInTheDocument();
-    expect(screen.getByRole('table')).toHaveClass('min-w-[1420px]');
+    expect(screen.getByRole('columnheader', { name: '设备' })).toHaveClass('sticky');
+    expect(screen.getByRole('table')).not.toHaveClass('min-w-[1420px]');
   });
 
   it('clamps to the last valid page when the filtered list shrinks', () => {
@@ -351,4 +352,67 @@ it('distinguishes NX3Carrier by product and filters same-model devices', async (
   fireEvent.change(screen.getByRole('textbox', { name: '搜索设备' }), { target: { value: 'NX3Carrier' } });
   await waitFor(() => expect(screen.queryByText('NX3-A')).not.toBeInTheDocument());
   expect(screen.getByText('CARRIER-A')).toBeInTheDocument();
+});
+
+it('#3962：支持状态卡反选、搜索框一键清空、恒定标签列与详情卡行内编辑标签', async () => {
+  const onEditDeviceTags = vi.fn();
+  const noTagDevices = [
+    { id: 1, serial: 'DEV-IDLE', model: 'M1', status: 'idle' as const },
+    { id: 2, serial: 'DEV-OFF', model: 'M1', status: 'offline' as const },
+  ];
+  renderWithQuery(<ExpandableDeviceTable devices={noTagDevices} onEditDeviceTags={onEditDeviceTags} />);
+
+  // #6: 无标签数据时仍渲染标签列
+  expect(screen.getByRole('columnheader', { name: '标签' })).toBeInTheDocument();
+
+  // #4: 状态卡支持二次点击反选及 aria-pressed
+  const offlineBtn = screen.getByRole('button', { name: /离线/ });
+  expect(offlineBtn).toHaveAttribute('aria-pressed', 'false');
+  fireEvent.click(offlineBtn);
+  expect(offlineBtn).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.queryByText('DEV-IDLE')).not.toBeInTheDocument();
+  fireEvent.click(offlineBtn);
+  expect(offlineBtn).toHaveAttribute('aria-pressed', 'false');
+  expect(screen.getByText('DEV-IDLE')).toBeInTheDocument();
+
+  // #5: 搜索框非空时显示一键清空按钮
+  const searchInput = screen.getByRole('textbox', { name: '搜索设备' });
+  expect(screen.queryByRole('button', { name: '清空搜索' })).not.toBeInTheDocument();
+  fireEvent.change(searchInput, { target: { value: 'DEV-OFF' } });
+  const clearBtn = screen.getByRole('button', { name: '清空搜索' });
+  fireEvent.click(clearBtn);
+  expect(searchInput).toHaveValue('');
+
+  // #2: 展开详情卡后可直接点击标签编辑入口
+  fireEvent.click(screen.getByText('DEV-IDLE'));
+  const editTagBtn = screen.getByTestId('device-detail-edit-tags-1');
+  expect(editTagBtn).toHaveTextContent('点击添加标签');
+  fireEvent.click(editTagBtn);
+  expect(onEditDeviceTags).toHaveBeenCalledWith(expect.objectContaining({ id: 1, serial: 'DEV-IDLE' }));
+});
+
+it('#3962 PR2：0值状态卡中性灰、未映射徽标降噪、标签chip带title', () => {
+  const sample = [
+    {
+      id: 1,
+      serial: 'DEV-01',
+      model: 'M1',
+      status: 'idle' as const,
+      attribution_source: 'unmapped' as const,
+      tags: ['ui-review-r3'],
+    },
+  ];
+  render(<ExpandableDeviceTable devices={sample} />);
+  const unmapped = screen.getByText('未映射');
+  expect(unmapped).toHaveClass('bg-muted', 'text-muted-foreground');
+  expect(unmapped).not.toHaveClass('text-warning');
+
+  const tagChip = screen.getByText('ui-review-r3');
+  expect(tagChip).toHaveAttribute('title', 'ui-review-r3');
+  expect(tagChip).toHaveClass('max-w-[140px]');
+
+  const testingBtn = screen.getByRole('button', { name: /测试中/ });
+  const errorBtn = screen.getByRole('button', { name: /错误/ });
+  expect(within(testingBtn).getByText('0')).toHaveClass('text-muted-foreground');
+  expect(within(errorBtn).getByText('0')).toHaveClass('text-muted-foreground');
 });
