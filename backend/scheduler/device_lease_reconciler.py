@@ -403,8 +403,13 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
                     )
 
                 try:
+                    final_reason = (
+                        "claim_unconfirmed"
+                        if job.status_reason == "claim_unconfirmed"
+                        else "unknown_grace_timeout"
+                    )
                     JobStateMachine.transition(
-                        job, JobStatus.FAILED, "unknown_grace_timeout",
+                        job, JobStatus.FAILED, final_reason,
                     )
                     await db.flush()
                     terminalize = job
@@ -444,6 +449,13 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
         await db.commit()
         drained += 1
         failed += 1
+        try:
+            reconciler_actions.labels(
+                action="to_failed",
+                reason=terminalize.status_reason or "unknown_grace_timeout",
+            ).inc()
+        except Exception:
+            logger.debug("reconciler_metrics_failed", exc_info=True)
         logger.warning(
             "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s drained=%d/%d",
             terminalize.device_id, terminalize.id, terminalize.ended_at,
@@ -599,6 +611,13 @@ async def _reconcile_unconfirmed_claims(db) -> int:
         await db.commit()
         drained += 1
         failed += 1
+        try:
+            reconciler_actions.labels(
+                action="to_failed",
+                reason=terminalize.status_reason or "unknown_grace_timeout",
+            ).inc()
+        except Exception:
+            logger.debug("reconciler_metrics_failed", exc_info=True)
         logger.warning(
             "reconciler_unconfirmed_claim_released device=%s job=%s started_at=%s drained=%d/%d",
             terminalize.device_id, terminalize.id, terminalize.started_at,
@@ -1179,8 +1198,6 @@ def _record_check(label: str, outcome: str, result) -> None:
                 reconciler_actions.labels(
                     action="release_lease", reason="terminal_job_active_lease"
                 ).inc(terminal)
-        elif label == "stale_unknown" and result:
-            reconciler_actions.labels(action="to_failed", reason="unknown_grace_timeout").inc(result)
         elif label == "terminal_job_active_lease" and result:
             reconciler_actions.labels(
                 action="release_lease", reason="terminal_job_active_lease"

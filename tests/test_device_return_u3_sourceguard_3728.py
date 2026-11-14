@@ -25,7 +25,12 @@ _MODULES = [
     (
         "backend/scheduler/device_lease_reconciler.py",
         "handle_job_lease_release(",
-        5,
+        6,
+    ),
+    (
+        "backend/services/agent_claim.py",
+        "handle_job_lease_release(",
+        1,
     ),
     (
         "backend/scheduler/recycler.py",
@@ -55,7 +60,7 @@ def test_u3_job_lease_release_routed_through_device_return(rel, anchor, expect):
 
 def test_u3_eleven_call_sites_total():
     total = sum(expect for _, _, expect in _MODULES)
-    assert total == 11
+    assert total == 13
 
 
 def test_lease_manager_primitives_still_exist():

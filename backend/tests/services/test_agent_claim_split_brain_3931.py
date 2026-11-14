@@ -33,6 +33,10 @@ from backend.services.agent_claim import (  # noqa: E402
     _UNCONFIRMED_CLAIM_REDELIVER_GRACE_SECONDS,
     claim_jobs_for_host,
 )
+from backend.services.agent_job_heartbeat import (  # noqa: E402
+    ExtendLockIn,
+    extend_agent_job_lock,
+)
 
 PIPELINE = {
     "lifecycle": {
@@ -162,6 +166,7 @@ async def test_unconfirmed_orphan_claim_redelivered_with_rotated_token(claim_see
     lease = db.query(DeviceLease).filter(DeviceLease.job_id == job_id).one()
     assert lease.status == LeaseStatus.ACTIVE.value
     assert lease.fencing_token == f"{device_id}:2"
+    assert lease.renewed_at == lease.acquired_at
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -200,3 +205,55 @@ async def test_unconfirmed_orphan_claim_on_offline_device_is_released(claim_seed
     assert job.status == JobStatus.UNKNOWN.value
     assert job.status_reason == "claim_unconfirmed"
     assert lease.status == LeaseStatus.RELEASED.value
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_renewed_lease_via_extend_lock_is_never_redelivered(claim_seed):
+    host_id, add_claim, db = claim_seed
+    _device_id, job_id, old_token = add_claim(
+        age_seconds=_UNCONFIRMED_CLAIM_REDELIVER_GRACE_SECONDS + 10,
+        agent_instance_id="inst-a",
+    )
+
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as adb:
+        await extend_agent_job_lock(adb, job_id, ExtendLockIn(fencing_token=old_token))
+
+    # Even with zero heartbeat/trace and empty active_job_ids, renewed lease protects job.
+    async with AsyncSessionLocal() as adb:
+        claimed, tokens = await claim_jobs_for_host(
+            adb, host_id, capacity=2, agent_instance_id="inst-a", active_job_ids=[],
+        )
+        assert claimed == []
+        assert tokens == {}
+
+    db.expire_all()
+    lease = db.query(DeviceLease).filter(DeviceLease.job_id == job_id).one()
+    assert lease.fencing_token == old_token
+    assert lease.renewed_at > lease.acquired_at
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_expired_active_lease_is_not_redelivered_or_refreshed(claim_seed):
+    host_id, add_claim, db = claim_seed
+    _device_id, job_id, old_token = add_claim(
+        age_seconds=_UNCONFIRMED_CLAIM_REDELIVER_GRACE_SECONDS + 10,
+        agent_instance_id="inst-a",
+    )
+    expired_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+    db.query(DeviceLease).filter(DeviceLease.job_id == job_id).update({"expires_at": expired_at})
+    db.commit()
+
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as adb:
+        claimed, tokens = await claim_jobs_for_host(
+            adb, host_id, capacity=2, agent_instance_id="inst-a", active_job_ids=[],
+        )
+        assert claimed == []
+        assert tokens == {}
+
+    db.expire_all()
+    lease = db.query(DeviceLease).filter(DeviceLease.job_id == job_id).one()
+    assert lease.status == LeaseStatus.ACTIVE.value
+    assert lease.fencing_token == old_token
+    assert lease.expires_at <= datetime.now(timezone.utc)

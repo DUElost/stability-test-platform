@@ -15,6 +15,7 @@ pytestmark = pytest.mark.skipif(
 
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine  # noqa: E402
 from backend.core.job_timeout_config import UNCONFIRMED_CLAIM_TIMEOUT_SECONDS  # noqa: E402
+from backend.core.metrics import reconciler_actions  # noqa: E402
 from backend.models.device_lease import DeviceLease  # noqa: E402
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType  # noqa: E402
 from backend.models.host import Device, Host  # noqa: E402
@@ -24,6 +25,10 @@ from backend.models.plan_run import PlanRun  # noqa: E402
 from backend.scheduler.device_lease_reconciler import (  # noqa: E402
     _reconcile_stale_unknown_jobs,
     _reconcile_unconfirmed_claims,
+)
+from backend.services.agent_claim import (  # noqa: E402
+    _UNCONFIRMED_CLAIM_REDELIVER_GRACE_SECONDS,
+    claim_jobs_for_host,
 )
 
 
@@ -163,6 +168,13 @@ async def test_stale_unknown_finalizes_claim_unconfirmed_without_grace_wait(unco
         with_lease=False,
     )
 
+    def _counter_val(reason: str) -> float:
+        child = reconciler_actions.labels(action="to_failed", reason=reason)
+        return float(child._value.get()) if hasattr(child, "_value") else 0.0
+
+    before_unconfirmed = _counter_val("claim_unconfirmed")
+    before_grace = _counter_val("unknown_grace_timeout")
+
     await async_engine.dispose()
     async with AsyncSessionLocal() as adb:
         count = await _reconcile_stale_unknown_jobs(adb)
@@ -171,4 +183,44 @@ async def test_stale_unknown_finalizes_claim_unconfirmed_without_grace_wait(unco
     db.expire_all()
     job = db.get(JobInstance, job_id)
     assert job.status == JobStatus.FAILED.value
+    assert job.status_reason == "claim_unconfirmed"
+    assert db.get(PlanRun, run_id).status == "PARTIAL_SUCCESS"
+    if hasattr(reconciler_actions.labels(action="to_failed", reason="claim_unconfirmed"), "_value"):
+        assert _counter_val("claim_unconfirmed") == before_unconfirmed + 1.0
+        assert _counter_val("unknown_grace_timeout") == before_grace
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_repeated_redelivery_response_drop_still_reclaimed_by_check_2b(unconfirmed_seed):
+    add, db = unconfirmed_seed
+    run_id, device_id, job_id = add(age_seconds=_UNCONFIRMED_CLAIM_REDELIVER_GRACE_SECONDS + 10)
+    db.query(DeviceLease).filter(DeviceLease.job_id == job_id).update({"agent_instance_id": "inst-r"})
+    db.commit()
+    host_id = db.get(JobInstance, job_id).host_id
+
+    # Redeliver once and drop the response on Agent side:
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as adb:
+        claimed, tokens = await claim_jobs_for_host(
+            adb, host_id, capacity=2, agent_instance_id="inst-r", active_job_ids=[],
+        )
+        assert [j.id for j in claimed] == [job_id]
+        assert tokens[job_id] == f"{device_id}:2"
+
+    # Advance 121s after redelivery without Agent confirming or extending lease:
+    stale_time = datetime.now(timezone.utc) - timedelta(seconds=UNCONFIRMED_CLAIM_TIMEOUT_SECONDS + 1)
+    db.query(JobInstance).filter(JobInstance.id == job_id).update({"started_at": stale_time})
+    db.commit()
+
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as adb:
+        count = await _reconcile_unconfirmed_claims(adb)
+        assert count == 1
+
+    db.expire_all()
+    job = db.get(JobInstance, job_id)
+    lease = db.query(DeviceLease).filter(DeviceLease.job_id == job_id).one()
+    assert job.status == JobStatus.FAILED.value
+    assert job.status_reason == "claim_unconfirmed"
+    assert lease.status == LeaseStatus.RELEASED.value
     assert db.get(PlanRun, run_id).status == "PARTIAL_SUCCESS"

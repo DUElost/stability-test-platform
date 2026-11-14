@@ -217,6 +217,8 @@ async def _recover_unconfirmed_claims(
             JobInstance.started_at <= cutoff,
             DeviceLease.lease_type == LeaseType.JOB.value,
             DeviceLease.status == LeaseStatus.ACTIVE.value,
+            DeviceLease.expires_at > now,
+            DeviceLease.renewed_at <= DeviceLease.acquired_at,
             DeviceLease.agent_instance_id == agent_instance_id,
             ~exists(select(1).where(StepTrace.job_id == JobInstance.id)),
         )
@@ -224,7 +226,7 @@ async def _recover_unconfirmed_claims(
     )
     if active_set:
         candidate_stmt = candidate_stmt.where(JobInstance.id.notin_(active_set))
-    candidate_ids = [row[0] for row in (await db.execute(candidate_stmt)).all()]
+    candidate_ids = sorted(row[0] for row in (await db.execute(candidate_stmt)).all())
 
     for job_id in candidate_ids:
         try:
@@ -275,6 +277,17 @@ async def _recover_unconfirmed_claims(
                 )).scalars().first()
                 if lease is None or lease.agent_instance_id != agent_instance_id:
                     continue
+                lease_expires = _as_utc(lease.expires_at)
+                lease_acquired = _as_utc(lease.acquired_at)
+                lease_renewed = _as_utc(lease.renewed_at)
+                if lease_expires is None or lease_expires <= now:
+                    continue
+                if (
+                    lease_acquired is not None
+                    and lease_renewed is not None
+                    and lease_renewed > lease_acquired
+                ):
+                    continue
 
                 plan_run = await db.get(PlanRun, job.plan_run_id) if job.plan_run_id else None
                 run_active = plan_run is not None and plan_run.status == "RUNNING"
@@ -312,11 +325,12 @@ async def _recover_unconfirmed_claims(
                         continue
                     normal_slots -= 1
 
-                # Rotate fencing_token and refresh lease before re-delivering to Agent.
+                # Rotate fencing_token and refresh delivery TTL before re-delivering to
+                # Agent. Keep lease.renewed_at untouched so Check 2b still knows no Agent
+                # lease extension has occurred if the re-delivered response is also lost.
                 device.lease_generation = int(device.lease_generation or 0) + 1
                 lease.lease_generation = device.lease_generation
                 lease.fencing_token = f"{device.id}:{device.lease_generation}"
-                lease.renewed_at = now
                 lease.expires_at = now + timedelta(seconds=_DEFAULT_LEASE_SECONDS)
                 job.started_at = now
                 fencing_token_map[job.id] = lease.fencing_token
