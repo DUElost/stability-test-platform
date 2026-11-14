@@ -13,6 +13,7 @@ import AppShell from '../layouts/AppShell';
 import { RouteTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { InlineError } from '@/components/ui/error-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import { resolveAuthGate } from './authGate';
 
 // Auth pages stay as static imports (always needed on first load)
@@ -56,9 +57,38 @@ const AiAssistantSettingsPage = lazy(() => import('../pages/settings/AiAssistant
 
 function AuthGateLoading() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
-      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-      校验登录状态中...
+    <div
+      className="flex min-h-screen flex-col bg-background"
+      role="status"
+      aria-label="校验登录状态中"
+    >
+      <div className="flex h-14 items-center justify-between border-b border-border px-6">
+        <Skeleton className="h-5 w-32" />
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-8 w-20 rounded-full" />
+          <Skeleton className="h-8 w-8 rounded-full" />
+        </div>
+      </div>
+      <div className="flex flex-1 gap-6 p-6">
+        <div className="hidden w-52 shrink-0 space-y-3 md:block">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-4/5" />
+          <Skeleton className="h-8 w-3/4" />
+        </div>
+        <div className="flex-1 space-y-4">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            校验登录状态中...
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Skeleton className="h-24 rounded-lg" />
+            <Skeleton className="h-24 rounded-lg" />
+            <Skeleton className="h-24 rounded-lg" />
+            <Skeleton className="h-24 rounded-lg" />
+          </div>
+          <Skeleton className="h-64 w-full rounded-xl" />
+        </div>
+      </div>
     </div>
   );
 }
