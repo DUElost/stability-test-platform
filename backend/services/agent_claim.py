@@ -8,22 +8,23 @@ lease 获取 → JobOut 装配（serial / watcher_policy / PlanRunHost）。
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.metrics import claim_lease_failed_total
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance
+from backend.models.job import JobInstance, StepTrace
 from backend.models.plan_run import PlanRun, PlanRunHost
+from backend.services.device_return import handle_job_lease_release
 from backend.services.errors import UpgradeRequired
 from backend.services.host_maintenance import in_maintenance_window
-from backend.services.lease_manager import acquire_lease
+from backend.services.lease_manager import _DEFAULT_LEASE_SECONDS, acquire_lease
 from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
     extract_dispatch_host_watcher_admin_states,
@@ -59,6 +60,13 @@ class ClaimRequest(BaseModel):
     agent_version: str = ""
     # #3892 / ADR-0063 D4 第 5–6 条：vbus 刷机站额外申请的名额；旧 Agent 不带 = 0。
     vbus_slots: int = Field(default=0, ge=0, le=1)
+    # #3931：Agent 当前活跃 job_id 快照；None 表示旧版调用方，不做未确认认领重投。
+    active_job_ids: Optional[List[int]] = None
+
+
+# #3931：同一 agent_instance_id 下次 claim 时，至少等待该秒数才把未上报任何执行信号的
+# RUNNING 认领视为响丢孤儿，避免瞬时交错误判。
+_UNCONFIRMED_CLAIM_REDELIVER_GRACE_SECONDS = 5
 
 
 class JobOut(BaseModel):
@@ -143,12 +151,209 @@ async def enrich_job_metadata(
     return serial_map, watcher_policy_map
 
 
+def _device_healthy_for_normal_claim(device: Device | None) -> bool:
+    if device is None or device.retired_at is not None:
+        return False
+    if device.status == "OFFLINE":
+        return False
+    if device.adb_connected is False:
+        return False
+    if (device.adb_state or "device") in ("offline", "unknown"):
+        return False
+    return True
+
+
+def _device_healthy_for_vbus_claim(device: Device | None) -> bool:
+    if device is None or device.retired_at is not None:
+        return False
+    if device.status == DeviceStatus.ERROR.value:
+        return False
+    if (device.adb_state or "") == "unauthorized":
+        return False
+    return True
+
+
+async def _recover_unconfirmed_claims(
+    db: AsyncSession,
+    *,
+    host_id: str,
+    agent_instance_id: str,
+    active_job_ids: List[int],
+    normal_slots: int,
+    vbus_slots: int,
+    now: datetime,
+) -> tuple[list[JobInstance], Dict[int, str], set[int], int, int, bool]:
+    """Re-deliver or release unconfirmed orphan RUNNING claims from the same agent instance (#3931).
+
+    Caller MUST hold ``Host FOR UPDATE``. Locks ``Job -> Device -> DeviceLease`` in
+    ascending ``job_id`` order (I5).
+    """
+    redelivered: list[JobInstance] = []
+    fencing_token_map: Dict[int, str] = {}
+    claimed_device_ids: set[int] = set()
+    db_mutated = False
+
+    if not agent_instance_id:
+        return redelivered, fencing_token_map, claimed_device_ids, normal_slots, vbus_slots, db_mutated
+
+    cutoff = now - timedelta(seconds=_UNCONFIRMED_CLAIM_REDELIVER_GRACE_SECONDS)
+    active_set = set(active_job_ids)
+    candidate_stmt = (
+        select(JobInstance.id)
+        .join(
+            DeviceLease,
+            (DeviceLease.job_id == JobInstance.id)
+            & (DeviceLease.device_id == JobInstance.device_id),
+        )
+        .where(
+            JobInstance.host_id == host_id,
+            JobInstance.status == JobStatus.RUNNING.value,
+            JobInstance.execution_state.is_(None),
+            JobInstance.last_execution_heartbeat_at.is_(None),
+            JobInstance.last_patrol_heartbeat_at.is_(None),
+            JobInstance.last_progress_at.is_(None),
+            JobInstance.disarm_guard.is_(None),
+            JobInstance.started_at.isnot(None),
+            JobInstance.started_at <= cutoff,
+            DeviceLease.lease_type == LeaseType.JOB.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+            DeviceLease.expires_at > now,
+            DeviceLease.renewed_at <= DeviceLease.acquired_at,
+            DeviceLease.agent_instance_id == agent_instance_id,
+            ~exists(select(1).where(StepTrace.job_id == JobInstance.id)),
+        )
+        .order_by(JobInstance.id)
+    )
+    if active_set:
+        candidate_stmt = candidate_stmt.where(JobInstance.id.notin_(active_set))
+    candidate_ids = sorted(row[0] for row in (await db.execute(candidate_stmt)).all())
+
+    for job_id in candidate_ids:
+        try:
+            async with db.begin_nested():
+                # Lock order I5: Job -> Device -> DeviceLease
+                job = (await db.execute(
+                    select(JobInstance)
+                    .where(JobInstance.id == job_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )).scalars().first()
+                if (
+                    job is None
+                    or job.host_id != host_id
+                    or job.status != JobStatus.RUNNING.value
+                    or job.execution_state is not None
+                    or job.last_execution_heartbeat_at is not None
+                    or job.last_patrol_heartbeat_at is not None
+                    or job.last_progress_at is not None
+                    or job.disarm_guard is not None
+                    or job.started_at is None
+                    or _as_utc(job.started_at) > cutoff
+                ):
+                    continue
+                has_trace = (await db.execute(
+                    select(StepTrace.id).where(StepTrace.job_id == job.id).limit(1)
+                )).first()
+                if has_trace is not None:
+                    continue
+
+                device = (await db.execute(
+                    select(Device)
+                    .where(Device.id == job.device_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )).scalars().first()
+
+                lease = (await db.execute(
+                    select(DeviceLease)
+                    .where(
+                        DeviceLease.job_id == job.id,
+                        DeviceLease.device_id == job.device_id,
+                        DeviceLease.lease_type == LeaseType.JOB.value,
+                        DeviceLease.status == LeaseStatus.ACTIVE.value,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )).scalars().first()
+                if lease is None or lease.agent_instance_id != agent_instance_id:
+                    continue
+                lease_expires = _as_utc(lease.expires_at)
+                lease_acquired = _as_utc(lease.acquired_at)
+                lease_renewed = _as_utc(lease.renewed_at)
+                if lease_expires is None or lease_expires <= now:
+                    continue
+                if (
+                    lease_acquired is not None
+                    and lease_renewed is not None
+                    and lease_renewed > lease_acquired
+                ):
+                    continue
+
+                plan_run = await db.get(PlanRun, job.plan_run_id) if job.plan_run_id else None
+                run_active = plan_run is not None and plan_run.status == "RUNNING"
+                is_vbus = is_vbus_flash_pipeline(job.pipeline_def)
+                device_ok = (
+                    _device_healthy_for_vbus_claim(device)
+                    if is_vbus
+                    else _device_healthy_for_normal_claim(device)
+                )
+
+                if not run_active or not device_ok:
+                    # Run ended/aborted or device vanished/retired: release lease now and
+                    # move job to UNKNOWN(claim_unconfirmed) so Check 2 finalizes cleanly
+                    # outside host FOR UPDATE without waiting 300s grace.
+                    await handle_job_lease_release(
+                        db, device_id=job.device_id, job_id=job.id, job=job,
+                    )
+                    JobStateMachine.transition(job, JobStatus.UNKNOWN, "claim_unconfirmed")
+                    job.ended_at = now
+                    db_mutated = True
+                    logger.warning(
+                        "claim_unconfirmed_released host=%s job=%s device=%s run_active=%s device_ok=%s",
+                        host_id, job.id, job.device_id, run_active, device_ok,
+                    )
+                    continue
+
+                if job.device_id in claimed_device_ids:
+                    continue
+                if is_vbus:
+                    if vbus_slots <= 0:
+                        continue
+                    vbus_slots -= 1
+                else:
+                    if normal_slots <= 0:
+                        continue
+                    normal_slots -= 1
+
+                # Rotate fencing_token and refresh delivery TTL before re-delivering to
+                # Agent. Keep lease.renewed_at untouched so Check 2b still knows no Agent
+                # lease extension has occurred if the re-delivered response is also lost.
+                device.lease_generation = int(device.lease_generation or 0) + 1
+                lease.lease_generation = device.lease_generation
+                lease.fencing_token = f"{device.id}:{device.lease_generation}"
+                lease.expires_at = now + timedelta(seconds=_DEFAULT_LEASE_SECONDS)
+                job.started_at = now
+                fencing_token_map[job.id] = lease.fencing_token
+                redelivered.append(job)
+                claimed_device_ids.add(job.device_id)
+                db_mutated = True
+                logger.warning(
+                    "claim_unconfirmed_redelivered host=%s job=%s device=%s generation=%s",
+                    host_id, job.id, job.device_id, lease.lease_generation,
+                )
+        except InvalidTransitionError:
+            continue
+
+    return redelivered, fencing_token_map, claimed_device_ids, normal_slots, vbus_slots, db_mutated
+
+
 async def claim_jobs_for_host(
     db: AsyncSession,
     host_id: str,
     capacity: int = 10,
     agent_instance_id: str = "",
     vbus_slots: int = 0,
+    active_job_ids: Optional[List[int]] = None,
 ) -> tuple[List[JobInstance], Dict[int, str]]:
     """Shared claim logic for ``claim_jobs`` (POST).
 
@@ -194,10 +399,29 @@ async def claim_jobs_for_host(
         await db.rollback()
         return [], {}
 
-    # 2. Effective capacity — each device runs at most 1 Job;
-    #    Agent's "capacity" is the soft cap on concurrent jobs.
-    #    Defensive clamp: never claim more than free device count.
+    # 2. Effective capacity & #3931 self-healing for unconfirmed claims from the same agent instance
     effective_capacity = capacity
+    redelivered: list[JobInstance] = []
+    fencing_token_map: Dict[int, str] = {}
+    claimed_device_ids: set[int] = set()
+    recovered_db_mutated = False
+    if active_job_ids is not None and agent_instance_id:
+        (
+            redelivered,
+            fencing_token_map,
+            claimed_device_ids,
+            effective_capacity,
+            vbus_slots,
+            recovered_db_mutated,
+        ) = await _recover_unconfirmed_claims(
+            db,
+            host_id=host_id,
+            agent_instance_id=agent_instance_id,
+            active_job_ids=active_job_ids,
+            normal_slots=effective_capacity,
+            vbus_slots=vbus_slots,
+            now=now,
+        )
 
     # 4. Get all device IDs for this host (Phase 3c: filter known-unhealthy devices)
     #    - INCLUDE: known-healthy OR never-reported (NULL adb fields → coalesce to safe default)
@@ -240,9 +464,7 @@ async def claim_jobs_for_host(
 
     # 6. Per-device first PENDING job + FOR UPDATE SKIP LOCKED
     pending_jobs: list[JobInstance] = []
-    claimed: list[JobInstance] = []
-    claimed_device_ids: set[int] = set()
-    fencing_token_map: Dict[int, str] = {}
+    claimed: list[JobInstance] = list(redelivered)
 
     if effective_capacity > 0 and free_device_ids:
         rn = func.row_number().over(
@@ -316,7 +538,7 @@ async def claim_jobs_for_host(
             continue
 
     # 9. Unified exit: commit to release host FOR UPDATE lock
-    if claimed:
+    if claimed or recovered_db_mutated:
         await db.commit()
     else:
         await db.rollback()
@@ -428,6 +650,7 @@ async def claim_agent_jobs(
     claimed, fencing_token_map = await claim_jobs_for_host(
         db, payload.host_id, payload.capacity, payload.agent_instance_id,
         vbus_slots=payload.vbus_slots,
+        active_job_ids=payload.active_job_ids,
     )
 
     if not claimed:

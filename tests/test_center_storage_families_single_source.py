@@ -62,8 +62,23 @@ EXCLUDE_PREFIXES = (
 
 
 def test_all_families_is_derived_not_a_fourth_copy() -> None:
-    assert sf.ALL_FAMILIES == sf.RUN_FAMILIES + (sf.JOBS_FAMILY,)
+    assert sf.ALL_FAMILIES == sf.RUN_FAMILIES + (sf.JOBS_FAMILY,) + sf.CHAIN_FAMILIES
     assert len(set(sf.ALL_FAMILIES)) == len(sf.ALL_FAMILIES)
+
+
+def test_evidence_is_chain_level_and_on_the_log_root() -> None:
+    """B8 G6：证据区按链留存，不得进按 run 清理的 RUN_FAMILIES。"""
+    assert sf.EVIDENCE_FAMILY == "evidence"
+    assert sf.CHAIN_FAMILIES == (sf.EVIDENCE_FAMILY,)
+    assert sf.EVIDENCE_FAMILY not in sf.RUN_FAMILIES
+    assert sf.EVIDENCE_FAMILY in sf.ALL_FAMILIES
+    assert sf.FAMILY_STORAGE_ROOTS[sf.EVIDENCE_FAMILY] == "log"
+    assert sf.storage_root_for_family(
+        sf.EVIDENCE_FAMILY, log_root="/log", control_plane_root="/cp",
+    ) == "/log"
+    # 写侧/读侧都引用正本清单：证据区对按 run 的清理与 run 分解不可见。
+    assert sf.EVIDENCE_FAMILY not in cron_scheduler.RUN_FAMILIES
+    assert sf.EVIDENCE_FAMILY not in mcs.RUN_FAMILIES
 
 
 def test_consumers_reference_the_same_objects_not_local_rebindings() -> None:

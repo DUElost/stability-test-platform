@@ -92,7 +92,8 @@ _ABORT_STATUSES = frozenset({"ABORTED", "CANCELED", "CANCELLED"})
 
 
 def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
-                       capacity: int = 2, vbus_slots: int = 0) -> List[Dict[str, Any]]:
+                       capacity: int = 2, vbus_slots: int = 0,
+                       active_job_ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
     """Claim pending jobs via POST /agent/jobs/claim (D1: 统一 claim 路径).
 
     Backend 在 claim 响应中注入 device_serial + watcher_policy，供 JobSession 启动使用。
@@ -100,6 +101,8 @@ def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
     more jobs than the thread pool can execute (orphaned RUNNING jobs).
     *vbus_slots*（#3892 / ADR-0063 D4 第 5 条）只在本机是 vbus 刷机站时 > 0，
     此时才写进请求体；为 0 时请求体与旧版逐字一致。
+    *active_job_ids*（#3931）：Agent 当前在跑 + 已持久化的活跃 job_id 快照；
+    显式传入时随请求上报，供控制面识别上次响应丢失产生的未确认认领并自愈。
     """
     from . import __version__ as agent_version
 
@@ -113,11 +116,13 @@ def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
     }
     if vbus_slots > 0:
         body["vbus_slots"] = vbus_slots
+    if active_job_ids is not None:
+        body["active_job_ids"] = sorted({int(jid) for jid in active_job_ids})
     resp = requests.post(
         f"{api_url}/api/v1/agent/jobs/claim",
         json=body,
         headers=headers,
-        timeout=10,
+        timeout=(5, 20),
     )
     resp.raise_for_status()
     payload = resp.json()

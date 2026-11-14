@@ -190,6 +190,7 @@ _INTERNAL_ONLY: dict[str, str] = {
     "SUDO_UID": "sudo 调用时由系统注入（stp_agent_priv）",
     "SUDO_GID": "sudo 调用时由系统注入（stp_agent_priv）",
     "SUDO_USER": "sudo 调用时由系统注入（stp_agent_priv；SUDO_UID 缺失时的兜底）",
+    "UNCONFIRMED_CLAIM_TIMEOUT_SECONDS": "未确认认领快速回收阈值（#3931：reconciler Check 2b 内部防孤儿超时，默认 120s，不属常规运维模板项）",
 }
 
 
