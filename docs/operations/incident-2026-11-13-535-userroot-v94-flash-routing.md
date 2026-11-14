@@ -1,6 +1,6 @@
 # 2026-11-13 535 全队 userroot V94 刷机战役复盘（fingerprint 路由三元耦合与显式路由切换）
 
-> **状态**：v3 批次（plan 186/187，显式 `firmware_dir` 路由）已收口；93/134 台 COMPLETED，41 台 FAILED 按签名分类处置（10 台重派 run 1347/1348、23 台滞留 BROM 待现场重插、8 台已刷成 V94 但后置链失败）。无包缺陷、无镜像损坏。
+> **状态**：v3 批次（plan 186/187，显式 `firmware_dir` 路由）已收口；93/134 台 COMPLETED，41 台 FAILED 按签名分类处置（10 台重派 run 1347/1348、24 台滞留 BROM 待现场重插、7 台已刷成 V94 但后置链失败）。无包缺陷、无镜像损坏。
 > **影响范围**：run 1264（535 Monkey，135 台 ABORTED）腾出的 135 台空闲设备；NX2 71 / NX3 54 / NX3Carrier 10。两次整批秒败（1342/1343）**无烧写副作用**，但消耗一轮派发与全部设备的欠账放行。
 > **关联**：[runbook §1](../operations/honor-flash-runbook.md)（userroot 包 incremental 陷阱）、[设计文档 §2](../design/2026-08-honor-flash-firmware-routing.md)（路由模式选型约束）、#3895（abort 欠 oobe 欠账）、#3931（认领排队超窗）、#3867（UNKNOWN grace 家族）。
 
@@ -51,7 +51,7 @@ v3 形态（plan 186/187 的 flash 步骤参数，与 plan 183 同模式）：
 | `not adb-ready within 600s; OOBE skip not attempted` | 4 | 刷后 oobe 等待窗内设备未回 adb（同 944/957 先例，深度亏电/首启慢）；设备版本已是 V94 | 重插充电后补 oobe_skip，无需重刷 |
 | `init_check_unreported` / `device_lease_not_held` | 5 | 调度/lifecycle 竞态（欠账 override 后的 init_check 上报、租约竞争） | 重派即愈（10 台重派批次） |
 
-另有 8 台 build_display_id 已含 `261110V94`（烧写成功）——**判定「已达标」按设备当前版本，不得按 job 终态**；job FAILED 只说明后置链或核验失败。
+另有 7 台 build_display_id 已含 `261110V94`（烧写成功）——**判定「已达标」按设备当前版本，不得按 job 终态**；job FAILED 只说明后置链或核验失败。
 
 ## 5. 教训与动作
 
@@ -59,7 +59,7 @@ v3 形态（plan 186/187 的 flash 步骤参数，与 plan 183 同模式）：
 2. canary 暴露 `post_flash_verify` mismatch 后，运维不得只改 manifest.version 就放量；必须先确认路由模式，incremental 与目录名解耦的包一律切显式 `firmware_dir`，并复核 `metrics.route.decided_by`（已落 runbook §4）。
 3. 批量重派前必须清点并放行 abort 遗留欠账（D5.7 `return-override`，`evidence_ref` 必填）：1336–1338 卡 PRECHECK 即因此；135 台放行后准入零阻塞。
 4. 派发量必须按 #3931 分批（~17 台/批），不得一次 135 台撞认领排队超窗与 batch barrier 等齐失败。
-5. `PipelineEngine._last_step_error` 缺陷待开单跟踪；23 台 BROM 滞留设备待现场重插后重派（plan 186/187/183 可复用，skip_if_current 自动跳过已达标设备）。
+5. `PipelineEngine._last_step_error` 缺陷待开单跟踪；24 台 BROM 滞留设备待现场重插后重派（plan 186/187/183 可复用，skip_if_current 自动跳过已达标设备）。
 
 ---
 
