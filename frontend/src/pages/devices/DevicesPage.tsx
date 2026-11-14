@@ -35,6 +35,7 @@ export default function DevicesPage() {
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
   const [filteredDevices, setFilteredDevices] = useState<DeviceTableData[]>([]);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
+  const [singleTagDevice, setSingleTagDevice] = useState<DeviceTableData | null>(null);
   const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
   // ADR-0029：页面级项目筛选（无全局选择器/跨页跟随，D8 挂起）。
   // 筛选走后端 ?project_key=——未知 key 后端 404，前端按错误态渲染。
@@ -223,12 +224,16 @@ export default function DevicesPage() {
       await Promise.all(workers);
       return { succeeded, failed };
     },
-    onSuccess: ({ succeeded, failed }) => {
+    onSuccess: ({ succeeded, failed }, variables) => {
       queryClient.invalidateQueries({ queryKey: deviceKeys.allLists() });
+      const wasSingleEdit = singleTagDevice !== null && variables.targets.length === 1 && variables.targets[0]?.id === singleTagDevice.id;
       setIsTagDialogOpen(false);
+      setSingleTagDevice(null);
       if (failed.length === 0) {
         toast.success(`已更新 ${succeeded} 台设备的标签`);
-        setSelectedDeviceIds(new Set());
+        if (!wasSingleEdit) {
+          setSelectedDeviceIds(new Set());
+        }
       } else {
         toast.error(`标签更新完成：成功 ${succeeded} 台，失败 ${failed.length} 台`);
       }
@@ -513,12 +518,15 @@ export default function DevicesPage() {
             testId="device-project-filter"
             showUnassigned
           />
-          {isAdmin && (
-            <Button onClick={() => setIsModalOpen(true)}>
-              <Plus className="w-4 h-4" />
-              添加设备
-            </Button>
-          )}
+          <Button
+            data-testid="device-add-button"
+            disabled={!isAdmin}
+            title={!isAdmin ? '需要管理员权限' : undefined}
+            onClick={() => setIsModalOpen(true)}
+          >
+            <Plus className="w-4 h-4" />
+            添加设备
+          </Button>
         </div>
       </div>
 
@@ -531,6 +539,7 @@ export default function DevicesPage() {
           onSelectionChange={setSelectedDeviceIds}
           onFilteredDevicesChange={handleFilteredDevicesChange}
           isAdmin={isAdmin}
+          onEditDeviceTags={isAdmin ? (device) => setSingleTagDevice(device) : undefined}
         />
       </div>
 
@@ -566,12 +575,16 @@ export default function DevicesPage() {
       />
 
       <BatchEditDeviceTagsDialog
-        isOpen={isTagDialogOpen}
-        selectedCount={selectedDevices.length}
+        isOpen={isTagDialogOpen || singleTagDevice !== null}
+        selectedCount={singleTagDevice ? 1 : selectedDevices.length}
         isSubmitting={tagUpdateMutation.isPending}
-        onClose={() => setIsTagDialogOpen(false)}
+        onClose={() => {
+          setIsTagDialogOpen(false);
+          setSingleTagDevice(null);
+        }}
         onSubmit={(operation, tags) => {
-          tagUpdateMutation.mutate({ targets: selectedDevices, operation, tags });
+          const targets = singleTagDevice ? [singleTagDevice] : selectedDevices;
+          tagUpdateMutation.mutate({ targets, operation, tags });
         }}
       />
 
