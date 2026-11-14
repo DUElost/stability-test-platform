@@ -257,6 +257,48 @@ def _read_prefs_evidence() -> dict[str, Any]:
     }
 
 
+_READ_TRANSIENT_MAX_ATTEMPTS = 3
+_READ_TRANSIENT_RETRY_DELAY_SECONDS = 1.0
+
+
+def _read_prefs_evidence_with_retry(
+    *,
+    max_attempts: int = _READ_TRANSIENT_MAX_ATTEMPTS,
+    delay_seconds: float = _READ_TRANSIENT_RETRY_DELAY_SECONDS,
+) -> dict[str, Any]:
+    """Read prefs evidence with bounded short retries on transient read failures.
+
+    Only retries when readback is ``readback_failed`` AND ``evidence["kind"] == "transient"``
+    (e.g., transient ADB offline / package service glitch right after reboot or am force-stop).
+    Non-transient classifications (``ok``, ``not_installed``, ``absent``, ``denied``, ``empty``)
+    return immediately without extra delay.
+    """
+    attempts = max(1, int(max_attempts))
+    snap = _read_prefs_evidence()
+    attempt = 1
+    while (
+        attempt < attempts
+        and snap.get("readback") == "readback_failed"
+        and (snap.get("evidence") or {}).get("kind") == "transient"
+    ):
+        progress_stamp(
+            {
+                "phase": "read_prefs_retry",
+                "attempt": attempt,
+                "max_attempts": attempts,
+            }
+        )
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        attempt += 1
+        snap = _read_prefs_evidence()
+    if attempt > 1:
+        evidence = dict(snap.get("evidence") or {})
+        evidence["transient_retries"] = attempt - 1
+        snap = {**snap, "evidence": evidence}
+    return snap
+
+
 def _map_result(
     readback: str,
     *,
@@ -368,7 +410,7 @@ def _run(cfg: dict) -> dict:
             == "true"
         )
         # 先只读分类，再决定是否需要停服务/写标志（§3.6.6 第 4、5 条）。
-        pre = _read_prefs_evidence()
+        pre = _read_prefs_evidence_with_retry()
         pre_evidence = pre.get("evidence") or {}
         kind = str(pre_evidence.get("kind") or "")
         installed = pre_evidence.get("autotesttool_installed")
@@ -423,7 +465,7 @@ def _run(cfg: dict) -> dict:
     platform, model = _resolve_category(cfg, can_detect=True)
     identity = _device_identity_evidence()
 
-    snap = _read_prefs_evidence()
+    snap = _read_prefs_evidence_with_retry()
     readback = str(snap["readback"])
 
     if stop_error:

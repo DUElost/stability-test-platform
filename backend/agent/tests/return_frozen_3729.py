@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -48,16 +49,29 @@ class FrozenReturnDevice:
         spec = importlib.util.spec_from_file_location("u4_frozen_packer", ROOT / "tools/dev/package_tool_asset.py")
         packer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(packer)
+        manifest = json.loads((ROOT / "tool_manifest.json").read_text(encoding="utf-8"))
+        latest = manifest["tools"]["powercycle_disarm"]["versions"][-1]
         self.packages = tmp_path / "packages"
-        self.tarball = self.packages / "powercycle_disarm/1.0.8.tar.gz"
+        self.tarball = self.packages / f"powercycle_disarm/{latest['version']}.tar.gz"
         self.tarball.parent.mkdir(parents=True)
         packed = packer.build_deterministic_tar_gz(ROOT / "backend/agent/scripts/powercycle_disarm", self.tarball)
-        assert packed["package_sha256"] == PACKAGE
+        assert packed["package_sha256"] == latest["package_sha256"]
         self.cache = tmp_path / "cache"
         monkeypatch.setenv("STP_PACKAGES_ROOT", str(self.packages))
         monkeypatch.setenv("STP_TOOLS_CACHE_ROOT", str(self.cache))
         monkeypatch.setenv("STP_DEVICE_SERIAL", "u4-test-device")
+        latest_entry = ScriptEntry(
+            1, "powercycle_disarm", latest["version"], "python", "powercycle_disarm.py", "", latest["package_sha256"]
+        )
+        latest_resolved = resolve_script_path(latest_entry)
+        assert Path(latest_resolved.path).is_file()
         self.entry = ScriptEntry(1, "powercycle_disarm", "1.0.8", "python", "powercycle_disarm.py", "", PACKAGE)
+        if latest["version"] != "1.0.8":
+            # U4 frozen tests pin ONBOARDED["power-cycle"] to 1.0.8 + PACKAGE until real-device
+            # verification refreshes report_ref; seed the verified cache entry without git history.
+            frozen_cache = self.cache / "powercycle_disarm/1.0.8"
+            shutil.copytree(latest_resolved.cwd, frozen_cache)
+            (frozen_cache / ".stp-verified").write_text(f"{PACKAGE}\n", encoding="utf-8")
         resolved = resolve_script_path(self.entry)
         assert Path(resolved.path).is_file()
         lib_spec = importlib.util.spec_from_file_location("u4_frozen_lib", Path(resolved.cwd) / "_lib.py")
