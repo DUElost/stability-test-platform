@@ -1,0 +1,73 @@
+---
+# batch_flash_p532a.yml -- 批量刷机编排 Playbook (P532AA / 方案 2)
+#
+# 特性：
+# 1. 跨 Host 完全并行（通过 forks 控制并发度）
+# 2. 同 Host 内部多设备由 flash_p532a.py 内置 flock 天然串行
+# 3. 采用方案 2（官方 PAC 静默直开，全自动跳过 Recovery 与白屏拦截）
+# 4. 自动分发加固版 spd_dump 与流水线脚本，自动预热 SSD 缓存
+#
+# 用法：
+#   ansible-playbook -i tools/ansible/inventory.ini tools/ansible/playbooks/batch_flash_p532a.yml -l <target_hosts> -f 10
+#
+- name: Batch Flash P532AA Fleet (Scheme 2 - Silent Direct Boot)
+  hosts: linux_hosts:agent_legacy
+  gather_facts: false
+  become: false
+
+  vars:
+    firmware_dir: "/mnt/stp-aee/firmware/P532AA/P532AA-EVT-16.0-DailyBuild-userdebug-202611090000/images"
+    cache_dir: "/var/tmp/stp_flash"
+    spd_dump_local_src: "/usr/local/bin/spd_dump"
+    script_local_src: "{{ playbook_dir }}/../../dev/flash_p532a.py"
+
+  tasks:
+    - name: Ensure target prerequisites (spd_dump and script deployment)
+      become: true
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "0755"
+      loop:
+        - { src: "{{ script_local_src }}", dest: "/usr/local/bin/flash_p532a.py" }
+        - { src: "{{ spd_dump_local_src }}", dest: "/usr/local/bin/spd_dump" }
+
+    - name: Ensure SSD cache directory exists
+      ansible.builtin.file:
+        path: "{{ cache_dir }}"
+        state: directory
+        mode: "0777"
+
+    - name: Disable USB autosuspend on host to protect long BSL transfers
+      become: true
+      ansible.builtin.shell: |
+        echo -1 > /sys/module/usbcore/parameters/autosuspend 2>/dev/null || true
+        for d in /sys/bus/usb/devices/*/power/control; do echo on > "$d" 2>/dev/null || true; done
+      changed_when: false
+
+    - name: Pre-warm full firmware cache & trimmed super.img on local SSD
+      ansible.builtin.shell: |
+        python3 -c "import sys; sys.path.insert(0, '/usr/local/bin'); import flash_p532a; flash_p532a.prepare_local_cache('{{ firmware_dir }}', '{{ cache_dir }}')"
+      changed_when: false
+
+    - name: Scan connected P532AA devices on this host
+      ansible.builtin.shell: |
+        adb devices -l | grep -i "p532a" | awk '{print $1}'
+      register: detected_devices
+      changed_when: false
+
+    - name: Display detected devices for this host
+      ansible.builtin.debug:
+        msg: "Host {{ inventory_hostname }} has {{ detected_devices.stdout_lines | length }} devices: {{ detected_devices.stdout_lines }}"
+
+    - name: Execute Scheme 2 flashing for each connected device sequentially
+      ansible.builtin.shell: |
+        python3 /usr/local/bin/flash_p532a.py --serial "{{ item }}" --firmware-dir "{{ firmware_dir }}" --cache-dir "{{ cache_dir }}"
+      loop: "{{ detected_devices.stdout_lines }}"
+      when: detected_devices.stdout_lines | length > 0
+      register: flash_results
+
+    - name: Summary of flash results
+      ansible.builtin.debug:
+        var: flash_results
+      when: detected_devices.stdout_lines | length > 0

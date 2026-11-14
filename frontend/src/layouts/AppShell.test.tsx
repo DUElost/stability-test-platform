@@ -5,6 +5,11 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import AppShell from './AppShell';
+import { DASHBOARD_SUBSCRIPTION } from '@/config';
+
+const { mockUseSocketIO } = vi.hoisted(() => ({
+  mockUseSocketIO: vi.fn(() => ({ isConnected: true })),
+}));
 
 vi.mock('./Sidebar', () => ({
   default: ({ onCloseMobile }: { onCloseMobile?: () => void }) => (
@@ -17,7 +22,7 @@ vi.mock('./Sidebar', () => ({
 }));
 
 vi.mock('@/hooks/useSocketIO', () => ({
-  useSocketIO: () => ({ isConnected: true }),
+  useSocketIO: mockUseSocketIO,
   disconnectDashSocket: vi.fn(),
 }));
 vi.mock('@/hooks/useCrossClientSync', () => ({ useCrossClientSync: vi.fn() }));
@@ -70,5 +75,10 @@ describe('AppShell 移动抽屉焦点顺序（#1197）', () => {
     fireEvent.click(closeBtn);
     expect(drawer).toHaveAttribute('inert');
     expect(document.activeElement).toBe(toggle);
+  });
+
+  it('挂载即调用 useSocketIO(DASHBOARD_SUBSCRIPTION) 发起 dash socket 连接（#3970）', () => {
+    renderShell();
+    expect(mockUseSocketIO).toHaveBeenCalledWith(DASHBOARD_SUBSCRIPTION);
   });
 });

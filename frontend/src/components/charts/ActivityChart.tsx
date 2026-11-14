@@ -38,11 +38,13 @@ export function ActivityChart({ data, isLoading }: ActivityChartProps) {
     );
   }
 
-  if (chartData.length === 0) {
+  const hasActivity = chartData.some((p) => p.started > 0 || p.completed > 0 || p.failed > 0);
+
+  if (chartData.length === 0 || !hasActivity) {
     return (
-      <ChartBody>
-        <InlineEmpty chart>暂无数据</InlineEmpty>
-      </ChartBody>
+      <div className="min-h-[120px] flex items-center justify-center">
+        <InlineEmpty chart>{chartData.length === 0 ? '暂无数据' : '近 24 小时暂无活动'}</InlineEmpty>
+      </div>
     );
   }
 
@@ -67,6 +69,7 @@ export function ActivityChart({ data, isLoading }: ActivityChartProps) {
             </defs>
             <XAxis
               dataKey="time"
+              interval={2}
               axisLine={false}
               tickLine={false}
               tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}

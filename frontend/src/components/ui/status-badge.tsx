@@ -235,14 +235,14 @@ export function StatusBadge({
   return (
     <Badge
       variant={entry.variant}
-      className={cn("gap-1", sizeCls, className)}
+      className={cn("shrink-0 whitespace-nowrap gap-1", sizeCls, className)}
       data-status={status ?? "UNKNOWN"}
       data-kind={kind}
     >
       {showIcon && (
         <entry.Icon
           size={iconSize}
-          className={spin ? "animate-spin" : undefined}
+          className={cn("shrink-0", spin && "animate-spin")}
           aria-hidden
         />
       )}

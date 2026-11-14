@@ -62,6 +62,29 @@ EOF
   后缀，但设备 `ro.build.version.incremental` 返回**不含后缀**的串。
   manifest.version 必须以真机实测值为准（三处一致：目录名/manifest/
   latest.json）；否则 post-flash verify 恒 mismatch 误判失败。
+- **userroot 包 incremental 陷阱（2026-11-13 实测，run 1339/1340/1342）**：
+  userroot 构建变体的 `ro.build.version.incremental` 带 `user-` 段
+  （如 `P535AA-HONOR-NX2-16-user-261110V94`），而包名与 boot.img 内嵌
+  fingerprint 均不含该段——目录名（=包名口径）与设备 incremental 无法
+  同串，fingerprint 路由的「目录名/params.version/manifest.version 三元
+  一致」约束不可满足（改 params.version 则目录 not found，改目录则
+  verify mismatch）。运维处置：此类包（NX2/NX3/NX3Carrier）一律改用
+  **显式 `firmware_dir` 路由**——目录名沿用包名口径，manifest.version
+  填真机 `getprop ro.build.version.incremental` 实测值（显式模式免
+  目录名一致校验，比对按 manifest.version 执行；NX3Carrier 的
+  fingerprint 形 manifest 同模式，见 plan 183/186/187）。验包取证必须
+  同时提取 boot fingerprint 与真实 incremental，二者不等是 userroot
+  包的常态而非异常；manifest.version 以 canary 刷后
+  `post_flash_verify` 回读值为终审。
+- **v3 复盘补充（2026-11-13，run 1342/1343 全批实证）**：canary 报
+  `post_flash_verify` mismatch 后，运维**不得**只改 manifest.version 就放量
+  ——fingerprint 路由会把 params.version 拼进目录，改串即整批
+  `firmware_dir not found`（125 台秒败、无烧写副作用）。放量的前置检查：
+  `curl -s /api/v1/plan-runs/{run_id}/jobs` 查 canary 的 flash 步骤
+  `metrics.route.decided_by`——值非 `params` 时，运维必须改用显式
+  `firmware_dir` 的 Plan（§3 参数形态见复盘文档 §3）。完整时间线、
+  判据矩阵与失败签名分类见
+  [11-13 复盘](./incident-2026-11-13-535-userroot-v94-flash-routing.md)。
 - manifest 的 `version` 必须等于目录名，放错目录会 fail-fast。
 - ELA 上架同样步骤，目录换成 `$ROOT/ELA/`，models 填 `ELA_LX2`/`ELA_LX3`。
 - **版本切换 = 改 latest.json（族级指针，同族全部机型共享）**：多机型
@@ -141,8 +164,10 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 
 验证点（PlanRun 详情 / step_trace）：
 
-1. flash 步骤 `metrics.route.decided_by == "fingerprint"`，`family == "MLD"`，
-   `version` == manifest 版本。
+1. flash 步骤 `metrics.route.decided_by`：fingerprint 路由下为
+   `"fingerprint"`，`family == "MLD"`，`version` == manifest 版本；显式
+   `firmware_dir` 路由下为 `"params"`，`metrics.firmware_dir` 指向实存目录，
+   `version` == manifest 版本（userroot 包必须为此分支，见 §1）。
 2. 刷前该设备已是目标版本 → 第二次跑同 Plan 应出现 `skipped: true`（快路径）。
 3. 刷后 `metrics.post_flash_verify.current` == 目标版本。
 4. 后续 check/ensure_root 步骤通过（设备刷完确实回来了）。
@@ -163,6 +188,17 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 
 - **设备必须先回 Android 才能指纹路由**：adb 不可达（卡 BROM/黑屏）的设备
   路由会 fail-fast，此时用显式 `firmware_dir` 参数的步骤兜底（v1.1.0 行为）。
+- **中止后的重派必须先行欠账放行**（2026-11-13 run 1336–1338 实证）：
+  批量 abort 的 Monkey/专项 run 会给全体设备留
+  `return_state.{gpu,monkey,power-cycle}=unverified`，新 run 卡 PRECHECK
+  且不建 job。运维必须对每台执行
+  `POST /api/v1/devices/{id}/return-override`（`families` 覆盖欠账族、
+  `reason_category=manual_release_for_maintenance`、`evidence_ref` 必填，
+  写明来源 run 与欠账 job_id）后再派发。
+- **批量派发必须分批**（#3931）：一次派发量不得超过 agent 认领吞吐 ×
+  UNKNOWN 宽限窗；135 台整批会触发未认领 job 误判
+  `unknown_grace_timeout` 与 batch barrier `barrier_max_wait` 连锁判死。
+  分批档位以 ~17 台/批、批间确认为准（11-13 复盘 §5）。
 - **UNISOC（Z258）不适用**：SP Flash Tool 只覆盖 MTK；Z258 刷机另行立项。
 - **吞吐上限 = 每 host 同时 1 台**：需要并行时按 USB 控制器分片锁是后续课题
   （设计文档 §8 重议触发）。

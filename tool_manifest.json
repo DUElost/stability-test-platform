@@ -631,6 +631,35 @@
         }
       ]
     },
+    "flash_firmware_unisoc_bsl": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/flash_firmware_unisoc_bsl/1.0.0.tar.gz",
+          "package_sha256": "ff17af016d23db7965b24d0a13efd21668ebdc5734683a7a17c058332799d514",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc_bsl.py",
+          "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/flash_firmware_unisoc_bsl/1.0.1.tar.gz",
+          "package_sha256": "cc6c1e18531561c6f40ab6839d44a1cad705f1f29dc3cbe9d7ea0eaa9da9f286",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc_bsl.py",
+          "version": "1.0.1"
+        },
+        {
+          "artifact": "packages/flash_firmware_unisoc_bsl/1.0.2.tar.gz",
+          "package_sha256": "a4d88cbd8c872c2a4eb8097ff7744ab33dd593d3b91756dac404f5172a1899d4",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc_bsl.py",
+          "version": "1.0.2"
+        }
+      ]
+    },
     "flash_preflight": {
       "kind": "script",
       "versions": [

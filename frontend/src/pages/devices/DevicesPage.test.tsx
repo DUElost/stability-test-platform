@@ -272,14 +272,20 @@ describe('DevicesPage', () => {
     await waitFor(() => {
       expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument();
     });
+    // #3962 #8：非 admin 保留添加设备/批量写入口为禁用态并提示需要管理员权限
+    const addBtn = screen.getByTestId('device-add-button');
+    expect(addBtn).toBeDisabled();
+    expect(addBtn).toHaveAttribute('title', '需要管理员权限');
+
     fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
 
     await waitFor(() => {
       expect(screen.getByTestId('device-bulk-action-bar')).toBeInTheDocument();
     });
-    expect(screen.queryByTestId('device-bulk-assign-project')).not.toBeInTheDocument();
-    // 批量标签入口同样不显示（非 admin）
-    expect(screen.queryByTestId('device-bulk-tags')).not.toBeInTheDocument();
+    expect(screen.getByTestId('device-bulk-assign-project')).toBeDisabled();
+    expect(screen.getByTestId('device-bulk-assign-project')).toHaveAttribute('title', '需要管理员权限');
+    expect(screen.getByTestId('device-bulk-tags')).toBeDisabled();
+    expect(screen.getByTestId('device-bulk-tags')).toHaveAttribute('title', '需要管理员权限');
     expect(screen.queryByTestId('device-bulk-swipe-trail-on')).not.toBeInTheDocument();
     expect(screen.queryByTestId('device-bulk-swipe-trail-off')).not.toBeInTheDocument();
   });

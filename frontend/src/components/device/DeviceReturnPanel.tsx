@@ -113,14 +113,14 @@ export function DeviceReturnPanel({ deviceId, returnState, isAdmin }: Props) {
               setDialogOpen(true);
             }}
           >
-            人工放行…
+            人工放行
           </Button>
         ) : null}
       </div>
 
       {aggregate === 'uninitialized' ? (
         <p className={cn('text-xs', TEXT.subtitle)} data-testid={'device-return-empty-' + deviceId}>
-          未初始化（阶段 B 激活前；不推断为已归还）
+          未初始化（尚未产生归还记录，暂不判定为已归还）
         </p>
       ) : (
         <div className="space-y-1" data-testid={'device-return-families-' + deviceId}>

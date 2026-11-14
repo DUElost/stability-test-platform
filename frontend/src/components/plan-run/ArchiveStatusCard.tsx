@@ -13,15 +13,21 @@ interface Props {
   onRetry?: () => void;
 }
 
-function pctBar(value: number | null | undefined, label: string) {
+function pctBar(value: number | null | undefined, label: string, higherIsBetter = false) {
   const pct = value != null ? Math.min(100, Math.round(value)) : null;
   const color = pct == null
     ? 'bg-muted'
-    : pct >= 90
-      ? 'bg-destructive'
-      : pct >= 70
-        ? 'bg-warning'
-        : 'bg-success';
+    : higherIsBetter
+      ? pct >= 95
+        ? 'bg-success'
+        : pct >= 80
+          ? 'bg-warning'
+          : 'bg-destructive'
+      : pct >= 90
+        ? 'bg-destructive'
+        : pct >= 70
+          ? 'bg-warning'
+          : 'bg-success';
   return (
     <div className="flex items-center gap-2 text-[11px]">
       <span className={cn('w-28 shrink-0', TEXT.subtitle)}>{label}</span>
@@ -118,7 +124,7 @@ export default function ArchiveStatusCard({
 
         {linkStats && (
           <div className="space-y-1.5 border-t border-border/50 pt-2" data-testid="signal-link-stats">
-            {pctBar(linkHealthPct(linkStats.fixable_link_rate), 'Signal 链接健康')}
+            {pctBar(linkHealthPct(linkStats.fixable_link_rate), 'Signal 链接健康', true)}
             <div className={cn('flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]', TEXT.subtitle)}>
               <span data-testid="link-not-yet-archived">未归档 {linkStats.not_yet_archived}</span>
               <span data-testid="link-unlinkable">不可链 {linkStats.unlinkable}</span>

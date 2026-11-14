@@ -72,19 +72,73 @@ def test_parse_scheme_maps_file_id_to_partition(tmp_path, tool):
 def test_build_plan_marks_device_unique_entries_preserve(tmp_path, tool):
     images = tmp_path / "images"
     images.mkdir()
-    for name in ("nv.bin", "boot.img"):
+    names = {
+        "NV_LTE": "lte_nv.bin",
+        "Modem_LTE_DELTANV": "lte_deltanv.bin",
+        "NV_NR": "nr_nv.bin",
+        "Modem_NR_DELTANV": "nr_deltanv.bin",
+        "NV_CALI_NR": "nr_cali.bin",
+        "BOOT": "boot.img",
+    }
+    for name in names.values():
         (images / name).write_bytes(b"\x00\x00\x00\x00")
+    blocks = {
+        "NV_LTE": ("l_fixnv1_a", "NV_COMM_SLOT"),
+        "Modem_LTE_DELTANV": ("l_deltanv_a", "CODE2"),
+        "NV_NR": ("nr_downloadnv_a", "NV_COMM"),
+        "Modem_NR_DELTANV": ("nr_deltanv_a", "CODE2"),
+        "NV_CALI_NR": ("calinv", "CODE2"),
+        "BOOT": ("boot_a", "CODE2"),
+    }
     pac = {"entries": [
-        {"id": "NV_LTE", "file": "nv.bin", "size": 4, "type": 1},
-        {"id": "BOOT", "file": "boot.img", "size": 4, "type": 1},
+        {"id": fid, "file": names[fid], "size": 4, "type": 1} for fid in names
     ]}
-    scheme = {"NV_LTE": {"partitions": ["l_fixnv1_a"], "type": "NV_COMM_SLOT"},
-              "BOOT": {"partitions": ["boot_a"], "type": "CODE2"}}
+    scheme = {fid: {"partitions": [blocks[fid][0]], "type": blocks[fid][1]}
+              for fid in names}
 
     plan = tool.build_plan(pac, str(images), scheme)
     by_id = {entry["id"]: entry for entry in plan["entries"]}
 
-    assert by_id["NV_LTE"]["preserve"] is True
-    assert by_id["NV_LTE"]["partitions"] == ["l_fixnv1_a"]
+    for fid in ("NV_LTE", "Modem_LTE_DELTANV", "NV_NR", "Modem_NR_DELTANV", "NV_CALI_NR"):
+        assert by_id[fid]["preserve"] is True, fid
+        assert by_id[fid]["partitions"] == [blocks[fid][0]], fid
     assert "preserve" not in by_id["BOOT"]
     assert by_id["BOOT"]["partitions"] == ["boot_a"]
+
+
+def test_parse_scheme_and_build_plan_capture_fdl_base_and_erases(tmp_path, tool):
+    xml = tmp_path / "P525AAN.xml"
+    xml.write_text(
+        "<BMAConfig><SchemeList><Scheme name='P525AAN'>"
+        "<File><ID>FDL</ID><Type>FDL</Type><Block><Base>0x65000800</Base><Size>0x0</Size></Block></File>"
+        "<File><ID>FDL2</ID><Type>NAND_FDL</Type><Block><Base>0x9EFFFE00</Base><Size>0x0</Size></Block></File>"
+        "<File><ID>EraseSPL</ID><Type>EraseFlash2</Type><Block id='splloader'><Base>0x0</Base></Block></File>"
+        "<File><ID>EraseMisc</ID><Type>EraseFlash2</Type><Block id='misc'><Base>0x0</Base></Block></File>"
+        "<File><ID>EraseMetadata</ID><Type>EraseFlash2</Type><Block id='metadata'/></File>"
+        "<File><ID>BOOT</ID><Type>CODE2</Type><Block id='boot_a'/></File>"
+        "</Scheme></SchemeList></BMAConfig>",
+        encoding="utf-8",
+    )
+    images = tmp_path / "images"
+    images.mkdir()
+    for fname in ("fdl1-sign.bin", "lk-fdl2-sign.bin", "boot.img"):
+        (images / fname).write_bytes(b"\x01\x02\x03\x04")
+
+    scheme = tool.parse_scheme(str(xml))
+    assert scheme["FDL"]["base"] == "0x65000800"
+    assert scheme["FDL2"]["base"] == "0x9EFFFE00"
+    assert "base" not in scheme["EraseMisc"]  # 0x0 ignored
+
+    pac = {
+        "entries": [
+            {"id": "FDL", "file": "fdl1-sign.bin", "size": 4, "type": 1},
+            {"id": "FDL2", "file": "lk-fdl2-sign.bin", "size": 4, "type": 1},
+            {"id": "BOOT", "file": "boot.img", "size": 4, "type": 1},
+        ]
+    }
+    plan = tool.build_plan(pac, str(images), scheme)
+    assert plan["fdl"] == {
+        "fdl1": {"file": "fdl1-sign.bin", "base": "0x65000800"},
+        "fdl2": {"file": "lk-fdl2-sign.bin", "base": "0x9EFFFE00"},
+    }
+    assert plan["erases"] == ["splloader", "misc", "metadata"]

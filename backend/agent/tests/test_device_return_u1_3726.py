@@ -1498,3 +1498,39 @@ class TestReviewF2SameFamilySkipPreservesExecution:
         assert entry["result"] == DISARM_RESULT_EXECUTED_UNVERIFIED, entry
         assert entry["step_id"] == "real-finish", entry
         assert entry["exit_code"] == 0, entry
+
+
+class TestLastStepErrorInitialization3972:
+    """#3972: _last_step_error must exist on a fresh Engine and be read defensively.
+
+    Before the fix these two cases fail: __init__ never set the attribute, and
+    device_return.execute_registered() accessed it bare on outcome=None.
+    """
+
+    def test_fresh_engine_initializes_last_step_error(self):
+        engine = PipelineEngine(
+            adb=MagicMock(),
+            serial="S",
+            run_id=1,
+            log_dir="/tmp/u1-test",
+            mq_producer=MagicMock(),
+            api_url=None,
+            is_aborted=lambda: False,
+        )
+        assert engine._last_step_error == ""
+
+    def test_execute_registered_outcome_none_without_attribute(self, monkeypatch):
+        from backend.agent import device_return
+
+        monkeypatch.setattr(device_return, "resolve_script_path", lambda reg: "/fake")
+        engine = PipelineEngine.__new__(PipelineEngine)
+        engine._script_registry = MagicMock()
+        engine._last_step_result = None
+        engine._execute_step = MagicMock(return_value=None)
+        # Deliberately no _last_step_error: DebtWorker builds a fresh Engine and
+        # may reach execute_registered() before any _execute_step assignment.
+        entry = device_return.execute_registered(
+            engine, next(iter(ONBOARDED)), "disarm", with_permit=False
+        )
+        assert entry["result"] == DISARM_RESULT_NOT_EXECUTED
+        assert entry["reason"] == "execution_not_started"
