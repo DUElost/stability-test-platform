@@ -261,3 +261,10 @@ def fix_host_devices(host_ip: str, serials: list[str]):
    - 检测到设备 `uptime` 增长超过设定阈值且轮次未推进时，增加自愈唤醒尝试（重发保活广播或拉起 Activity）。
 3. **`gpu_setup.py` / `prepare_device()` 初始化加固**：
    - 在 `prepare_device()` 中增加 NFC 与 Tag 抑制：执行 `cmd nfc disable-nfc persist`、`svc nfc disable` 与 `pm disable-user --user 0 com.android.apps.tag`，防止机架密集摆放设备的射频互感引发 Empty tag 焦点抢占。
+
+---
+
+## 7. 实施记录与版本核对
+
+- **2026-11-02 中央资源发布收口**：
+  中央存储路径 `/mnt/stp-aee/resources/power-cycle/chain/AutoTestTool.apk` 正式替换为 AOSP 展锐平台测试公钥签名包（SHA-256: `e88d013db3276b11ffff58fb64ac20f7592ec283a610bc329215fa7f45c9e7ef`）。后续轮次与新任务在 setup 阶段安装后即可直接获得 `android.permission.REBOOT: granted=true` 权限，根治安装 Tinno 原厂包导致的静默未重启问题。

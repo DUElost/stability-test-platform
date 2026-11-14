@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .config import BASE_DIR
 from .event_uploader import EventUploader
+from .evidence_uploader import EvidenceUploader
 from .log_archiver import LogArchiver
 from .scan_runner import ScanRunner
 from .settings import reset_agent_settings_caches
@@ -271,6 +272,13 @@ def build_control_handler(
                 force=True,
             )
             EventUploader.instance().start()
+            EvidenceUploader.instance().configure(
+                api_url=reloaded_api_url,
+                agent_secret=reloaded_agent_secret,
+                host_id=str(host_id),
+                force=True,
+            )
+            EvidenceUploader.instance().start()
             operation_cap = deps.operation_scheduler.reload_from_env()
             # #2086：心跳/协调域的节奏旋钮原先只在构造时取值——reload 打印 done
             # 但运行中的值不变。实例级 re-apply 补上（缓存已在上面清过）。

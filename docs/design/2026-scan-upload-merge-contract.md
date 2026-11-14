@@ -202,11 +202,13 @@ unlinked_fixable、not_yet_archived。链接故障只看
 | scan / merge | `{root}/dedup/{run_id}/`；merge 发布到 `merge/`，按平台执行时落 `merge/{platform}/` |
 | extract | `{root}/jira/{run_id}/` |
 | 上传清单分片 | `{root}/_meta/{run_id}/{host_id}.json`（#2188 D 步；scan 侧聚合后注册产物，与 run 同生命周期） |
+| 证据区（B8 G6） | `{root}/evidence/{主PlanRun编号}_{采集时目录名}/{SN}/{事件目录名}/`（ADR-0062 D9 第 6 条；按链留存，不进 `RUN_FAMILIES`） |
 
-本表的族清单正本是 `backend/storage_families.py`（`RUN_FAMILIES` / `JOBS_FAMILY`）——
-retention purge 桶与 `measure_center_storage.py` 的 E-1/E-2 测量族都从它取，本表由
-`tests/test_center_storage_families_single_source.py` 与它逐族对拍（曾经三处各写一份、
-`_meta` 在两份里缺席，导致「有清理、无观测」）。
+本表的族清单正本是 `backend/storage_families.py`（`RUN_FAMILIES` / `JOBS_FAMILY` /
+`CHAIN_FAMILIES`）——retention purge 桶与 `measure_center_storage.py` 的 E-1/E-2 测量族
+都从它取，本表由 `tests/test_center_storage_families_single_source.py` 与它逐族对拍
+（曾经三处各写一份、`_meta` 在两份里缺席，导致「有清理、无观测」）。`evidence/` 是
+链主键族，按 run 清理器不得消费它。
 
 `merge/{platform}/` 是**平台分区**形态：下游 `dedup_extract._merge_uri_is_platform_partitioned`
 按 `PlanRunArtifact.storage_uri` 的**路径形状**判定平台，并据此决定 jira bundle 的落点
