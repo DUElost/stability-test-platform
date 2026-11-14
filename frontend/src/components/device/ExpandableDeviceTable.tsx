@@ -525,7 +525,7 @@ export function ExpandableDeviceTable({
           <TableHeader>
             <TableRow className="sticky top-0 z-20 bg-muted/95 hover:bg-muted/95">
               {selectable && (
-                <TableHead className="sticky left-0 z-30 w-10 min-w-[40px] bg-muted px-3 py-2">
+                <TableHead className="sticky left-0 z-30 w-9 min-w-[36px] bg-muted px-2.5 py-2">
                   <input
                     ref={selectPageRef}
                     type="checkbox"
@@ -539,27 +539,27 @@ export function ExpandableDeviceTable({
               )}
               <TableHead
                 className={cn(
-                  'sticky z-30 w-10 min-w-[40px] bg-muted',
-                  selectable ? 'left-10' : 'left-0',
+                  'sticky z-30 w-8 min-w-[32px] bg-muted px-2',
+                  selectable ? 'left-9' : 'left-0',
                 )}
               ></TableHead>
               <TableHead
                 className={cn(
-                  'sticky z-30 min-w-[180px] max-w-[230px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
-                  selectable ? 'left-20' : 'left-10',
+                  'sticky z-30 min-w-[140px] max-w-[220px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
+                  selectable ? 'left-[68px]' : 'left-8',
                 )}
               >
                 设备
               </TableHead>
-              <TableHead className="min-w-[80px] font-medium">版本</TableHead>
-              <TableHead className="min-w-[132px] font-medium">状态</TableHead>
-              <TableHead className="min-w-[96px] font-medium">电量</TableHead>
-              <TableHead className="min-w-[68px] font-medium">温度</TableHead>
-              {hasDiskData && <TableHead className="min-w-[116px] font-medium">存储</TableHead>}
-              {hasNetworkData && <TableHead className="min-w-[72px] font-medium">网络</TableHead>}
-              <TableHead className="min-w-[100px] font-medium">标签</TableHead>
-              <TableHead className="min-w-[108px] font-medium">所属主机</TableHead>
-              <TableHead className="min-w-[136px] font-medium text-right">最后活跃</TableHead>
+              <TableHead className="min-w-[64px] font-medium">版本</TableHead>
+              <TableHead className="min-w-[112px] font-medium">状态</TableHead>
+              <TableHead className="min-w-[76px] font-medium">电量</TableHead>
+              <TableHead className="min-w-[60px] font-medium">温度</TableHead>
+              {hasDiskData && <TableHead className="min-w-[88px] font-medium">存储</TableHead>}
+              {hasNetworkData && <TableHead className="min-w-[60px] font-medium">网络</TableHead>}
+              <TableHead className="min-w-[84px] font-medium">标签</TableHead>
+              <TableHead className="min-w-[88px] font-medium">所属主机</TableHead>
+              <TableHead className="min-w-[96px] font-medium text-right">最后活跃</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -580,7 +580,7 @@ export function ExpandableDeviceTable({
                     onClick={() => toggleRow(device.id)}
                   >
                     {selectable && (
-                      <TableCell className="sticky left-0 z-10 w-10 min-w-[40px] bg-card px-3 py-1.5">
+                      <TableCell className="sticky left-0 z-10 w-9 min-w-[36px] bg-card px-2.5 py-1.5">
                         <input
                           type="checkbox"
                           checked={selectedIds?.has(device.id) ?? false}
@@ -593,8 +593,8 @@ export function ExpandableDeviceTable({
                     )}
                     <TableCell
                       className={cn(
-                        'sticky z-10 w-10 min-w-[40px] bg-card px-3 py-1.5',
-                        selectable ? 'left-10' : 'left-0',
+                        'sticky z-10 w-8 min-w-[32px] bg-card px-2 py-1.5',
+                        selectable ? 'left-9' : 'left-0',
                       )}
                     >
                       <ChevronDown
@@ -606,8 +606,8 @@ export function ExpandableDeviceTable({
                     </TableCell>
                     <TableCell
                       className={cn(
-                        'sticky z-10 min-w-[180px] max-w-[230px] bg-card px-3 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
-                        selectable ? 'left-20' : 'left-10',
+                        'sticky z-10 min-w-[140px] max-w-[220px] bg-card px-3 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
+                        selectable ? 'left-[68px]' : 'left-8',
                       )}
                     >
                       <div className="truncate font-mono text-sm text-foreground" title={device.serial}>
