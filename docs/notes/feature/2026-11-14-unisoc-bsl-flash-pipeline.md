@@ -27,8 +27,8 @@ Class: feature
 
 - 单元测试：`.venv/bin/python -m pytest backend/agent/tests/test_flash_firmware_unisoc_bsl.py -v`（5 passed）。
 - 包与清单门禁：`.venv/bin/python tools/dev/check_script_packages.py` 与 `.venv/bin/python tools/dev/check_tool_manifest.py --base origin/main` 通过。
-- 实机批量验证：`172.21.15.72` 16/16 台 P532AA 方案 2 批量刷机全数成功升级至 `userdebug` inc=117（总耗时 ~66 分钟）。
-- STP 契约双机并发验证：`172.21.15.82` 上以 `android` 用户并发运行 `MSW000003J6AU0001C`（`flash=238.3s`, `boot=63.0s`, `total=304.8s`）与 `MSW000003J6AU0006A`（`lock-wait` 心跳正常，`flash=233.7s`, `boot=60.9s`, `total=539.0s`），均返回 `success=true` 且 `uid=0(root)`。
+- 实机批量验证：`172.21.x.x` 16/16 台 P532AA 方案 2 批量刷机全数成功升级至 `userdebug` inc=117（总耗时 ~66 分钟）。
+- STP 契约双机并发验证：`172.21.x.x` 上以 `android` 用户并发运行 `<device-A>`（`flash=238.3s`, `boot=63.0s`, `total=304.8s`）与 `<device-B>`（`lock-wait` 心跳正常，`flash=233.7s`, `boot=60.9s`, `total=539.0s`），均返回 `success=true` 且 `uid=0(root)`。
 
 ## Revisit
 

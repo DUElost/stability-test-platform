@@ -85,13 +85,27 @@ def test_resolve_firmware_images_dir_accepts_version_or_images_dir(tmp_path: Pat
     assert mod.resolve_firmware_images_dir({"firmware_dir": str(images.parent)}, "adb", "SN1") == str(images)
 
 
+def _patch_advancing_clock(monkeypatch: pytest.MonkeyPatch, mod, *, start: float = 1_000_000.0):
+    state = {"now": start}
+
+    def fake_time() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(mod.time, "time", fake_time)
+    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    return state
+
+
 def test_acquire_host_lock_emits_lock_wait_and_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     lock_file = tmp_path / "test.lock"
     progress = mod.Progress()
     stamps: list[dict] = []
     monkeypatch.setattr(progress, "stamp", lambda **kw: stamps.append(kw))
-    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+    _patch_advancing_clock(monkeypatch, mod)
 
     calls = {"n": 0}
     real_flock = mod.fcntl.flock
