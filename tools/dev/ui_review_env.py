@@ -217,7 +217,90 @@ def wait_until_ready(root: Path) -> None:
     user = session(USER, credentials["user"], "user")
     if inventory(user) != expected:
         raise PreviewError("Ordinary user could not read the expected fixture inventory")
+    seed_site_pages(admin)
     write_status(root, ready=True, inventory=actual)
+
+
+def seed_site_pages(admin) -> None:
+    """Seed representative projects, plans, and runs for site-wide UI review."""
+    request(admin, "/api/v1/scripts/scan", data={})
+
+    projects = request(admin, "/api/v1/projects")
+    project_items = projects.get("data", []) if isinstance(projects, dict) else projects
+    if not project_items:
+        request(
+            admin,
+            "/api/v1/projects",
+            data={
+                "project_key": "UI-REVIEW-LONG-PROJECT-2026",
+                "display_name": "UI-Review-长名称稳定性测试与异常回归验证工程-2026Q4",
+                "customer": "Internal-QA",
+            },
+        )
+
+    plans_resp = request(admin, "/api/v1/plans")
+    plans_data = plans_resp.get("data", plans_resp) if isinstance(plans_resp, dict) else plans_resp
+    plan_items = plans_data.get("items", []) if isinstance(plans_data, dict) else plans_data
+    if not plan_items:
+        scripts = request(admin, "/api/v1/scripts")["data"]
+        by_name = {s["name"]: s for s in scripts if s.get("is_active")}
+        s_init = by_name.get("aee_prepare") or scripts[0]
+        s_patrol = by_name.get("monkey_setup") or scripts[0]
+        s_tear = by_name.get("monkey_teardown") or scripts[0]
+        created_plan = request(
+            admin,
+            "/api/v1/plans",
+            data={
+                "name": "UI-Review-长名称多阶段巡检计划-Monkey与稳定性回归验证",
+                "description": "UI review fixture plan",
+                "specialty_key": "monkey",
+                "patrol_interval_seconds": 60,
+                "timeout_seconds": 300,
+                "watcher_policy": None,
+                "next_plan_id": None,
+                "steps": [
+                    {
+                        "step_key": "init_prepare",
+                        "script_name": s_init["name"],
+                        "script_version": s_init["version"],
+                        "stage": "init",
+                        "sort_order": 0,
+                        "timeout_seconds": 30,
+                        "retry": 0,
+                    },
+                    {
+                        "step_key": "patrol_step",
+                        "script_name": s_patrol["name"],
+                        "script_version": s_patrol["version"],
+                        "stage": "patrol",
+                        "sort_order": 0,
+                        "timeout_seconds": 30,
+                        "retry": 0,
+                    },
+                    {
+                        "step_key": "teardown_step",
+                        "script_name": s_tear["name"],
+                        "script_version": s_tear["version"],
+                        "stage": "teardown",
+                        "sort_order": 0,
+                        "timeout_seconds": 60,
+                        "retry": 0,
+                    },
+                ],
+            },
+        )["data"]
+        plan_id = created_plan["id"]
+    else:
+        plan_id = plan_items[0]["id"]
+
+    runs_resp = request(admin, "/api/v1/plan-runs")
+    runs_data = runs_resp.get("data", runs_resp) if isinstance(runs_resp, dict) else runs_resp
+    run_items = runs_data.get("items", []) if isinstance(runs_data, dict) else runs_data
+    if not run_items:
+        devs = request(admin, "/api/v1/devices?limit=5")["items"]
+        dev_ids = [d["id"] for d in devs[:2]]
+        if dev_ids:
+            request(admin, f"/api/v1/plans/{plan_id}/run", data={"device_ids": dev_ids})
 
 
 def read_status(sha: str) -> dict:
