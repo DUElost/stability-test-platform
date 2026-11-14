@@ -21,14 +21,27 @@ def main() -> None:
         )
         for index in range(2)
     ]
-    for payload in payloads:
+    for host_idx, payload in enumerate(payloads):
         payload["devices"][0]["model"] = LONG_MODEL
-        for device in payload["devices"]:
+        usb_slots: dict[str, list[str | None]] = {}
+        for dev_idx, device in enumerate(payload["devices"]):
             device["temperature"] = device.pop("battery_temp") // 10
-        payload["capacity"].update(
-            online_healthy_devices=DEVICES_PER_HOST - 1,
-            usb_device_count=DEVICES_PER_HOST,
-        )
+            device["disk_total"] = 128_000_000_000
+            device["disk_used"] = 64_000_000_000 + (dev_idx % 5) * 8_000_000_000
+            if host_idx == 0:
+                slot = f"1-5.{dev_idx + 1}:1"
+                if device["adb_connected"]:
+                    usb_slots[device["serial"]] = [slot, "0e8d:201c"]
+                else:
+                    vid_pid = "0e8d:2046" if dev_idx % 2 == 0 else None
+                    usb_slots[device["serial"]] = [slot, vid_pid]
+        capacity_update: dict[str, object] = {
+            "online_healthy_devices": DEVICES_PER_HOST - 1,
+            "usb_device_count": DEVICES_PER_HOST,
+        }
+        if usb_slots:
+            capacity_update["usb_power_slots"] = usb_slots
+        payload["capacity"].update(capacity_update)
 
     while True:
         for payload in payloads:
