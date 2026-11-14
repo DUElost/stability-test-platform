@@ -486,11 +486,10 @@ export default function DevicesPage() {
       width="wide"
       className={selectedDeviceIds.size > 0 ? 'pb-28' : undefined}
     >
-      <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
+      <PageHeader title="物理设备" subtitle="管理和监控测试设备 · 点击设备行展开详情，勾选后可批量处理" />
 
-      <div className="flex flex-wrap items-center justify-between gap-2 py-2">
-        <span className={cn('text-xs', TEXT.subtitle)}>点击设备行展开详情，勾选后可批量处理</span>
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2 py-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* #2962 A / ADR-0057 D4：默认隐藏陈旧与退役设备（服务端口径），
               这里给出显式查看开关——隐藏是默认，不是不可见。 */}
           <Button

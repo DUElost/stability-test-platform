@@ -390,3 +390,29 @@ it('#3962：支持状态卡反选、搜索框一键清空、恒定标签列与�
   fireEvent.click(editTagBtn);
   expect(onEditDeviceTags).toHaveBeenCalledWith(expect.objectContaining({ id: 1, serial: 'DEV-IDLE' }));
 });
+
+it('#3962 PR2：0值状态卡中性灰、未映射徽标降噪、标签chip带title', () => {
+  const sample = [
+    {
+      id: 1,
+      serial: 'DEV-01',
+      model: 'M1',
+      status: 'idle' as const,
+      attribution_source: 'unmapped' as const,
+      tags: ['ui-review-r3'],
+    },
+  ];
+  render(<ExpandableDeviceTable devices={sample} />);
+  const unmapped = screen.getByText('未映射');
+  expect(unmapped).toHaveClass('bg-muted', 'text-muted-foreground');
+  expect(unmapped).not.toHaveClass('text-warning');
+
+  const tagChip = screen.getByText('ui-review-r3');
+  expect(tagChip).toHaveAttribute('title', 'ui-review-r3');
+  expect(tagChip).toHaveClass('max-w-[140px]');
+
+  const testingBtn = screen.getByRole('button', { name: /测试中/ });
+  const errorBtn = screen.getByRole('button', { name: /错误/ });
+  expect(within(testingBtn).getByText('0')).toHaveClass('text-muted-foreground');
+  expect(within(errorBtn).getByText('0')).toHaveClass('text-muted-foreground');
+});
