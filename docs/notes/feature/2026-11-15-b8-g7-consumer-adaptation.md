@@ -90,10 +90,11 @@ Class: feature
   2. extract 去掉平台过滤 → 混合运行多拷 1 个事件，用例失败；
   3. 计数退回路径口径 → 同一发生两条路径被计 2 次，用例失败；
   4. 关掉 I4 保护 → retention 用例失败。
-- 相关回归（202 + 190 + 122 + 59 + 58 项）全绿；`frontend` vitest
-  `DedupReportCard` 18 项全绿；`npm run type-check` 通过。
+- 受影响回归 413 项全绿；`frontend` vitest `DedupReportCard` 18 +
+  `LogEventsCard` 16 = 34 项全绿；`npm run type-check` 通过。
 - `python scripts/run_gates.py check:quick` 16 道门全绿。
-- 完整 `scripts/run_pytest.py backend/tests tests`：见 PR 正文（实跑结果）。
+- 完整 `scripts/run_pytest.py tests/`：2538 passed, 18 skipped（EXIT 0）。
+- 六项 required CI 在 HEAD `9b015cb17` 上全部 pass。
 
 ## Revisit
 
