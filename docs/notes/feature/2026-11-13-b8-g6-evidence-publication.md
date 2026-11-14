@@ -97,6 +97,36 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
   普通事件不入队）。变异验证：去掉服务端 recovery 过滤 → 有台账用例 RED；
   去掉按 ID 恢复 → 无台账用例 RED。
 
+### 第 3 轮复核返修（14895494 补跑探针）
+
+- **HTTP 路由漏接**：R2 已在服务层 `list_agent_device_log_events` 支持
+  `purpose` / `ids`，但 FastAPI 路由 `list_device_log_events` 既未声明、也未转发
+  这两个 query 参数；请求仍 200，参数被静默丢弃，按用途过滤与按 ID 恢复在生产
+  HTTP 路径上全部失效。R2 的探针用进程内桥接**直接调用服务层**，绕过了这处
+  缺口，所以没抓到。本轮在路由签名补 `ids: Optional[str]` /
+  `purpose: Optional[str]` 并逐字透传；`agent_api.py` 恰好触及 god-files 封顶
+  411 行，docstring 压成单行、透参并入同一表达式保持不越界。
+- **按 ID 恢复窗口饥饿**：`_recover_spill_intents` 每轮都调用
+  `_durable_spill_event_ids()` 读同一批前 200 个 key（ORDER BY key LIMIT 200）。
+  若这 200 个都已耗尽预算、或状态不属于本循环（被跳过且不清意图），第 201 个
+  （仍有预算）永远不被查询/入队，连续两轮读同一批——持续占窗。修复：
+  - `state_store.list_states` 增加 keyset 游标 `after_key`（`AND key > ?`）；
+  - `_durable_spill_entries(limit, after_key)` 返回 `(意图键, event_id)`，
+    `_read/_write_spill_cursor` 把游标持久化到 agent_state（按 `states` 分键，
+    快/慢循环互不干扰），进程重启可续接；
+  - `_recover_spill_intents` 每轮从游标续读，整页被跳过（无事件入队）时本轮
+    继续翻页（`_SPILL_INTENT_MAX_PAGES=4` 上限，每页仍 ≤200，有界），到末尾
+    （不足一页）把游标归零供下一轮回卷；无论本页是否入队，游标都推进到本页
+    末尾，被跳过的意图不再下一轮占位。已耗尽预算事件仍按原 attempts 跳过、
+    不从零开始；入队守卫、五次上限、台账只在校验回执成功后登记等语义不变。
+- 验收探针改为**穿过 FastAPI**：`backend/tests/api/test_b8_g6_r3_route_and_intent_window.py`
+  用 `httpx.ASGITransport(app=fastapi_app)` 让请求真正经路由 → 服务层 → 隔离
+  PG16（testcontainers），并用 spy 记录服务层收到的 kwargs + 行为断言双重证明
+  `purpose` / `ids` 到达；意图窗口探针用真实 `_recover_spill_intents`（两轮）+
+  临时 SQLite 201 意图（前 200 耗尽/状态不匹配、第 201 个 attempts=4），
+  `requests.get` 桥接到同一 ASGITransport，按 ID 恢复查询也走真实路由。
+  参数化 4 例（有台账/首次失败无台账 × 已耗尽/当前循环无法处理）。
+
 ## Alternatives
 
 - **把证据目的路径写回 DLE.remote_path**：否决。溢出补扫与留存以该字段定位
@@ -141,11 +171,16 @@ evidence_publication 以 (实际 PlanRun, 平台, 代表 DLE) 为唯一身份，
 - R2 探针：真实 _retry_failed_loop（两轮）+ 真实 list_agent_device_log_events
   桥接，200 填充 + 第 201 条溢出（attempts=4）：6f621823 → 2 failed；
   本 HEAD → 2 passed。变异：去 recovery 过滤 / 去按 ID 恢复各 1 RED。
-- 定向套件 369 passed（含 R1 的 LOCAL 候选、扫描输入、失败后重启与补扫读回，
+- R3 探针（穿 FastAPI → PG16）：backend/tests/api/test_b8_g6_r3_route_and_intent_window.py
+  5 例，同一探针文件在 14895494 反例基线 worktree → **5 failed**（路由 spy 收到
+  的 kwargs 无 purpose/ids；201 意图两轮 queried=2/enqueued=[] 跨轮饥饿），
+  返修后 → **5 passed**。变异自守：去掉路由透传 → HTTP 用例 RED；禁用游标
+  翻页 → 4 个意图窗口用例全 RED。
+- 定向套件 376 passed（含 R1 的 LOCAL 候选、扫描输入、失败后重启与补扫读回，
   CURRENT/无模式/展锐回归，G6 服务/契约/Agent/G4/G5/G1/G2/retention/measure/
-  Agent control+shutdown/导入棘轮）。全量 Agent 套件 3382 passed / 2 skipped /
-  1 既有 ambient 失败（test_dialout_absent_and_no_rule_fails，已在 origin/main
-  复现，与本次改动无关；CI pr-agent-tests 绿）。
+  Agent control+shutdown/导入棘轮，及 R3 新探针）。全量 Agent 套件 3384 passed /
+  2 skipped / 1 既有 ambient 失败（test_dialout_absent_and_no_rule_fails，已在
+  origin/main 复现，与本次改动无关；CI pr-agent-tests 绿）。
 - 门禁：python scripts/run_gates.py check:quick（16 gates 全绿）；
   tools/dev/check_pr_migrate.py（空库 alembic upgrade head + schema 比对 + seed 身份，
   [OK]）；PYTHONPATH=. .venv/bin/lint-imports --no-cache（5 contracts kept）。

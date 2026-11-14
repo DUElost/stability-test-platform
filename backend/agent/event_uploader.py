@@ -55,8 +55,13 @@ _RECOVER_POLL_LIMIT = 200
 _RETRY_FAILED_LIMIT = 200
 # B8 G6：恢复循环的查询用途（服务端在截取窗口前排除不可走旧链的事件）。
 _RECOVERY_PURPOSE = "recovery"
-# 按事件 ID 恢复已持久化溢出意图的上限（与恢复窗同量级）。
+# 按事件 ID 恢复已持久化溢出意图的单页上限（与恢复窗同量级，有界）。
 _SPILL_INTENT_LIMIT = 200
+# 单轮最多翻几页：整页被跳过时继续翻，避免"一批固定意图永久占满窗口"。
+# 每页仍 <= _SPILL_INTENT_LIMIT，总量有界；跨轮用持久游标续接。
+_SPILL_INTENT_MAX_PAGES = 4
+# 持久 keyset 游标前缀（与 event_upload_spill: 意图键不同前缀，不参与意图扫描）。
+_SPILL_CURSOR_PREFIX = "stp_spill_cursor:"
 # 已离开恢复态的事件：残留的溢出意图可以清除。
 _TERMINAL_UPLOAD_STATES = frozenset({"REMOTE", "ARCHIVED", "PRUNED", "PULL_FAILED"})
 
@@ -94,27 +99,62 @@ def _durable_spill_flag(event_id: str, value: bool | None = None) -> bool:
         return False
 
 
-def _durable_spill_event_ids(limit: int = _SPILL_INTENT_LIMIT) -> list[str]:
-    """重启后读出仍有效的溢出意图 event_id（有界）。
+def _durable_spill_entries(
+    limit: int = _SPILL_INTENT_LIMIT, after_key: str = "",
+) -> list[tuple[str, str]]:
+    """按 keyset 游标读一页活跃溢出意图，返回 ``(意图键, event_id)``。
 
-    HddSpill 在 force 入队时就把意图写进 agent_state；首次溢出失败（回执
-    未成功、尚无 SpillLedger）时，这是唯一能证明"该事件应走溢出通道"的
-    持久记录。
+    ``after_key`` 让恢复循环每轮从上一轮末尾继续；越过已耗尽 / 本循环无法
+    处理的意图，避免它们永久占满 ``LIMIT`` 窗口（B8 G6 第 3 轮）。
     """
     try:
         store = _state_store()
         if store is None:
             return []
-        entries = store.list_states("event_upload_spill:", limit=limit, value="1")
+        rows = store.list_states(
+            "event_upload_spill:", limit=limit, value="1", after_key=after_key,
+        )
     except Exception:
         logger.warning("event_uploader_spill_intent_list_failed", exc_info=True)
         return []
-    event_ids: list[str] = []
-    for key, _value in entries:
+    entries: list[tuple[str, str]] = []
+    for key, _value in rows:
         _prefix, _, event_id = key.partition(":")
         if event_id:
-            event_ids.append(event_id)
-    return event_ids
+            entries.append((key, event_id))
+    return entries
+
+
+def _durable_spill_event_ids(limit: int = _SPILL_INTENT_LIMIT) -> list[str]:
+    """重启后读出仍有效的溢出意图 event_id（有界，从头开始，测试/兼容用）。"""
+    return [event_id for _key, event_id in _durable_spill_entries(limit=limit)]
+
+
+def _spill_cursor_key(states: str) -> str:
+    return f"{_SPILL_CURSOR_PREFIX}{states}"
+
+
+def _read_spill_cursor(states: str) -> str:
+    """读本状态集合的持久 keyset 游标；无状态库或异常时从头开始。"""
+    try:
+        store = _state_store()
+        if store is None:
+            return ""
+        return store.get_state(_spill_cursor_key(states), "")
+    except Exception:
+        logger.warning("event_uploader_spill_cursor_read_failed", exc_info=True)
+        return ""
+
+
+def _write_spill_cursor(states: str, cursor: str) -> None:
+    try:
+        store = _state_store()
+        if store is None:
+            return
+        # 游标落到已读取页的末尾；空串代表一轮翻完，下一轮从头再扫。
+        store.set_state(_spill_cursor_key(states), cursor)
+    except Exception:
+        logger.debug("event_uploader_spill_cursor_write_failed", exc_info=True)
 
 
 def _attempts_state_key(event_id: str) -> str:
@@ -732,14 +772,39 @@ class EventUploader:
     def _recover_spill_intents(self, states: str) -> None:
         """按事件 ID 有界恢复已持久化的溢出意图（优先于窗口查询）。
 
-        HddSpill 在 force 入队时就写入 agent_state 的 event_upload_spill:
-        意图；首次溢出失败（回执未成功、尚无 SpillLedger）时它是唯一来源。
-        按 ID 精确取回不受恢复窗饱和影响；只处理本循环负责的状态，已耗尽
-        预算的 UPLOAD_FAILED 不重入队（沿用持久 attempts）。
+        HddSpill 在 force 入队时写入 ``event_upload_spill:`` 意图；首次溢出
+        失败（回执未成功、尚无 SpillLedger）时它是唯一来源。每轮从持久
+        keyset 游标续读，整页被跳过（已耗尽 / 状态不属于本循环）时继续翻页，
+        使一批固定不变的意图无法永久占满 ``LIMIT`` 窗口；游标跨轮持久化，
+        进程重启也能接着推进。翻页总数有 ``_SPILL_INTENT_MAX_PAGES`` 上限。
         """
-        intent_ids = _durable_spill_event_ids()
-        if not intent_ids:
-            return
+        wanted = {value.strip() for value in states.split(",") if value.strip()}
+        cursor = _read_spill_cursor(states)
+        for _page in range(_SPILL_INTENT_MAX_PAGES):
+            entries = _durable_spill_entries(
+                limit=_SPILL_INTENT_LIMIT, after_key=cursor,
+            )
+            if not entries:
+                # 已到键空间末尾（或空集合）：游标归零，下一轮从头再扫。
+                _write_spill_cursor(states, "")
+                return
+            intent_ids = [event_id for _key, event_id in entries]
+            last_key = entries[-1][0]
+            enqueued = self._recover_spill_intent_page(intent_ids, wanted)
+            # 无论本页是否可入队，游标都推进到本页末尾：被跳过的意图不会
+            # 在下一轮继续占位。到末尾（不足一页）时归零以便下一轮回卷。
+            at_tail = len(entries) < _SPILL_INTENT_LIMIT
+            _write_spill_cursor(states, "" if at_tail else last_key)
+            if enqueued or at_tail:
+                return
+            # 整页被跳过且尚未到末尾：本轮继续翻到下一页（有界）。
+            cursor = last_key
+        # 翻页预算用尽：游标已指向下一页起点，下一轮从这里续读。
+
+    def _recover_spill_intent_page(
+        self, intent_ids: list[str], wanted: set[str],
+    ) -> bool:
+        """按 ID 精确取回一页意图并处理；返回本页是否有事件实际入队。"""
         try:
             resp = requests.get(
                 f"{self._api_url}/api/v1/agent/device-log-events",
@@ -753,19 +818,19 @@ class EventUploader:
             )
         except Exception:
             logger.exception("event_uploader_spill_intent_query_error")
-            return
+            return False
         if resp.status_code >= 400:
             logger.warning(
                 "event_uploader_spill_intent_query_failed status=%s",
                 resp.status_code,
             )
-            return
+            return False
 
         events = {
             str(item.get("id")): item
             for item in resp.json().get("data", {}).get("events", [])
         }
-        wanted = {value.strip() for value in states.split(",") if value.strip()}
+        enqueued = False
         for event_id in intent_ids:
             item = events.get(event_id)
             if item is None:
@@ -784,7 +849,7 @@ class EventUploader:
                     event_id, attempts,
                 )
                 continue
-            self.enqueue_local_event(event={
+            if self.enqueue_local_event(event={
                 "id": event_id,
                 "local_path": item["local_path"],
                 "host_id": item.get("host_id", self._host_id),
@@ -797,7 +862,9 @@ class EventUploader:
                 "upload_attempts": attempts,
                 "dedup_first": bool(item.get("dedup_first")),
                 "hdd_spill": True,
-            }, force=True)
+            }, force=True):
+                enqueued = True
+        return enqueued
 
     def _recover_pending(self) -> None:
         """30s 快速轮询：把「等待首次上送」的事件入队（#380）。

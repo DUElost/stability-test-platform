@@ -343,3 +343,71 @@ def test_spill_intent_recovery_by_id_respects_budget_and_identity(
     assert jobs[0].attempt == 2
     assert jobs[0].hdd_spill is True
     assert up._load_attempts(exhausted) == event_uploader_module._MAX_RETRIES
+
+
+def test_list_states_after_key_is_keyset_paged(tmp_path, monkeypatch):
+    """state_store.list_states 支持 keyset 游标：越过已读页、不重不漏。"""
+    from backend.agent.aee.state_store import ScriptStateStore
+
+    path = tmp_path / "agent_state.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_state "
+            "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        for index in range(5):
+            conn.execute(
+                "INSERT INTO agent_state (key, value) VALUES (?, ?)",
+                (f"event_upload_spill:k{index:03d}", "1"),
+            )
+        # 同前缀但 value=0 的已清除项不得占窗
+        conn.execute(
+            "UPDATE agent_state SET value='0' WHERE key=?",
+            ("event_upload_spill:k000",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    store = ScriptStateStore(db_path=str(path))
+
+    page1 = store.list_states("event_upload_spill:", limit=2, value="1")
+    assert [key for key, _v in page1] == [
+        "event_upload_spill:k001", "event_upload_spill:k002",
+    ]
+    page2 = store.list_states(
+        "event_upload_spill:", limit=2, value="1", after_key=page1[-1][0],
+    )
+    assert [key for key, _v in page2] == [
+        "event_upload_spill:k003", "event_upload_spill:k004",
+    ]
+    page3 = store.list_states(
+        "event_upload_spill:", limit=2, value="1", after_key=page2[-1][0],
+    )
+    assert page3 == []
+    # 无前缀/无游标时 from-head 仍可用（兼容）
+    assert len(store.list_states("event_upload_spill:", limit=200, value="1")) == 4
+
+
+def test_spill_cursor_roundtrip_and_paging_helpers(tmp_path, monkeypatch):
+    """持久游标跨轮续读；整页被跳过时翻到下一页（不永久占窗）。"""
+    _state_db(tmp_path, monkeypatch)
+    keys = [f"event_upload_spill:{uuid4()}" for _ in range(5)]
+    for key in keys:
+        event_id = key.partition(":")[2]
+        assert event_uploader_module._durable_spill_flag(event_id, True)
+
+    states = "UPLOAD_FAILED,UPLOADING"
+    assert event_uploader_module._read_spill_cursor(states) == ""
+    entries = event_uploader_module._durable_spill_entries(limit=2)
+    assert len(entries) == 2
+    event_uploader_module._write_spill_cursor(states, entries[-1][0])
+    assert event_uploader_module._read_spill_cursor(states) == entries[-1][0]
+    following = event_uploader_module._durable_spill_entries(
+        limit=2, after_key=entries[-1][0],
+    )
+    assert len(following) == 2
+    # 游标写入空串 = 回卷到头
+    event_uploader_module._write_spill_cursor(states, "")
+    assert event_uploader_module._read_spill_cursor(states) == ""
+    assert len(event_uploader_module._durable_spill_event_ids()) == 5
