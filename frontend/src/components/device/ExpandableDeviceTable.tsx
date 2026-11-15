@@ -251,9 +251,19 @@ export function ExpandableDeviceTable({
   // 防抖搜索，减少不必要的过滤计算
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
 
+  const devicesInStatusAndTagScope = useMemo(
+    () =>
+      devices.filter((device) => {
+        if (statusFilter !== 'all' && device.status !== statusFilter) return false;
+        if (taggedOnly && (!device.tags || device.tags.length === 0)) return false;
+        return true;
+      }),
+    [devices, statusFilter, taggedOnly],
+  );
+
   const hostOptions = useMemo(() => {
     const byKey = new Map<string, string>();
-    for (const device of devices) {
+    for (const device of devicesInStatusAndTagScope) {
       const key = hostFilterKey(device);
       if (byKey.has(key)) continue;
       byKey.set(key, device.host_name?.trim() || (key === 'unassigned' ? '未分配' : key));
@@ -261,35 +271,48 @@ export function ExpandableDeviceTable({
     return Array.from(byKey.entries())
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
-  }, [devices]);
+  }, [devicesInStatusAndTagScope]);
 
-  const devicesInHostScope = useMemo(
-    () => devices.filter((device) => hostFilter === 'all' || hostFilterKey(device) === hostFilter),
-    [devices, hostFilter],
+  const devicesInOptionScope = useMemo(
+    () => devicesInStatusAndTagScope.filter((device) => hostFilter === 'all' || hostFilterKey(device) === hostFilter),
+    [devicesInStatusAndTagScope, hostFilter],
   );
 
   const modelOptions = useMemo(
-    () => Array.from(new Set(devicesInHostScope.map((device) => device.model).filter(Boolean))).sort((a, b) =>
-      a.localeCompare(b, 'zh-CN'),
-    ),
-    [devicesInHostScope],
+    () =>
+      Array.from(new Set(devicesInOptionScope.map((device) => device.model).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, 'zh-CN'),
+      ),
+    [devicesInOptionScope],
   );
 
   const productOptions = useMemo(
-    () => Array.from(new Set(devicesInHostScope.map((device) => device.product).filter((value): value is string => Boolean(value)))).sort(),
-    [devicesInHostScope],
+    () =>
+      Array.from(
+        new Set(devicesInOptionScope.map((device) => device.product).filter((value): value is string => Boolean(value))),
+      ).sort(),
+    [devicesInOptionScope],
   );
 
   const versionOptions = useMemo(
-    () => Array.from(
-      new Set(
-        devicesInHostScope
-          .map((device) => device.build_display_id)
-          .filter((value): value is string => Boolean(value)),
-      ),
-    ).sort((a, b) => a.localeCompare(b, 'zh-CN')),
-    [devicesInHostScope],
+    () =>
+      Array.from(
+        new Set(
+          devicesInOptionScope
+            .map((device) => device.build_display_id)
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [devicesInOptionScope],
   );
+
+  const [prevHostOptions, setPrevHostOptions] = useState(hostOptions);
+  if (prevHostOptions !== hostOptions) {
+    setPrevHostOptions(hostOptions);
+    if (hostFilter !== 'all' && !hostOptions.some((opt) => opt.value === hostFilter)) {
+      setHostFilter('all');
+    }
+  }
 
   const [prevModelOptions, setPrevModelOptions] = useState(modelOptions);
   if (prevModelOptions !== modelOptions) {

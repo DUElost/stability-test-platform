@@ -417,3 +417,58 @@ it('#3962 PR2：0值状态卡中性灰、未映射徽标降噪、标签chip带ti
   expect(within(testingBtn).getByText('0')).toHaveClass('text-muted-foreground');
   expect(within(errorBtn).getByText('0')).toHaveClass('text-muted-foreground');
 });
+
+it('scopes version, model, product, and host filter options to active status and tag filters', () => {
+  const sample = [
+    {
+      id: 21,
+      serial: 'IDLE-1',
+      model: 'M-IDLE',
+      product: 'P-IDLE',
+      build_display_id: 'V-IDLE',
+      host_id: 'h1',
+      host_name: 'Host-Idle',
+      status: 'idle' as const,
+      tags: ['t1'],
+    },
+    {
+      id: 22,
+      serial: 'OFFLINE-1',
+      model: 'M-OFFLINE',
+      product: 'P-OFFLINE',
+      build_display_id: 'V-OFFLINE',
+      host_id: 'h2',
+      host_name: 'Host-Offline',
+      status: 'offline' as const,
+      tags: [],
+    },
+  ];
+
+  render(<ExpandableDeviceTable devices={sample} />);
+
+  // 切换到「空闲」快捷视图
+  fireEvent.click(screen.getByRole('button', { name: /空闲/ }));
+
+  // 版本下拉应只包含 V-IDLE，不应包含 V-OFFLINE
+  fireEvent.click(screen.getByRole('combobox', { name: '按版本筛选' }));
+  expect(screen.getByRole('option', { name: 'V-IDLE' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'V-OFFLINE' })).not.toBeInTheDocument();
+  fireEvent.keyDown(document, { key: 'Escape' });
+
+  // 型号下拉应只包含 M-IDLE
+  fireEvent.click(screen.getByRole('combobox', { name: '按型号筛选' }));
+  expect(screen.getByRole('option', { name: 'M-IDLE' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'M-OFFLINE' })).not.toBeInTheDocument();
+  fireEvent.keyDown(document, { key: 'Escape' });
+
+  // Product 下拉应只包含 P-IDLE
+  fireEvent.click(screen.getByTestId('device-product-filter'));
+  expect(screen.getByRole('option', { name: 'P-IDLE' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'P-OFFLINE' })).not.toBeInTheDocument();
+  fireEvent.keyDown(document, { key: 'Escape' });
+
+  // 主机下拉应只包含 Host-Idle
+  fireEvent.click(screen.getByRole('combobox', { name: '按所属主机筛选' }));
+  expect(screen.getByRole('option', { name: 'Host-Idle' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'Host-Offline' })).not.toBeInTheDocument();
+});
