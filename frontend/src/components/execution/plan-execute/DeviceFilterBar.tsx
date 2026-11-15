@@ -194,7 +194,7 @@ export function DeviceFilterBar({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 w-28 justify-between bg-card px-2 font-normal text-xs"
+                className="h-9 w-28 justify-between rounded-lg bg-card px-2.5 font-normal text-xs"
               >
                 <span className="truncate">
                   {deviceTagFilter.length === 0
@@ -248,24 +248,6 @@ export function DeviceFilterBar({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-          {activeFilterChips.length > 0 && (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                if (onResetAll) {
-                  onResetAll();
-                } else {
-                  activeFilterChips.forEach((chip) => onClearFilterChip(chip.id));
-                }
-              }}
-            >
-              <RotateCcw className="h-3 w-3" aria-hidden />
-              重置筛选
-            </Button>
-          )}
           <span className="rounded-md bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">
             筛选 {filteredCount}
           </span>
@@ -322,6 +304,24 @@ export function DeviceFilterBar({
               <X className="h-3 w-3 opacity-70" aria-hidden />
             </button>
           ))}
+          {activeFilterChips.length > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="ml-auto h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                if (onResetAll) {
+                  onResetAll();
+                } else {
+                  activeFilterChips.forEach((chip) => onClearFilterChip(chip.id));
+                }
+              }}
+            >
+              <RotateCcw className="h-3 w-3" aria-hidden />
+              重置筛选
+            </Button>
+          )}
         </div>
       )}
     </div>
