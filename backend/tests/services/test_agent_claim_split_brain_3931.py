@@ -257,3 +257,58 @@ async def test_expired_active_lease_is_not_redelivered_or_refreshed(claim_seed):
     assert lease.status == LeaseStatus.ACTIVE.value
     assert lease.fencing_token == old_token
     assert lease.expires_at <= datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_lease_expiring_between_scan_and_lock_is_not_redelivered(claim_seed, monkeypatch):
+    import backend.services.agent_claim as agent_claim_mod
+
+    host_id, add_claim, db = claim_seed
+    base_now = datetime.now(timezone.utc)
+    clock_box = [base_now]
+
+    class _FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = clock_box[0]
+            if tz is None:
+                return current.replace(tzinfo=None)
+            return current.astimezone(tz)
+
+    _device_id, job_id, old_token = add_claim(
+        age_seconds=_UNCONFIRMED_CLAIM_REDELIVER_GRACE_SECONDS + 10,
+        agent_instance_id="inst-a",
+    )
+    expires_before = base_now + timedelta(seconds=10)
+    db.query(DeviceLease).filter(DeviceLease.job_id == job_id).update({"expires_at": expires_before})
+    db.commit()
+
+    monkeypatch.setattr(agent_claim_mod, "datetime", _FakeDateTime)
+
+    await async_engine.dispose()
+    saw_lease_for_update = False
+    async with AsyncSessionLocal() as adb:
+        orig_execute = adb.execute
+
+        async def _advancing_execute(stmt, *args, **kwargs):
+            nonlocal saw_lease_for_update
+            sql = str(stmt)
+            if "FOR UPDATE" in sql and "device_leases" in sql:
+                saw_lease_for_update = True
+                clock_box[0] = expires_before + timedelta(seconds=5)
+            return await orig_execute(stmt, *args, **kwargs)
+
+        monkeypatch.setattr(adb, "execute", _advancing_execute)
+        claimed, tokens = await claim_jobs_for_host(
+            adb, host_id, capacity=2, agent_instance_id="inst-a", active_job_ids=[],
+        )
+        assert saw_lease_for_update
+        assert claimed == []
+        assert tokens == {}
+
+    db.expire_all()
+    lease = db.query(DeviceLease).filter(DeviceLease.job_id == job_id).one()
+    assert lease.status == LeaseStatus.ACTIVE.value
+    assert lease.fencing_token == old_token
+    lease_exp = lease.expires_at if lease.expires_at.tzinfo else lease.expires_at.replace(tzinfo=timezone.utc)
+    assert lease_exp == expires_before
