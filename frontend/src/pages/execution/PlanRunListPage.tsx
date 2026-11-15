@@ -347,7 +347,7 @@ export default function PlanRunListPage() {
           ) : (
             <>
               <div className="overflow-x-auto rounded-lg border border-border">
-                <Table className="min-w-[960px]">
+                <Table className="min-w-[1040px]">
                   <TableHeader>
                     <TableRow className="border-b text-left text-xs text-muted-foreground hover:bg-transparent">
                       <TableHead className="h-9 px-3">Run</TableHead>
@@ -360,6 +360,7 @@ export default function PlanRunListPage() {
                       <TableHead className="h-9 px-3">触发者</TableHead>
                       <TableHead className="h-9 px-3">时长</TableHead>
                       <TableHead className="h-9 px-3">开始时间</TableHead>
+                      <TableHead className="h-9 px-3">结束时间</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -404,6 +405,9 @@ export default function PlanRunListPage() {
                         </TableCell>
                         <TableCell className={cn('px-3 py-2.5 text-xs whitespace-nowrap', TEXT.caption)}>
                           {formatDateTimeFull(run.started_at)}
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs whitespace-nowrap', TEXT.caption)}>
+                          {run.ended_at ? formatDateTimeFull(run.ended_at) : '—'}
                         </TableCell>
                       </ClickableRow>
                     ))}
