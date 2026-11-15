@@ -184,6 +184,8 @@ def _apply_plan_run_list_filters(
     statuses: Optional[list[PlanRunStatus]],
     project_key: Optional[str],
     q: Optional[str],
+    run_type: Optional[str] = None,
+    started_after: Optional[datetime] = None,
     db: Session,
     join_plan_for_search: bool = False,
 ):
@@ -196,6 +198,10 @@ def _apply_plan_run_list_filters(
             stmt = stmt.where(PlanRun.status == values[0])
         else:
             stmt = stmt.where(PlanRun.status.in_(values))
+    if run_type:
+        stmt = stmt.where(PlanRun.run_type == run_type)
+    if started_after is not None:
+        stmt = stmt.where(PlanRun.started_at >= started_after)
     if project_key is not None:
         if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
             raise NotFound("project not found")
@@ -225,6 +231,8 @@ def build_plan_run_list_page(
     statuses: Optional[list[PlanRunStatus]],
     project_key: Optional[str],
     q: Optional[str],
+    run_type: Optional[str] = None,
+    started_after: Optional[datetime] = None,
 ) -> PlanRunListPageOut:
     needle = (q or "").strip()
     need_plan_join = bool(needle)
@@ -236,6 +244,8 @@ def build_plan_run_list_page(
         statuses=statuses,
         project_key=project_key,
         q=q,
+        run_type=run_type,
+        started_after=started_after,
         db=db,
         join_plan_for_search=need_plan_join,
     )
@@ -248,6 +258,8 @@ def build_plan_run_list_page(
         statuses=statuses,
         project_key=project_key,
         q=q,
+        run_type=run_type,
+        started_after=started_after,
         db=db,
         join_plan_for_search=need_plan_join,
     )

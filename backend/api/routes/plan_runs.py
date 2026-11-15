@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -113,24 +114,19 @@ def list_plan_runs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     plan_id: Optional[int] = None,
-    status: Optional[list[PlanRunStatus]] = Query(
-        default=None,
-        description="可重复：?status=QUEUED&status=PRECHECK",
-    ),
+    status: Optional[list[PlanRunStatus]] = Query(default=None, description="可重复：?status=QUEUED&status=PRECHECK"),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     q: Optional[str] = Query(None, description="搜索 Run ID / Plan 名 / 触发者"),
+    run_type: Optional[str] = Query(None, description="按执行类型过滤"),
+    started_after: Optional[datetime] = Query(None, description="按开始时间下限过滤（ISO 8601）"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
     """薄壳：``plan_run_catalog.build_plan_run_list_page``。"""
     return ok(build_plan_run_list_page(
         db,
-        skip=skip,
-        limit=limit,
-        plan_id=plan_id,
-        statuses=status,
-        project_key=project_key,
-        q=q,
+        skip=skip, limit=limit, plan_id=plan_id, statuses=status,
+        project_key=project_key, q=q, run_type=run_type, started_after=started_after,
     ))
 
 
