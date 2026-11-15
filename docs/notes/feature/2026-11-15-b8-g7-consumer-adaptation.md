@@ -32,13 +32,31 @@ Class: feature
    「FINAL/SUPPLEMENT 轮未关闭」的 run，整批推迟；链族 `evidence/` 不在
    `RUN_FAMILIES`，单 run 清理永不删除它；measure 脚本增加链族容量分解。
 
+### 第二轮返修（规划侧 #3800 探针，基线 `b28ee8f3`）
+
+规划侧在隔离 PG16 加挂两条验收探针，基线全红，暴露两处服务层误判：
+
+1. **混合运行归档误判完成**：MTK 先去重交付已就绪、run 有旧 extract 记录，
+   但唯一的 merge 报表属于 MTK，展锐现行分区没有自己的 merge，`archive_complete()`
+   仍返回 True。返修：`_legacy_archive_complete(platforms=...)` 在混合运行时按
+   `scan_artifact_uri_platform` 归类 `merge_result_xls` 的分区路径，要求**每个**
+   CURRENT 分区都有本分区报表；无模式存量分区仍走 #1110 的「任意一份报表 +
+   extract」旧判据（查询形态不变，旧的 mock 单测不受影响）。真实
+   `auto_archive_sweep` 入口验证：缺展锐报表继续入队现行侧，补齐后不再入队。
+2. **共享代表被重复计数**：两个问题共用同一 DLE，台账只有一条 VERIFIED
+   发布记录，`representatives.published` 却为 2。返修：`_representative_counts`
+   把选择关系（问题 × DLE）与证据状态（每 DLE 一条）分开——`selected` 保留
+   选中的问题数（2），`published` / `pending` / `failed` 按代表 DLE 去重（一份
+   证据只算一次）。四种共享形态（无记录 / PENDING / FAILED / VERIFIED）各有断言。
+
 ### 统计口径（同 PR 交付）
 
 | 数字 | 含义 | 来源 |
 |---|---|---|
 | 发生数 `occurrences` | 本分区全部发生，含未选为代表 | `issue_occurrence`，按 `occurrence_key` 去重（无 key 按行），`facts.count_partition_occurrences` |
 | 设备数 `machines` | 发生涉及的设备 | `issue_occurrence.serial` 去重，`facts.count_partition_machines` |
-| 已发布代表 `representatives.published` | 已校验代表证据 | `evidence_publication.state = VERIFIED`，且对应选择为 SELECTED |
+| 已发布代表 `representatives.published` | 已校验代表证据 | `evidence_publication.state = VERIFIED` ∩ SELECTED，**按代表 DLE 去重**（多问题共享一份证据只算 1） |
+| 已选 `representatives.selected` | 选中的问题数 | `representative_selection` 中 SELECTED 的问题数（共享 DLE 时仍为 2） |
 | DLE 观察数 `observed_events` | 仅现行分区展示，供对账 | `device_log_event` 按 `occurrence_key`/DLE id 去重（`partition_scope.observation_counts`） |
 | AEE 风险桶次数 | 观测面计数 | `log_observation` 同一发生身份口径 |
 | 上传汇总 `by_platform` | 按平台镜像顶层键 | `device_log_event.platform` 分组，pending/remote 与顶层同义 |
@@ -81,19 +99,24 @@ Class: feature
 
 ## Verification
 
-- 新增 `backend/tests/services/test_b8_g7_partition_consumers.py`（24 项）：
+- 新增 `backend/tests/services/test_b8_g7_partition_consumers.py`（31 项，含规划侧
+  2 条探针 + 共享代表 4 形态 + 真实 `auto_archive_sweep` 入口）：
   混合/纯先去重/存量 extract、READY / READY_WITH_GAPS / 重试中、两侧独立、
   下载与跨 run / 跨根拒绝、I4 推迟、单 run 清理保留链证据、发生计数稳定、
   DLE-only 进入观测面、上传汇总与分区视图、能力目录。
-- 基线反例（逐项红→绿，恢复后 24/24 绿）：
+- 基线反例（逐项红→绿，恢复后 31/31 绿）：
   1. 归档判据退回「只认现行」→ READY / READY_WITH_GAPS 两例失败；
   2. extract 去掉平台过滤 → 混合运行多拷 1 个事件，用例失败；
   3. 计数退回路径口径 → 同一发生两条路径被计 2 次，用例失败；
-  4. 关掉 I4 保护 → retention 用例失败。
-- 受影响回归 450 项全绿；`frontend` vitest `DedupReportCard` 18 +
+  4. 关掉 I4 保护 → retention 用例失败；
+  5. 第二轮：关掉「CURRENT 分区本分区报表」校验 → 2 条归档探针红，恢复绿；
+  6. 第二轮：去掉代表 DLE 去重 → 5 条共享代表计数用例红，恢复绿。
+- 规划侧固定反例基线 `b28ee8f3fab611af03185f3a00a6c14f3854eda6`：挂上探针后
+  2 failed（`assert True is False`、`assert 2 == 1`），返修后 7/7 绿。
+- 受影响回归 492 项全绿；`frontend` vitest `DedupReportCard` 18 +
   `LogEventsCard` 16 = 34 项全绿；`npm run type-check` 通过。
 - `python scripts/run_gates.py check:quick` 16 道门全绿。
-- 完整 `scripts/run_pytest.py tests/`：2538 passed, 18 skipped（EXIT 0）。
+- 完整 `scripts/run_pytest.py tests/`：2539 passed, 18 skipped（EXIT 0）。
 - 六项 required CI 全 pass。
 - `pr-backend-tests-informational` 复跑暴露 1 个假会话回归
   （`test_b8_g0a_storage_roots` 缺 `platform`）：DLE 下载改为按

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -31,6 +32,7 @@ from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
+from backend.scheduler import cron_scheduler
 from backend.scheduler.cron_scheduler import purge_run_storage_dirs
 from backend.services import dedup_extract
 from backend.services import delivery_download
@@ -365,6 +367,35 @@ def _verified_publication(
     return row
 
 
+def _publication(
+    db_session, store, *, run_id, dle, state,
+):
+    """按给定状态登记一条发布记录，用于共享代表的计数口径验收。"""
+    if state == facts.PUBLICATION_STATE_FAILED:
+        row = facts.record_evidence_publication(
+            db_session, plan_run_id=run_id, platform="mtk", dle_id=dle.id,
+            root_plan_run_id=run_id, source_kind=facts.PUBLICATION_SOURCE_LOCAL,
+            source_path=dle.local_path, collection_folder=FOLDER,
+            naming_rule_version="aee-folder-name/v1",
+            destination_rel_path=None,
+            state=facts.PUBLICATION_STATE_FAILED,
+            failure_reason="checksum_mismatch",
+        )
+        db_session.commit()
+        return row
+    rel = f"evidence/{run_id}_{FOLDER}/{dle.serial}/{EVENT_A}"
+    (store / rel).mkdir(parents=True, exist_ok=True)
+    row = facts.record_evidence_publication(
+        db_session, plan_run_id=run_id, platform="mtk", dle_id=dle.id,
+        root_plan_run_id=run_id, source_kind=facts.PUBLICATION_SOURCE_LOCAL,
+        source_path=dle.local_path, collection_folder=FOLDER,
+        naming_rule_version="aee-folder-name/v1", destination_rel_path=rel,
+        state=facts.PUBLICATION_STATE_PENDING,
+    )
+    db_session.commit()
+    return row
+
+
 def test_dle_download_uses_verified_publication(db_session, store):
     run = _plan_run(db_session)
     host_id = _host(db_session)
@@ -685,3 +716,130 @@ def test_capabilities_and_partition_targets(db_session, store):
 
     # 纯先去重：自动 merge 不跑现行工具，也不当失败。
     assert run_merge_for_partitions_sync(run.id) == "ok"
+
+
+def test_planner_audit_archive_needs_a_current_partition_merge(db_session, store):
+    run = _plan_run(db_session)
+    host_id = _host(db_session)
+    unisoc = _device(db_session, host_id, platform="UNISOC")
+    _job(db_session, run, host_id, unisoc)
+    _mode(db_session, run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST)
+    _mode(db_session, run.id, platform="unisoc", mode=facts.PARTITION_MODE_CURRENT)
+    _closed_final(db_session, run.id)
+    _merge_artifact(db_session, store, run_id=run.id, platform="mtk")
+    run.run_context = {"extract": {"targets": 1, "copied": 1}}
+    db_session.commit()
+    assert partition_scope.archive_complete(db_session, run.id) is False
+    _merge_artifact(db_session, store, run_id=run.id, platform="unisoc")
+    assert partition_scope.archive_complete(db_session, run.id) is True
+
+
+def test_planner_audit_shared_dle_counts_as_one_published_representative(db_session, store):
+    run = _plan_run(db_session)
+    host_id = _host(db_session)
+    _mode(db_session, run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST)
+    _closed_final(db_session, run.id)
+    dle = _dle(db_session, run_id=run.id, host_id=host_id)
+    first = _selection(db_session, run_id=run.id, dle_id=dle.id)
+    second = _selection(db_session, run_id=run.id, dle_id=dle.id)
+    assert first.id != second.id
+    _verified_publication(
+        db_session, store, run_id=run.id, root_run_id=run.id, dle=dle,
+    )
+    view = partition_scope.delivery_view(db_session, plan_run_id=run.id, platform="mtk")
+    assert view["issues"] == 2
+    assert len(facts.list_partition_evidence_publications(
+        db_session, plan_run_id=run.id, platform="mtk",
+    )) == 1
+    assert view["representatives"]["published"] == 1
+
+
+@pytest.mark.parametrize(
+    ("publication_state", "expected"),
+    [
+        (None, {"published": 0, "pending": 1, "failed": 0}),
+        (facts.PUBLICATION_STATE_PENDING, {"published": 0, "pending": 1, "failed": 0}),
+        (facts.PUBLICATION_STATE_FAILED, {"published": 0, "pending": 0, "failed": 1}),
+        (facts.PUBLICATION_STATE_VERIFIED, {"published": 1, "pending": 0, "failed": 0}),
+    ],
+)
+def test_planner_audit_shared_dle_counters_are_not_duplicated(
+    db_session, store, publication_state, expected,
+):
+    """同一 DLE 被两个问题共用：保留 2 个问题、1 份代表证据，各状态只计一次。"""
+    run = _plan_run(db_session)
+    host_id = _host(db_session)
+    _mode(db_session, run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST)
+    _closed_final(db_session, run.id)
+    dle = _dle(db_session, run_id=run.id, host_id=host_id)
+    _selection(db_session, run_id=run.id, dle_id=dle.id)
+    _selection(db_session, run_id=run.id, dle_id=dle.id)
+    if publication_state is None:
+        pass
+    elif publication_state == facts.PUBLICATION_STATE_VERIFIED:
+        _verified_publication(
+            db_session, store, run_id=run.id, root_run_id=run.id, dle=dle,
+        )
+    else:
+        _publication(
+            db_session, store, run_id=run.id, dle=dle,
+            state=publication_state,
+        )
+
+    view = partition_scope.delivery_view(db_session, plan_run_id=run.id, platform="mtk")
+    representatives = view["representatives"]
+    assert view["issues"] == 2
+    assert representatives["selected"] == 2
+    assert {
+        key: representatives[key] for key in ("published", "pending", "failed")
+    } == expected
+    assert len(facts.list_partition_evidence_publications(
+        db_session, plan_run_id=run.id, platform="mtk",
+    )) == (0 if publication_state is None else 1)
+
+
+def test_planner_audit_real_auto_archive_sweep_needs_current_merge(
+    db_session, store, monkeypatch, caplog,
+):
+    """真实 auto_archive_sweep：缺展锐报表时仍推进现行侧，补齐后才判完成。"""
+    run = _plan_run(db_session, status="SUCCESS")
+    host_id = _host(db_session)
+    unisoc = _device(db_session, host_id, platform="UNISOC")
+    _job(db_session, run, host_id, unisoc)
+    _mode(db_session, run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST)
+    _mode(db_session, run.id, platform="unisoc", mode=facts.PARTITION_MODE_CURRENT)
+    _closed_final(db_session, run.id)
+    # 只有 MTK 的 merge 报表：先去重侧就绪也不能替展锐现行侧完成。
+    _merge_artifact(db_session, store, run_id=run.id, platform="mtk")
+    run.run_context = {"extract": {"targets": 1, "copied": 1}}
+    plan = db_session.get(Plan, run.plan_id)
+    plan.auto_archive_interval_seconds = 1
+    db_session.commit()
+
+    enqueued: list[tuple[int, bool]] = []
+    monkeypatch.setattr(
+        cron_scheduler, "SessionLocal",
+        sessionmaker(bind=db_session.get_bind()),
+    )
+    monkeypatch.setattr(
+        cron_scheduler, "_sched",
+        lambda: SimpleNamespace(stp_scan_round_shadow_enabled=False),
+    )
+    monkeypatch.setattr(
+        "backend.services.dedup_scan.enqueue_dedup_terminal_sync",
+        lambda run_id, is_final: enqueued.append((run_id, is_final)),
+    )
+
+    cron_scheduler.auto_archive_sweep()
+    assert partition_scope.archive_complete(db_session, run.id) is False
+    assert enqueued == [(run.id, True)], (
+        "展锐缺本分区 merge 报表时必须继续推进现行侧"
+    )
+
+    enqueued.clear()
+    _merge_artifact(db_session, store, run_id=run.id, platform="unisoc")
+    assert partition_scope.archive_complete(db_session, run.id) is True
+    cron_scheduler.auto_archive_sweep()
+    # 若 sweep 内部抛异常会被自身 except 吞掉，enqueued 也会是空——额外看日志。
+    assert not [r for r in caplog.records if "auto_archive_sweep failed" in r.getMessage()]
+    assert enqueued == [], "补齐展锐报表后归档完成，不再重复入队"

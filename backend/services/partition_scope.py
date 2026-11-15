@@ -14,11 +14,12 @@ ADR-0062 D13 规定运行模式的单位是「实际 PlanRun × 平台」；D16 
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from sqlalchemy import Text, cast, distinct, func, select
 from sqlalchemy.orm import Session
 
+from backend.core.dedup_platform import scan_artifact_uri_platform
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.host import Device
 from backend.models.job import JobInstance
@@ -131,20 +132,32 @@ def _representative_counts(
             db, plan_run_id=plan_run_id, platform=platform,
         )
     }
-    published = pending = failed = 0
+    # 一个 DLE 可被多个问题选为代表（D7 第 1 条）：选择关系是「问题 × DLE」，
+    # 但证据台账 (plan_run, platform, dle) 只有一条，发布状态也是每个 DLE 一个值。
+    # 故 selected 保留选中的**问题数**（2 个问题共用一份证据时仍为 2），
+    # published / pending / failed 按**代表 DLE 去重**（一份证据只算一次）。
+    states: dict[str, Optional[str]] = {}
     for issue in selected:
-        state = publications.get(str(issue.get("representative_dle_id")))
-        if state == facts.PUBLICATION_STATE_VERIFIED:
-            published += 1
-        elif state == facts.PUBLICATION_STATE_FAILED:
-            failed += 1
-        else:
-            pending += 1
+        dle_id = str(issue.get("representative_dle_id"))
+        if dle_id not in states:
+            states[dle_id] = publications.get(dle_id)
     return {
         "selected": len(selected),
-        "published": published,
-        "pending": pending,
-        "failed": failed,
+        "published": sum(
+            1 for state in states.values()
+            if state == facts.PUBLICATION_STATE_VERIFIED
+        ),
+        "failed": sum(
+            1 for state in states.values()
+            if state == facts.PUBLICATION_STATE_FAILED
+        ),
+        "pending": sum(
+            1 for state in states.values()
+            if state not in {
+                facts.PUBLICATION_STATE_VERIFIED,
+                facts.PUBLICATION_STATE_FAILED,
+            }
+        ),
     }
 
 
@@ -247,15 +260,41 @@ def dedup_first_platforms(db: Session, plan_run_id: int) -> list[str]:
     ]
 
 
-def _legacy_archive_complete(db: Session, plan_run_id: int) -> bool:
-    """现行分区的既有判据（#1110）：merge 产物存在且已记录 extract。"""
-    merge_count = int(db.execute(
-        select(func.count()).select_from(PlanRunArtifact).where(
+def _merge_artifact_platforms(db: Session, plan_run_id: int) -> set[str]:
+    """本 run 已有 merge 报表覆盖的平台（按产物 URI 的分区路径归类）。"""
+    rows = db.execute(
+        select(PlanRunArtifact.storage_uri).where(
             PlanRunArtifact.plan_run_id == plan_run_id,
             PlanRunArtifact.artifact_type == "merge_result_xls",
         )
-    ).scalar_one())
-    if merge_count == 0:
+    ).scalars()
+    return {
+        scan_artifact_uri_platform(str(uri)) for uri in rows if uri
+    }
+
+
+def _legacy_archive_complete(
+    db: Session, plan_run_id: int, *, platforms: Sequence[str] | None = None,
+) -> bool:
+    """现行分区的既有判据（#1110）：merge 产物存在且已记录 extract。
+
+    ``platforms`` 给定时还要求**每个**现行分区都有自己的 merge 报表：混合运行里
+    先去重侧的旧报表不能替现行侧完成归档（D13 第 3 条：两侧独立判断）。此时按
+    产物 URI 的分区路径归类，不复用旧版「任意一份报表」的计数口径。
+
+    ``platforms=None`` 是无模式存量 / 纯现行分区的兼容路径：保留 #1110 的
+    「任意一份 merge 报表 + extract 记录」判据，查询形态也保持原样。
+    """
+    if platforms is None:
+        merge_count = int(db.execute(
+            select(func.count()).select_from(PlanRunArtifact).where(
+                PlanRunArtifact.plan_run_id == plan_run_id,
+                PlanRunArtifact.artifact_type == "merge_result_xls",
+            )
+        ).scalar_one())
+        if merge_count == 0:
+            return False
+    elif not set(platforms).issubset(_merge_artifact_platforms(db, plan_run_id)):
         return False
     run = db.get(PlanRun, plan_run_id)
     if run is None:
@@ -267,7 +306,8 @@ def archive_complete(db: Session, plan_run_id: int) -> bool:
     """归档完成判据（D16，B8 G7）。
 
     - 先去重分区：交付状态为就绪或就绪但有缺口（不要求 extract 产物）；
-    - 现行分区（含无模式存量）：沿用 merge + extract，一侧失败不伪装成另一侧完成；
+    - 现行分区（含无模式存量）：沿用 merge + extract；混合运行时每个现行分区
+      必须有本分区的 merge 报表，不能由先去重侧或另一平台的报表代替；
     - 没有任何先去重分区时，行为与改动前逐字一致。
     """
     rows = partition_rows(db, plan_run_id=plan_run_id)
@@ -281,8 +321,10 @@ def archive_complete(db: Session, plan_run_id: int) -> bool:
         )
         if not shadow_delivery.delivery_is_archive_complete(decision):
             return False
-    if any(row["mode"] == facts.PARTITION_MODE_CURRENT for row in rows):
-        return _legacy_archive_complete(db, plan_run_id)
+    current = [row["platform"] for row in rows
+               if row["mode"] == facts.PARTITION_MODE_CURRENT]
+    if current:
+        return _legacy_archive_complete(db, plan_run_id, platforms=current)
     return True
 
 
