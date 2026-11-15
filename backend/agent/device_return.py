@@ -81,6 +81,19 @@ def execute_registered(engine: Any, family: str, mode: str, *, with_permit: bool
     return entry
 
 
+def _is_transient_readback_failure(entry: dict) -> bool:
+    """Return True when disarm failed strictly due to a transient readback glitch."""
+    if entry.get("result") != "failed":
+        return False
+    evidence = entry.get("evidence")
+    if not isinstance(evidence, dict):
+        return False
+    return (
+        evidence.get("readback") == "readback_failed"
+        and evidence.get("kind") == "transient"
+    )
+
+
 def run_init_checks(engine: Any, result_type: Callable):
     for family in ONBOARDED:
         step_id = "return_check." + family
@@ -98,6 +111,10 @@ def run_init_checks(engine: Any, result_type: Callable):
                 if entry["result"] not in {"confirmed", "incomplete", "not_executed"}:
                     entry = execute_registered(engine, family, "disarm")
                     executions.append({"mode": "disarm", "entry": dict(entry)})
+                    if _is_transient_readback_failure(entry):
+                        logger.warning("init_return_check_transient_retry family=%s", family)
+                        entry = execute_registered(engine, family, "disarm")
+                        executions.append({"mode": "disarm", "entry": dict(entry)})
             except PackageUnavailable:
                 error_message, exit_code = "package_unavailable", 2
                 return result_type(success=False, exit_code=2, error_message="package_unavailable")
@@ -246,13 +263,20 @@ class ReturnDebtConsumer:
     def _execute(self, debt: _Debt, families: list[str]) -> None:
         scheduler = self.get_scheduler()
         if not isinstance(scheduler, OperationScheduler) or self.is_active(debt.device_id):
+            logger.debug(
+                "return_debt_skipped_unavailable_or_active device_id=%s has_scheduler=%s",
+                debt.device_id,
+                isinstance(scheduler, OperationScheduler),
+            )
             return
         try:
             permit = scheduler.acquire(debt.device_id, timeout=0)
         except PermitDenied:
+            logger.info("return_debt_permit_denied device_id=%s", debt.device_id)
             return
         with permit:
             if self.is_active(debt.device_id):
+                logger.info("return_debt_aborted_device_became_active device_id=%s", debt.device_id)
                 return
             engine = self.engine_factory(AdbWrapper(self.adb_path), debt.serial, 0,
                 script_registry=self.registry, nfs_root="", device_id=debt.device_id,
@@ -267,18 +291,53 @@ class ReturnDebtConsumer:
                     debt.attempts[family] = (self.clock(), "unreported")
                 try:
                     entry = execute_registered(engine, family, "disarm", with_permit=False)
+                    if _is_transient_readback_failure(entry):
+                        if self.is_active(debt.device_id):
+                            logger.info(
+                                "return_debt_retry_aborted_active device_id=%s family=%s",
+                                debt.device_id, family,
+                            )
+                            return
+                        with self._lock:
+                            if self._debts.get(debt.device_id) is not debt or family not in debt.families:
+                                logger.info(
+                                    "return_debt_retry_aborted_stale device_id=%s family=%s",
+                                    debt.device_id, family,
+                                )
+                                return
+                        logger.warning(
+                            "return_debt_transient_retry device_id=%s family=%s",
+                            debt.device_id, family,
+                        )
+                        entry = execute_registered(engine, family, "disarm", with_permit=False)
                     report_return_discharge(self.api_url, debt.device_id, debt.token, {family: entry})
                     value = entry["result"]
+                    logger.info(
+                        "return_debt_discharged_attempt device_id=%s family=%s result=%s",
+                        debt.device_id, family, value,
+                    )
                 except requests.HTTPError as exc:
                     status = exc.response.status_code if exc.response is not None else None
                     if status == 409:
+                        logger.info(
+                            "return_debt_token_rejected device_id=%s family=%s status=409",
+                            debt.device_id, family,
+                        )
                         with self._lock:
                             self._rejected.add((debt.device_id, self._token_digest(debt.token)))
                             if self._debts.get(debt.device_id) is debt:
                                 del self._debts[debt.device_id]
                         return
                     value = "executed_unverified" if status == 422 else "unreported"
-                except (requests.RequestException, PackageUnavailable):
+                    logger.warning(
+                        "return_debt_report_http_error device_id=%s family=%s status=%s mapped=%s",
+                        debt.device_id, family, status, value,
+                    )
+                except (requests.RequestException, PackageUnavailable) as exc:
                     value = "unreported"
+                    logger.warning(
+                        "return_debt_report_deferred device_id=%s family=%s error=%s retry_after_s=%s",
+                        debt.device_id, family, exc, _RETRY_SECONDS,
+                    )
                 with self._lock:
                     debt.attempts[family] = (self.clock(), value)

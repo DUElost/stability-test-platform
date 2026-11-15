@@ -19,15 +19,15 @@ def frozen_progress_lines(tmp_path):
     assert spec and spec.loader
     packer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(packer)
-    artifact = tmp_path / "disarm-1.0.8.tar.gz"
-    package = packer.build_deterministic_tar_gz(root / "backend/agent/scripts/powercycle_disarm", artifact)
     manifest = json.loads((root / "tool_manifest.json").read_text())
-    registered = next(v for v in manifest["tools"]["powercycle_disarm"]["versions"] if v["version"] == "1.0.8")
-    assert package["package_sha256"] == registered["package_sha256"] == "98cc16f82fa6c56fe24f37151958f4ad3efd2f5983b1bba36f9340d95cd4a557"
+    registered = manifest["tools"]["powercycle_disarm"]["versions"][-1]
+    artifact = tmp_path / f"disarm-{registered['version']}.tar.gz"
+    package = packer.build_deterministic_tar_gz(root / "backend/agent/scripts/powercycle_disarm", artifact)
+    assert package["package_sha256"] == registered["package_sha256"]
     with tarfile.open(artifact) as archive:
         source = archive.extractfile("_lib.py").read()
     lib = ModuleType("frozen_disarm_progress")
-    exec(compile(source, "powercycle_disarm@1.0.8/_lib.py", "exec"), lib.__dict__)
+    exec(compile(source, f"powercycle_disarm@{registered['version']}/_lib.py", "exec"), lib.__dict__)
     captured = io.StringIO()
     lib.sys = SimpleNamespace(stderr=captured)
     for seq in (1, 1, 2):

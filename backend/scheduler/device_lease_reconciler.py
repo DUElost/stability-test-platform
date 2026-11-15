@@ -33,7 +33,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy.exc
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 
 from backend.core.database import AsyncSessionLocal
@@ -52,7 +52,7 @@ from backend.models.enums import (
     LeaseStatus,
     LeaseType,
 )
-from backend.models.job import JobInstance
+from backend.models.job import JobInstance, StepTrace
 from backend.models.plan_run import PlanRun
 from backend.services.aggregator import PlanAggregator
 from backend.services.device_return import handle_job_lease_release
@@ -64,6 +64,7 @@ from backend.core.job_timeout_config import (
     ABORT_ACK_GRACE_SECONDS as _ABORT_REAPER_GRACE_SECONDS,
     DISARM_SCRIPT_NAMES as _DISARM_SCRIPT_NAMES,  # noqa: F401  # 测试兼容再导出
     EXECUTING_DISARM as _EXECUTING_DISARM,  # noqa: F401  # 测试兼容再导出
+    UNCONFIRMED_CLAIM_TIMEOUT_SECONDS as _UNCONFIRMED_CLAIM_TIMEOUT_SECONDS,
     UNKNOWN_GRACE_SECONDS as _UNKNOWN_GRACE_SECONDS,
     abort_reap_clock as _abort_reap_clock_pure,
     abort_request_covers_job as _abort_request_covers_job_pure,
@@ -346,7 +347,10 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
         select(JobInstance).where(
             JobInstance.status == JobStatus.UNKNOWN.value,
             JobInstance.ended_at.is_not(None),
-            JobInstance.ended_at < grace_deadline,
+            or_(
+                JobInstance.ended_at < grace_deadline,
+                JobInstance.status_reason == "claim_unconfirmed",
+            ),
         )
         .order_by(JobInstance.id)
     )).scalars().all()
@@ -377,7 +381,10 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
                     job is None
                     or job.status != JobStatus.UNKNOWN.value
                     or job.ended_at is None
-                    or job.ended_at >= grace_deadline
+                    or (
+                        job.ended_at >= grace_deadline
+                        and job.status_reason != "claim_unconfirmed"
+                    )
                 ):
                     continue
                 # If there's still an ACTIVE lease, release it
@@ -396,8 +403,13 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
                     )
 
                 try:
+                    final_reason = (
+                        "claim_unconfirmed"
+                        if job.status_reason == "claim_unconfirmed"
+                        else "unknown_grace_timeout"
+                    )
                     JobStateMachine.transition(
-                        job, JobStatus.FAILED, "unknown_grace_timeout",
+                        job, JobStatus.FAILED, final_reason,
                     )
                     await db.flush()
                     terminalize = job
@@ -437,6 +449,13 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
         await db.commit()
         drained += 1
         failed += 1
+        try:
+            reconciler_actions.labels(
+                action="to_failed",
+                reason=terminalize.status_reason or "unknown_grace_timeout",
+            ).inc()
+        except Exception:
+            logger.debug("reconciler_metrics_failed", exc_info=True)
         logger.warning(
             "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s drained=%d/%d",
             terminalize.device_id, terminalize.id, terminalize.ended_at,
@@ -450,6 +469,167 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
             drained, left_after_cap, drain_batch,
         )
 
+    return failed
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Check 2b: unconfirmed RUNNING claims (#3931)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _reconcile_unconfirmed_claims(db) -> int:
+    """Release & fail RUNNING claims that never produced any Agent confirmation (#3931).
+
+    When a claim HTTP response is lost and the Agent never re-claims or crashes,
+    waiting 600s lease expiry + 300s UNKNOWN grace (15m) stalls sibling barrier
+    devices. If ``_UNCONFIRMED_CLAIM_TIMEOUT_SECONDS`` elapses with ZERO execution
+    heartbeat, patrol heartbeat, progress, execution_state, disarm_guard,
+    StepTrace, or lease renewal, the job never started running and is safe to
+    release & fail immediately (per-candidate commit, I5 lock order).
+    """
+    timeout_seconds = _UNCONFIRMED_CLAIM_TIMEOUT_SECONDS
+    if timeout_seconds <= 0:
+        return 0
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=timeout_seconds)
+
+    candidates = (await db.execute(
+        select(JobInstance)
+        .join(
+            DeviceLease,
+            (DeviceLease.job_id == JobInstance.id)
+            & (DeviceLease.device_id == JobInstance.device_id),
+        )
+        .where(
+            JobInstance.status == JobStatus.RUNNING.value,
+            JobInstance.execution_state.is_(None),
+            JobInstance.last_execution_heartbeat_at.is_(None),
+            JobInstance.last_patrol_heartbeat_at.is_(None),
+            JobInstance.last_progress_at.is_(None),
+            JobInstance.disarm_guard.is_(None),
+            JobInstance.started_at.is_not(None),
+            JobInstance.started_at < cutoff,
+            DeviceLease.lease_type == LeaseType.JOB.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+            DeviceLease.renewed_at <= DeviceLease.acquired_at,
+            ~exists(select(1).where(StepTrace.job_id == JobInstance.id)),
+        )
+        .order_by(JobInstance.id)
+    )).scalars().all()
+
+    failed = 0
+    drain_batch = get_scheduler_settings().reconciler_drain_batch
+    drained = 0
+    left_after_cap = 0
+
+    for index, candidate in enumerate(candidates):
+        if drained >= drain_batch:
+            left_after_cap = len(candidates) - index
+            break
+        terminalize: JobInstance | None = None
+        try:
+            async with db.begin_nested():
+                # Lock order I5: Job -> Device -> DeviceLease
+                job = (await db.execute(
+                    select(JobInstance)
+                    .where(JobInstance.id == candidate.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )).scalars().first()
+                if (
+                    job is None
+                    or job.status != JobStatus.RUNNING.value
+                    or job.execution_state is not None
+                    or job.last_execution_heartbeat_at is not None
+                    or job.last_patrol_heartbeat_at is not None
+                    or job.last_progress_at is not None
+                    or job.disarm_guard is not None
+                    or job.started_at is None
+                ):
+                    continue
+                started = (
+                    job.started_at.replace(tzinfo=timezone.utc)
+                    if job.started_at.tzinfo is None
+                    else job.started_at.astimezone(timezone.utc)
+                )
+                if started >= cutoff:
+                    continue
+
+                await db.execute(
+                    select(Device)
+                    .where(Device.id == job.device_id)
+                    .with_for_update()
+                )
+                lease = (await db.execute(
+                    select(DeviceLease)
+                    .where(
+                        DeviceLease.job_id == job.id,
+                        DeviceLease.device_id == job.device_id,
+                        DeviceLease.lease_type == LeaseType.JOB.value,
+                        DeviceLease.status == LeaseStatus.ACTIVE.value,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )).scalars().first()
+                if lease is None or lease.renewed_at > lease.acquired_at:
+                    continue
+                has_trace = (await db.execute(
+                    select(StepTrace.id).where(StepTrace.job_id == job.id).limit(1)
+                )).first()
+                if has_trace is not None:
+                    continue
+
+                await handle_job_lease_release(
+                    db, device_id=job.device_id, job_id=job.id, job=job,
+                )
+                try:
+                    JobStateMachine.transition(job, JobStatus.UNKNOWN, "claim_unconfirmed")
+                    job.ended_at = now
+                    JobStateMachine.transition(job, JobStatus.FAILED, "claim_unconfirmed")
+                    await db.flush()
+                    terminalize = job
+                except InvalidTransitionError:
+                    pass
+        except Exception:
+            logger.exception(
+                "reconciler_unconfirmed_claim_failed device=%s job=%s",
+                candidate.device_id, candidate.id,
+            )
+            continue
+
+        if terminalize is None:
+            continue
+        try:
+            await PlanAggregator.on_job_terminal(terminalize, db)
+        except Exception:
+            logger.exception(
+                "reconciler_drain_terminalize_failed check=unconfirmed_claims job=%s",
+                terminalize.id,
+            )
+            await db.rollback()
+            left_after_cap = max(left_after_cap, len(candidates) - index - 1)
+            break
+        await db.commit()
+        drained += 1
+        failed += 1
+        try:
+            reconciler_actions.labels(
+                action="to_failed",
+                reason=terminalize.status_reason or "unknown_grace_timeout",
+            ).inc()
+        except Exception:
+            logger.debug("reconciler_metrics_failed", exc_info=True)
+        logger.warning(
+            "reconciler_unconfirmed_claim_released device=%s job=%s started_at=%s drained=%d/%d",
+            terminalize.device_id, terminalize.id, terminalize.started_at,
+            drained, drain_batch,
+        )
+
+    if left_after_cap:
+        logger.warning(
+            "reconciler_drain_truncated check=unconfirmed_claims drained=%d "
+            "remaining=%d drain_batch=%d",
+            drained, left_after_cap, drain_batch,
+        )
     return failed
 
 
@@ -961,6 +1141,7 @@ async def _reconcile_checks() -> None:
     # 补广播属行为变更，需单独评审，勿顺手改 True。
     checks: list[tuple[str, callable, bool]] = [
         ("aborted_running_jobs", _reconcile_aborted_running_jobs, True),  # P1: 优先级最高
+        ("unconfirmed_claims", _reconcile_unconfirmed_claims, False),
         ("expired_leases", _reconcile_expired_leases, False),
         ("stale_unknown", _reconcile_stale_unknown_jobs, False),
         ("terminal_job_active_lease", _reconcile_terminal_job_active_leases, False),
@@ -1005,6 +1186,8 @@ def _record_check(label: str, outcome: str, result) -> None:
                 reconciler_actions.labels(
                     action="to_unknown", reason="abort_ack_timeout",
                 ).inc(unknown_count)
+        elif label == "unconfirmed_claims" and result:
+            reconciler_actions.labels(action="to_failed", reason="claim_unconfirmed").inc(result)
         elif label == "expired_leases" and result is not None:
             unknown, failed, terminal = result
             if unknown:
@@ -1015,8 +1198,6 @@ def _record_check(label: str, outcome: str, result) -> None:
                 reconciler_actions.labels(
                     action="release_lease", reason="terminal_job_active_lease"
                 ).inc(terminal)
-        elif label == "stale_unknown" and result:
-            reconciler_actions.labels(action="to_failed", reason="unknown_grace_timeout").inc(result)
         elif label == "terminal_job_active_lease" and result:
             reconciler_actions.labels(
                 action="release_lease", reason="terminal_job_active_lease"

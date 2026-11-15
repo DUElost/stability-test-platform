@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -22,6 +23,111 @@ from backend.agent.script_packages import resolve_script_path
 
 PACKAGE = "98cc16f82fa6c56fe24f37151958f4ad3efd2f5983b1bba36f9340d95cd4a557"
 ROOT = Path(__file__).resolve().parents[3]
+
+_LIB_109_INSTALLED = '''def autotesttool_installed(timeout: int = 15) -> bool | None:
+    """AutoTestTool 是否已安装（§3.6.6 第 2 条）：true / false / null。
+
+    - rc=0 且至少一行以 package: 开头 → true；
+    - rc=1 且 stdout/stderr 均无输出（package 不存在）→ false；
+    - 其它（rc=0 但无 package 行、rc=1 但带 ADB/系统服务错误文本、rc 其它、超时）→ null。
+
+    pm path 的 rc 必须与输出一起看；仅看输出或仅看 rc=1 会把 ADB offline /
+    package service 瞬态失败误判成未安装。本函数只读，不写设备。
+    """
+    rc, out, _err = adb("shell", f"pm path {_PKG}", timeout=max(1, int(timeout)))
+    has_package = any(
+        line.strip().startswith("package:") for line in (out or "").splitlines()
+    )
+    if rc == 0 and has_package:
+        return True
+    if rc == 1 and not has_package and not (out or "").strip() and not (_err or "").strip():
+        return False
+    return None'''
+
+_LIB_108_INSTALLED = '''def autotesttool_installed(timeout: int = 15) -> bool | None:
+    """AutoTestTool 是否已安装（§3.6.6 第 2 条）：true / false / null。
+
+    - rc=0 且至少一行以 package: 开头 → true；
+    - rc=1 且无 package: 行 → false；
+    - 其它（rc=0 但无 package 行、rc 其它、超时）→ null。
+
+    pm path 的 rc 必须与输出一起看；仅看输出会把 rc=1 的瞬态失败误判成
+    未安装。本函数只读，不写设备。
+    """
+    rc, out, _err = adb("shell", f"pm path {_PKG}", timeout=max(1, int(timeout)))
+    has_package = any(
+        line.strip().startswith("package:") for line in (out or "").splitlines()
+    )
+    if rc == 0 and has_package:
+        return True
+    if rc == 1 and not has_package:
+        return False
+    return None'''
+
+_DISARM_109_RETRY_BLOCK = '''_READ_TRANSIENT_MAX_ATTEMPTS = 3
+_READ_TRANSIENT_RETRY_DELAY_SECONDS = 1.0
+
+
+def _read_prefs_evidence_with_retry(
+    *,
+    max_attempts: int = _READ_TRANSIENT_MAX_ATTEMPTS,
+    delay_seconds: float = _READ_TRANSIENT_RETRY_DELAY_SECONDS,
+) -> dict[str, Any]:
+    """Read prefs evidence with bounded short retries on transient read failures.
+
+    Only retries when readback is ``readback_failed`` AND ``evidence["kind"] == "transient"``
+    (e.g., transient ADB offline / package service glitch right after reboot or am force-stop).
+    Non-transient classifications (``ok``, ``not_installed``, ``absent``, ``denied``, ``empty``)
+    return immediately without extra delay.
+    """
+    attempts = max(1, int(max_attempts))
+    snap = _read_prefs_evidence()
+    attempt = 1
+    while (
+        attempt < attempts
+        and snap.get("readback") == "readback_failed"
+        and (snap.get("evidence") or {}).get("kind") == "transient"
+    ):
+        progress_stamp(
+            {
+                "phase": "read_prefs_retry",
+                "attempt": attempt,
+                "max_attempts": attempts,
+            }
+        )
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        attempt += 1
+        snap = _read_prefs_evidence()
+    if attempt > 1:
+        evidence = dict(snap.get("evidence") or {})
+        evidence["transient_retries"] = attempt - 1
+        snap = {**snap, "evidence": evidence}
+    return snap
+
+
+'''
+
+
+def _materialize_frozen_108_source(dst: Path) -> Path:
+    """Materialize the authentic pinned 1.0.8 tree without requiring git history."""
+    shutil.copytree(
+        ROOT / "backend/agent/scripts/powercycle_disarm",
+        dst,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    lib_path = dst / "_lib.py"
+    lib_text = lib_path.read_text(encoding="utf-8")
+    assert _LIB_109_INSTALLED in lib_text, "unexpected _lib.py 1.0.9 hunk"
+    lib_path.write_text(lib_text.replace(_LIB_109_INSTALLED, _LIB_108_INSTALLED, 1), encoding="utf-8")
+
+    entry_path = dst / "powercycle_disarm.py"
+    entry_text = entry_path.read_text(encoding="utf-8")
+    assert _DISARM_109_RETRY_BLOCK in entry_text, "unexpected powercycle_disarm.py retry hunk"
+    entry_text = entry_text.replace(_DISARM_109_RETRY_BLOCK, "", 1)
+    entry_text = entry_text.replace("_read_prefs_evidence_with_retry()", "_read_prefs_evidence()")
+    entry_path.write_text(entry_text, encoding="utf-8")
+    return dst
 
 
 class FrozenReturnDevice:
@@ -48,10 +154,11 @@ class FrozenReturnDevice:
         spec = importlib.util.spec_from_file_location("u4_frozen_packer", ROOT / "tools/dev/package_tool_asset.py")
         packer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(packer)
+        frozen_src = _materialize_frozen_108_source(tmp_path / "frozen-1.0.8-src")
         self.packages = tmp_path / "packages"
         self.tarball = self.packages / "powercycle_disarm/1.0.8.tar.gz"
         self.tarball.parent.mkdir(parents=True)
-        packed = packer.build_deterministic_tar_gz(ROOT / "backend/agent/scripts/powercycle_disarm", self.tarball)
+        packed = packer.build_deterministic_tar_gz(frozen_src, self.tarball)
         assert packed["package_sha256"] == PACKAGE
         self.cache = tmp_path / "cache"
         monkeypatch.setenv("STP_PACKAGES_ROOT", str(self.packages))

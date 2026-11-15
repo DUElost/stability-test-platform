@@ -99,3 +99,27 @@ def test_main_wires_claim_tick():
         "pending_jobs_fetched",
         why="#736 claim_loop 已抽出，loop 外壳不得回潮 claim 日志字面量",
     )
+
+
+def test_claim_tick_reports_active_job_ids_snapshot():
+    kwargs = _tick_kwargs()
+    with kwargs["occupancy"].lock:
+        kwargs["occupancy"].job_ids.add(12)
+    kwargs["local_db"].get_active_jobs.return_value = [{"job_id": 5}, {"job_id": 12}]
+    with patch("backend.agent.claim_loop.fetch_pending_jobs", return_value=[]) as fetch:
+        process_claim_tick(**kwargs)
+    assert fetch.call_args.kwargs["active_job_ids"] == [5, 12]
+
+
+def test_fetch_pending_jobs_active_job_ids_contract():
+    from backend.agent.api_client import fetch_pending_jobs
+
+    resp = MagicMock()
+    resp.json.return_value = {"data": []}
+    with patch("backend.agent.api_client.requests.post", return_value=resp) as post:
+        fetch_pending_jobs("http://x", "h1", "inst", capacity=1)
+        assert "active_job_ids" not in post.call_args.kwargs["json"]
+        assert post.call_args.kwargs["timeout"] == (5, 20)
+
+        fetch_pending_jobs("http://x", "h1", "inst", capacity=1, active_job_ids=[9, 3, 9])
+        assert post.call_args.kwargs["json"]["active_job_ids"] == [3, 9]

@@ -105,6 +105,13 @@ UNKNOWN_GRACE_SECONDS = _int_env(
     production_default=300,
 )
 
+# Unconfirmed RUNNING claim (zero heartbeats, zero step_traces, unrenewed lease)
+# fast reclaim threshold (#3931) before full 600s lease expiry + 300s UNKNOWN grace.
+UNCONFIRMED_CLAIM_TIMEOUT_SECONDS = _int_env(
+    "UNCONFIRMED_CLAIM_TIMEOUT_SECONDS",
+    production_default=120,
+)
+
 
 def has_patrol_lifecycle(pipeline_def: object) -> bool:
     if not isinstance(pipeline_def, dict):
