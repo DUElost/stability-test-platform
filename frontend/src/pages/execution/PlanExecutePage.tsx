@@ -905,6 +905,16 @@ export default function PlanExecutePage() {
     setReadyOnly(next.readyOnly);
   };
 
+  const resetAllDeviceFilters = () => {
+    setDeviceFilter('');
+    setDeviceVersionFilter('all');
+    setDeviceModelFilter('all');
+    setDeviceProductFilter('all');
+    setDeviceHostFilter('all');
+    setDeviceTagFilter([]);
+    setReadyOnly(false);
+  };
+
   const flashHighlight = (deviceId: number) => {
     setHighlightId(deviceId);
     if (highlightClearTimerRef.current != null) window.clearTimeout(highlightClearTimerRef.current);
@@ -1345,6 +1355,7 @@ export default function PlanExecutePage() {
                       onSelectAllReady={selectAllReady}
                       activeFilterChips={activeFilterChips}
                       onClearFilterChip={applyFilterChipClear}
+                      onResetAll={resetAllDeviceFilters}
                     />
                     <div className="min-h-0 flex-1 overflow-hidden">
                       {view === 'matrix' ? (
