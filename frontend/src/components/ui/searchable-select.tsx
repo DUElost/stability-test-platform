@@ -82,7 +82,6 @@ export function SearchableSelect({
 
   useEffect(() => {
     if (open && searchable) {
-      setQuery('');
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open, searchable]);
@@ -96,7 +95,11 @@ export function SearchableSelect({
         aria-expanded={open}
         aria-haspopup="listbox"
         data-testid={testId}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          const next = !open;
+          if (next) setQuery('');
+          setOpen(next);
+        }}
         className={cn(
           'flex h-9 w-full items-center justify-between gap-1.5 rounded-lg border px-2.5 text-xs sm:text-sm transition-all',
           'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25',
