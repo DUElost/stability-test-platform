@@ -1118,6 +1118,21 @@ def list_material_protected_run_ids(
     return protected
 
 
+def find_verified_publication_for_dle(
+    db: Session, *, plan_run_id: int, dle_id: Any,
+) -> Optional[EvidencePublication]:
+    """已校验发布记录（B8 G7 下载用）；只按 (run, 代表 DLE) 定位。
+
+    同一 DLE 在一个 run 内只属于一个平台，故不需要 platform；只返回 VERIFIED，
+    重试中/失败的记录不能作为交付证据下载。
+    """
+    return db.execute(select(EvidencePublication).where(
+        EvidencePublication.plan_run_id == plan_run_id,
+        EvidencePublication.dle_id == dle_id,
+        EvidencePublication.state == PUBLICATION_STATE_VERIFIED,
+    )).scalar_one_or_none()
+
+
 def get_evidence_publication_for_dle(
     db: Session, *, plan_run_id: int, platform: str, dle_id: Any,
 ) -> Optional[EvidencePublication]:

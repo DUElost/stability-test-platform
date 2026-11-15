@@ -45,14 +45,10 @@ def build_device_log_event_download_response(
     # B8 G7 / D16：先去重分区的代表证据以 G6 已校验发布记录为准（D9 第 6–7 条）。
     # 注册表是唯一索引；不得按主文件夹推断归属。DLE.remote_path 仍供溢出补扫，
     # 只在没有已校验发布记录时使用。
-    publication = facts.get_evidence_publication_for_dle(
-        db, plan_run_id=plan_run_id, platform=event.platform, dle_id=eid,
+    publication = facts.find_verified_publication_for_dle(
+        db, plan_run_id=plan_run_id, dle_id=eid,
     )
-    if (
-        publication is not None
-        and publication.state == facts.PUBLICATION_STATE_VERIFIED
-        and publication.destination_rel_path
-    ):
+    if publication is not None and publication.destination_rel_path:
         try:
             resolved = resolve_evidence_event_path(
                 publication.destination_rel_path,
