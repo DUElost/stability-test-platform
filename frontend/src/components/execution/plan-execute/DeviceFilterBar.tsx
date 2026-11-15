@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { FilterSearchInput } from '@/components/ui/filter-bar';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,8 +11,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { FORM, SEGMENTED, TEXT } from '@/design-system/tokens';
-import { Check, ChevronDown, X } from 'lucide-react';
+import { SEGMENTED, TEXT } from '@/design-system/tokens';
+import { Check, ChevronDown, RotateCcw, X } from 'lucide-react';
 import type { ActiveFilterChip } from './planExecuteFilters';
 import type { DeviceViewMode } from './types';
 
@@ -43,6 +45,7 @@ interface DeviceFilterBarProps {
   onSelectAllReady: () => void;
   activeFilterChips: ActiveFilterChip[];
   onClearFilterChip: (chipId: ActiveFilterChip['id']) => void;
+  onResetAll?: () => void;
 }
 
 /**
@@ -78,6 +81,7 @@ export function DeviceFilterBar({
   onSelectAllReady,
   activeFilterChips,
   onClearFilterChip,
+  onResetAll,
 }: DeviceFilterBarProps) {
   const [tagSearch, setTagSearch] = useState('');
   const filteredTagOptions = useMemo(() => {
@@ -112,12 +116,13 @@ export function DeviceFilterBar({
           </button>
         </div>
 
-        <Input
-          className="h-8 w-40 bg-card sm:w-48"
-          type="text"
-          placeholder="搜索 serial…"
+        <FilterSearchInput
+          id="plan-execute-device-search"
           value={deviceFilter}
-          onChange={(event) => onDeviceFilterChange(event.target.value)}
+          onChange={onDeviceFilterChange}
+          placeholder="搜索 serial…"
+          ariaLabel="搜索 serial"
+          className="w-44 sm:w-52"
         />
 
         <label
@@ -153,48 +158,43 @@ export function DeviceFilterBar({
         </Button>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <select
+          <SearchableSelect
             value={deviceVersionFilter}
-            onChange={(e) => onVersionChange(e.target.value)}
-            className={`${FORM.selectSm} w-[7.5rem]`}
-            aria-label="版本筛选"
-          >
-            <option value="all">全部版本</option>
-            {versionOptions.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-          <select
+            onChange={onVersionChange}
+            options={versionOptions.map((value) => ({ value, label: value }))}
+            allLabel="全部版本"
+            searchPlaceholder="筛选版本..."
+            ariaLabel="版本筛选"
+            testId="plan-execute-version-filter"
+            className="w-[8.5rem]"
+          />
+          <SearchableSelect
             value={deviceModelFilter}
-            onChange={(e) => onModelChange(e.target.value)}
-            className={`${FORM.selectSm} w-28`}
-            aria-label="型号筛选"
-          >
-            <option value="all">全部型号</option>
-            {modelOptions.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-          <select
+            onChange={onModelChange}
+            options={modelOptions.map((value) => ({ value, label: value }))}
+            allLabel="全部型号"
+            searchPlaceholder="筛选型号..."
+            ariaLabel="型号筛选"
+            testId="plan-execute-model-filter"
+            className="w-32"
+          />
+          <SearchableSelect
             value={deviceProductFilter}
-            onChange={(e) => onProductChange(e.target.value)}
-            className={`${FORM.selectSm} w-48`}
-            aria-label="Product 筛选"
-          >
-            <option value="all">全部 product</option>
-            {productOptions.map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
+            onChange={onProductChange}
+            options={productOptions.map((value) => ({ value, label: value }))}
+            allLabel="全部 product"
+            searchPlaceholder="筛选 product..."
+            ariaLabel="Product 筛选"
+            testId="plan-execute-product-filter"
+            className="w-48"
+          />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 w-28 justify-between bg-card px-2 font-normal text-xs"
+                className="h-9 w-28 justify-between rounded-lg bg-card px-2.5 font-normal text-xs"
               >
                 <span className="truncate">
                   {deviceTagFilter.length === 0
@@ -254,49 +254,45 @@ export function DeviceFilterBar({
         </div>
       </div>
 
-      <div
-        className="flex flex-wrap items-center gap-1.5 border-t px-3 py-1.5"
-        data-testid="active-filter-chips"
-      >
-        {(versionChips.length > 0 || modelChips.length > 0) && (
-          <span className={cn('self-center text-[11px]', TEXT.subtitle)}>快捷：</span>
-        )}
-        {versionChips.map((v) => (
-          <button
-            key={`v-${v}`}
-            type="button"
-            onClick={() => onVersionChange(deviceVersionFilter === v ? 'all' : v)}
-            className={cn(
-              'h-6 rounded-md border px-2 text-xs transition-colors',
-              deviceVersionFilter === v
-                ? 'border-primary bg-primary/15 font-medium text-primary'
-                : 'bg-card hover:border-primary/50',
-            )}
-          >
-            {v}
-          </button>
-        ))}
-        {modelChips.map((m) => (
-          <button
-            key={`m-${m}`}
-            type="button"
-            onClick={() => onModelChange(deviceModelFilter === m ? 'all' : m)}
-            className={cn(
-              'h-6 rounded-md border px-2 text-xs transition-colors',
-              deviceModelFilter === m
-                ? 'border-primary bg-primary/15 font-medium text-primary'
-                : 'bg-card hover:border-primary/50',
-            )}
-          >
-            {m}
-          </button>
-        ))}
-        {activeFilterChips.length === 0 ? (
-          <span className={cn('text-[11px]', TEXT.subtitle)}>
-            无激活筛选 · 条件会写入 URL 便于分享
-          </span>
-        ) : (
-          activeFilterChips.map((chip) => (
+      {(versionChips.length > 0 || modelChips.length > 0 || activeFilterChips.length > 0) && (
+        <div
+          className="flex flex-wrap items-center gap-1.5 border-t px-3 py-1.5"
+          data-testid="active-filter-chips"
+        >
+          {(versionChips.length > 0 || modelChips.length > 0) && (
+            <span className={cn('self-center text-[11px]', TEXT.subtitle)}>快捷：</span>
+          )}
+          {versionChips.map((v) => (
+            <button
+              key={`v-${v}`}
+              type="button"
+              onClick={() => onVersionChange(deviceVersionFilter === v ? 'all' : v)}
+              className={cn(
+                'h-6 rounded-md border px-2 text-xs transition-colors',
+                deviceVersionFilter === v
+                  ? 'border-primary bg-primary/15 font-medium text-primary'
+                  : 'bg-card hover:border-primary/50',
+              )}
+            >
+              {v}
+            </button>
+          ))}
+          {modelChips.map((m) => (
+            <button
+              key={`m-${m}`}
+              type="button"
+              onClick={() => onModelChange(deviceModelFilter === m ? 'all' : m)}
+              className={cn(
+                'h-6 rounded-md border px-2 text-xs transition-colors',
+                deviceModelFilter === m
+                  ? 'border-primary bg-primary/15 font-medium text-primary'
+                  : 'bg-card hover:border-primary/50',
+              )}
+            >
+              {m}
+            </button>
+          ))}
+          {activeFilterChips.map((chip) => (
             <button
               key={chip.id}
               type="button"
@@ -307,9 +303,27 @@ export function DeviceFilterBar({
               {chip.label}
               <X className="h-3 w-3 opacity-70" aria-hidden />
             </button>
-          ))
-        )}
-      </div>
+          ))}
+          {activeFilterChips.length > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="ml-auto h-6 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                if (onResetAll) {
+                  onResetAll();
+                } else {
+                  activeFilterChips.forEach((chip) => onClearFilterChip(chip.id));
+                }
+              }}
+            >
+              <RotateCcw className="h-3 w-3" aria-hidden />
+              重置筛选
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

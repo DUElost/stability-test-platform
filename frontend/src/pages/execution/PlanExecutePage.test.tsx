@@ -1885,12 +1885,14 @@ it('selects Carrier devices independently from ordinary NX3 and restores the pro
     hosts: [{ id: 'h1', ip: '192.0.2.88', status: 'ONLINE' }],
   });
   await goToDeviceStep();
-  expect(screen.getByRole('combobox', { name: 'Product 筛选' })).toHaveValue('sys_mssi_64_cn_armv82');
+  const productCombobox = screen.getByRole('combobox', { name: 'Product 筛选' });
+  expect(productCombobox).toHaveTextContent('sys_mssi_64_cn_armv82');
   const table = screen.getByTestId('device-table-panel');
   expect(within(table).getByText('NX3-CARRIER')).toBeInTheDocument();
   expect(within(table).getByText('Product: NX3Carrier · sys_mssi_64_cn_armv82')).toBeInTheDocument();
   expect(within(table).queryByText('NX3-ORDINARY')).not.toBeInTheDocument();
-  fireEvent.change(screen.getByRole('combobox', { name: 'Product 筛选' }), { target: { value: 'MLD-NX3' } });
+  fireEvent.click(productCombobox);
+  fireEvent.click(screen.getByRole('option', { name: 'MLD-NX3' }));
   expect(within(table).getByText('NX3-ORDINARY')).toBeInTheDocument();
   expect(within(table).queryByText('NX3-CARRIER')).not.toBeInTheDocument();
 });
