@@ -277,10 +277,13 @@ async def _recover_unconfirmed_claims(
                 )).scalars().first()
                 if lease is None or lease.agent_instance_id != agent_instance_id:
                     continue
+                # Re-read current time under Job -> Device -> DeviceLease FOR UPDATE so a
+                # lease expiring after candidate scan / pre-lock `now` cannot be refreshed.
+                lock_now = datetime.now(timezone.utc)
                 lease_expires = _as_utc(lease.expires_at)
                 lease_acquired = _as_utc(lease.acquired_at)
                 lease_renewed = _as_utc(lease.renewed_at)
-                if lease_expires is None or lease_expires <= now:
+                if lease_expires is None or lease_expires <= lock_now:
                     continue
                 if (
                     lease_acquired is not None
@@ -306,7 +309,7 @@ async def _recover_unconfirmed_claims(
                         db, device_id=job.device_id, job_id=job.id, job=job,
                     )
                     JobStateMachine.transition(job, JobStatus.UNKNOWN, "claim_unconfirmed")
-                    job.ended_at = now
+                    job.ended_at = lock_now
                     db_mutated = True
                     logger.warning(
                         "claim_unconfirmed_released host=%s job=%s device=%s run_active=%s device_ok=%s",
@@ -331,8 +334,8 @@ async def _recover_unconfirmed_claims(
                 device.lease_generation = int(device.lease_generation or 0) + 1
                 lease.lease_generation = device.lease_generation
                 lease.fencing_token = f"{device.id}:{device.lease_generation}"
-                lease.expires_at = now + timedelta(seconds=_DEFAULT_LEASE_SECONDS)
-                job.started_at = now
+                lease.expires_at = lock_now + timedelta(seconds=_DEFAULT_LEASE_SECONDS)
+                job.started_at = lock_now
                 fencing_token_map[job.id] = lease.fencing_token
                 redelivered.append(job)
                 claimed_device_ids.add(job.device_id)

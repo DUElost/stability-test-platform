@@ -23,6 +23,7 @@ from backend.models.job import JobInstance, StepTrace  # noqa: E402
 from backend.models.plan import Plan  # noqa: E402
 from backend.models.plan_run import PlanRun  # noqa: E402
 from backend.scheduler.device_lease_reconciler import (  # noqa: E402
+    _reconcile_checks,
     _reconcile_stale_unknown_jobs,
     _reconcile_unconfirmed_claims,
 )
@@ -224,3 +225,28 @@ async def test_repeated_redelivery_response_drop_still_reclaimed_by_check_2b(unc
     assert job.status_reason == "claim_unconfirmed"
     assert lease.status == LeaseStatus.RELEASED.value
     assert db.get(PlanRun, run_id).status == "PARTIAL_SUCCESS"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_full_reconcile_checks_counts_claim_unconfirmed_once(unconfirmed_seed):
+    add, db = unconfirmed_seed
+    run_id, _device_id, job_id = add(age_seconds=UNCONFIRMED_CLAIM_TIMEOUT_SECONDS + 15)
+
+    def _action_count() -> float:
+        child = reconciler_actions.labels(action="to_failed", reason="claim_unconfirmed")
+        return float(child._value.get()) if hasattr(child, "_value") else 0.0
+
+    before = _action_count()
+
+    await async_engine.dispose()
+    await _reconcile_checks()
+
+    db.expire_all()
+    job = db.get(JobInstance, job_id)
+    lease = db.query(DeviceLease).filter(DeviceLease.job_id == job_id).one()
+    assert job.status == JobStatus.FAILED.value
+    assert job.status_reason == "claim_unconfirmed"
+    assert lease.status == LeaseStatus.RELEASED.value
+    assert db.get(PlanRun, run_id).status == "PARTIAL_SUCCESS"
+    if hasattr(reconciler_actions.labels(action="to_failed", reason="claim_unconfirmed"), "_value"):
+        assert _action_count() == before + 1.0

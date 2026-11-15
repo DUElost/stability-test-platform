@@ -1186,8 +1186,6 @@ def _record_check(label: str, outcome: str, result) -> None:
                 reconciler_actions.labels(
                     action="to_unknown", reason="abort_ack_timeout",
                 ).inc(unknown_count)
-        elif label == "unconfirmed_claims" and result:
-            reconciler_actions.labels(action="to_failed", reason="claim_unconfirmed").inc(result)
         elif label == "expired_leases" and result is not None:
             unknown, failed, terminal = result
             if unknown:
