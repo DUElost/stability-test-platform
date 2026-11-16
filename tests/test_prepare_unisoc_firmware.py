@@ -8,7 +8,9 @@ length corrupts super.img and the device falls back to fastboot (observed on
 from __future__ import annotations
 
 import importlib.util
+import json
 import struct
+import sys
 from pathlib import Path
 
 import pytest
@@ -142,3 +144,240 @@ def test_parse_scheme_and_build_plan_capture_fdl_base_and_erases(tmp_path, tool)
         "fdl2": {"file": "lk-fdl2-sign.bin", "base": "0x9EFFFE00"},
     }
     assert plan["erases"] == ["splloader", "misc", "metadata"]
+
+
+def _pack_u16(text: str, n_chars: int = 256) -> bytes:
+    encoded = text.encode("utf-16-le")
+    return encoded[: 2 * n_chars].ljust(2 * n_chars, b"\x00")
+
+
+def _build_pac(
+    path: Path,
+    entries: list[tuple[str, str, int, bytes]],
+    *,
+    product: str = "P525AAN",
+    firmware: str = "P525AAN_V1.0",
+) -> Path:
+    """Create a minimal valid Unisoc PAC archive for CLI tests."""
+    header_size = 2124
+    entry_size = 2580
+    magic = ~0x50005 & 0xFFFFFFFF
+
+    hdr = bytearray(header_size)
+    hdr[52 : 52 + 512] = _pack_u16(product)
+    hdr[564 : 564 + 512] = _pack_u16(firmware)
+    struct.pack_into("<II", hdr, 1076, len(entries), header_size)
+    struct.pack_into("<I", hdr, 2116, magic)
+
+    data_offset = header_size + len(entries) * entry_size
+    directory = bytearray()
+    payloads = bytearray()
+    for eid, fname, typ, data in entries:
+        rec = bytearray(entry_size)
+        rec[4 : 4 + 512] = _pack_u16(eid)
+        rec[516 : 516 + 512] = _pack_u16(fname)
+        struct.pack_into("<IIIIII", rec, 1532, 0, 0, len(data), typ, 1, data_offset)
+        directory.extend(rec)
+        payloads.extend(data)
+        data_offset += len(data)
+
+    path.write_bytes(bytes(hdr) + bytes(directory) + bytes(payloads))
+    return path
+
+
+def _run_main(tool, monkeypatch, argv: list[str]) -> None:
+    monkeypatch.setattr(sys, "argv", ["prepare_unisoc_firmware.py", *argv])
+    tool.main()
+
+
+def test_main_fails_and_writes_no_plan_when_fdl2_base_missing(tmp_path, tool, monkeypatch):
+    xml = (
+        "<BMAConfig><SchemeList><Scheme name='P525AAN'>"
+        "<File><ID>FDL</ID><Type>FDL</Type><Block><Base>0x65000800</Base></Block></File>"
+        "<File><ID>FDL2</ID><Type>NAND_FDL</Type><Block><Base>0x0</Base></Block></File>"
+        "<File><ID>BOOT</ID><Type>CODE2</Type><Block id='boot_a'/></File>"
+        "</Scheme></SchemeList></BMAConfig>"
+    ).encode("utf-8")
+    pac_path = _build_pac(
+        tmp_path / "missing_fdl2_base.pac",
+        [
+            ("FDL", "fdl1-sign.bin", 1, b"fdl1"),
+            ("FDL2", "lk-fdl2-sign.bin", 1, b"fdl2"),
+            ("BOOT", "boot.img", 1, b"boot"),
+            ("SCHEME", "P525AAN.xml", 2, xml),
+        ],
+    )
+    outdir = tmp_path / "out"
+
+    with pytest.raises(SystemExit) as exc_info:
+        _run_main(tool, monkeypatch, [str(pac_path), str(outdir), "--models", "MLY-LX2"])
+
+    assert exc_info.value.code not in (0, None)
+    assert not (outdir / "images" / "plan.json").exists()
+    assert not (outdir / "manifest.json").exists()
+
+
+def test_main_fails_and_writes_no_plan_when_fdl1_missing(tmp_path, tool, monkeypatch):
+    xml = (
+        "<BMAConfig><SchemeList><Scheme name='P525AAN'>"
+        "<File><ID>FDL2</ID><Type>NAND_FDL</Type><Block><Base>0x9EFFFE00</Base></Block></File>"
+        "<File><ID>BOOT</ID><Type>CODE2</Type><Block id='boot_a'/></File>"
+        "</Scheme></SchemeList></BMAConfig>"
+    ).encode("utf-8")
+    pac_path = _build_pac(
+        tmp_path / "missing_fdl1.pac",
+        [
+            ("FDL2", "lk-fdl2-sign.bin", 1, b"fdl2"),
+            ("BOOT", "boot.img", 1, b"boot"),
+            ("SCHEME", "P525AAN.xml", 2, xml),
+        ],
+    )
+    outdir = tmp_path / "out"
+
+    with pytest.raises(SystemExit) as exc_info:
+        _run_main(tool, monkeypatch, [str(pac_path), str(outdir), "--models", "MLY-LX2"])
+
+    assert exc_info.value.code not in (0, None)
+    assert not (outdir / "images" / "plan.json").exists()
+
+
+def test_build_plan_preserves_nv_comm_types_even_when_id_unknown(tmp_path, tool):
+    images = tmp_path / "images"
+    images.mkdir()
+    for fname in ("custom_slot_nv.bin", "custom_nv.bin", "boot.img"):
+        (images / fname).write_bytes(b"\x01\x02\x03\x04")
+
+    pac = {
+        "entries": [
+            {"id": "UNKNOWN_NV_SLOT", "file": "custom_slot_nv.bin", "size": 4, "type": 1},
+            {"id": "UNKNOWN_NV_PLAIN", "file": "custom_nv.bin", "size": 4, "type": 1},
+            {"id": "BOOT", "file": "boot.img", "size": 4, "type": 1},
+        ]
+    }
+    scheme = {
+        "UNKNOWN_NV_SLOT": {"partitions": ["l_fixnv1_a"], "type": "NV_COMM_SLOT"},
+        "UNKNOWN_NV_PLAIN": {"partitions": ["nr_downloadnv_a"], "type": "NV_COMM"},
+        "BOOT": {"partitions": ["boot_a"], "type": "CODE2"},
+    }
+
+    plan = tool.build_plan(pac, str(images), scheme)
+    by_id = {entry["id"]: entry for entry in plan["entries"]}
+
+    assert by_id["UNKNOWN_NV_SLOT"]["preserve"] is True
+    assert by_id["UNKNOWN_NV_PLAIN"]["preserve"] is True
+    assert "preserve" not in by_id["BOOT"]
+
+
+def test_build_plan_keeps_splloader_in_erases(tmp_path, tool):
+    images = tmp_path / "images"
+    images.mkdir()
+    for fname in ("fdl1-sign.bin", "edk2-fdl2-sign.bin", "boot.img"):
+        (images / fname).write_bytes(b"\x01\x02\x03\x04")
+
+    xml = tmp_path / "p532a.xml"
+    xml.write_text(
+        "<BMAConfig><SchemeList><Scheme name='p532a'>"
+        "<File><ID>FDL</ID><Type>FDL</Type><Block><Base>0x65008000</Base></Block></File>"
+        "<File><ID>FDL2</ID><Type>NAND_FDL</Type><Block><Base>0xBDFFFE00</Base></Block></File>"
+        "<File><ID>EraseSPL</ID><Type>EraseFlash2</Type><Block id='splloader'/></File>"
+        "<File><ID>EraseUbootLog</ID><Type>EraseFlash2</Type><Block id='uboot_log'/></File>"
+        "<File><ID>EraseSdklog</ID><Type>EraseFlash2</Type><Block id='sd_klog'/></File>"
+        "<File><ID>EraseMisc</ID><Type>EraseFlash2</Type><Block id='misc'/></File>"
+        "<File><ID>EraseSysdump</ID><Type>EraseFlash2</Type><Block id='sysdumpdb'/></File>"
+        "<File><ID>EraseMetadata</ID><Type>EraseFlash2</Type><Block id='metadata'/></File>"
+        "<File><ID>BOOT</ID><Type>CODE2</Type><Block id='boot_a'/></File>"
+        "</Scheme></SchemeList></BMAConfig>",
+        encoding="utf-8",
+    )
+    scheme = tool.parse_scheme(str(xml))
+    pac = {
+        "entries": [
+            {"id": "FDL", "file": "fdl1-sign.bin", "size": 4, "type": 1},
+            {"id": "FDL2", "file": "edk2-fdl2-sign.bin", "size": 4, "type": 1},
+            {"id": "BOOT", "file": "boot.img", "size": 4, "type": 1},
+        ]
+    }
+
+    plan = tool.build_plan(pac, str(images), scheme)
+    assert "splloader" in plan["erases"]
+    assert plan["erases"] == ["splloader", "uboot_log", "sd_klog", "misc", "sysdumpdb", "metadata"]
+
+
+def test_build_plan_always_emits_erases_even_when_empty(tmp_path, tool):
+    images = tmp_path / "images"
+    images.mkdir()
+    for fname in ("fdl1-sign.bin", "edk2-fdl2-sign.bin", "boot.img"):
+        (images / fname).write_bytes(b"\x01\x02\x03\x04")
+
+    pac = {
+        "entries": [
+            {"id": "FDL", "file": "fdl1-sign.bin", "size": 4, "type": 1},
+            {"id": "FDL2", "file": "edk2-fdl2-sign.bin", "size": 4, "type": 1},
+            {"id": "BOOT", "file": "boot.img", "size": 4, "type": 1},
+        ]
+    }
+    scheme_no_erase = {
+        "FDL": {"partitions": [], "type": "FDL", "base": "0x65008000"},
+        "FDL2": {"partitions": [], "type": "NAND_FDL", "base": "0xBDFFFE00"},
+        "BOOT": {"partitions": ["boot_a"], "type": "CODE2"},
+    }
+    plan_no_erase = tool.build_plan(pac, str(images), scheme_no_erase)
+    assert plan_no_erase["erases"] == []
+
+
+def test_main_version_prop_option_and_default(tmp_path, tool, monkeypatch):
+    xml = (
+        "<BMAConfig><SchemeList><Scheme name='p532a'>"
+        "<File><ID>FDL</ID><Type>FDL</Type><Block><Base>0x65008000</Base></Block></File>"
+        "<File><ID>FDL2</ID><Type>NAND_FDL</Type><Block><Base>0xBDFFFE00</Base></Block></File>"
+        "<File><ID>EraseSPL</ID><Type>EraseFlash2</Type><Block id='splloader'/></File>"
+        "<File><ID>BOOT</ID><Type>CODE2</Type><Block id='boot_a'/></File>"
+        "</Scheme></SchemeList></BMAConfig>"
+    ).encode("utf-8")
+    pac_path = _build_pac(
+        tmp_path / "valid.pac",
+        [
+            ("FDL", "fdl1-sign.bin", 1, b"fdl1"),
+            ("FDL2", "edk2-fdl2-sign.bin", 1, b"fdl2"),
+            ("BOOT", "boot.img", 1, b"boot"),
+            ("SCHEME", "p532a.xml", 2, xml),
+        ],
+        product="p532a_64only",
+        firmware="P532AA_V1.0",
+    )
+
+    out_default = tmp_path / "out_default"
+    _run_main(tool, monkeypatch, [str(pac_path), str(out_default), "--models", "p532a_64only"])
+    manifest_default = json.loads((out_default / "manifest.json").read_text(encoding="utf-8"))
+    plan_default = json.loads((out_default / "images" / "plan.json").read_text(encoding="utf-8"))
+    assert manifest_default["version_prop"] == "ro.build.sw_internal_version"
+    assert manifest_default["platform"] == "unisoc"
+    assert manifest_default["models"] == ["p532a_64only"]
+    assert plan_default["fdl"] == {
+        "fdl1": {"file": "fdl1-sign.bin", "base": "0x65008000"},
+        "fdl2": {"file": "edk2-fdl2-sign.bin", "base": "0xBDFFFE00"},
+    }
+    assert plan_default["erases"] == ["splloader"]
+
+    out_custom = tmp_path / "out_custom"
+    _run_main(
+        tool,
+        monkeypatch,
+        [
+            str(pac_path),
+            str(out_custom),
+            "--models",
+            "p532a_64only",
+            "--version-prop",
+            "ro.build.version.incremental",
+        ],
+    )
+    manifest_custom = json.loads((out_custom / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest_custom["version_prop"] == "ro.build.version.incremental"
+
+    with pytest.raises(SystemExit):
+        _run_main(
+            tool,
+            monkeypatch,
+            [str(pac_path), str(tmp_path / "out_empty"), "--version-prop", "   "],
+        )
