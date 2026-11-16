@@ -49,6 +49,27 @@ Class: feature
    选中的问题数（2），`published` / `pending` / `failed` 按代表 DLE 去重（一份
    证据只算一次）。四种共享形态（无记录 / PENDING / FAILED / VERIFIED）各有断言。
 
+### 第三轮返修（独立复核固定 HEAD `42663280e`，B1–B3）
+
+独立复核在固定 HEAD 上以真实入口复现三条 #3990 验收失败，均判「需修改」：
+
+1. **B1 · I4 推迟后重算链引用**。同链根/子 run 同批到期、子 run 有 RETRYING
+   代表时，I4 只把子 run 移出待删列表；根 run 与同批无关 run 仍被送入
+   `purge_run_storage_dirs`，文件先删、行后删，PG 外键拒绝删根 run 并回滚，
+   文件无法随事务恢复（日志 `retention_rollback_after_nfs_purge`）。返修：
+   I4 收缩 `safe_run_ids` 后**在任何物理删除前**用收缩后的批次再跑一次
+   `_retention_safe_ids`，把被保留 run 的祖先重新计入 `keep`；无关 run 正常回收。
+2. **B2 · 两个下载入口都校验代表发布**。先去重分区的代表发布为 PENDING 时，
+   发布证据端点 409，但 DLE 下载仍回退 `DLE.remote_path` 并返回 HddSpill
+   溢出源 ZIP。返修：`find_verified_publication_for_dle` 增补平台维度，DLE
+   下载在无 VERIFIED 记录时按分区模式拒绝——DEDUP_FIRST 一律 409；旧路径
+   下载仅保留 CURRENT 与无模式存量，`remote_path` 的补扫语义不变。
+3. **B3 · 解析后的导出仍须属于登记版本**。同存储根内把子 run 的
+   `_meta/{run}/_delivery/{platform}/v{n}.json`（或其父目录）换成指向另一 run
+   的软链接后，下载路由返回另一 run 的 JSON。返修：`resolve_delivery_export`
+   先按解析后的根拼出登记路径，再要求 `realpath` 与该派生路径逐字一致——
+   文件或任一父目录是软链接即 400；正常登记的两个 run 与各自历史版本照常下载。
+
 ### 统计口径（同 PR 交付）
 
 | 数字 | 含义 | 来源 |
@@ -99,11 +120,12 @@ Class: feature
 
 ## Verification
 
-- 新增 `backend/tests/services/test_b8_g7_partition_consumers.py`（31 项，含规划侧
-  2 条探针 + 共享代表 4 形态 + 真实 `auto_archive_sweep` 入口）：
-  混合/纯先去重/存量 extract、READY / READY_WITH_GAPS / 重试中、两侧独立、
-  下载与跨 run / 跨根拒绝、I4 推迟、单 run 清理保留链证据、发生计数稳定、
-  DLE-only 进入观测面、上传汇总与分区视图、能力目录。
+- 新增 `backend/tests/services/test_b8_g7_partition_consumers.py`（39 项，含规划侧
+  2 条探针 + 共享代表 4 形态 + 真实 `auto_archive_sweep` 入口 + 独立复核 B1–B3
+  回归）：混合/纯先去重/存量 extract、READY / READY_WITH_GAPS / 重试中、两侧独立、
+  下载与跨 run / 跨根拒绝、I4 推迟与链引用重算、单 run 清理保留链证据、发生计数
+  稳定、DLE-only 进入观测面、上传汇总与分区视图、能力目录、先去重分区无
+  VERIFIED 发布不提供溢出源、导出软链接不得切换 run。
 - 基线反例（逐项红→绿，恢复后 31/31 绿）：
   1. 归档判据退回「只认现行」→ READY / READY_WITH_GAPS 两例失败；
   2. extract 去掉平台过滤 → 混合运行多拷 1 个事件，用例失败；
@@ -111,6 +133,11 @@ Class: feature
   4. 关掉 I4 保护 → retention 用例失败；
   5. 第二轮：关掉「CURRENT 分区本分区报表」校验 → 2 条归档探针红，恢复绿；
   6. 第二轮：去掉代表 DLE 去重 → 5 条共享代表计数用例红，恢复绿。
+- 独立复核固定反例基线 `42663280eb46a81728c0e2160537f3db72945376`：同一份
+  `test_reviewer_g7.py` 探针（隔离 PG16、真实鉴权路由）在该 HEAD 上 B1–B3 三项
+  全红（`IntegrityError` + 文件已删、DLE 溢出源 200、软链接导出返回
+  `plan_run_id=1`），返修后全量 20/20 绿；三项回归用例逐项变异（反向应用
+  修复补丁）分别红 1 / 4 / 1 条，恢复后全绿。
 - 规划侧固定反例基线 `b28ee8f3fab611af03185f3a00a6c14f3854eda6`：挂上探针后
   2 failed（`assert True is False`、`assert 2 == 1`），返修后 7/7 绿。
 - 受影响回归 492 项全绿；`frontend` vitest `DedupReportCard` 18 +

@@ -65,11 +65,22 @@ def resolve_delivery_export(
     root = resolve_shared_storage_root()
     if not root:
         raise DeliveryDownloadError(503, "NFS root not configured")
-    path = delivery_export_path(root, plan_run_id, platform.lower(), version_no)
+    # B8 G7 / B3：登记路径由 (run, 平台, 版本) 派生。解析后的文件必须仍
+    # 落在该派生路径上——文件或任一父目录是软链接时 realpath 会偏离并
+    # 指向另一 run 的导出，属于越出登记版本的范围（同根白名单拦不住）。
+    expected = delivery_export_path(
+        str(Path(root).resolve(strict=False)),
+        plan_run_id, platform.lower(), version_no,
+    )
     try:
-        return resolve_local_artifact_path(str(path), must_exist=True)
+        resolved = resolve_local_artifact_path(str(expected), must_exist=True)
     except ArtifactPathError as exc:
         raise DeliveryDownloadError(404, str(exc)) from exc
+    if resolved != expected:
+        raise DeliveryDownloadError(
+            400, "delivery export path must not follow symlinks",
+        )
+    return resolved
 
 
 def resolve_evidence_directory(

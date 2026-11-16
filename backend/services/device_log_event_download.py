@@ -46,7 +46,7 @@ def build_device_log_event_download_response(
     # 注册表是唯一索引；不得按主文件夹推断归属。DLE.remote_path 仍供溢出补扫，
     # 只在没有已校验发布记录时使用。
     publication = facts.find_verified_publication_for_dle(
-        db, plan_run_id=plan_run_id, dle_id=eid,
+        db, plan_run_id=plan_run_id, dle_id=eid, platform=event.platform,
     )
     if publication is not None and publication.destination_rel_path:
         try:
@@ -63,6 +63,22 @@ def build_device_log_event_download_response(
                 resolved, download_name=f"dle-{event.id}",
             )
         raise HTTPException(status_code=404, detail="evidence path is not a directory")
+
+    # B8 G7 / B2：先去重分区的 DLE 下载只提供同一实际 run、平台和 DLE 的
+    # VERIFIED 发布证据。没有已校验记录时不得回退到 DLE.remote_path——
+    # 那里是 HddSpill 溢出源（补扫输入），不是可交付证据。旧路径仅保留给
+    # CURRENT 与无模式存量（D13 第 2 条：无记录按现行解释）。
+    partition = facts.get_partition_mode(
+        db, plan_run_id=plan_run_id, platform=event.platform or "",
+    )
+    if partition is not None and partition.mode == facts.PARTITION_MODE_DEDUP_FIRST:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "log event download in dedup-first partition requires a "
+                "verified evidence publication"
+            ),
+        )
 
     if event.state == "PRUNED":
         raise HTTPException(

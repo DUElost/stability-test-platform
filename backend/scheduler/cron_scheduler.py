@@ -843,14 +843,24 @@ def run_retention_cleanup() -> None:
                 db, run_ids=safe_run_ids,
             )
             if protected_run_ids:
-                safe_run_ids = [
+                # B8 G7 / B1：被 I4 推迟的 run 仍留在库里，仍可能被本批中
+                # 的 run 通过 parent/root 引用。物理清理前必须用**收缩后的
+                # 批次**重算链引用——否则其祖先会被送入
+                # purge_run_storage_dirs（文件先删、行后删），随后外键拒绝
+                # 删行并回滚，留下「行在、文件已删」的不可回溯缺口。
+                remaining = [
                     run_id for run_id in safe_run_ids
                     if run_id not in protected_run_ids
                 ]
+                safe_run_ids, deferred_ancestors = _retention_safe_ids(
+                    db, remaining,
+                )
                 keep.update(protected_run_ids)
+                keep.update(deferred_ancestors)
                 logger.info(
-                    "retention_cleanup deferred: material_protected=%d",
-                    len(protected_run_ids),
+                    "retention_cleanup deferred: material_protected=%d "
+                    "kept_ancestors=%d",
+                    len(protected_run_ids), len(deferred_ancestors),
                 )
                 if not safe_run_ids:
                     record_retention_txn(time.perf_counter() - lock_t0)

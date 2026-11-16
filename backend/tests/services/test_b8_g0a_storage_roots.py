@@ -63,11 +63,15 @@ def test_legacy_dle_download_succeeds_but_upload_receipt_rejects_it(roots):
         id=event_id, plan_run_id=42, state="REMOTE", remote_path=str(old_file),
         platform="MTK",
     )
-    # B8 G7：DLE 下载先查已校验代表发布记录；这个假会话要能回答「无发布记录」，
-    # 才能继续走旧根 devices/ 路径（本用例只验旧根下载的读/写边界）。
+    # B8 G7：DLE 下载先查已校验代表发布记录与分区模式；这个假会话要能回答
+    # 「无发布记录 / 无模式」，才能继续走旧根 devices/ 路径（本用例只验旧根
+    # 下载的读/写边界）。
     db = SimpleNamespace(
         get=lambda *_args: event,
-        execute=lambda *_args: SimpleNamespace(scalar_one_or_none=lambda: None),
+        execute=lambda *_args: SimpleNamespace(
+            scalar_one_or_none=lambda: None,
+            scalars=lambda: SimpleNamespace(first=lambda: None),
+        ),
     )
     response = build_device_log_event_download_response(db, plan_run_id=42, event_id=event_id)
     assert Path(response.path) == old_file

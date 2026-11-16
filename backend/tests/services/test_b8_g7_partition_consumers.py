@@ -843,3 +843,181 @@ def test_planner_audit_real_auto_archive_sweep_needs_current_merge(
     # 若 sweep 内部抛异常会被自身 except 吞掉，enqueued 也会是空——额外看日志。
     assert not [r for r in caplog.records if "auto_archive_sweep failed" in r.getMessage()]
     assert enqueued == [], "补齐展锐报表后归档完成，不再重复入队"
+
+
+# ── 7. 独立复核返修（B1–B3）────────────────────────────────────────────────
+
+def test_retention_recomputes_chain_after_i4_deferral(
+    db_session, store, monkeypatch, scheduler_env, caplog,
+):
+    """B1：I4 收缩批次后必须重算链引用，祖先不得先删文件。"""
+    caplog.set_level("INFO", logger=cron_scheduler.__name__)
+    root = _plan_run(db_session)
+    child = _plan_run(db_session, root_plan_run_id=root.id)
+    child.parent_plan_run_id = root.id
+    unrelated = _plan_run(db_session)
+    db_session.commit()
+    host_id = _host(db_session)
+
+    def _source(run, event):
+        path = store / "devices" / str(run.id) / event / "source.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(event, encoding="utf-8")
+        return path
+
+    root_source = _source(root, EVENT_A)
+    child_source = _source(child, EVENT_B)
+    unrelated_file = store / "devices" / str(unrelated.id) / "expired"
+    unrelated_file.parent.mkdir(parents=True, exist_ok=True)
+    unrelated_file.write_text("expired", encoding="utf-8")
+
+    spill = _dle(
+        db_session, run_id=child.id, host_id=host_id, state="REMOTE",
+        remote_path=str(child_source.parent), event=EVENT_B,
+    )
+    # PENDING 发布让子 run 受 I4 保护；父级引用使根 run 不得同批删除。
+    facts.record_evidence_publication(
+        db_session, plan_run_id=child.id, platform="mtk", dle_id=spill.id,
+        root_plan_run_id=root.id, source_kind=facts.PUBLICATION_SOURCE_SPILL,
+        source_path=str(child_source.parent), collection_folder=FOLDER,
+        naming_rule_version="aee-folder-name/v1",
+        destination_rel_path=f"evidence/{root.id}_{FOLDER}/{SERIAL}/{EVENT_B}",
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(cron_scheduler, "SessionLocal", lambda: db_session)
+    scheduler_env("PLAN_RUN_RETENTION_DAYS", "0")
+    cron_scheduler.run_retention_cleanup()
+
+    db_session.expire_all()
+    assert db_session.get(PlanRun, root.id) is not None
+    assert db_session.get(PlanRun, child.id) is not None
+    assert root_source.read_text(encoding="utf-8") == EVENT_A
+    assert child_source.read_text(encoding="utf-8") == EVENT_B
+    assert not unrelated_file.exists()
+    assert db_session.get(PlanRun, unrelated.id) is None
+    assert not [
+        record for record in caplog.records
+        if "retention_rollback_after_nfs_purge" in record.getMessage()
+    ], "I4 收缩后重算链引用，不应出现外键回滚"
+
+
+@pytest.mark.parametrize("state", [None, "PENDING", "RETRYING", "FAILED"])
+def test_dedup_first_dle_requires_verified_publication(db_session, store, state):
+    """B2：先去重分区的 DLE 下载不得回退到 HddSpill 溢出源。"""
+    run = _plan_run(db_session)
+    _mode(db_session, run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST)
+    host_id = _host(db_session)
+    spill_dir = store / "devices" / str(run.id) / "host" / "aee_exp" / EVENT_A
+    spill_dir.mkdir(parents=True)
+    (spill_dir / "source.txt").write_text("spill source", encoding="utf-8")
+    dle = _dle(
+        db_session, run_id=run.id, host_id=host_id, platform="MTK",
+        state="REMOTE", remote_path=str(spill_dir),
+    )
+    facts.record_spill_ledger_entry(
+        db_session, plan_run_id=run.id, platform="mtk", dle_id=dle.id,
+        size_bytes=(spill_dir / "source.txt").stat().st_size,
+        spilled_at=datetime.now(timezone.utc),
+    )
+    if state is not None:
+        row = facts.record_evidence_publication(
+            db_session, plan_run_id=run.id, platform="mtk", dle_id=dle.id,
+            root_plan_run_id=run.id, source_kind=facts.PUBLICATION_SOURCE_SPILL,
+            source_path=str(spill_dir), collection_folder=FOLDER,
+            naming_rule_version="aee-folder-name/v1",
+            destination_rel_path=f"evidence/{run.id}_{FOLDER}/{SERIAL}/{EVENT_A}",
+        )
+        if state != "PENDING":
+            facts.update_evidence_publication_state(
+                db_session, row=row, state=state, attempts=1,
+                failure_reason="checksum_mismatch",
+            )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        build_device_log_event_download_response(
+            db_session, plan_run_id=run.id, event_id=dle.id,
+        )
+    assert exc.value.status_code == 409
+
+
+def test_dedup_first_dle_serves_verified_evidence(db_session, store):
+    run = _plan_run(db_session)
+    _mode(db_session, run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST)
+    host_id = _host(db_session)
+    spill_dir = store / "devices" / str(run.id) / "host" / "aee_exp" / EVENT_A
+    spill_dir.mkdir(parents=True)
+    (spill_dir / "source.txt").write_text("spill source", encoding="utf-8")
+    dle = _dle(
+        db_session, run_id=run.id, host_id=host_id, platform="MTK",
+        state="REMOTE", remote_path=str(spill_dir),
+    )
+    _verified_publication(
+        db_session, store, run_id=run.id, root_run_id=run.id, dle=dle,
+    )
+    response = build_device_log_event_download_response(
+        db_session, plan_run_id=run.id, event_id=dle.id,
+    )
+    assert isinstance(response, FileResponse)
+    assert Path(response.path).is_file()
+
+
+def test_current_partition_keeps_legacy_dle_download(db_session, store):
+    run = _plan_run(db_session)
+    _mode(db_session, run.id, platform="mtk", mode=facts.PARTITION_MODE_CURRENT)
+    host_id = _host(db_session)
+    event_dir = _event_dir(store, run_id=run.id, name=EVENT_A)
+    dle = _dle(
+        db_session, run_id=run.id, host_id=host_id, platform="MTK",
+        state="REMOTE", remote_path=str(event_dir),
+    )
+    response = build_device_log_event_download_response(
+        db_session, plan_run_id=run.id, event_id=dle.id,
+    )
+    assert Path(response.path).is_file()
+
+
+def test_delivery_export_rejects_symlink_to_other_run(db_session, store):
+    """B3：解析后的导出文件必须仍是请求登记的 run × 平台 × 版本。"""
+    first = _plan_run(db_session)
+    second = _plan_run(db_session)
+    versions = {}
+    for run in (first, second):
+        _mode(db_session, run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST)
+        _closed_final(db_session, run.id)
+        versions[run.id] = shadow_delivery.register_delivery_version(
+            db_session, plan_run_id=run.id, platform="mtk", root=str(store),
+        )
+        db_session.commit()
+    first_path = delivery_download.resolve_delivery_export(
+        db_session, plan_run_id=first.id, platform="mtk", version_no=1,
+    )
+    second_path = delivery_download.resolve_delivery_export(
+        db_session, plan_run_id=second.id, platform="mtk", version_no=1,
+    )
+    assert first_path.is_file() and second_path.is_file()
+
+    second_path.unlink()
+    second_path.symlink_to(first_path)
+    with pytest.raises(DeliveryDownloadError) as exc:
+        delivery_download.resolve_delivery_export(
+            db_session, plan_run_id=second.id, platform="mtk", version_no=1,
+        )
+    assert exc.value.status_code == 400
+
+    second_path.unlink()
+    second_path.parent.rmdir()
+    second_path.parent.symlink_to(first_path.parent, target_is_directory=True)
+    with pytest.raises(DeliveryDownloadError) as exc:
+        delivery_download.resolve_delivery_export(
+            db_session, plan_run_id=second.id, platform="mtk", version_no=1,
+        )
+    assert exc.value.status_code == 400
+
+    second_path.parent.unlink()
+    second_path.parent.mkdir()
+    assert delivery_download.resolve_delivery_export(
+        db_session, plan_run_id=first.id, platform="mtk", version_no=1,
+    ) == first_path
+    assert versions[first.id].version_no == versions[second.id].version_no == 1
