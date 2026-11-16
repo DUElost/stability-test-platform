@@ -1,7 +1,7 @@
 # Jira 提单联调夹具
 
 - `transsion_upload_list_real.xlsx` / `tinno_upload_list_real.xlsx`：由工具仓
-  `DUElost/automation-toolkit` 提交 `12587942f6058621b732e3154c139eb57b9c8eb4`
+  `DUElost/automation-toolkit` 返修候选 `12587942f6058621b732e3154c139eb57b9c8eb4`（待 #27 独立复核）
   的真实阶段一脚本生成，保留真实列布局（含 `Signature ID` / `Occurrence IDs` /
   `Occurrence Keys` / `Occurrence Count` / `Attribution Status` 等归因列）。
 - 生成输入：3 行去重 `.xls`（签名 101/102/103，发生 1001–1006）与同范围

@@ -47,6 +47,7 @@ Class: feature
 8. **两套工具从平台绑定入口联调（工具返修候选 `12587942`）**：
    - 传音与天珑分别以平台 `source=delivery_version` 的 `upload_list` 入口启动真实固定工具生成清单，再经人工删行/重排后从 `create` 入口启动真实建单入口（Jira 连接替换为模拟实现），平台消费 `attribution.json` 的 links/gaps 落库。
    - 覆盖同一链根下两个实际 `PlanRun`（A/B）、同一 run 的 v1/v2、筛选排除行、重复发生 gap、越界 link 与重复回调。每个 Jira key 只关联本次登记且选中的发生；筛选掉的问题不落 link，越界 link 只记 `unverified_link_scope` 不落库，重复回调不新增。
+   - 该候选 HEAD 的独立复核结论尚未发布；若复核要求新的工具 HEAD，夹具与联调证据需按新 HEAD 重跑后再固定。
 
 ## Alternatives
 
