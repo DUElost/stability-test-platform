@@ -66,7 +66,7 @@ Class: feature
   - `cd frontend && npm run test -- --run` → **154 files / 1355 tests passed**。
 - Agent 与 CI 检查：
   - `.venv/bin/python scripts/run_pytest.py -q backend/agent/tests/` → **3424 passed, 2 skipped, 1 failed**（`backend/agent/tests/test_flash_preflight_v102.py::test_dialout_absent_and_no_rule_fails`，与本单未修改的 `backend/agent/` 宿主组权限环境有关；以 PR 上游 6 项 required CI 实跑为准）。
-  - 6 项 required CI（`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、`pr-agent-tests`、`pr-migrate-empty-db`）：待 Draft PR 创建后核对结果。
+  - 6 项 required CI（`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、`pr-agent-tests`、`pr-migrate-empty-db`）：本 PR 最终 HEAD 全部 SUCCESS（以 PR 页面为准）。
 
 ## Revisit
 
