@@ -57,6 +57,8 @@ export interface ListPlanRunsParams {
   projectKey?: string;
   /** Run ID / Plan 名 / 触发者 */
   q?: string;
+  runType?: string;
+  startedAfter?: string;
 }
 
 function buildPlanRunListParams(params: ListPlanRunsParams): URLSearchParams {
@@ -66,6 +68,8 @@ function buildPlanRunListParams(params: ListPlanRunsParams): URLSearchParams {
   if (params.planId != null) sp.set('plan_id', String(params.planId));
   if (params.projectKey) sp.set('project_key', params.projectKey);
   if (params.q?.trim()) sp.set('q', params.q.trim());
+  if (params.runType) sp.set('run_type', params.runType);
+  if (params.startedAfter) sp.set('started_after', params.startedAfter);
   const statuses = params.status == null
     ? []
     : Array.isArray(params.status)

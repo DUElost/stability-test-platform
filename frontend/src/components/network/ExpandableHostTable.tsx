@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
 import { Progress } from '@/components/ui/progress';
@@ -19,8 +19,16 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw, ClipboardCheck, RefreshCw } from 'lucide-react';
-import { resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
+import {
+  FilterSearchInput,
+  FilterWorkbench,
+  MoreFiltersPopover,
+  type ActiveFilterChip,
+  type QuickViewOption,
+} from '@/components/ui/filter-bar';
+import { SearchableSelect } from '@/components/ui/searchable-select';
+import { FORM, resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
+import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw, ClipboardCheck, RefreshCw, ShieldAlert } from 'lucide-react';
 import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
 import type {
   HostScriptPresence,
@@ -125,6 +133,22 @@ interface ExpandableHostTableProps {
   onLoadHostScriptPresence?: (hostId: string | number) => Promise<HostScriptPresence>;
   /** 单机按需重核；成功后组件会重新拉一次该机矩阵。 */
   onRefreshHostScriptPresence?: (hostId: string | number) => Promise<unknown>;
+  /** 可选受控筛选状态（由页面同步到 URL）。 */
+  statusFilter?: 'all' | HostTableData['status'];
+  onStatusFilterChange?: (value: 'all' | HostTableData['status']) => void;
+  searchQuery?: string;
+  onSearchQueryChange?: (value: string) => void;
+  healthFilter?: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
+  onHealthFilterChange?: (value: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE') => void;
+  syncFilter?: 'all' | 'drift' | 'matched' | 'mount_error';
+  onSyncFilterChange?: (value: 'all' | 'drift' | 'matched' | 'mount_error') => void;
+  showRetired?: boolean;
+  onShowRetiredChange?: (value: boolean) => void;
+  onResetAllFilters?: () => void;
+  onClearQuickView?: () => void;
+  onNavigateToDevices?: (hostId: string | number) => void;
+  onFilteredHostsChange?: (hosts: HostTableData[]) => void;
+  extraHeaderRight?: ReactNode;
 }
 
 function getResourceColor(percentage: number): string {
@@ -282,9 +306,36 @@ export function ExpandableHostTable({
   onRetryScriptPresenceSummary,
   onLoadHostScriptPresence,
   onRefreshHostScriptPresence,
+  statusFilter: controlledStatusFilter,
+  onStatusFilterChange,
+  searchQuery: controlledSearchQuery,
+  onSearchQueryChange,
+  healthFilter: controlledHealthFilter,
+  onHealthFilterChange,
+  syncFilter: controlledSyncFilter,
+  onSyncFilterChange,
+  showRetired,
+  onShowRetiredChange,
+  onResetAllFilters,
+  onClearQuickView,
+  onNavigateToDevices,
+  onFilteredHostsChange,
+  extraHeaderRight,
 }: ExpandableHostTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
-  const [statusFilter, setStatusFilter] = useState<'all' | HostTableData['status']>('all');
+  const [localStatusFilter, setLocalStatusFilter] = useState<'all' | HostTableData['status']>('all');
+  const [localSearchQuery, setLocalSearchQuery] = useState('');
+  const [localHealthFilter, setLocalHealthFilter] = useState<'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE'>('all');
+  const [localSyncFilter, setLocalSyncFilter] = useState<'all' | 'drift' | 'matched' | 'mount_error'>('all');
+
+  const statusFilter = controlledStatusFilter ?? localStatusFilter;
+  const setStatusFilter = onStatusFilterChange ?? setLocalStatusFilter;
+  const searchQuery = controlledSearchQuery ?? localSearchQuery;
+  const setSearchQuery = onSearchQueryChange ?? setLocalSearchQuery;
+  const healthFilter = controlledHealthFilter ?? localHealthFilter;
+  const setHealthFilter = onHealthFilterChange ?? setLocalHealthFilter;
+  const syncFilter = controlledSyncFilter ?? localSyncFilter;
+  const setSyncFilter = onSyncFilterChange ?? setLocalSyncFilter;
   const selectable = !!onSelectionChange;
   const selectAllRef = useRef<HTMLInputElement>(null);
   // #2958：逐台矩阵按需拉取（展开时才请求）+ fleet 汇总明细面板开合。
@@ -335,12 +386,44 @@ export function ExpandableHostTable({
     }
   };
 
+  const hasMountIssue = (host: HostTableData) =>
+    Boolean(host.mount_status?.some((m) => !m.mounted));
+
   const filteredHosts = useMemo(() => {
-    if (statusFilter === 'all') return hosts;
-    return hosts.filter((host) => host.status === statusFilter);
-  }, [hosts, statusFilter]);
+    const q = searchQuery.trim().toLowerCase();
+    const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+    return hosts.filter((host) => {
+      if (statusFilter !== 'all' && host.status !== statusFilter) return false;
+      if (healthFilter !== 'all') {
+        const effectiveHealth = host.health_status ?? 'HEALTHY';
+        if (effectiveHealth !== healthFilter) return false;
+      }
+      if (syncFilter === 'drift' && host.agent_code_sync_status !== 'drift') return false;
+      if (syncFilter === 'matched' && host.agent_code_sync_status !== 'matched') return false;
+      if (syncFilter === 'mount_error' && !hasMountIssue(host)) return false;
+      if (tokens.length > 0) {
+        const haystack = [
+          host.name,
+          host.ip,
+          host.agent_code_revision,
+          host.agent_code_deployed,
+          host.agent_protocol_version,
+          host.status,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!tokens.every((t) => haystack.includes(t))) return false;
+      }
+      return true;
+    });
+  }, [hosts, statusFilter, healthFilter, syncFilter, searchQuery]);
 
   const filteredIds = useMemo(() => filteredHosts.map((host) => host.id), [filteredHosts]);
+
+  useEffect(() => {
+    onFilteredHostsChange?.(filteredHosts);
+  }, [filteredHosts, onFilteredHostsChange]);
   const selectedFilteredCount = filteredIds.filter((id) => selectedIds?.has(id)).length;
   const allFilteredSelected = filteredIds.length > 0 && selectedFilteredCount === filteredIds.length;
   const someFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
@@ -397,8 +480,55 @@ export function ExpandableHostTable({
       // 「口径坏了」（现场实测：观测时点的 0/48 是真实状态，不是判据 bug）。
       agentDrift: onlineHosts.filter((h) => h.agent_code_sync_status === 'drift').length,
       agentTrackable: onlineHosts.length,
+      mountErrorCount: hosts.filter((h) => h.mount_status?.some((m) => !m.mounted)).length,
+      unhealthyCount: hosts.filter(
+        (h) => h.health_status === 'DEGRADED' || h.health_status === 'UNSCHEDULABLE',
+      ).length,
     };
   }, [hosts]);
+
+  // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip，避免与搜索框 / 下拉 / 快捷视图重复
+  const hiddenChips = useMemo<ActiveFilterChip[]>(() => {
+    const chips: ActiveFilterChip[] = [];
+    if (syncFilter === 'matched') {
+      chips.push({
+        key: 'sync',
+        label: 'Agent 同步',
+        value: '已对齐',
+        onRemove: () => setSyncFilter('all'),
+      });
+    }
+    if (showRetired && onShowRetiredChange) {
+      chips.push({
+        key: 'retired',
+        label: '范围',
+        value: '含已退役',
+        onRemove: () => onShowRetiredChange(false),
+      });
+    }
+    return chips;
+  }, [syncFilter, showRetired, onShowRetiredChange, setSyncFilter]);
+
+  const handleResetAll = () => {
+    if (onResetAllFilters) {
+      onResetAllFilters();
+      return;
+    }
+    setStatusFilter('all');
+    setHealthFilter('all');
+    setSyncFilter('all');
+    setSearchQuery('');
+    onShowRetiredChange?.(false);
+  };
+
+  // 只统计仅存在于「更多筛选」内的条件，避免与顶层快捷视图（待热更新 / 挂载异常）双重亮起
+  const moreActiveCount = (syncFilter === 'matched' ? 1 : 0) + (showRetired ? 1 : 0);
+  const hasAnyActiveFilter =
+    statusFilter !== 'all' ||
+    healthFilter !== 'all' ||
+    syncFilter !== 'all' ||
+    Boolean(searchQuery.trim()) ||
+    Boolean(showRetired);
 
   // #2958：缺口语义 = missing + mismatch（与告警口径一致）；unknown 不计缺口。
   const presenceCounts = scriptPresenceSummary?.counts;
@@ -438,7 +568,7 @@ export function ExpandableHostTable({
           </button>
           <button
             type="button"
-            onClick={() => setStatusFilter('ONLINE')}
+            onClick={() => setStatusFilter(statusFilter === 'ONLINE' ? 'all' : 'ONLINE')}
             aria-pressed={statusFilter === 'ONLINE'}
             aria-label="筛选在线主机"
             className={cn(
@@ -458,7 +588,7 @@ export function ExpandableHostTable({
           </button>
           <button
             type="button"
-            onClick={() => setStatusFilter('DEGRADED')}
+            onClick={() => setStatusFilter(statusFilter === 'DEGRADED' ? 'all' : 'DEGRADED')}
             aria-pressed={statusFilter === 'DEGRADED'}
             aria-label="筛选告警主机"
             className={cn(
@@ -478,7 +608,7 @@ export function ExpandableHostTable({
           </button>
           <button
             type="button"
-            onClick={() => setStatusFilter('OFFLINE')}
+            onClick={() => setStatusFilter(statusFilter === 'OFFLINE' ? 'all' : 'OFFLINE')}
             aria-pressed={statusFilter === 'OFFLINE'}
             aria-label="筛选离线主机"
             className={cn(
@@ -613,6 +743,126 @@ export function ExpandableHostTable({
             )}
           </div>
         )}
+
+        {/* 统一筛选工作台：快捷视图分段条 + 搜索 + 健康度 + 更多筛选 + Chips */}
+        {(() => {
+          const isAllQuickView =
+            statusFilter === 'all' && healthFilter === 'all' && syncFilter === 'all';
+          const quickViews: QuickViewOption[] = [
+            {
+              key: 'all',
+              label: '全部主机',
+              count: hosts.length,
+              active: isAllQuickView,
+              tone: 'default',
+              onClick: () => {
+                if (onClearQuickView) {
+                  onClearQuickView();
+                  return;
+                }
+                setStatusFilter('all');
+                setHealthFilter('all');
+                setSyncFilter('all');
+              },
+            },
+            {
+              key: 'drift',
+              label: '待热更新',
+              count: stats.agentDrift,
+              active: syncFilter === 'drift',
+              tone: 'warning',
+              onClick: () => setSyncFilter(syncFilter === 'drift' ? 'all' : 'drift'),
+            },
+            {
+              key: 'unhealthy',
+              label: '健康异常',
+              count: stats.unhealthyCount,
+              active: healthFilter === 'DEGRADED' || healthFilter === 'UNSCHEDULABLE',
+              tone: 'warning',
+              onClick: () =>
+                setHealthFilter(
+                  healthFilter === 'DEGRADED' || healthFilter === 'UNSCHEDULABLE'
+                    ? 'all'
+                    : 'DEGRADED',
+                ),
+            },
+            {
+              key: 'mount_error',
+              label: '挂载异常',
+              count: stats.mountErrorCount,
+              active: syncFilter === 'mount_error',
+              tone: 'danger',
+              onClick: () => setSyncFilter(syncFilter === 'mount_error' ? 'all' : 'mount_error'),
+            },
+          ];
+
+          return (
+            <FilterWorkbench
+              quickViews={quickViews}
+              headerRight={extraHeaderRight}
+              hiddenChips={hiddenChips}
+              hasAnyActiveFilter={hasAnyActiveFilter}
+              onResetAll={handleResetAll}
+              matchSummary={`显示 ${filteredHosts.length} / ${hosts.length} 台主机`}
+              chipsTestId="hosts-filter-chips"
+            >
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+                <FilterSearchInput
+                  id="host-search"
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  placeholder="搜索主机名 / IP / Agent 版本..."
+                  ariaLabel="搜索主机"
+                  testId="host-search-input"
+                  className="flex-1 sm:max-w-md"
+                />
+                <SearchableSelect
+                  value={healthFilter}
+                  onChange={(v) => setHealthFilter(v as typeof healthFilter)}
+                  options={[
+                    { value: 'HEALTHY', label: '正常' },
+                    { value: 'DEGRADED', label: '降级' },
+                    { value: 'UNSCHEDULABLE', label: '禁调' },
+                  ]}
+                  allLabel="全部健康度"
+                  searchable={false}
+                  icon={<ShieldAlert />}
+                  ariaLabel="按健康状态筛选"
+                  className="w-full sm:w-40"
+                  testId="host-health-filter"
+                />
+                <MoreFiltersPopover activeCount={moreActiveCount} testId="hosts-more-filters">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-foreground">Agent 代码同步</label>
+                    <select
+                      value={syncFilter}
+                      onChange={(e) => setSyncFilter(e.target.value as typeof syncFilter)}
+                      aria-label="按代码同步状态筛选"
+                      className={cn(FORM.select, 'h-8 w-full text-xs')}
+                    >
+                      <option value="all">全部同步状态</option>
+                      <option value="drift">待热更新 (drift)</option>
+                      <option value="matched">已对齐 (matched)</option>
+                      <option value="mount_error">存储挂载异常</option>
+                    </select>
+                  </div>
+                  {onShowRetiredChange && (
+                    <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
+                      <span>显示已退役主机</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(showRetired)}
+                        onChange={(e) => onShowRetiredChange(e.target.checked)}
+                        data-testid="hosts-show-retired"
+                        className="rounded"
+                      />
+                    </label>
+                  )}
+                </MoreFiltersPopover>
+              </div>
+            </FilterWorkbench>
+          );
+        })()}
 
         {/* Table */}
         <div className="rounded-xl border border-border bg-card">
@@ -754,15 +1004,34 @@ export function ExpandableHostTable({
                       </TableCell>
                       <TableCell className="px-3 py-1.5 text-center">
                         <div className="inline-flex items-center gap-1">
-                          <span
-                            className={cn(
-                              'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
-                              (host.device_count || 0) > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground'
-                            )}
-                            title={host.claim_hint ?? '在线设备数（来源：adb devices）'}
-                          >
-                            在线 {host.device_count || 0}
-                          </span>
+                          {onNavigateToDevices ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onNavigateToDevices(host.id);
+                              }}
+                              className={cn(
+                                'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:underline',
+                                (host.device_count || 0) > 0
+                                  ? 'bg-primary/10 text-primary hover:bg-primary/20'
+                                  : 'bg-muted/50 text-muted-foreground hover:bg-muted',
+                              )}
+                              title="点击跳转到设备页查看该主机下的设备"
+                            >
+                              在线 {host.device_count || 0}
+                            </button>
+                          ) : (
+                            <span
+                              className={cn(
+                                'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                                (host.device_count || 0) > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground'
+                              )}
+                              title={host.claim_hint ?? '在线设备数（来源：adb devices）'}
+                            >
+                              在线 {host.device_count || 0}
+                            </span>
+                          )}
                           {(() => {
                             // lsusb 对照值：与「在线」(adb devices) 并排，差值即 ADB
                             // 未枚举到的物理设备。未采集显示「—」，不伪装成 0。

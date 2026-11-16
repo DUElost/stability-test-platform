@@ -130,6 +130,8 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     onRetire,
     onUnretire,
     scriptPresenceSummaryError,
+    showRetired,
+    onShowRetiredChange,
   }: {
     hosts: any[];
     selectedIds?: Set<string | number>;
@@ -138,8 +140,18 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     onRetire?: (host: any) => void;
     onUnretire?: (host: any) => void;
     scriptPresenceSummaryError?: boolean;
+    showRetired?: boolean;
+    onShowRetiredChange?: (val: boolean) => void;
   }) => (
     <div data-testid="host-table">
+      {onShowRetiredChange && (
+        <input
+          type="checkbox"
+          data-testid="hosts-show-retired"
+          checked={Boolean(showRetired)}
+          onChange={(e) => onShowRetiredChange(e.target.checked)}
+        />
+      )}
       <span data-testid="host-table-summary-error">
         {scriptPresenceSummaryError ? 'error' : 'ok'}
       </span>
@@ -342,22 +354,19 @@ describe('HostsPage', () => {
     expect(screen.getByTestId('host-table')).toBeInTheDocument();
   });
 
-  it('passes summary query isError down to the table（#3497 B2-G1 接线）', async () => {
+  it('does not query fleet script presence summary on HostsPage', async () => {
     const { api } = await import('../../utils/api');
     mockHostsList.mockResolvedValue({
       items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
       total: 1,
     });
-    (api.scriptPresence.summary as any).mockRejectedValueOnce(new Error('summary down'));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
     await screen.findByText('Worker-01');
-    // 失败 → isError 传入表格（表格据此渲染失败提示，不再折叠成「未提供汇总」）
-    await waitFor(() => {
-      expect(screen.getByTestId('host-table-summary-error')).toHaveTextContent('error');
-    });
+    expect(api.scriptPresence.summary).not.toHaveBeenCalled();
+    expect(screen.getByTestId('host-table-summary-error')).toHaveTextContent('ok');
   });
 
   it('does not query plan runs to compute host active task counts', async () => {

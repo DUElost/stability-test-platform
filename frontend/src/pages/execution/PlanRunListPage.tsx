@@ -1,10 +1,16 @@
-import { useState } from 'react';
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { StateTabs } from '@/components/ui/state-tabs';
+import {
+  FilterSearchInput,
+  FilterWorkbench,
+  MoreFiltersPopover,
+  type ActiveFilterChip,
+} from '@/components/ui/filter-bar';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import {
   Table,
   TableBody,
@@ -17,20 +23,22 @@ import { ClickableRow } from '@/components/ui/clickable-row';
 import { PaginationBar } from '@/components/ui/pagination-bar';
 import { api, toApiError, type PlanRun, type PlanRunStatus } from '@/utils/api';
 import { planRunKeys } from '@/utils/api/queryKeys';
-import { Clock, Search } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
-import { KPI_TONE, LAYOUT, STAT, TEXT } from '@/design-system/tokens';
+import { FORM, KPI_TONE, LAYOUT, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull, formatDurationSeconds, parseIsoToDate } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 
 /** 列表状态筛选：全部 + 常用终态/运行态；排队合并 QUEUED+PRECHECK */
 type StatusFilter = 'all' | 'RUNNING' | 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED' | 'queued';
+type TimeRangeFilter = 'all' | 'today' | '7d' | '30d';
 
 const STATUS_TABS: { key: StatusFilter; label: string }[] = [
   { key: 'all', label: '全部' },
@@ -40,6 +48,17 @@ const STATUS_TABS: { key: StatusFilter; label: string }[] = [
   { key: 'FAILED', label: '失败' },
   { key: 'queued', label: '排队中' },
 ];
+
+function computeStartedAfter(range: TimeRangeFilter): string | undefined {
+  if (range === 'all') return undefined;
+  const now = new Date();
+  if (range === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return start.toISOString();
+  }
+  const days = range === '7d' ? 7 : 30;
+  return new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+}
 
 function statusToApi(filter: StatusFilter): PlanRunStatus | PlanRunStatus[] | undefined {
   if (filter === 'all') return undefined;
@@ -71,17 +90,28 @@ function formatFailedDevices(run: PlanRun): string {
 
 export default function PlanRunListPage() {
   const navigate = useNavigate();
-  // ADR-0029：页面级项目筛选（无全局选择器/跨页跟随）
-  const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [search, setSearch] = useState('');
+  const { getString, getPositiveInt, updateParams, clearParams } = useUrlFilterParams();
+
+  // ADR-0029 + URL 持久化：筛选与分页同步到 URL
+  const projectKey = getString('project') || undefined;
+  const rawStatus = getString('status', 'all');
+  const statusFilter: StatusFilter = STATUS_TABS.some((t) => t.key === rawStatus)
+    ? (rawStatus as StatusFilter)
+    : 'all';
+  const search = getString('q', '');
   const debouncedSearch = useDebouncedValue(search, 300);
+  const rawRange = getString('range', 'all');
+  const timeRange: TimeRangeFilter =
+    rawRange === 'today' || rawRange === '7d' || rawRange === '30d' ? rawRange : 'all';
+  const runType = getString('runType', 'all');
   // PaginationBar 为 1-based
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const page = getPositiveInt('page', 1);
+  const rawPageSize = getPositiveInt('pageSize', 50);
+  const pageSize = [20, 50, 100].includes(rawPageSize) ? rawPageSize : 50;
 
   const skip = (page - 1) * pageSize;
   const q = debouncedSearch.trim() || undefined;
+  const startedAfter = useMemo(() => computeStartedAfter(timeRange), [timeRange]);
 
   const {
     data: listPage,
@@ -90,12 +120,15 @@ export default function PlanRunListPage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: planRunKeys.list(projectKey, {
-      page,
-      pageSize,
-      status: statusFilter === 'all' ? null : statusFilter,
-      q: q ?? null,
-    }),
+    queryKey: [
+      ...planRunKeys.list(projectKey, {
+        page,
+        pageSize,
+        status: statusFilter === 'all' ? null : statusFilter,
+        q: q ?? null,
+      }),
+      { range: timeRange === 'all' ? null : timeRange, runType: runType === 'all' ? null : runType },
+    ],
     queryFn: () =>
       api.planRuns.listPage({
         skip,
@@ -103,6 +136,8 @@ export default function PlanRunListPage() {
         projectKey,
         status: statusToApi(statusFilter),
         q,
+        runType: runType === 'all' ? undefined : runType,
+        startedAfter,
       }),
     refetchInterval: 15_000,
   });
@@ -113,10 +148,16 @@ export default function PlanRunListPage() {
   const stats = listPage?.stats ?? { total: 0, running: 0, failed: 0 };
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, totalPages);
-  if (total > 0 && safePage !== page) {
-    setPage(safePage);
-  }
-  const hasActiveFilter = statusFilter !== 'all' || Boolean(search.trim());
+  const setPage = (nextPage: number | ((p: number) => number)) => {
+    const resolved = typeof nextPage === 'function' ? nextPage(safePage) : nextPage;
+    updateParams({ page: resolved <= 1 ? undefined : resolved });
+  };
+  const hasActiveFilter =
+    statusFilter !== 'all' ||
+    Boolean(search.trim()) ||
+    timeRange !== 'all' ||
+    runType !== 'all' ||
+    Boolean(projectKey);
   const showEmpty = !isLoading && !isError && stats.total === 0 && !hasActiveFilter;
   const showFilteredEmpty =
     !isLoading
@@ -125,21 +166,29 @@ export default function PlanRunListPage() {
     && runs.length === 0
     && hasActiveFilter
     && total === 0;
-  const hasRunsView = !isLoading && !isError && !showEmpty;
-
-  const resetPage = () => setPage(1);
 
   const projectFilter = (
     <ProjectFilterSelect
       value={projectKey}
-      onChange={(key) => {
-        setProjectKey(key);
-        resetPage();
-      }}
-      className="w-44"
+      onChange={(key) => updateParams({ project: key }, { resetPage: true })}
+      className="w-full sm:w-44"
       testId="plan-run-project-filter"
     />
   );
+
+  // 只为「更多筛选」内部专属的条件渲染 Chip，避免与状态 Tabs / 项目 / 时间 / 搜索重复
+  const hiddenChips = useMemo<ActiveFilterChip[]>(() => {
+    const chips: ActiveFilterChip[] = [];
+    if (runType !== 'all') {
+      chips.push({
+        key: 'runType',
+        label: '类型',
+        value: runType,
+        onRemove: () => updateParams({ runType: undefined }, { resetPage: true }),
+      });
+    }
+    return chips;
+  }, [runType, updateParams]);
 
   return (
     <PageContainer width="wide" className={LAYOUT.pageGap}>
@@ -148,31 +197,37 @@ export default function PlanRunListPage() {
         subtitle="查看所有 PlanRun 历史记录"
       />
 
-      {!hasRunsView && (
-        <div className="flex justify-end">{projectFilter}</div>
-      )}
-
-      {/* KPI：项目作用域聚合（不受 status/q 影响）；点击切筛 */}
+      {/* KPI：项目作用域聚合（不受 status/q 影响）；点击切筛、再点取消 */}
       {!isLoading && !isError && stats.total > 0 && (
         <div className="grid grid-cols-3 gap-4">
           <DashboardStatCard
             label="总数"
             value={stats.total}
-            onClick={() => { setStatusFilter('all'); resetPage(); }}
+            onClick={() => updateParams({ status: undefined }, { resetPage: true })}
             ariaLabel="显示全部执行记录"
             valueClassName={cn(STAT.value, statusFilter === 'all' && KPI_TONE.primary.value)}
           />
           <DashboardStatCard
             label="运行中"
             value={stats.running}
-            onClick={() => { setStatusFilter('RUNNING'); resetPage(); }}
+            onClick={() =>
+              updateParams(
+                { status: statusFilter === 'RUNNING' ? undefined : 'RUNNING' },
+                { resetPage: true },
+              )
+            }
             ariaLabel="筛选运行中"
             valueClassName={cn(STAT.value, KPI_TONE.primary.value)}
           />
           <DashboardStatCard
             label="失败"
             value={stats.failed}
-            onClick={() => { setStatusFilter('FAILED'); resetPage(); }}
+            onClick={() =>
+              updateParams(
+                { status: statusFilter === 'FAILED' ? undefined : 'FAILED' },
+                { resetPage: true },
+              )
+            }
             ariaLabel="筛选失败"
             valueClassName={cn(
               STAT.value,
@@ -181,6 +236,84 @@ export default function PlanRunListPage() {
           />
         </div>
       )}
+
+      {/* 统一筛选工作台：顶部左侧状态分段与右侧总数同排，下方收纳次级筛选控件 */}
+      <FilterWorkbench
+        headerLeft={
+          <StateTabs
+            items={STATUS_TABS.map((t) => ({
+              key: t.key,
+              label: t.label,
+              testId: `plan-run-status-${t.key}`,
+            }))}
+            activeKey={statusFilter}
+            onChange={(key) =>
+              updateParams({ status: key === 'all' ? undefined : key }, { resetPage: true })
+            }
+            ariaLabel="按状态筛选"
+            testId="plan-run-status-tabs"
+          />
+        }
+        hiddenChips={hiddenChips}
+        hasAnyActiveFilter={hasActiveFilter}
+        onResetAll={() => clearParams(['status', 'project', 'q', 'range', 'runType'])}
+        matchSummary={!isLoading && !isError ? `共 ${total} 条执行记录` : undefined}
+        chipsTestId="plan-run-filter-chips"
+      >
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+          <FilterSearchInput
+            id="plan-run-search"
+            value={search}
+            onChange={(val) => updateParams({ q: val || undefined }, { resetPage: true })}
+            placeholder="搜索 ID / Plan / 触发者..."
+            ariaLabel="搜索执行记录"
+            testId="plan-run-search"
+            className="flex-1 sm:max-w-md"
+          />
+          {projectFilter}
+          <SearchableSelect
+            value={timeRange}
+            onChange={(val) =>
+              updateParams({ range: val === 'all' ? undefined : val }, { resetPage: true })
+            }
+            options={[
+              { value: 'today', label: '今天' },
+              { value: '7d', label: '近 7 天' },
+              { value: '30d', label: '近 30 天' },
+            ]}
+            allLabel="全部时间"
+            searchable={false}
+            icon={<Clock />}
+            ariaLabel="按时间范围筛选"
+            className="w-full sm:w-36"
+            testId="plan-run-time-filter"
+          />
+          <MoreFiltersPopover
+            activeCount={runType !== 'all' ? 1 : 0}
+            testId="plan-run-more-filters"
+          >
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground">执行类型 (run_type)</label>
+              <select
+                value={runType}
+                onChange={(e) =>
+                  updateParams(
+                    { runType: e.target.value === 'all' ? undefined : e.target.value },
+                    { resetPage: true },
+                  )
+                }
+                aria-label="按执行类型筛选"
+                className={cn(FORM.select, 'h-8 w-full text-xs')}
+              >
+                <option value="all">全部类型</option>
+                <option value="MANUAL">手动触发 (MANUAL)</option>
+                <option value="SCHEDULE">定时调度 (SCHEDULE)</option>
+                <option value="CHAIN">链路触发 (CHAIN)</option>
+              </select>
+            </div>
+          </MoreFiltersPopover>
+        </div>
+      </FilterWorkbench>
 
       {isLoading ? (
         <PageSkeleton>
@@ -194,7 +327,7 @@ export default function PlanRunListPage() {
             : toApiError(error).message || '请检查网络连接或稍后重试'}
           onRetry={isProject404 ? undefined : () => void refetch()}
           action={isProject404 ? (
-            <Button variant="outline" onClick={() => setProjectKey(undefined)}>
+            <Button variant="outline" onClick={() => updateParams({ project: undefined })}>
               清除项目筛选
             </Button>
           ) : undefined}
@@ -207,41 +340,6 @@ export default function PlanRunListPage() {
         />
       ) : (
         <div className="space-y-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <StateTabs
-              items={STATUS_TABS.map((t) => ({
-                key: t.key,
-                label: t.label,
-                testId: `plan-run-status-${t.key}`,
-              }))}
-              activeKey={statusFilter}
-              onChange={(key) => {
-                setStatusFilter(key as StatusFilter);
-                resetPage();
-              }}
-              ariaLabel="按状态筛选"
-              testId="plan-run-status-tabs"
-              className="min-w-0 flex-1"
-            />
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              {projectFilter}
-              <div className="relative w-full sm:w-56">
-                <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4', TEXT.subtitle)} />
-                <Input
-                  type="search"
-                  placeholder="搜索 ID / Plan / 触发者"
-                  value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setPage(1);
-                  }}
-                  className="pl-9"
-                  data-testid="plan-run-search"
-                />
-              </div>
-            </div>
-          </div>
-
           {showFilteredEmpty ? (
             <SearchEmptyState
               keyword={search || STATUS_TABS.find((t) => t.key === statusFilter)?.label || '筛选'}
@@ -249,7 +347,7 @@ export default function PlanRunListPage() {
           ) : (
             <>
               <div className="overflow-x-auto rounded-lg border border-border">
-                <Table className="min-w-[960px]">
+                <Table className="min-w-[1040px]">
                   <TableHeader>
                     <TableRow className="border-b text-left text-xs text-muted-foreground hover:bg-transparent">
                       <TableHead className="h-9 px-3">Run</TableHead>
@@ -262,6 +360,7 @@ export default function PlanRunListPage() {
                       <TableHead className="h-9 px-3">触发者</TableHead>
                       <TableHead className="h-9 px-3">时长</TableHead>
                       <TableHead className="h-9 px-3">开始时间</TableHead>
+                      <TableHead className="h-9 px-3">结束时间</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -307,6 +406,9 @@ export default function PlanRunListPage() {
                         <TableCell className={cn('px-3 py-2.5 text-xs whitespace-nowrap', TEXT.caption)}>
                           {formatDateTimeFull(run.started_at)}
                         </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs whitespace-nowrap', TEXT.caption)}>
+                          {run.ended_at ? formatDateTimeFull(run.ended_at) : '—'}
+                        </TableCell>
                       </ClickableRow>
                     ))}
                   </TableBody>
@@ -325,8 +427,7 @@ export default function PlanRunListPage() {
                   onNextPage={() => setPage((p) => p + 1)}
                   onPrevPage={() => setPage((p) => Math.max(1, p - 1))}
                   onChangePageSize={(size) => {
-                    setPageSize(size);
-                    setPage(1);
+                    updateParams({ pageSize: size === 50 ? undefined : size, page: undefined });
                   }}
                   pageSizeOptions={[20, 50, 100]}
                 />

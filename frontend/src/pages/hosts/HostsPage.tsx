@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Server } from 'lucide-react';
+import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -51,10 +53,28 @@ export default function HostsPage() {
   const isAdmin = sessionQ.data?.role === 'admin';
   const canManageWatcherAdminState = isAdmin;
 
-  // ADR-0038 D5：「显示已退役」开关——默认走共享缓存键（三页同口径：不含退役），
-  // 打开时走独立键（避免把含退役的列表写进三页共享缓存），前缀同为 ['hosts']，
-  // 既有 invalidateQueries({queryKey: ['hosts']}) 仍同时覆盖两者。
-  const [showRetired, setShowRetired] = useState(false);
+  const navigate = useNavigate();
+  const { getString, getBool, updateParams, clearParams } = useUrlFilterParams();
+
+  // ADR-0038 D5：「显示已退役」开关——同步到 URL 参数 retired=1
+  const showRetired = getBool('retired');
+  const setShowRetired = (next: boolean) => updateParams({ retired: next });
+  const rawStatus = getString('status', 'all');
+  const statusFilter: 'all' | HostTableData['status'] =
+    rawStatus === 'ONLINE' || rawStatus === 'OFFLINE' || rawStatus === 'DEGRADED'
+      ? rawStatus
+      : 'all';
+  const searchQuery = getString('q', '');
+  const rawHealth = getString('health', 'all');
+  const healthFilter: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE' =
+    rawHealth === 'HEALTHY' || rawHealth === 'DEGRADED' || rawHealth === 'UNSCHEDULABLE'
+      ? rawHealth
+      : 'all';
+  const rawSync = getString('sync', 'all');
+  const syncFilter: 'all' | 'drift' | 'matched' | 'mount_error' =
+    rawSync === 'drift' || rawSync === 'matched' || rawSync === 'mount_error'
+      ? rawSync
+      : 'all';
   const { data: hostsData, isLoading, error } = useQuery({
     queryKey: showRetired ? hostKeys.retiredList() : hostKeys.list(),
     // #3152：全量列表按服务端 total 翻页——单次 `list(0,200)` 在第 201 台起会让主机
@@ -78,12 +98,6 @@ export default function HostsPage() {
       ? null
       : coerceHostList(retiredPeekQ.data).length > 0;
 
-  // #2958 第五道闸：脚本在位 fleet 汇总（逐台矩阵在展开行内按需拉，不进本页查询）。
-  const scriptPresenceQ = useQuery({
-    queryKey: scriptPresenceKeys.summary(),
-    queryFn: () => api.scriptPresence.summary(),
-    refetchInterval: 60000,
-  });
   const loadHostScriptPresence = (hostId: string | number) =>
     api.scriptPresence.host(hostId);
   const refreshHostScriptPresence = async (hostId: string | number) => {
@@ -92,17 +106,29 @@ export default function HostsPage() {
     return result;
   };
 
+  const [filteredHostIds, setFilteredHostIds] = useState<Set<string> | null>(null);
+  const handleFilteredHostsChange = useCallback((nextHosts: HostTableData[]) => {
+    const nextIds = new Set(nextHosts.map((host) => String(host.id)));
+    setFilteredHostIds(nextIds);
+    setSelectedHostIds((previous) => {
+      if (previous.size === 0) return previous;
+      const next = new Set(Array.from(previous).filter((id) => nextIds.has(String(id))));
+      return next.size === previous.size ? previous : next;
+    });
+  }, []);
+
   const liveHostIds = useMemo(
     () => new Set(hosts.map((host) => String(host.id))),
     [hosts],
   );
   const visibleSelectedHostIds = useMemo(() => {
     if (selectedHostIds.size === 0) return selectedHostIds;
+    const activeScopeIds = filteredHostIds ?? liveHostIds;
     const next = new Set(
-      Array.from(selectedHostIds).filter((id) => liveHostIds.has(String(id))),
+      Array.from(selectedHostIds).filter((id) => activeScopeIds.has(String(id))),
     );
     return next.size === selectedHostIds.size ? selectedHostIds : next;
-  }, [selectedHostIds, liveHostIds]);
+  }, [selectedHostIds, filteredHostIds, liveHostIds]);
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof api.hosts.create>[0]) => api.hosts.create(data),
@@ -851,39 +877,57 @@ export default function HostsPage() {
     );
   }
 
+  const hostHeaderActions = (
+    <div className="flex items-center gap-2">
+      {!opPanelOpen && hostOps.length > 0 && (
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="host-op-panel-reopen"
+          onClick={() => setOpPanelOpen(true)}
+        >
+          {hostOps.some((o) => o.kind === 'flash_prereqs')
+            ? '刷机前置进度'
+            : hotUpdatePanelOps
+              ? '热更新进度'
+              : '安装进度'}
+          {installPending || hotUpdateOpPending
+            ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
+            : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
+        </Button>
+      )}
+      {isAdmin && (
+        <Button size="sm" onClick={() => setIsModalOpen(true)}>
+          <Plus className="w-4 h-4" />
+          添加主机
+        </Button>
+      )}
+    </div>
+  );
+
   return (
     <PageContainer width="wide">
-      <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
-
-      <div className="flex items-center justify-end gap-2 py-2">
-        {!opPanelOpen && hostOps.length > 0 && (
-          <Button
-            variant="outline"
-            data-testid="host-op-panel-reopen"
-            onClick={() => setOpPanelOpen(true)}
-          >
-            {hostOps.some((o) => o.kind === 'flash_prereqs')
-              ? '刷机前置进度'
-              : hotUpdatePanelOps
-                ? '热更新进度'
-                : '安装进度'}
-            {installPending || hotUpdateOpPending
-              ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
-              : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
-          </Button>
-        )}
-        {retiredToggle}
-        {isAdmin && (
-          <Button onClick={() => setIsModalOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加主机
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title="主机集群"
+        subtitle="管理和监控测试执行节点"
+      />
 
       {/* Host Table —— tableData 为空的分支在 :567 已提前 return，此处无需再判 */}
       <ExpandableHostTable
         hosts={tableData}
+        statusFilter={statusFilter}
+        onStatusFilterChange={(val) => updateParams({ status: val === 'all' ? undefined : val })}
+        searchQuery={searchQuery}
+        onSearchQueryChange={(val) => updateParams({ q: val || undefined })}
+        healthFilter={healthFilter}
+        onHealthFilterChange={(val) => updateParams({ health: val === 'all' ? undefined : val })}
+        syncFilter={syncFilter}
+        onSyncFilterChange={(val) => updateParams({ sync: val === 'all' ? undefined : val })}
+        showRetired={showRetired}
+        onShowRetiredChange={setShowRetired}
+        onClearQuickView={() => updateParams({ status: undefined, health: undefined, sync: undefined })}
+        onResetAllFilters={() => clearParams(['status', 'q', 'health', 'sync', 'retired'])}
+        onNavigateToDevices={(hostId) => navigate(`/devices?host=${hostId}`)}
         onHotUpdate={isAdmin ? handleHotUpdate : undefined}
         isHotUpdating={(hostId: string | number) =>
           isHostOpBusy(hostId, 'hot_update') ||
@@ -910,9 +954,8 @@ export default function HostsPage() {
         isAdmin={isAdmin}
         selectedIds={visibleSelectedHostIds}
         onSelectionChange={setSelectedHostIds}
-        scriptPresenceSummary={scriptPresenceQ.data ?? null}
-        scriptPresenceSummaryError={scriptPresenceQ.isError}
-        onRetryScriptPresenceSummary={() => void scriptPresenceQ.refetch()}
+        onFilteredHostsChange={handleFilteredHostsChange}
+        extraHeaderRight={hostHeaderActions}
         onLoadHostScriptPresence={loadHostScriptPresence}
         onRefreshHostScriptPresence={refreshHostScriptPresence}
       />

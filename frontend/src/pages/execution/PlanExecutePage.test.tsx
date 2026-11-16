@@ -1885,12 +1885,44 @@ it('selects Carrier devices independently from ordinary NX3 and restores the pro
     hosts: [{ id: 'h1', ip: '192.0.2.88', status: 'ONLINE' }],
   });
   await goToDeviceStep();
-  expect(screen.getByRole('combobox', { name: 'Product 筛选' })).toHaveValue('sys_mssi_64_cn_armv82');
+  const productCombobox = screen.getByRole('combobox', { name: 'Product 筛选' });
+  expect(productCombobox).toHaveTextContent('sys_mssi_64_cn_armv82');
   const table = screen.getByTestId('device-table-panel');
   expect(within(table).getByText('NX3-CARRIER')).toBeInTheDocument();
   expect(within(table).getByText('Product: NX3Carrier · sys_mssi_64_cn_armv82')).toBeInTheDocument();
   expect(within(table).queryByText('NX3-ORDINARY')).not.toBeInTheDocument();
-  fireEvent.change(screen.getByRole('combobox', { name: 'Product 筛选' }), { target: { value: 'MLD-NX3' } });
+  fireEvent.click(productCombobox);
+  fireEvent.click(screen.getByRole('option', { name: 'MLD-NX3' }));
   expect(within(table).getByText('NX3-ORDINARY')).toBeInTheDocument();
   expect(within(table).queryByText('NX3-CARRIER')).not.toBeInTheDocument();
+});
+
+it('scopes version, model, and product filter options when readyOnly is enabled', async () => {
+  renderPage({
+    initialEntry: '/execution/plan-execute?plan=7',
+    devices: [
+      { id: 901, serial: 'DEV-READY', model: 'M-READY', product: 'P-READY', build_display_id: 'V-READY', host_id: 'h1', status: 'ONLINE', adb_connected: true },
+      { id: 902, serial: 'DEV-OFFLINE', model: 'M-OFFLINE', product: 'P-OFFLINE', build_display_id: 'V-OFFLINE', host_id: 'h1', status: 'OFFLINE', adb_connected: false },
+    ],
+    hosts: [{ id: 'h1', ip: '192.0.2.88', status: 'ONLINE' }],
+  });
+  await goToDeviceStep();
+
+  fireEvent.click(screen.getByLabelText('仅显示就绪'));
+
+  const versionCombo = screen.getByRole('combobox', { name: '版本筛选' });
+  fireEvent.click(versionCombo);
+  expect(screen.getByRole('option', { name: 'V-READY' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'V-OFFLINE' })).not.toBeInTheDocument();
+  fireEvent.click(versionCombo);
+
+  const modelCombo = screen.getByRole('combobox', { name: '型号筛选' });
+  fireEvent.click(modelCombo);
+  expect(screen.getByRole('option', { name: 'M-READY' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'M-OFFLINE' })).not.toBeInTheDocument();
+  fireEvent.click(modelCombo);
+
+  fireEvent.click(screen.getByRole('combobox', { name: 'Product 筛选' }));
+  expect(screen.getByRole('option', { name: 'P-READY' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'P-OFFLINE' })).not.toBeInTheDocument();
 });

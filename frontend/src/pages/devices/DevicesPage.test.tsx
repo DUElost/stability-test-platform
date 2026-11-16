@@ -397,6 +397,7 @@ describe('DevicesPage', () => {
       expect.objectContaining({ includeStale: false, includeRetired: false }),
     );
 
+    fireEvent.click(screen.getByTestId('devices-more-filters'));
     fireEvent.click(screen.getByTestId('device-toggle-stale'));
     await waitFor(() =>
       expect(mockFetchAllDevicePages).toHaveBeenLastCalledWith(
@@ -404,7 +405,8 @@ describe('DevicesPage', () => {
       ),
     );
 
-    // 键变化触发重新拉取：loading 期间工具栏不在 DOM，等它回来再点第二个开关
+    // 键变化触发重新拉取：loading 期间工具栏不在 DOM，等它回来再打开更多筛选点第二个开关
+    fireEvent.click(await screen.findByTestId('devices-more-filters'));
     fireEvent.click(await screen.findByTestId('device-toggle-retired'));
     await waitFor(() =>
       expect(mockFetchAllDevicePages).toHaveBeenLastCalledWith(
