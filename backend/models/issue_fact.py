@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -335,4 +336,49 @@ class SpillLedger(Base):
     __table_args__ = (
         UniqueConstraint("dle_id", name="uq_spill_ledger_dle_id"),
         Index("idx_spill_ledger_run_platform", "plan_run_id", "platform"),
+    )
+
+
+class CompatRerun(Base):
+    """受控兼容补跑登记（ADR-0062 D15 第 5–7 条，B8 G8）。
+
+    由 Owner 对单个 DEDUP_FIRST 分区发起，独立记录来源、覆盖范围、缺失清单、
+    是否非全量以及独立的现行格式产物路径；不覆盖原交付物权威、不改写
+    DeviceLogEvent.state、不重复计数。
+    """
+
+    __tablename__ = "compat_rerun"
+
+    id = Column(Integer, primary_key=True)
+    plan_run_id = Column(Integer, nullable=False)
+    platform = Column(String(16), nullable=False)
+    request_key = Column(String(128), nullable=False)
+    requested_by = Column(String(128), nullable=False)
+    status = Column(String(16), nullable=False, default="PENDING", server_default="PENDING")
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    source_delivery_version_id = Column(
+        Integer, ForeignKey("delivery_version.id", ondelete="SET NULL"), nullable=True,
+    )
+    source_delivery_version_no = Column(Integer, nullable=True)
+    coverage_scope = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    source_records = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    missing_items = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    is_partial = Column(Boolean, nullable=False, default=False, server_default="false")
+    artifact_dir = Column(String(1024), nullable=True)
+    merge_xls_path = Column(String(1024), nullable=True)
+    manifest_path = Column(String(1024), nullable=True)
+    jira_run_id = Column(Integer, nullable=True)
+    error = Column(String(1024), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "plan_run_id", "platform", "request_key",
+            name="uq_compat_rerun_run_platform_request",
+        ),
+        Index("idx_compat_rerun_run_platform", "plan_run_id", "platform"),
     )

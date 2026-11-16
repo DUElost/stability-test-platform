@@ -804,6 +804,24 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "JiraRunStartPayload",
     ),
     (
+        "backend/api/schemas/jira_run.py",
+        "JiraOccurrenceLinkOut",
+        "frontend/src/utils/api/types.ts",
+        "JiraOccurrenceLink",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "CompatRerunOut",
+        "frontend/src/utils/api/types.ts",
+        "CompatRerunRecord",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "CompatRerunTriggerOut",
+        "frontend/src/utils/api/types.ts",
+        "CompatRerunTriggerPayload",
+    ),
+    (
         "backend/api/schemas/dedup.py",
         "JiraRunCancelOut",
         "frontend/src/utils/api/types.ts",

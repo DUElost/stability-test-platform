@@ -18,8 +18,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Collection, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Collection, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
+import xlwt
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
@@ -1747,3 +1748,53 @@ def enqueue_dedup_terminal_sync(
         )
     except Exception as e:
         logger.error("enqueue_dedup_terminal_sync failed plan_run=%d: %s", plan_run_id, e)
+
+
+DEDUP_XLS_HEADERS: tuple[str, ...] = (
+    "Id",
+    "Path",
+    "Version",
+    "ExpTime",
+    "ExpClass",
+    "ExpType ",
+    "CurProcess",
+    "Package",
+    "Detail",
+    "CausedBy",
+    "Count",
+    "DeviceId",
+    "Device Count",
+)
+_XLS_CELL_MAX_LEN = 32000
+
+
+def write_dedup_xls(
+    path: Path,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    sheet_name: str = "aeeexp",
+) -> Path:
+    """Write standard ``aeeexp`` dedup Excel (.xls) atomically for vendor tools / compat rerun."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    book = xlwt.Workbook(encoding="utf-8")
+    sheet = book.add_sheet(sheet_name)
+    for col_idx, header in enumerate(DEDUP_XLS_HEADERS):
+        sheet.write(0, col_idx, header)
+    for row_idx, row in enumerate(rows, start=1):
+        for col_idx, header in enumerate(DEDUP_XLS_HEADERS):
+            key = header.strip()
+            val = row.get(header) if header in row else row.get(key, "")
+            if val is None:
+                val = ""
+            elif isinstance(val, str) and len(val) > _XLS_CELL_MAX_LEN:
+                val = val[:_XLS_CELL_MAX_LEN]
+            sheet.write(row_idx, col_idx, val)
+    tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        book.save(str(tmp_path))
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+    return path
+

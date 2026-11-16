@@ -6,6 +6,7 @@ from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.host import Device, Host
 from backend.models.issue_fact import (
+    CompatRerun,
     DeliveryVersion,
     EvidencePublication,
     IssueOccurrence,
@@ -17,7 +18,7 @@ from backend.models.issue_fact import (
     SpillLedger,
 )
 from backend.models.job import JobArtifact, JobInstance, StepTrace
-from backend.models.jira_run import JiraRun
+from backend.models.jira_run import JiraOccurrenceLink, JiraRun
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_migration_audit import PlanMigrationAudit
 from backend.models.plan_run import (
@@ -51,6 +52,7 @@ __all__ = [
     "AiAssistantConfig",
     "AiChatMessage",
     "AiChatSession",
+    "CompatRerun",
     "Device",
     "DeviceLease",
     "DeviceReturnDebt",
@@ -67,6 +69,7 @@ __all__ = [
     "JobArtifact",
     "JobInstance",
     "JobStatus",
+    "JiraOccurrenceLink",
     "JiraRun",
     "LeaseStatus",
     "LeaseType",

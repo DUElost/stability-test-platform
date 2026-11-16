@@ -8,9 +8,12 @@
 """
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
+
+from backend.api.schemas.base import ORMBaseModel
 
 
 class DedupArtifactOut(BaseModel):
@@ -136,7 +139,8 @@ class DedupAgentConfigReloadOut(BaseModel):
 class JiraRunStartOut(BaseModel):
     """``POST /jira/runs`` 响应（控制台 run 句柄 + 本次实际输入）。
 
-    ``jira_project_key`` 仅在 ``source=plan_run`` 且该 PlanRun 能解析出项目键时有值。
+    ``jira_project_key`` 仅在 ``source=plan_run`` / ``delivery_version`` / ``compat_rerun``
+    且该 PlanRun 能解析出项目键时有值。
     """
 
     console_run_id: str
@@ -145,6 +149,44 @@ class JiraRunStartOut(BaseModel):
     stage: str
     source: str
     jira_project_key: Optional[str] = None
+    platform: Optional[str] = None
+    delivery_version_id: Optional[int] = None
+    delivery_version_no: Optional[int] = None
+    compat_rerun_id: Optional[int] = None
+    workspace_dir: Optional[str] = None
+
+
+class CompatRerunOut(ORMBaseModel):
+    """``GET /plan-runs/{id}/dedup/compat-reruns`` 单条兼容补跑登记。"""
+
+    id: int
+    plan_run_id: int
+    platform: str
+    request_key: str
+    requested_by: str
+    status: str
+    attempts: int
+    source_delivery_version_id: Optional[int] = None
+    source_delivery_version_no: Optional[int] = None
+    coverage_scope: dict[str, Any] = {}
+    source_records: list[dict[str, Any]] = []
+    missing_items: list[dict[str, Any]] = []
+    is_partial: bool = False
+    artifact_dir: Optional[str] = None
+    merge_xls_path: Optional[str] = None
+    manifest_path: Optional[str] = None
+    jira_run_id: Optional[int] = None
+    error: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class CompatRerunTriggerOut(BaseModel):
+    """``POST /plan-runs/{id}/dedup/compat-rerun`` 响应。"""
+
+    replayed: bool
+    rerun: CompatRerunOut
 
 
 class JiraRunCancelOut(BaseModel):
@@ -159,6 +201,8 @@ class JiraRunCancelOut(BaseModel):
 
 
 __all__ = [
+    "CompatRerunOut",
+    "CompatRerunTriggerOut",
     "DedupAgentConfigReloadOut",
     "DedupArtifactOut",
     "DedupExtractOut",

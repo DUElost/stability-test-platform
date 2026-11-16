@@ -473,6 +473,20 @@ export interface JiraDraftListItem {
   post_processed_at: string;
 }
 
+export interface JiraOccurrenceLink {
+  id: number;
+  jira_run_id: number;
+  plan_run_id: number;
+  platform: string;
+  delivery_version_id?: number | null;
+  delivery_version_no?: number | null;
+  signature_id: number;
+  occurrence_id: number;
+  issue_key: string;
+  evidence_source: string;
+  created_at: string;
+}
+
 export interface JiraRunRecord {
   id: number;
   console_run_id: string;
@@ -484,6 +498,14 @@ export interface JiraRunRecord {
   input_source: string;
   plan_run_id?: number | null;
   artifact_id?: number | null;
+  platform?: string | null;
+  delivery_version_id?: number | null;
+  delivery_version_no?: number | null;
+  compat_rerun_id?: number | null;
+  workspace_dir?: string | null;
+  attribution_status?: string | null;
+  attribution_gaps?: Array<Record<string, unknown>>;
+  occurrence_links?: JiraOccurrenceLink[];
   status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED' | string;
   started_at: string;
   ended_at?: string | null;
@@ -2569,6 +2591,40 @@ export interface JiraRunStartPayload {
   stage: string;
   source: string;
   jira_project_key: string | null;
+  platform?: string | null;
+  delivery_version_id?: number | null;
+  delivery_version_no?: number | null;
+  compat_rerun_id?: number | null;
+  workspace_dir?: string | null;
+}
+
+export interface CompatRerunRecord {
+  id: number;
+  plan_run_id: number;
+  platform: string;
+  request_key: string;
+  requested_by: string;
+  status: string;
+  attempts: number;
+  source_delivery_version_id?: number | null;
+  source_delivery_version_no?: number | null;
+  coverage_scope: Record<string, unknown>;
+  source_records: Array<Record<string, unknown>>;
+  missing_items: Array<Record<string, unknown>>;
+  is_partial: boolean;
+  artifact_dir?: string | null;
+  merge_xls_path?: string | null;
+  manifest_path?: string | null;
+  jira_run_id?: number | null;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
+export interface CompatRerunTriggerPayload {
+  replayed: boolean;
+  rerun: CompatRerunRecord;
 }
 
 /** `POST /jira/runs/{id}/cancel`。对应后端 `JiraRunCancelOut`（#2187 轴线 C）。 */

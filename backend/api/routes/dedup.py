@@ -28,8 +28,10 @@ from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user
-from backend.api.schemas.jira_run import JiraRunOut
+from backend.api.schemas.jira_run import JiraOccurrenceLinkOut, JiraRunOut
 from backend.api.schemas.dedup import (
+    CompatRerunOut,
+    CompatRerunTriggerOut,
     DedupAgentConfigReloadOut,
     DedupArtifactOut,
     DedupExtractOut,
@@ -40,11 +42,25 @@ from backend.api.schemas.dedup import (
     JiraRunStartOut,
 )
 from backend.services.audit_writer import record_audit
+from backend.services.compat_rerun import (
+    CompatRerunError,
+    list_compat_reruns_for_partition,
+    trigger_compat_rerun,
+)
+from backend.services.jira_delivery import (
+    SOURCE_COMPAT_RERUN,
+    SOURCE_DELIVERY_VERSION,
+    JiraDeliveryError,
+    list_jira_occurrence_links,
+    prepare_isolated_jira_workspace,
+    record_jira_run_completion,
+    resolve_compat_rerun_jira_input,
+    resolve_delivery_jira_input,
+)
 from backend.core.database import SessionLocal, get_db
 from backend.models.host import Host
 from backend.models.jira_run import JiraRun
 from backend.models.user import User
-from backend.services.jira_issue_parser import parse_issue_keys
 from backend.services.jira_vendor import (
     build_jira_argv,
     load_vendor_tool_env,
@@ -82,7 +98,52 @@ router = APIRouter(prefix="/api/v1/jira", tags=["dedup-jira"])
 
 _VENDORS = {"transsion", "tinno"}
 _STAGES = {"upload_list", "create"}
-_SOURCES = {"upload", "plan_run"}
+_SOURCES = {"upload", "plan_run", SOURCE_DELIVERY_VERSION, SOURCE_COMPAT_RERUN}
+
+
+def _parse_iso_dt(value: object) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _serialize_jira_run(row: JiraRun, links_by_run: dict[int, list]) -> JiraRunOut:
+    links = [JiraOccurrenceLinkOut.model_validate(l) for l in links_by_run.get(row.id, [])]
+    return JiraRunOut(
+        id=row.id,
+        console_run_id=row.console_run_id,
+        vendor=row.vendor,
+        stage=row.stage,
+        dry_run=row.dry_run,
+        reporter=row.reporter,
+        input_source=row.input_source,
+        plan_run_id=row.plan_run_id,
+        artifact_id=row.artifact_id,
+        platform=row.platform,
+        delivery_version_id=row.delivery_version_id,
+        delivery_version_no=row.delivery_version_no,
+        compat_rerun_id=row.compat_rerun_id,
+        workspace_dir=row.workspace_dir,
+        attribution_status=row.attribution_status,
+        attribution_gaps=list(row.attribution_gaps or []),
+        occurrence_links=links,
+        jira_project_key=row.jira_project_key,
+        status=row.status,
+        started_at=row.started_at,
+        ended_at=row.ended_at,
+        exit_code=row.exit_code,
+        issue_keys=list(row.issue_keys or []),
+        error=row.error,
+        created_by_user_id=row.created_by_user_id,
+        created_at=row.created_at,
+    )
 
 
 def _work_dir() -> Path:
@@ -109,7 +170,7 @@ def _mark_jira_run_not_started(console_run_id: str, error: str) -> None:
                 return
             row.status = "FAILED"
             row.error = error[:1024]
-            row.ended_at = datetime.now(timezone.utc).isoformat()
+            row.ended_at = datetime.now(timezone.utc)
             db.commit()
     except Exception:
         logger.exception("jira_run_mark_not_started_failed run_id=%s", console_run_id)
@@ -118,40 +179,42 @@ def _mark_jira_run_not_started(console_run_id: str, error: str) -> None:
 def _on_jira_run_complete(run: "ConsoleRun") -> None:
     """RunConsole 终态回调：把结果写回 jira_run 行（run.run_id == console_run_id）。
 
-    在 reader 线程跑（同步），用独立 SessionLocal 操作 DB，解析落盘日志提取
-    issue_keys。任何异常只记录日志——不影响 RunConsole 主流程。
+    在 reader 线程跑（同步），用独立 SessionLocal 操作 DB，解析落盘日志与
+    隔离工作区可验证归因输出。任何异常只记录日志——不影响 RunConsole 主流程。
     找不到行（持久化失败等）时记 warning 跳过 —— 正常路径已由「先写后启」
     （#1084）消除该竞态。
     """
     console_run_id = run.run_id
     try:
         status_snapshot = run.to_status()
-        issue_keys: list[str] = []
         try:
             # #2070：走 iter_log_lines 而不是 read_log —— read_log 的
             # `_replay_max_lines`（默认 2000）是给 HTTP 响应体设界的显示层约束，
             # 复用到落库路径会让超长日志第 2000 行之后的 issue key 静默丢失。
-            issue_keys = parse_issue_keys(
-                RunConsole.instance().iter_log_lines(console_run_id)
-            )
+            log_lines = list(RunConsole.instance().iter_log_lines(console_run_id))
         except Exception:
             logger.exception("jira_run_parse_issue_keys_failed run_id=%s", console_run_id)
+            log_lines = []
 
         with SessionLocal() as db:
             row = db.query(JiraRun).filter_by(console_run_id=console_run_id).first()
             if row is None:
                 logger.warning("jira_run_complete_row_missing run_id=%s", console_run_id)
                 return
-            row.status = status_snapshot.get("status") or row.status
-            row.exit_code = status_snapshot.get("exit_code")
-            row.ended_at = status_snapshot.get("ended_at")
-            row.error = (status_snapshot.get("error") or "")[:1024] or None
-            if issue_keys:
-                row.issue_keys = issue_keys
+            updated = record_jira_run_completion(
+                db,
+                jira_run=row,
+                status=status_snapshot.get("status") or row.status,
+                exit_code=status_snapshot.get("exit_code"),
+                ended_at=_parse_iso_dt(status_snapshot.get("ended_at")) or datetime.now(timezone.utc),
+                error=status_snapshot.get("error"),
+                log_lines=log_lines,
+            )
             db.commit()
+            keys_count = len(row.issue_keys or [])
         logger.info(
-            "jira_run_completed run_id=%s status=%s keys=%d",
-            console_run_id, status_snapshot.get("status"), len(issue_keys),
+            "jira_run_completed run_id=%s status=%s keys=%d updated=%s",
+            console_run_id, status_snapshot.get("status"), keys_count, updated,
         )
     except Exception:
         logger.exception("jira_run_complete_callback_failed run_id=%s", console_run_id)
@@ -166,18 +229,21 @@ async def start_jira_run(
     source: str = Form("upload"),
     plan_run_id: Optional[int] = Form(None),
     artifact_id: Optional[int] = Form(None),
+    platform: Optional[str] = Form(None),
+    delivery_version_no: Optional[int] = Form(None),
+    delivery_version_id: Optional[int] = Form(None),
+    compat_rerun_id: Optional[int] = Form(None),
     file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """一键执行：上传文件或选 PlanRun 产物 → RunConsole 起厂商工具 subprocess。
+    """一键执行：上传文件、选 PlanRun 产物或绑定交付版本/兼容补跑 → RunConsole 起厂商工具。
 
-    两阶段均需输入文件，来源二选一：
-      - source=upload:  手动上传（upload_list=去重 Result_*.xls；create=JIRA_Upload_List_*.xlsx）
-      - source=plan_run: 直接选 PlanRunArtifact（storage_uri 作为厂商工具输入路径，免上传）
-    reporter（可选，create 阶段）：指定建单负责人，透传到厂商工具 --reporter。
-    返回 console run_id + SocketIO room；前端订阅 room 看实时日志。
-    同一厂商同时只允许一个 run（工具目录共享，串行）。
+    输入来源四选一：
+      - source=upload: 手动上传（upload_list=去重 Result_*.xls；create=JIRA_Upload_List_*.xlsx）
+      - source=plan_run: 现行分区选 PlanRunArtifact（storage_uri 作为厂商工具输入路径）
+      - source=delivery_version: DEDUP_FIRST 严格绑定 PlanRun × platform × DeliveryVersion
+      - source=compat_rerun: 绑定已完成受控兼容补跑（防重复建单）
     """
     if vendor not in _VENDORS:
         raise HTTPException(status_code=422, detail=f"vendor must be one of {sorted(_VENDORS)}")
@@ -196,11 +262,17 @@ async def start_jira_run(
             ),
         )
 
-    # 解析输入文件路径 + 记录来源信息
+    console_run_id = f"con-{uuid.uuid4().hex[:12]}"
     input_xls: str
     input_source_label: str
     resolved_plan_run_id: Optional[int] = None
     resolved_artifact_id: Optional[int] = None
+    resolved_platform: Optional[str] = None
+    resolved_dv_id: Optional[int] = None
+    resolved_dv_no: Optional[int] = None
+    resolved_compat_id: Optional[int] = None
+    resolved_workspace_dir: Optional[str] = None
+    run_cwd = tool["dir"]
 
     if source == "upload":
         if file is None or not (file.filename or "").strip():
@@ -219,7 +291,7 @@ async def start_jira_run(
         dest.write_bytes(await file.read())
         input_xls = str(dest)
         input_source_label = safe_name
-    else:  # source == "plan_run"
+    elif source == "plan_run":
         if artifact_id is None:
             raise HTTPException(status_code=400, detail="artifact_id is required for source=plan_run")
         from backend.models.plan_run_artifact import PlanRunArtifact
@@ -232,6 +304,66 @@ async def start_jira_run(
         input_source_label = artifact.storage_uri
         resolved_plan_run_id = artifact.plan_run_id
         resolved_artifact_id = artifact.id
+    elif source == SOURCE_DELIVERY_VERSION:
+        uploaded_bytes = await file.read() if file is not None and (file.filename or "").strip() else None
+        uploaded_name = Path(file.filename).name if file is not None and file.filename else None
+        try:
+            resolved_input = resolve_delivery_jira_input(
+                db,
+                plan_run_id=plan_run_id,
+                platform=platform,
+                delivery_version_no=delivery_version_no,
+                delivery_version_id=delivery_version_id,
+                stage=stage,
+                uploaded_bytes=uploaded_bytes,
+                uploaded_filename=uploaded_name,
+            )
+            prepared = prepare_isolated_jira_workspace(
+                work_root=_work_dir(),
+                console_run_id=console_run_id,
+                resolved_input=resolved_input,
+                stage=stage,
+            )
+        except JiraDeliveryError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        input_xls = str(prepared.input_xls)
+        input_source_label = resolved_input.input_source_label
+        resolved_plan_run_id = resolved_input.plan_run_id
+        resolved_platform = resolved_input.platform
+        resolved_dv_id = resolved_input.delivery_version_id
+        resolved_dv_no = resolved_input.delivery_version_no
+        resolved_workspace_dir = str(prepared.workspace_dir)
+        run_cwd = str(prepared.workspace_dir)
+    else:  # source == SOURCE_COMPAT_RERUN
+        uploaded_bytes = await file.read() if file is not None and (file.filename or "").strip() else None
+        uploaded_name = Path(file.filename).name if file is not None and file.filename else None
+        try:
+            resolved_input = resolve_compat_rerun_jira_input(
+                db,
+                plan_run_id=plan_run_id,
+                platform=platform,
+                compat_rerun_id=compat_rerun_id,
+                stage=stage,
+                uploaded_bytes=uploaded_bytes,
+                uploaded_filename=uploaded_name,
+            )
+            prepared = prepare_isolated_jira_workspace(
+                work_root=_work_dir(),
+                console_run_id=console_run_id,
+                resolved_input=resolved_input,
+                stage=stage,
+            )
+        except JiraDeliveryError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        input_xls = str(prepared.input_xls)
+        input_source_label = resolved_input.input_source_label
+        resolved_plan_run_id = resolved_input.plan_run_id
+        resolved_platform = resolved_input.platform
+        resolved_dv_id = resolved_input.delivery_version_id
+        resolved_dv_no = resolved_input.delivery_version_no
+        resolved_compat_id = resolved_input.compat_rerun_id
+        resolved_workspace_dir = str(prepared.workspace_dir)
+        run_cwd = str(prepared.workspace_dir)
 
     # G17：plan_run 源时解析登记簿映射键并注入 stage1 argv；缺失不阻断（工具侧
     # 默认映射仍生效），仅记 warning 供运营在登记簿补齐。upload 源无项目上下文。
@@ -240,15 +372,12 @@ async def start_jira_run(
         jira_project_key = resolve_jira_project_key(db, resolved_plan_run_id)
         if jira_project_key is None:
             logger.warning(
-                "jira_project_key_unresolved source=plan_run plan_run_id=%s — "
+                "jira_project_key_unresolved source=%s plan_run_id=%s — "
                 "fill test_project.jira_project_key or the vendor tool falls back "
                 "to its own config mapping",
-                resolved_plan_run_id,
+                source, resolved_plan_run_id,
             )
         else:
-            # #710 / ADR-0029 D12：提单前做一次存在性探测（best-effort，不阻断）。
-            # 配置了 STP_JIRA_BASE_URL 才探测；404 明确不存在 → WARNING 提示登记簿
-            # 填错；探测不可达/无配置 → 静默跳过，保持既有 best-effort 语义。
             from backend.services.jira_project_key import probe_jira_project_key
 
             exists = probe_jira_project_key(jira_project_key)
@@ -267,7 +396,6 @@ async def start_jira_run(
     # 线程）可能早于本协程的 INSERT 执行，旧行为是回调找不到行直接跳过，
     # jira_run 永久停在 RUNNING 且缺 issue_keys。预生成 console_run_id 先行
     # INSERT，start() 失败则把行回写 FAILED，不留悬挂的 RUNNING。
-    console_run_id = f"con-{uuid.uuid4().hex[:12]}"
     try:
         with SessionLocal() as db2:
             db2.add(JiraRun(
@@ -279,6 +407,13 @@ async def start_jira_run(
                 input_source=input_source_label,
                 plan_run_id=resolved_plan_run_id,
                 artifact_id=resolved_artifact_id,
+                platform=resolved_platform,
+                delivery_version_id=resolved_dv_id,
+                delivery_version_no=resolved_dv_no,
+                compat_rerun_id=resolved_compat_id,
+                workspace_dir=resolved_workspace_dir,
+                attribution_status=None,
+                attribution_gaps=[],
                 jira_project_key=jira_project_key,
                 status="RUNNING",
                 created_by_user_id=getattr(_user, "id", None),
@@ -291,7 +426,7 @@ async def start_jira_run(
         RunConsole.instance().start(
             run_key=f"jira:{vendor}",
             cmd=argv,
-            cwd=tool["dir"],
+            cwd=run_cwd,
             env=load_vendor_tool_env(tool["dir"]),
             label=f"jira-{vendor}-{stage}",
             on_complete=_on_jira_run_complete,
@@ -312,6 +447,11 @@ async def start_jira_run(
         stage=stage,
         source=source,
         jira_project_key=jira_project_key,
+        platform=resolved_platform,
+        delivery_version_id=resolved_dv_id,
+        delivery_version_no=resolved_dv_no,
+        compat_rerun_id=resolved_compat_id,
+        workspace_dir=resolved_workspace_dir,
     ))
 
 
@@ -333,7 +473,8 @@ def list_jira_runs(
     if plan_run_id is not None:
         q = q.where(JiraRun.plan_run_id == plan_run_id)
     rows = db.execute(q).scalars().all()
-    return ok([JiraRunOut.model_validate(r) for r in rows])
+    links_by_run = list_jira_occurrence_links(db, jira_run_ids=[r.id for r in rows])
+    return ok([_serialize_jira_run(r, links_by_run) for r in rows])
 
 
 @router.get("/runs/{console_run_id}/record", response_model=ApiResponse[JiraRunOut])
@@ -352,7 +493,8 @@ def get_jira_run_detail(
     ).scalars().first()
     if row is None:
         raise HTTPException(status_code=404, detail="jira run not found")
-    return ok(JiraRunOut.model_validate(row))
+    links_by_run = list_jira_occurrence_links(db, jira_run_ids=[row.id])
+    return ok(_serialize_jira_run(row, links_by_run))
 
 
 @router.get("/runs/{console_run_id}", response_model=ApiResponse[dict])
@@ -803,3 +945,71 @@ def trigger_extract(
         jira_dir=str(jira_dir),
         extracted_count=extracted,
     ))
+
+
+@scan_router.post(
+    "/{run_id}/dedup/compat-rerun",
+    response_model=ApiResponse[CompatRerunTriggerOut],
+)
+def trigger_partition_compat_rerun(
+    run_id: int,
+    request: Request,
+    platform: str = Query("mtk"),
+    delivery_version_no: Optional[int] = Query(None, ge=1),
+    request_key: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Owner 显式发起单个 ``DEDUP_FIRST`` 分区的受控兼容补跑（ADR-0062 D15）。"""
+    try:
+        outcome = trigger_compat_rerun(
+            db,
+            plan_run_id=run_id,
+            platform=platform,
+            requested_by=current_user.username,
+            requester_role=current_user.role,
+            request_key=request_key,
+            delivery_version_no=delivery_version_no,
+        )
+    except CompatRerunError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    record_audit(
+        db,
+        action="compat_rerun_trigger",
+        resource_type="plan_run",
+        resource_id=str(run_id),
+        username=current_user.username,
+        user_id=current_user.id,
+        details={
+            "platform": outcome.rerun.platform,
+            "compat_rerun_id": outcome.rerun.id,
+            "request_key": outcome.rerun.request_key,
+            "replayed": outcome.replayed,
+            "is_partial": outcome.rerun.is_partial,
+        },
+        request=request,
+    )
+    db.commit()
+    return ok(
+        CompatRerunTriggerOut(
+            replayed=outcome.replayed,
+            rerun=CompatRerunOut.model_validate(outcome.rerun),
+        )
+    )
+
+
+@scan_router.get(
+    "/{run_id}/dedup/compat-reruns",
+    response_model=ApiResponse[list[CompatRerunOut]],
+)
+def list_partition_compat_reruns(
+    run_id: int,
+    platform: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """查询指定 PlanRun 分区的受控兼容补跑台账列表。"""
+    rows = list_compat_reruns_for_partition(db, plan_run_id=run_id, platform=platform)
+    return ok([CompatRerunOut.model_validate(r) for r in rows])

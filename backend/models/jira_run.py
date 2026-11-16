@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
@@ -48,6 +49,14 @@ class JiraRun(Base):
     input_source        = Column(String(512), nullable=False, default="upload")
     plan_run_id         = Column(Integer, ForeignKey("plan_run.id", ondelete="SET NULL"), nullable=True)
     artifact_id         = Column(Integer, ForeignKey("plan_run_artifact.id", ondelete="SET NULL"), nullable=True)
+    # B8 G8：交付版本 / 兼容补跑绑定与可验证归因缺口（ADR-0062 D10/D15）。
+    platform            = Column(String(16), nullable=True)
+    delivery_version_id = Column(Integer, ForeignKey("delivery_version.id", ondelete="SET NULL"), nullable=True)
+    delivery_version_no = Column(Integer, nullable=True)
+    compat_rerun_id     = Column(Integer, ForeignKey("compat_rerun.id", ondelete="SET NULL"), nullable=True)
+    workspace_dir       = Column(String(1024), nullable=True)
+    attribution_status  = Column(String(32), nullable=True)
+    attribution_gaps    = Column(_JsonType, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     # G17：source=plan_run 时经 PlanRun→Plan→test_project 解析出的目标 Jira 项目键，
     # 逐 run 记录实际注入值（缺键为 NULL）；审计与 G18 自动草稿策略都以此为事实源。
     jira_project_key    = Column(String(32), nullable=True)
@@ -65,4 +74,37 @@ class JiraRun(Base):
         Index("ix_jira_run_console_run_id", "console_run_id", unique=True),
         Index("idx_jira_run_created", "created_at"),
         Index("idx_jira_run_vendor_status", "vendor", "status"),
+        Index("idx_jira_run_delivery_version", "delivery_version_id"),
+        Index("idx_jira_run_compat_rerun", "compat_rerun_id"),
+    )
+
+
+class JiraOccurrenceLink(Base):
+    """B8 G8：有证据支持的 Jira issue key ↔ 问题/发生关联（ADR-0062 D10c）。
+
+    只在工具输出或输入契约能明确证明对应关系时写入；禁止按日志顺序猜配。
+    """
+
+    __tablename__ = "jira_occurrence_link"
+
+    id                  = Column(Integer, primary_key=True)
+    jira_run_id         = Column(Integer, ForeignKey("jira_run.id", ondelete="CASCADE"), nullable=False)
+    plan_run_id         = Column(Integer, nullable=False)
+    platform            = Column(String(16), nullable=False)
+    delivery_version_id = Column(Integer, ForeignKey("delivery_version.id", ondelete="SET NULL"), nullable=True)
+    delivery_version_no = Column(Integer, nullable=True)
+    signature_id        = Column(Integer, ForeignKey("issue_signature.id"), nullable=False)
+    occurrence_id       = Column(Integer, ForeignKey("issue_occurrence.id"), nullable=False)
+    issue_key           = Column(String(64), nullable=False)
+    evidence_source     = Column(String(64), nullable=False)
+    created_at          = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "jira_run_id", "occurrence_id", "issue_key",
+            name="uq_jira_occurrence_link_run_occ_key",
+        ),
+        Index("idx_jira_occurrence_link_run", "jira_run_id"),
+        Index("idx_jira_occurrence_link_occ", "occurrence_id"),
+        Index("idx_jira_occurrence_link_sig", "signature_id"),
     )
