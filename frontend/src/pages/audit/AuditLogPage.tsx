@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { PaginationBar } from '@/components/ui/pagination-bar';
 import { Input } from '@/components/ui/input';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import {
   Table,
   TableBody,
@@ -16,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { FORM, INTERACTIVE, LAYOUT, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { INTERACTIVE, LAYOUT, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
 import { datetimeLocalInputToIso } from '@/utils/time';
@@ -176,20 +177,24 @@ export default function AuditLogPage() {
       <PageHeader title="操作日志" subtitle="查看系统操作审计记录（仅管理员）" />
 
       {/* Filters */}
-      <div className="flex shrink-0 flex-wrap gap-3">
-        <select
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <SearchableSelect
           value={filters.resource_type}
-          onChange={(e) => { setFilters({ ...filters, resource_type: e.target.value }); setPage(0); }}
-          className={FORM.select}
-          data-testid="audit-resource-filter"
-        >
-            <option value="all">全部资源</option>
-            {resourceFacets.map((facet) => (
-              <option key={facet.value} value={facet.value}>
-                {`${RESOURCE_LABELS[facet.value] ?? facet.value}（${facet.count}）`}
-              </option>
-            ))}
-        </select>
+          onChange={(val) => {
+            setFilters({ ...filters, resource_type: val });
+            setPage(0);
+          }}
+          options={resourceFacets.map((facet) => ({
+            value: facet.value,
+            label: RESOURCE_LABELS[facet.value] ?? facet.value,
+            count: facet.count,
+          }))}
+          allLabel="全部资源"
+          searchPlaceholder="搜索资源类型..."
+          ariaLabel="按资源类型筛选"
+          testId="audit-resource-filter"
+          className="w-48"
+        />
         {/* #2629：操作维度改成「精确匹配 + datalist」（86 种字面量列不全，硬列就是假阴性来源） */}
         <label className="flex items-center gap-2">
           <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>操作</span>
