@@ -35,6 +35,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -171,16 +172,50 @@ def resolve_firmware_cache_root(fw_dir: str, cache_dir: str) -> str:
     return os.path.join(cache_dir, f"{safe_label[:48]}_{digest}")
 
 
+_LAST_REBOOT_SENT_AT: Dict[str, Optional[float]] = {"value": None}
+
+
+def _parse_positive_finite_float(
+    raw, name: str, default: float, route: Optional[dict] = None
+) -> float:
+    if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+        return default
+    if isinstance(raw, bool):
+        raise FlashRejectedError(
+            f"{name}={raw!r} must be a finite positive number (expected > 0 and finite)",
+            route=route,
+        )
+    try:
+        val = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise FlashRejectedError(
+            f"{name}={raw!r} must be a finite positive number (expected > 0 and finite)",
+            route=route,
+        ) from exc
+    if not math.isfinite(val) or val <= 0:
+        raise FlashRejectedError(
+            f"{name}={raw!r} must be a finite positive number (expected > 0 and finite)",
+            route=route,
+        )
+    return val
+
+
 def _load_json_dict(path: str, label: str, route: Optional[dict] = None) -> dict:
     if not os.path.isfile(path):
-        raise FlashRejectedError(f"{label} missing: {path}", route=route)
+        raise FlashRejectedError(f"{label} missing at {path} (expected JSON object file)", route=route)
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError) as exc:
-        raise FlashRejectedError(f"{label} unreadable/malformed at {path}: {exc}", route=route) from exc
+        raise FlashRejectedError(
+            f"{label} unreadable/malformed at {path} (expected JSON object): {exc}",
+            route=route,
+        ) from exc
     if not isinstance(data, dict):
-        raise FlashRejectedError(f"{label} must be a JSON object at {path}", route=route)
+        raise FlashRejectedError(
+            f"{label} invalid type at {path} (expected JSON object, got {type(data).__name__})",
+            route=route,
+        )
     return data
 
 
@@ -191,15 +226,26 @@ def _load_flash_spec(fw_dir: str, route: Optional[dict] = None) -> Dict[str, obj
 
     entries = plan.get("entries")
     if not isinstance(entries, list) or not entries:
-        raise FlashRejectedError(f"plan.json missing non-empty 'entries' list: {plan_path}", route=route)
+        raise FlashRejectedError(
+            f"plan.json key 'entries' must be a non-empty list in {plan_path} "
+            f"(got {type(entries).__name__ if 'entries' in plan else 'missing'})",
+            route=route,
+        )
 
     fdl_cfg = plan.get("fdl")
     if not isinstance(fdl_cfg, dict):
-        raise FlashRejectedError(f"plan.json missing required 'fdl' object: {plan_path}", route=route)
+        raise FlashRejectedError(
+            f"plan.json key 'fdl' must be a JSON object in {plan_path} "
+            f"(got {type(fdl_cfg).__name__ if 'fdl' in plan else 'missing'})",
+            route=route,
+        )
     fdl1_cfg = fdl_cfg.get("fdl1")
     fdl2_cfg = fdl_cfg.get("fdl2")
     if not isinstance(fdl1_cfg, dict) or not isinstance(fdl2_cfg, dict):
-        raise FlashRejectedError(f"plan.json missing required 'fdl.fdl1' or 'fdl.fdl2': {plan_path}", route=route)
+        raise FlashRejectedError(
+            f"plan.json keys 'fdl.fdl1' and 'fdl.fdl2' must be JSON objects in {plan_path}",
+            route=route,
+        )
 
     fdl1_file = str(fdl1_cfg.get("file") or "").strip()
     fdl1_base = str(fdl1_cfg.get("base") or "").strip()
@@ -207,12 +253,17 @@ def _load_flash_spec(fw_dir: str, route: Optional[dict] = None) -> Dict[str, obj
     fdl2_base = str(fdl2_cfg.get("base") or "").strip()
     if not (fdl1_file and fdl1_base and fdl2_file and fdl2_base):
         raise FlashRejectedError(
-            f"plan.json missing required fdl.fdl1/fdl2 file or base in {plan_path}",
+            f"plan.json keys 'fdl.fdl1.file', 'fdl.fdl1.base', 'fdl.fdl2.file', 'fdl.fdl2.base' "
+            f"must be non-empty strings in {plan_path}",
             route=route,
         )
 
     if "erases" not in plan or not isinstance(plan.get("erases"), list):
-        raise FlashRejectedError(f"plan.json missing required 'erases' list: {plan_path}", route=route)
+        raise FlashRejectedError(
+            f"plan.json key 'erases' must be a list in {plan_path} "
+            f"(got {type(plan.get('erases')).__name__ if 'erases' in plan else 'missing'})",
+            route=route,
+        )
 
     erases: List[str] = []
     skipped_erases: List[str] = []
@@ -228,6 +279,10 @@ def _load_flash_spec(fw_dir: str, route: Optional[dict] = None) -> Dict[str, obj
             skipped_erases.append(part)
 
     userdata_rel = ""
+    userdata_count = 0
+    super_rel = ""
+    super_file = ""
+    super_sparse = False
     head_parts: List[Tuple[str, str]] = []
     tail_parts: List[Tuple[str, str]] = []
     seen_parts = set()
@@ -240,28 +295,48 @@ def _load_flash_spec(fw_dir: str, route: Optional[dict] = None) -> Dict[str, obj
         ftype = str(item.get("flush_type") or "").strip()
         if fid in _SKIP_PLAN_IDS or ftype in _SKIP_PLAN_TYPES:
             continue
-        fname = str(item.get("file") or "").strip()
-        if not fname:
-            continue
-        rel_path = str(item.get("raw") or "").strip() if (item.get("sparse") and item.get("raw")) else fname
         parts = [str(p).strip() for p in (item.get("partitions") or []) if str(p).strip()]
-        if fid == "UserData" and not parts:
-            if not userdata_rel:
-                userdata_rel = rel_path
+        if "userdata" in parts and fid != "UserData":
+            raise FlashRejectedError(
+                f"plan.json 'entries' item id={fid!r} must not target 'userdata' "
+                f"(expected only id='UserData' with 'userdata' in 'partitions') in {plan_path}",
+                route=route,
+            )
+        fname = str(item.get("file") or "").strip()
+        raw_rel = str(item.get("raw") or "").strip()
+        is_sparse = bool(item.get("sparse"))
+        if fid == "UserData" and "userdata" in parts:
+            ud_rel = raw_rel if (is_sparse and raw_rel) else fname
+            if not ud_rel:
+                raise FlashRejectedError(
+                    f"plan.json 'UserData' entry missing non-empty 'file' string in {plan_path}",
+                    route=route,
+                )
+            userdata_count += 1
+            if userdata_count > 1:
+                raise FlashRejectedError(
+                    f"plan.json must contain exactly one 'entries' item with id='UserData' "
+                    f"and 'userdata' in 'partitions' in {plan_path}",
+                    route=route,
+                )
+            userdata_rel = ud_rel
+        if not fname and not (raw_rel and "super" in parts):
             continue
+        rel_path = raw_rel if (is_sparse and raw_rel) else fname
         if not parts:
             continue
         preserve = bool(item.get("preserve"))
 
         for part in parts:
-            if part == "userdata" or fid == "UserData":
-                if not userdata_rel:
-                    userdata_rel = rel_path
+            if part == "userdata":
                 continue
             if preserve or is_protected_partition(part):
                 continue
             if part == "super":
                 has_super = True
+                super_file = fname
+                super_sparse = is_sparse
+                super_rel = raw_rel or fname
                 continue
             if part in seen_parts:
                 continue
@@ -271,11 +346,18 @@ def _load_flash_spec(fw_dir: str, route: Optional[dict] = None) -> Dict[str, obj
             else:
                 head_parts.append((part, rel_path))
 
-    if not userdata_rel:
-        raise FlashRejectedError(f"plan.json missing required UserData entry: {plan_path}", route=route)
+    if userdata_count != 1 or not userdata_rel:
+        raise FlashRejectedError(
+            f"plan.json missing required 'entries' item with id='UserData' and 'userdata' in 'partitions' "
+            f"(expected exactly one) in {plan_path}",
+            route=route,
+        )
     rel_parts = head_parts + tail_parts
     if not rel_parts and not has_super:
-        raise FlashRejectedError(f"plan.json contains no writable partitions: {plan_path}", route=route)
+        raise FlashRejectedError(
+            f"plan.json key 'entries' contains no writable partitions (excluding 'userdata') in {plan_path}",
+            route=route,
+        )
 
     return {
         "has_plan": True,
@@ -286,6 +368,9 @@ def _load_flash_spec(fw_dir: str, route: Optional[dict] = None) -> Dict[str, obj
         "userdata_rel": userdata_rel,
         "rel_parts": rel_parts,
         "has_super": has_super,
+        "super_rel": super_rel,
+        "super_file": super_file,
+        "super_sparse": super_sparse,
     }
 
 
@@ -306,7 +391,7 @@ def resolve_spd_dump() -> str:
     raise RuntimeError("spd_dump executable not found (checked STP_SPD_DUMP_PATH, PATH, /usr/local/bin/spd_dump)")
 
 
-def run_adb(adb_bin: str, serial: str, args: List[str], timeout: int = 30) -> Tuple[int, str, str]:
+def run_adb(adb_bin: str, serial: str, args: List[str], timeout: float = 30) -> Tuple[int, str, str]:
     cmd = [adb_bin, "-s", serial] + args
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -351,7 +436,11 @@ def _resolve_latest_version(latest: dict, latest_path: str, ident: Dict[str, str
     if "versions" in latest and latest["versions"] is not None:
         versions_map = latest["versions"]
         if not isinstance(versions_map, dict):
-            raise FlashRejectedError(f"latest.json 'versions' must be an object: {latest_path}", route=route)
+            raise FlashRejectedError(
+                f"latest.json key 'versions' must be a JSON object in {latest_path} "
+                f"(got {type(versions_map).__name__})",
+                route=route,
+            )
         norm_versions = {_norm_ident(str(k)): str(v or "").strip() for k, v in versions_map.items()}
         for candidate in (ident["model"], ident["device"], ident["product_name"]):
             c_norm = _norm_ident(candidate)
@@ -365,36 +454,59 @@ def _resolve_latest_version(latest: dict, latest_path: str, ident: Dict[str, str
         )
     version = str(latest.get("version") or "").strip()
     if not version:
-        raise FlashRejectedError(f"latest.json missing 'version': {latest_path}", route=route)
+        raise FlashRejectedError(
+            f"latest.json key 'version' must be a non-empty string in {latest_path}",
+            route=route,
+        )
     return version
 
 
 def resolve_firmware_target(args: dict, adb_bin: str, serial: str) -> Tuple[str, str, dict, dict]:
     """Resolve firmware version dir, images dir, validated manifest, and route decision across all 3 routes."""
-    ident = read_device_identity(adb_bin, serial)
     explicit = str(args.get("firmware_dir") or "").strip()
     family = str(args.get("family") or "").strip()
     explicit_version = _env("STP_FLASH_FIRMWARE_VERSION", "") or str(args.get("version") or "").strip()
 
     route = {
         "decided_by": "params" if (explicit or explicit_version) else "fingerprint",
-        "model": ident["model"],
-        "device": ident["device"],
-        "product_name": ident["product_name"],
+        "model": "",
+        "device": "",
+        "product_name": "",
         "family": family,
         "version": explicit_version,
         "manifest": "",
     }
 
+    version_dir = ""
+    images_dir = ""
     if explicit:
         version_dir, images_dir = _resolve_explicit_firmware_dirs(explicit)
-        if not route["family"]:
-            route["family"] = os.path.basename(os.path.dirname(os.path.abspath(version_dir)))
-        if not route["version"]:
-            route["version"] = os.path.basename(os.path.abspath(version_dir))
-    else:
+        route["family"] = os.path.basename(os.path.dirname(os.path.abspath(version_dir)))
+        route["version"] = os.path.basename(os.path.abspath(version_dir))
+        route["manifest"] = os.path.join(version_dir, "manifest.json")
+
+    ident: Dict[str, str] = {"model": "", "device": "", "product_name": ""}
+    try:
+        for key, prop in (
+            ("model", "ro.product.model"),
+            ("device", "ro.product.device"),
+            ("product_name", "ro.product.name"),
+        ):
+            val = getprop(adb_bin, serial, prop)
+            ident[key] = val
+            route[key] = val
+    except Exception as exc:
+        raise FlashRejectedError(
+            f"failed to read device identity via adb ({type(exc).__name__}: {exc})",
+            route=route,
+        ) from exc
+
+    if not explicit:
         if not family:
-            raise FlashRejectedError("either firmware_dir or family must be provided", route=route)
+            raise FlashRejectedError(
+                "parameters must provide non-empty 'firmware_dir' or 'family' (expected non-empty string)",
+                route=route,
+            )
         fw_root = _env("STP_FLASH_FIRMWARE_ROOT", "") or os.path.join(
             _env("STP_NFS_ROOT", _DEFAULT_NFS_ROOT), "firmware"
         )
@@ -406,15 +518,10 @@ def resolve_firmware_target(args: dict, adb_bin: str, serial: str) -> Tuple[str,
         route["version"] = version
         version_dir = os.path.join(fw_root, family, version)
         images_dir = os.path.join(version_dir, "images")
+        route["manifest"] = os.path.join(version_dir, "manifest.json")
 
-    manifest_path = os.path.join(version_dir, "manifest.json")
-    route["manifest"] = manifest_path
+    manifest_path = route["manifest"]
     manifest = _load_json_dict(manifest_path, "manifest.json", route=route)
-
-    if manifest.get("family"):
-        route["family"] = str(manifest["family"]).strip()
-    if manifest.get("version"):
-        route["version"] = str(manifest["version"]).strip()
 
     platform = str(manifest.get("platform") or "").strip()
     if platform != "unisoc":
@@ -427,7 +534,8 @@ def resolve_firmware_target(args: dict, adb_bin: str, serial: str) -> Tuple[str,
     models = [str(m).strip() for m in raw_models if str(m).strip()] if isinstance(raw_models, list) else []
     if not models:
         raise FlashRejectedError(
-            f"manifest.json missing or empty 'models' list in {manifest_path}",
+            f"manifest.json key 'models' must be a non-empty list in {manifest_path} "
+            f"(got {type(raw_models).__name__ if 'models' in manifest else 'missing'})",
             route=route,
         )
 
@@ -443,9 +551,15 @@ def resolve_firmware_target(args: dict, adb_bin: str, serial: str) -> Tuple[str,
     target_version = str(manifest.get("version") or "").strip()
     version_prop = str(manifest.get("version_prop") or "").strip()
     if not target_version:
-        raise FlashRejectedError(f"manifest.json missing non-empty 'version' in {manifest_path}", route=route)
+        raise FlashRejectedError(
+            f"manifest.json key 'version' must be a non-empty string in {manifest_path}",
+            route=route,
+        )
     if not version_prop:
-        raise FlashRejectedError(f"manifest.json missing non-empty 'version_prop' in {manifest_path}", route=route)
+        raise FlashRejectedError(
+            f"manifest.json key 'version_prop' must be a non-empty string in {manifest_path}",
+            route=route,
+        )
 
     return version_dir, images_dir, manifest, route
 
@@ -483,10 +597,7 @@ def _sysfs_read(path: str) -> str:
 
 def find_unisoc_download_ports(base: Optional[str] = None) -> List[str]:
     usb_base = _SYSFS_USB_BASE if base is None else base
-    try:
-        names = sorted(os.listdir(usb_base))
-    except OSError:
-        return []
+    names = sorted(os.listdir(usb_base))
     hits: List[str] = []
     for name in names:
         if ":" in name or "-" not in name:
@@ -500,7 +611,15 @@ def find_unisoc_download_ports(base: Optional[str] = None) -> List[str]:
 
 
 def check_no_unisoc_download_port(base: Optional[str] = None, route: Optional[dict] = None) -> None:
-    hits = find_unisoc_download_ports(base)
+    usb_base = _SYSFS_USB_BASE if base is None else base
+    try:
+        hits = find_unisoc_download_ports(usb_base)
+    except OSError as exc:
+        raise FlashRejectedError(
+            f"USB bus directory unreadable at {usb_base}: {exc} "
+            f"(expected readable sysfs directory with no {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID})",
+            route=route,
+        ) from exc
     if hits:
         raise FlashRejectedError(
             f"Unisoc download port {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID} already present on USB bus "
@@ -579,9 +698,15 @@ def _copy_if_changed(src: str, dst: str, tmp_paths: Optional[List[str]] = None) 
     return True
 
 
-def prepare_local_cache(fw_dir: str, cache_dir: str, progress: Progress) -> Tuple[str, str]:
-    """Cache firmware files and trimmed super.img in an isolated SSD directory with SHA-256 verification."""
-    spec = _load_flash_spec(fw_dir)
+def prepare_local_cache(
+    fw_dir: str,
+    cache_dir: str,
+    progress: Progress,
+    spec: Optional[Dict[str, object]] = None,
+) -> Tuple[str, str]:
+    """Cache firmware files and trimmed super image in an isolated SSD directory with SHA-256 verification."""
+    if spec is None:
+        spec = _load_flash_spec(fw_dir)
     fw_cache_root = resolve_firmware_cache_root(fw_dir, cache_dir)
     progress.stamp(stage="cache-prepare", cache_dir=fw_cache_root)
     local_fw = os.path.join(fw_cache_root, "fw_cache")
@@ -615,13 +740,15 @@ def prepare_local_cache(fw_dir: str, cache_dir: str, progress: Progress) -> Tupl
             progress.stamp(stage="cache-ready", copied_files=copied, super_mb=0.0)
             return local_fw, ""
 
-        sparse_super = os.path.join(fw_dir, "super.img")
-        raw_super = os.path.join(fw_dir, "raw", "super.img")
-        src_super = raw_super if os.path.isfile(raw_super) else sparse_super
-        if not os.path.isfile(src_super):
-            raise RuntimeError(f"super.img not found under {fw_dir}")
+        super_rel = str(spec.get("super_rel") or "").strip()
+        super_file = str(spec.get("super_file") or "").strip()
+        super_sparse = bool(spec.get("super_sparse"))
+        src_super = os.path.join(fw_dir, super_rel)
+        if not super_rel or not os.path.isfile(src_super):
+            raise RuntimeError(f"required super firmware file missing: {src_super}")
 
-        trimmed_size = get_sparse_trimmed_size(sparse_super) or os.path.getsize(src_super)
+        sparse_super = os.path.join(fw_dir, super_file) if (super_sparse and super_file) else ""
+        trimmed_size = (get_sparse_trimmed_size(sparse_super) if sparse_super else None) or os.path.getsize(src_super)
         trimmed_size = min(trimmed_size, os.path.getsize(src_super))
         cached_super = os.path.join(fw_cache_root, f"super_trimmed_{trimmed_size}.img")
 
@@ -759,8 +886,13 @@ def run_spd_dump(
     timeout_seconds: float = _DEFAULT_SPD_DUMP_TIMEOUT_SECONDS,
 ) -> float:
     """Launch spd_dump, reboot device to autodloader, stream PROGRESS stamps, and enforce total timeout."""
-    if timeout_seconds <= 0:
-        raise ValueError(f"spd_dump_timeout_seconds must be > 0, got {timeout_seconds!r}")
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        raise ValueError(f"spd_dump_timeout_seconds must be a finite positive number, got {timeout_seconds!r}")
     t0 = time.time()
     deadline = t0 + float(timeout_seconds)
     proc = subprocess.Popen(
@@ -795,30 +927,54 @@ def run_spd_dump(
     try:
         sleep_s = min(1.5, max(0.0, deadline - time.time()))
         if sleep_s > 0:
-            time.sleep(sleep_s)
+            try:
+                early_rc = proc.wait(timeout=sleep_s)
+                raise RuntimeError(
+                    f"spd_dump exited prematurely (rc={early_rc}) before adb reboot autodloader"
+                )
+            except subprocess.TimeoutExpired:
+                pass
+        early_rc = proc.poll()
+        if early_rc is not None:
+            raise RuntimeError(
+                f"spd_dump exited prematurely (rc={early_rc}) before adb reboot autodloader"
+            )
+        remaining_before_adb = deadline - time.time()
+        if remaining_before_adb <= 0:
+            raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s before adb reboot autodloader")
+
         progress.stamp(stage="autodloader")
-        rc_adb, out_adb, err_adb = run_adb(adb_bin, serial, ["reboot", "autodloader"], timeout=15)
+        _LAST_REBOOT_SENT_AT["value"] = time.time()
+        rc_adb, out_adb, err_adb = run_adb(
+            adb_bin, serial, ["reboot", "autodloader"], timeout=min(15.0, remaining_before_adb)
+        )
         log.append(f"adb reboot autodloader -> rc={rc_adb} {out_adb} {err_adb}".strip())
         if rc_adb != 0:
             raise RuntimeError(f"adb reboot autodloader failed (rc={rc_adb}): {err_adb or out_adb}")
+        if time.time() >= deadline:
+            raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
 
         reader = threading.Thread(target=_read_stdout, daemon=True)
         reader.start()
 
         while True:
-            rc = proc.poll()
-            if rc is not None:
-                break
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
+            rc = proc.poll()
+            if rc is not None:
+                break
             try:
                 rc = proc.wait(timeout=min(remaining, 0.2))
+                if time.time() >= deadline:
+                    raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
                 break
             except subprocess.TimeoutExpired:
                 continue
 
         reader.join(timeout=2)
+        if time.time() >= deadline:
+            raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
         elapsed = round(time.time() - t0, 1)
         log.extend(tail[-15:])
         if rc != 0:
@@ -862,14 +1018,23 @@ def _read_boot_id(adb_bin: str, serial: str) -> str:
     return val
 
 
-def _read_uptime_seconds(adb_bin: str, serial: str) -> Optional[float]:
+def _read_uptime_seconds_with_ts(adb_bin: str, serial: str) -> Tuple[Optional[float], Optional[float]]:
     rc, out, _ = run_adb(adb_bin, serial, ["shell", "cat", "/proc/uptime"], timeout=10)
+    read_at = time.time()
     if rc != 0 or not out.strip():
-        return None
+        return None, None
     try:
-        return float(out.strip().split()[0])
+        val = float(out.strip().split()[0])
     except (ValueError, IndexError):
-        return None
+        return None, None
+    if not math.isfinite(val) or val < 0:
+        return None, None
+    return val, read_at
+
+
+def _read_uptime_seconds(adb_bin: str, serial: str) -> Optional[float]:
+    val, _ = _read_uptime_seconds_with_ts(adb_bin, serial)
+    return val
 
 
 def _capture_pre_reboot_evidence(adb_bin: str, serial: str) -> dict:
@@ -886,9 +1051,14 @@ def _capture_pre_reboot_evidence(adb_bin: str, serial: str) -> dict:
     }
 
 
-def _verify_post_reboot_evidence(adb_bin: str, serial: str, pre: dict) -> dict:
+def _verify_post_reboot_evidence(
+    adb_bin: str,
+    serial: str,
+    pre: dict,
+    reboot_sent_at: Optional[float] = None,
+) -> dict:
     post_boot_id = _read_boot_id(adb_bin, serial)
-    post_uptime = _read_uptime_seconds(adb_bin, serial)
+    post_uptime, post_uptime_ts = _read_uptime_seconds_with_ts(adb_bin, serial)
     rc_nonce, post_nonce_out, _ = run_adb(
         adb_bin, serial, ["shell", "getprop", "debug.stp_bsl_nonce"], timeout=10
     )
@@ -901,24 +1071,41 @@ def _verify_post_reboot_evidence(adb_bin: str, serial: str, pre: dict) -> dict:
     if pre.get("nonce_set") and post_nonce == pre.get("nonce"):
         raise RuntimeError("device did not reboot: volatile debug.stp_bsl_nonce persisted")
 
-    boot_id_changed = bool(pre_boot_id and post_boot_id and pre_boot_id != post_boot_id)
-    nonce_cleared = bool(pre.get("nonce_set") and rc_nonce == 0 and post_nonce == "")
-    pre_uptime = pre.get("pre_uptime")
-    uptime_reset = bool(pre_uptime is not None and post_uptime is not None and post_uptime < pre_uptime)
+    estimated_boot_at: Optional[float] = None
+    if post_uptime is not None and post_uptime_ts is not None:
+        estimated_boot_at = post_uptime_ts - post_uptime
+        if reboot_sent_at is not None and estimated_boot_at <= reboot_sent_at:
+            raise RuntimeError(
+                "device did not reboot: estimated boot time "
+                f"({estimated_boot_at:.3f}) <= reboot command time ({reboot_sent_at:.3f})"
+            )
 
-    if not (boot_id_changed or nonce_cleared or uptime_reset):
+    boot_id_changed = bool(pre_boot_id and post_boot_id and pre_boot_id != post_boot_id)
+    pre_uptime = pre.get("pre_uptime")
+    uptime_rebooted = bool(
+        pre_uptime is not None
+        and estimated_boot_at is not None
+        and reboot_sent_at is not None
+        and estimated_boot_at > reboot_sent_at
+    )
+
+    if not (boot_id_changed or uptime_rebooted):
         raise RuntimeError(
             "no positive evidence that device rebooted "
             f"(boot_id={pre_boot_id!r}->{post_boot_id!r}, uptime={pre_uptime}->{post_uptime}, "
+            f"estimated_boot_at={estimated_boot_at}, reboot_sent_at={reboot_sent_at}, "
             f"nonce_set={pre.get('nonce_set')}, post_nonce={post_nonce!r})"
         )
 
     return {
         "boot_id_changed": boot_id_changed,
-        "nonce_cleared": nonce_cleared,
-        "uptime_reset": uptime_reset,
+        "uptime_rebooted": uptime_rebooted,
         "pre_boot_id": pre_boot_id,
         "post_boot_id": post_boot_id,
+        "pre_uptime": pre_uptime,
+        "post_uptime": post_uptime,
+        "estimated_boot_at": estimated_boot_at,
+        "reboot_sent_at": reboot_sent_at,
     }
 
 
@@ -946,6 +1133,13 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
 
         check_no_unisoc_download_port(route=route)
 
+        spd_dump_timeout = _parse_positive_finite_float(
+            args.get("spd_dump_timeout_seconds"),
+            "spd_dump_timeout_seconds",
+            float(_DEFAULT_SPD_DUMP_TIMEOUT_SECONDS),
+            route=route,
+        )
+
         cache_dir = str(args.get("cache_dir") or _DEFAULT_CACHE_DIR).strip()
         pre_build_type = getprop(adb_bin, serial, "ro.build.type")
         pre_incremental = getprop(adb_bin, serial, "ro.build.version.incremental")
@@ -953,6 +1147,45 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
             args.get("verify_build_type") if args.get("verify_build_type") is not None else "userdebug"
         ).strip()
         target_incremental = str(args.get("verify_incremental") or "").strip()
+
+        version_prop = str(manifest["version_prop"]).strip()
+        expected_version = str(manifest["version"]).strip()
+
+        fdl1_file, fdl1_base = spec["fdl1"]  # type: ignore[misc]
+        fdl2_file, fdl2_base = spec["fdl2"]  # type: ignore[misc]
+        partitions = [
+            {"partition": "userdata", "image": str(spec["userdata_rel"])},
+            *[
+                {"partition": part, "image": rel}
+                for part, rel in spec["rel_parts"]  # type: ignore[attr-defined]
+            ],
+        ]
+        if spec["has_super"]:
+            partitions.append({"partition": "super", "image": str(spec["super_rel"])})
+
+        if _bool(args.get("dry_run"), False):
+            dry_super = os.path.join(fw_dir, str(spec["super_rel"])) if spec["has_super"] else ""
+            cmd = build_spd_dump_args(spd_dump_bin, fw_dir, dry_super, spec=spec)
+            return {
+                "metrics": {
+                    "dry_run": True,
+                    "firmware_dir": fw_dir,
+                    "fdl": {
+                        "fdl1": {"file": fdl1_file, "base": fdl1_base},
+                        "fdl2": {"file": fdl2_file, "base": fdl2_base},
+                    },
+                    "erases": list(spec["erases"]),  # type: ignore[arg-type]
+                    "skipped_erases": list(spec["skipped_erases"]),  # type: ignore[arg-type]
+                    "partitions": partitions,
+                    "route": route,
+                    "version_prop": version_prop,
+                    "expected_version": expected_version,
+                    "battery_level": battery_level,
+                    "pre_build_type": pre_build_type,
+                    "pre_incremental": pre_incremental,
+                    "spd_dump_cmd_len": len(cmd),
+                }
+            }
 
         if (
             not _bool(args.get("force"), False)
@@ -971,57 +1204,22 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                 },
             }
 
-        fdl1_file, fdl1_base = spec["fdl1"]  # type: ignore[misc]
-        fdl2_file, fdl2_base = spec["fdl2"]  # type: ignore[misc]
-        partitions = [
-            {"partition": "userdata", "image": str(spec["userdata_rel"])},
-            *[
-                {"partition": part, "image": rel}
-                for part, rel in spec["rel_parts"]  # type: ignore[attr-defined]
-            ],
-        ]
-        if spec["has_super"]:
-            partitions.append({"partition": "super", "image": "super.img"})
-
-        if _bool(args.get("dry_run"), False):
-            cmd = build_spd_dump_args(spd_dump_bin, fw_dir, os.path.join(fw_dir, "super.img"), spec=spec)
-            return {
-                "metrics": {
-                    "dry_run": True,
-                    "firmware_dir": fw_dir,
-                    "fdl": {
-                        "fdl1": {"file": fdl1_file, "base": fdl1_base},
-                        "fdl2": {"file": fdl2_file, "base": fdl2_base},
-                    },
-                    "erases": list(spec["erases"]),  # type: ignore[arg-type]
-                    "skipped_erases": list(spec["skipped_erases"]),  # type: ignore[arg-type]
-                    "partitions": partitions,
-                    "route": route,
-                    "battery_level": battery_level,
-                    "pre_build_type": pre_build_type,
-                    "pre_incremental": pre_incremental,
-                    "spd_dump_cmd_len": len(cmd),
-                }
-            }
-
-        spd_dump_timeout_raw = args.get("spd_dump_timeout_seconds")
-        spd_dump_timeout = (
-            float(_DEFAULT_SPD_DUMP_TIMEOUT_SECONDS)
-            if spd_dump_timeout_raw is None or str(spd_dump_timeout_raw).strip() == ""
-            else float(spd_dump_timeout_raw)
-        )
-
         lock_timeout = int(args.get("lock_timeout_seconds", 7200))
         lock_fd = acquire_host_lock(progress, timeout_seconds=lock_timeout)
         try:
-            check_no_unisoc_download_port(route=route)
-            pre_reboot = _capture_pre_reboot_evidence(adb_bin, serial)
-            local_fw, cached_super = prepare_local_cache(fw_dir, cache_dir, progress)
-            # Flash spec always comes from the source fw_dir plan.json read on this run (never cached copy).
+            # Single parsed spec is reused for both cache preparation and command assembly (J10).
+            local_fw, cached_super = prepare_local_cache(fw_dir, cache_dir, progress, spec=spec)
             cmd = build_spd_dump_args(spd_dump_bin, local_fw, cached_super, spec=spec)
+            pre_reboot = _capture_pre_reboot_evidence(adb_bin, serial)
+            # Final download-port gate after cache preparation and immediately before spd_dump (J7).
+            check_no_unisoc_download_port(route=route)
+            reboot_anchor = time.time()
+            _LAST_REBOOT_SENT_AT["value"] = None
             flash_seconds = run_spd_dump(
                 cmd, adb_bin, serial, progress, log, timeout_seconds=spd_dump_timeout
             )
+            last_reboot_ts = _LAST_REBOOT_SENT_AT["value"]
+            reboot_sent_at = last_reboot_ts if last_reboot_ts is not None else reboot_anchor
         finally:
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -1034,10 +1232,10 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
         )
 
         progress.stamp(stage="verify")
-        reboot_evidence = _verify_post_reboot_evidence(adb_bin, serial, pre_reboot)
+        reboot_evidence = _verify_post_reboot_evidence(
+            adb_bin, serial, pre_reboot, reboot_sent_at=reboot_sent_at
+        )
 
-        version_prop = str(manifest["version_prop"]).strip()
-        expected_version = str(manifest["version"]).strip()
         post_version = getprop(adb_bin, serial, version_prop)
         if post_version != expected_version:
             raise FlashRejectedError(

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 import pytest
@@ -110,7 +111,7 @@ def _p525aa_plan() -> dict:
         ("GDSP_LTE", "l_gdsp_a", "SC9863A_gdsp.bin"),
         ("AGDSP_LTE", "l_agdsp_a", "SC9863A_agdsp.bin"),
         ("PM_SYS", "pm_sys_a", "pm_sys.bin"),
-        ("BootLogo", "logo_a", "logo.bin"),
+        ("BootLogo", "logo", "logo.bin"),
         ("Fastboot_Logo", "fbootlogo", "unisoc_HD_720_1600.bmp"),
         ("BOOT", "boot_a", "boot.img"),
         ("INIT_BOOT", "init_boot_a", "init_boot.img"),
@@ -244,14 +245,20 @@ def _install_fake_adb(
     reboot_rc: int = 0,
     pre_boot_id: str = "boot-uuid-1",
     post_boot_id: str = "boot-uuid-2",
+    boot_id_rc: int = 0,
     pre_uptime: str = "120.5 200.0",
     post_uptime: str = "12.3 20.0",
+    uptime_rc: int = 0,
+    setprop_rc: int = 0,
+    nonce_read_rc: int = 0,
+    clock: Optional[dict] = None,
+    boot_advance_seconds: float = 30.0,
     adb_calls: Optional[List[List[str]]] = None,
 ):
     state = {"rebooted": False, "props": dict(props or {}), "nonce": ""}
     post = dict(post_props or props or {})
 
-    def fake_run_adb(adb_bin: str, serial: str, args: List[str], timeout: int = 30):
+    def fake_run_adb(adb_bin: str, serial: str, args: List[str], timeout: float = 30):
         if adb_calls is not None:
             adb_calls.append(list(args))
         if args == ["reboot", "autodloader"]:
@@ -268,17 +275,27 @@ def _install_fake_adb(
         if args[:2] == ["shell", "getprop"]:
             prop = args[2]
             if prop == "sys.boot_completed":
+                if clock is not None:
+                    clock["now"] += boot_advance_seconds
                 return 0, "1", ""
             if prop == "debug.stp_bsl_nonce":
+                if nonce_read_rc != 0:
+                    return nonce_read_rc, "", "getprop failed"
                 return 0, state["nonce"], ""
             src = post if state["rebooted"] else state["props"]
             return 0, src.get(prop, ""), ""
         if len(args) == 4 and args[:2] == ["shell", "setprop"] and args[2] == "debug.stp_bsl_nonce":
+            if setprop_rc != 0:
+                return setprop_rc, "", "setprop failed"
             state["nonce"] = args[3]
             return 0, "", ""
         if args == ["shell", "cat", "/proc/sys/kernel/random/boot_id"]:
+            if boot_id_rc != 0:
+                return boot_id_rc, "", "boot_id unreadable"
             return 0, (post_boot_id if state["rebooted"] else pre_boot_id), ""
         if args == ["shell", "cat", "/proc/uptime"]:
+            if uptime_rc != 0:
+                return uptime_rc, "", "uptime unreadable"
             return 0, (post_uptime if state["rebooted"] else pre_uptime), ""
         return 0, "", ""
 
@@ -337,8 +354,7 @@ def _patch_advancing_clock(monkeypatch: pytest.MonkeyPatch, mod, *, start: float
     def fake_sleep(seconds: float) -> None:
         state["now"] += float(seconds)
 
-    monkeypatch.setattr(mod.time, "time", fake_time)
-    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    monkeypatch.setattr(mod, "time", SimpleNamespace(time=fake_time, sleep=fake_sleep))
     return state
 
 
@@ -422,20 +438,22 @@ def test_run_acquires_host_lock_before_preparing_local_cache(tmp_path: Path, mon
         order.append("acquire_host_lock")
         return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
 
-    def fake_prepare(fw_dir, cache_dir, progress):
+    def fake_prepare(fw_dir, cache_dir, progress, spec=None):
         order.append("prepare_local_cache")
         return str(images_dir), str(images_dir / "raw" / "super.img")
+
+    clock = _patch_advancing_clock(monkeypatch, mod)
 
     def fake_spd_dump(*_a, **_kw):
         adb_state["rebooted"] = True
         adb_state["nonce"] = ""
+        clock["now"] += 30.0
         return 1.0
 
     monkeypatch.setattr(mod, "acquire_host_lock", fake_acquire)
     monkeypatch.setattr(mod, "prepare_local_cache", fake_prepare)
     monkeypatch.setattr(mod, "run_spd_dump", fake_spd_dump)
     monkeypatch.setattr(mod, "wait_boot_completed", lambda *_a: 1.0)
-    _patch_advancing_clock(monkeypatch, mod)
 
     res = mod.run({"firmware_dir": str(ver_dir), "verify_root": False}, "SN1", mod.Progress(), [])
     assert res["metrics"]["duration_seconds"] >= 0
@@ -519,6 +537,8 @@ def test_build_spd_dump_args_reads_p525aa_plan_json(tmp_path: Path) -> None:
     assert ("uboot_a", str(fw_dir / "lk-sign.bin")) in written
     assert ("super", str(super_trimmed)) in written
 
+    assert "keep_charge" in cmd
+    assert cmd[-1] == "reset"
     for protected in ("splloader", "l_fixnv1_a", "l_runtimenv1", "l_deltanv_a", "prodnv", "persist", "miscdata"):
         assert protected not in written_parts
 
@@ -648,9 +668,9 @@ def test_u2_05_rejects_identity_mismatch_across_all_three_routes_without_flash(
         adb_calls=adb_calls,
     )
     spd_called = {"n": 0}
-    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: "/usr/local/bin/spd_dump")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
     monkeypatch.setenv("STP_FLASH_FIRMWARE_ROOT", str(fw_root))
     monkeypatch.delenv("STP_FLASH_FIRMWARE_VERSION", raising=False)
@@ -718,23 +738,26 @@ def test_u2_06_rejects_missing_manifest_empty_models_or_wrong_platform(
 def test_u2_07_rejects_latest_versions_map_without_fallback_to_family_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#4006 §4 #7 (v1.1): family-level version target passes J2 so rejection can only come from J3."""
     mod = _load_module()
     fw_root = tmp_path / "firmware"
     _create_firmware_dir(fw_root, family="P525AA", version="v36", models=["MLY-LX2"])
+    _create_firmware_dir(fw_root, family="P525AA", version="v37_fallback", models=["MLY-LX2-NEW"])
     (fw_root / "P525AA" / "latest.json").write_text(
-        json.dumps({"version": "v36", "versions": {"MLY-LX2": "v36"}}), encoding="utf-8"
+        json.dumps({"version": "v37_fallback", "versions": {"MLY-LX2": "v36"}}), encoding="utf-8"
     )
     _install_fake_adb(
         monkeypatch,
         mod,
-        props={"ro.product.model": "UNKNOWN-X", "ro.product.device": "UNK", "ro.product.name": "UNK"},
+        props={"ro.product.model": "MLY-LX2-NEW", "ro.product.device": "MLY-NEW", "ro.product.name": "MLY-LX2-NEW"},
     )
     monkeypatch.setenv("STP_FLASH_FIRMWARE_ROOT", str(fw_root))
     monkeypatch.delenv("STP_FLASH_FIRMWARE_VERSION", raising=False)
 
     with pytest.raises(RuntimeError) as exc_info:
         mod.resolve_firmware_images_dir({"family": "P525AA"}, "adb", "SN1")
-    assert "UNKNOWN-X" in str(exc_info.value)
+    assert "MLY-LX2-NEW" in str(exc_info.value)
+    assert "versions" in str(exc_info.value)
 
 
 def test_u2_08_erase_whitelist_excludes_non_whitelist_and_reports_skipped(
@@ -824,9 +847,9 @@ def test_u2_11_rejects_when_unisoc_download_port_already_on_usb_bus(
         adb_calls=adb_calls,
     )
     spd_called = {"n": 0}
-    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: "/usr/local/bin/spd_dump")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
 
     with pytest.raises(RuntimeError, match="1782:4d00"):
@@ -911,7 +934,7 @@ def test_u2_14_rejects_when_spd_dump_exits_0_but_device_did_not_reboot(
 ) -> None:
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys; sys.exit(0)")
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
 
@@ -950,7 +973,7 @@ def test_u2_14_rejects_when_spd_dump_exits_0_but_device_did_not_reboot(
     )
     _patch_advancing_clock(monkeypatch, mod)
 
-    with pytest.raises(RuntimeError, match="reboot"):
+    with pytest.raises(RuntimeError, match="did not reboot"):
         mod.run(
             {"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False},
             "SN1",
@@ -966,10 +989,11 @@ def test_u2_15_rejects_when_post_flash_version_mismatch_manifest_version(
     ver_dir = _create_firmware_dir(
         tmp_path / "fw", family="P525AA", version="v36", manifest_version="TARGET_V36", models=["MLY-LX2"]
     )
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys; sys.exit(0)")
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
 
+    clock = _patch_advancing_clock(monkeypatch, mod)
     _install_fake_adb(
         monkeypatch,
         mod,
@@ -987,6 +1011,7 @@ def test_u2_15_rejects_when_post_flash_version_mismatch_manifest_version(
             "ro.build.type": "userdebug",
             "ro.build.sw_internal_version": "STILL_OLD_V35",
         },
+        clock=clock,
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
@@ -996,7 +1021,6 @@ def test_u2_15_rejects_when_post_flash_version_mismatch_manifest_version(
         "acquire_host_lock",
         lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
     )
-    _patch_advancing_clock(monkeypatch, mod)
 
     with pytest.raises(RuntimeError, match="STILL_OLD_V35"):
         mod.run(
@@ -1076,14 +1100,16 @@ def test_u2_17_same_length_plan_json_replacement_uses_new_fdl_address(
         lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
     )
 
+    clock = _patch_advancing_clock(monkeypatch, mod)
+
     def fake_spd_dump(cmd, *_a, **_kw):
         seen_cmds.append(list(cmd))
         adb_state["rebooted"] = True
         adb_state["nonce"] = ""
+        clock["now"] += 30.0
         return 0.5
 
     monkeypatch.setattr(mod, "run_spd_dump", fake_spd_dump)
-    _patch_advancing_clock(monkeypatch, mod)
 
     mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(cache_dir), "verify_root": False}, "SN1", mod.Progress(), [])
     assert "0x9EFFFE00" in seen_cmds[-1]
@@ -1144,6 +1170,7 @@ def test_u2_19_dry_run_returns_fdl_erases_skipped_partitions_and_route(
     assert m["erases"] == ["uboot_log", "misc", "sysdumpdb", "metadata"]
     assert m["skipped_erases"] == ["splloader", "l_runtimenv1"]
     assert len(m["partitions"]) == 25  # userdata + 23 writable + super
+    assert {"partition": "super", "image": "raw/super.img"} in m["partitions"]
     assert m["route"]["decided_by"] == "params"
     assert m["route"]["model"] == "MLY-LX2"
     assert m["route"]["family"] == "P525AA"
@@ -1151,33 +1178,60 @@ def test_u2_19_dry_run_returns_fdl_erases_skipped_partitions_and_route(
     assert m["route"]["manifest"] == str(ver_dir / "manifest.json")
 
 
+_P532AA_WRITABLE_PARTITIONS = frozenset({
+    "blackbox", "boot_a", "cache", "ch_sys_a", "dtbo_a", "fbootlogo_a",
+    "init_boot_a", "l_agdsp_a", "logo_a", "nr_modem_a", "nr_phy_a", "pm_sys_a",
+    "sml_a", "teecfg_a", "trustos_a", "uboot_a", "vbmeta_a", "vbmeta_odm_a",
+    "vbmeta_product_a", "vbmeta_system_a", "vbmeta_system_ext_a",
+    "vbmeta_vendor_a", "vendor_boot_a",
+})
+
+_P525AA_WRITABLE_PARTITIONS = frozenset({
+    "blackbox", "boot_a", "cache", "dtbo_a", "fbootlogo", "init_boot_a",
+    "l_agdsp_a", "l_gdsp_a", "l_ldsp_a", "l_modem_a", "logo", "pm_sys_a",
+    "sml_a", "teecfg_a", "trustos_a", "uboot_a", "vbmeta_a", "vbmeta_odm_a",
+    "vbmeta_product_a", "vbmeta_system_a", "vbmeta_system_ext_a",
+    "vbmeta_vendor_a", "vendor_boot_a",
+})
+
+
 def test_u2_20_regression_p532aa_and_p525aa_match_section_3_3_facts(tmp_path: Path) -> None:
-    """Regression (#4006 §4 #20): P532AA and P525AA fixtures match §3.3 addresses, erases, and 23 writable partitions."""
+    """Regression (#4006 §4 #20/#21): exact partition sets (with slot suffixes), FDL, erases, keep_charge, reset."""
     mod = _load_module()
 
     p532 = _create_firmware_dir(tmp_path / "fw1", family="P532AA", version="v119", models=["p532a_64only"], plan=_p532aa_plan())
     cmd_532 = mod.build_spd_dump_args("/usr/local/bin/spd_dump", str(p532 / "images"), str(tmp_path / "s1.img"))
+    assert str(p532 / "images" / "fdl1-sign.bin") in cmd_532
     assert "0x65008000" in cmd_532
+    assert str(p532 / "images" / "edk2-fdl2-sign.bin") in cmd_532
     assert "0xBDFFFE00" in cmd_532
-    assert [cmd_532[i + 1] for i, t in enumerate(cmd_532) if t == "erase_part"] == [
-        "uboot_log", "sd_klog", "misc", "sysdumpdb", "metadata"
-    ]
+    assert "keep_charge" in cmd_532
+    assert cmd_532[-1] == "reset"
+    erased_532 = [cmd_532[i + 1] for i, t in enumerate(cmd_532) if t == "erase_part"]
+    assert set(erased_532) == {"uboot_log", "sd_klog", "misc", "sysdumpdb", "metadata"}
+    assert len(erased_532) == 5
     written_532 = [cmd_532[i + 1] for i, t in enumerate(cmd_532) if t == "write_part"]
     assert written_532[0] == "userdata"
     assert written_532[-1] == "super"
-    assert len([p for p in written_532 if p not in ("userdata", "super")]) == 23
+    assert set(written_532) == _P532AA_WRITABLE_PARTITIONS | {"userdata", "super"}
+    assert len(written_532) == 25
 
     p525 = _create_firmware_dir(tmp_path / "fw2", family="P525AA", version="v36", models=["MLY-LX2", "MLY-LX2-CA"], plan=_p525aa_plan())
     cmd_525 = mod.build_spd_dump_args("/usr/local/bin/spd_dump", str(p525 / "images"), str(tmp_path / "s2.img"))
+    assert str(p525 / "images" / "fdl1-sign.bin") in cmd_525
     assert "0x65000800" in cmd_525
+    assert str(p525 / "images" / "lk-fdl2-sign.bin") in cmd_525
     assert "0x9EFFFE00" in cmd_525
-    assert [cmd_525[i + 1] for i, t in enumerate(cmd_525) if t == "erase_part"] == [
-        "uboot_log", "misc", "sysdumpdb", "metadata"
-    ]
+    assert "keep_charge" in cmd_525
+    assert cmd_525[-1] == "reset"
+    erased_525 = [cmd_525[i + 1] for i, t in enumerate(cmd_525) if t == "erase_part"]
+    assert set(erased_525) == {"uboot_log", "misc", "sysdumpdb", "metadata"}
+    assert len(erased_525) == 4
     written_525 = [cmd_525[i + 1] for i, t in enumerate(cmd_525) if t == "write_part"]
     assert written_525[0] == "userdata"
     assert written_525[-1] == "super"
-    assert len([p for p in written_525 if p not in ("userdata", "super")]) == 23
+    assert set(written_525) == _P525AA_WRITABLE_PARTITIONS | {"userdata", "super"}
+    assert len(written_525) == 25
 
 
 def test_u2_j9_version_readback_cannot_be_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1185,20 +1239,21 @@ def test_u2_j9_version_readback_cannot_be_disabled(tmp_path: Path, monkeypatch: 
     ver_dir = _create_firmware_dir(
         tmp_path / "fw", family="P525AA", version="v36", manifest_version="TARGET_V36", models=["MLY-LX2"]
     )
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys; sys.exit(0)")
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
     _install_fake_adb(
         monkeypatch,
         mod,
         props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
         post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "WRONG"},
+        clock=clock,
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
     monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
-    _patch_advancing_clock(monkeypatch, mod)
 
     with pytest.raises(RuntimeError, match="WRONG"):
         mod.run(
@@ -1216,7 +1271,7 @@ def test_u2_j11_main_emits_route_on_rejection_and_success(
     ver_dir = _create_firmware_dir(
         tmp_path / "fw", family="P525AA", version="v36", manifest_version="TARGET_V36", models=["MLY-LX2"]
     )
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys; sys.exit(0)")
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
 
@@ -1224,7 +1279,7 @@ def test_u2_j11_main_emits_route_on_rejection_and_success(
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
     monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
-    _patch_advancing_clock(monkeypatch, mod)
+    clock = _patch_advancing_clock(monkeypatch, mod)
     monkeypatch.setattr(mod.sys, "argv", ["flash_firmware_unisoc_bsl.py", "--serial", "SN1", "--firmware-dir", str(ver_dir)])
 
     # 1. Rejection output includes route decision
@@ -1232,6 +1287,7 @@ def test_u2_j11_main_emits_route_on_rejection_and_success(
         monkeypatch,
         mod,
         props={"ro.product.model": "WRONG-M", "ro.product.device": "WRONG-D", "ro.product.name": "WRONG-N"},
+        clock=clock,
     )
     monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({"verify_root": False}))
     mod.main()
@@ -1248,6 +1304,7 @@ def test_u2_j11_main_emits_route_on_rejection_and_success(
         mod,
         props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
         post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "TARGET_V36"},
+        clock=clock,
     )
     monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({"cache_dir": str(tmp_path / "cache"), "verify_root": False}))
     mod.main()
@@ -1256,3 +1313,540 @@ def test_u2_j11_main_emits_route_on_rejection_and_success(
     assert ok_out["metrics"]["route"]["decided_by"] == "params"
     assert ok_out["metrics"]["post_version"] == "TARGET_V36"
     assert ok_out["metrics"]["reboot_evidence"]["boot_id_changed"] is True
+
+
+# ── B9-U2 Finite Acceptance Checklist (#4006 §4 v1.1 #23–#35) ─────────────
+
+
+def test_u2_23_super_raw_non_default_filename_used_in_cmd_and_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    plan = {
+        "fdl": {
+            "fdl1": {"file": "fdl1-sign.bin", "base": "0x65000800"},
+            "fdl2": {"file": "lk-fdl2-sign.bin", "base": "0x9EFFFE00"},
+        },
+        "erases": ["misc"],
+        "entries": [
+            {"id": "UserData", "file": "userdata.img", "sparse": False, "partitions": ["userdata"], "preserve": True},
+            {"id": "BOOT", "file": "boot.img", "sparse": False, "partitions": ["boot_a"]},
+            {
+                "id": "Super",
+                "file": "alt_super_sparse.img",
+                "sparse": True,
+                "raw": "custom/alt_super.img",
+                "partitions": ["super"],
+                "flush_type": "YAFFS_IMG2",
+            },
+        ],
+    }
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"], plan=plan)
+    images = ver_dir / "images"
+    _make_sparse_image(images / "alt_super_sparse.img", [(0xCAC2, 16, b"\x11\x11\x11\x11"), (0xCAC3, 64, b"")])
+    alt_raw = images / "custom" / "alt_super.img"
+    alt_raw.parent.mkdir(parents=True, exist_ok=True)
+    alt_raw.write_bytes(b"ALT_SUPER_BYTES_" + b"X" * (16 * 4096 - 16))
+    # Place decoys at legacy hardcoded paths to prove neither is used
+    (images / "super.img").write_bytes(b"WRONG_SPARSE")
+    (images / "raw" / "super.img").write_bytes(b"WRONG_RAW" * 1024)
+
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    dry_res = mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
+    assert {"partition": "super", "image": "custom/alt_super.img"} in dry_res["metrics"]["partitions"]
+    assert {"partition": "super", "image": "super.img"} not in dry_res["metrics"]["partitions"]
+
+    captured: dict = {}
+
+    def fake_spd_dump(cmd, *_a, **_kw):
+        written = {cmd[i + 1]: cmd[i + 2] for i, t in enumerate(cmd) if t == "write_part"}
+        captured["super_bytes"] = Path(written["super"]).read_bytes()
+        adb_state["rebooted"] = True
+        adb_state["nonce"] = ""
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_spd_dump)
+    run_res = mod.run(
+        {"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False},
+        "SN1",
+        mod.Progress(),
+        [],
+    )
+    assert captured["super_bytes"].startswith(b"ALT_SUPER_BYTES_")
+    assert {"partition": "super", "image": "custom/alt_super.img"} in run_res["metrics"]["partitions"]
+
+
+def test_u2_24_rejects_non_userdata_id_targeting_userdata(tmp_path: Path) -> None:
+    mod = _load_module()
+    plan = {
+        "fdl": {
+            "fdl1": {"file": "fdl1-sign.bin", "base": "0x65000800"},
+            "fdl2": {"file": "lk-fdl2-sign.bin", "base": "0x9EFFFE00"},
+        },
+        "erases": ["misc"],
+        "entries": [
+            {"id": "Unrelated", "file": "other_userdata.img", "sparse": False, "partitions": ["userdata"], "flush_type": "CODE2"},
+            {"id": "BOOT", "file": "boot.img", "sparse": False, "partitions": ["boot_a"]},
+        ],
+    }
+    ver_dir = _create_firmware_dir(tmp_path, plan=plan)
+    with pytest.raises(RuntimeError, match="UserData"):
+        mod.build_spd_dump_args("/usr/local/bin/spd_dump", str(ver_dir / "images"), str(tmp_path / "s.img"))
+
+
+def test_u2_25_regression_userdata_written_with_preserve_while_other_preserve_skipped(tmp_path: Path) -> None:
+    mod = _load_module()
+    plan = {
+        "fdl": {
+            "fdl1": {"file": "fdl1-sign.bin", "base": "0x65000800"},
+            "fdl2": {"file": "lk-fdl2-sign.bin", "base": "0x9EFFFE00"},
+        },
+        "erases": ["misc"],
+        "entries": [
+            {"id": "UserData", "file": "userdata.img", "sparse": False, "partitions": ["userdata"], "preserve": True},
+            {"id": "BOOT", "file": "boot.img", "sparse": False, "partitions": ["boot_a"], "preserve": True},
+            {"id": "INIT_BOOT", "file": "init_boot.img", "sparse": False, "partitions": ["init_boot_a"]},
+        ],
+    }
+    ver_dir = _create_firmware_dir(tmp_path, plan=plan)
+    cmd = mod.build_spd_dump_args("/usr/local/bin/spd_dump", str(ver_dir / "images"), "")
+    written = [cmd[i + 1] for i, t in enumerate(cmd) if t == "write_part"]
+    assert "userdata" in written
+    assert "boot_a" not in written
+    assert "init_boot_a" in written
+
+
+def test_u2_26_rejects_download_port_appearing_during_cache_prepare_without_spd_dump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        adb_calls=adb_calls,
+    )
+    spd_called = {"n": 0}
+    orig_prepare = mod.prepare_local_cache
+
+    def prepare_then_plug_download_port(fw_dir, cache_dir, progress, *args, **kwargs):
+        res = orig_prepare(fw_dir, cache_dir, progress, *args, **kwargs)
+        d = sysfs_base / "1-4.1"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "idVendor").write_text("1782\n", encoding="utf-8")
+        (d / "idProduct").write_text("4d00\n", encoding="utf-8")
+        return res
+
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+    monkeypatch.setattr(mod, "prepare_local_cache", prepare_then_plug_download_port)
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
+
+    with pytest.raises(RuntimeError, match="1782:4d00"):
+        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache")}, "SN1", mod.Progress(), [])
+    assert spd_called["n"] == 0
+    assert ["reboot", "autodloader"] not in adb_calls
+
+
+def test_u2_27_rejects_when_usb_bus_directory_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    missing_sysfs = tmp_path / "no_such_sysfs_usb"
+    spd_called = {"n": 0}
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(missing_sysfs), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
+
+    with pytest.raises(RuntimeError, match="no_such_sysfs_usb"):
+        mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
+    assert spd_called["n"] == 0
+
+
+def test_u2_28_rejects_when_total_phase_duration_exceeds_timeout_even_if_spd_dump_exits_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time as _real_time
+
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "fast_ok_spd.py", "import sys, time; time.sleep(0.08); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+
+    def slow_adb(adb_bin: str, serial: str, args: List[str], timeout: float = 30):
+        if args == ["reboot", "autodloader"]:
+            _real_time.sleep(0.20)
+            return 0, "", ""
+        if args == ["shell", "dumpsys", "battery"]:
+            return 0, "  level: 90\n", ""
+        if args[:2] == ["shell", "getprop"]:
+            if args[2] == "sys.boot_completed":
+                return 0, "1", ""
+            return 0, {"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"}.get(args[2], ""), ""
+        return 0, "", ""
+
+    monkeypatch.setattr(mod, "run_adb", slow_adb)
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        mod.run(
+            {"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "spd_dump_timeout_seconds": 0.05},
+            "SN1",
+            mod.Progress(),
+            [],
+        )
+
+
+@pytest.mark.parametrize("bad_timeout", [0, -5, float("nan"), float("inf")])
+def test_u2_29_rejects_non_positive_or_non_finite_spd_dump_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_timeout: float
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        adb_calls=adb_calls,
+    )
+    spd_called = {"n": 0}
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
+
+    with pytest.raises(RuntimeError, match="spd_dump_timeout_seconds"):
+        mod.run({"firmware_dir": str(ver_dir), "spd_dump_timeout_seconds": bad_timeout}, "SN1", mod.Progress(), [])
+    assert spd_called["n"] == 0
+    assert ["reboot", "autodloader"] not in adb_calls
+
+
+def test_u2_30_rejects_when_spd_dump_exits_before_adb_reboot_without_calling_reboot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    dummy_spd = _make_executable(tmp_path / "early_exit_spd.py", "import sys; sys.exit(0)")
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(monkeypatch, mod, adb_calls=adb_calls)
+
+    with pytest.raises(RuntimeError, match="before adb reboot autodloader"):
+        mod.run_spd_dump([sys.executable, str(dummy_spd)], "adb", "SN1", mod.Progress(), [], timeout_seconds=5)
+    assert ["reboot", "autodloader"] not in adb_calls
+
+
+def test_u2_31a_rejects_when_boot_id_unreadable_uptime_not_later_and_nonce_cleared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        boot_id_rc=1,
+        pre_uptime="10.0 20.0",
+        post_uptime="50.0 80.0",
+        boot_advance_seconds=5.0,
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    with pytest.raises(RuntimeError, match="did not reboot"):
+        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
+
+
+def test_u2_31b_passes_when_boot_id_unreadable_and_estimated_boot_after_reboot_even_if_uptime_higher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        boot_id_rc=1,
+        pre_uptime="2.0 4.0",
+        post_uptime="5.0 10.0",
+        boot_advance_seconds=30.0,
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    res = mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
+    assert res.get("skipped") is not True
+    assert res["metrics"]["duration_seconds"] >= 0
+
+
+def test_u2_31c_rejects_when_all_reboot_signals_fail_to_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        boot_id_rc=1,
+        uptime_rc=1,
+        setprop_rc=1,
+        nonce_read_rc=1,
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    with pytest.raises(RuntimeError, match="no positive evidence"):
+        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
+
+
+def test_u2_31d_passes_when_nonce_setprop_fails_and_boot_id_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        pre_boot_id="boot-1",
+        post_boot_id="boot-2",
+        setprop_rc=1,
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    res = mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
+    assert res.get("skipped") is not True
+    assert res["metrics"]["duration_seconds"] >= 0
+
+
+def test_u2_32_rejects_when_plan_replaced_and_image_deleted_before_cache_prepare(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    images = ver_dir / "images"
+    cache_dir = tmp_path / "cache"
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    spd_called = {"n": 0}
+
+    def fake_spd_dump(*_a, **_kw):
+        spd_called["n"] += 1
+        adb_state["rebooted"] = True
+        adb_state["nonce"] = ""
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_spd_dump)
+
+    # First run populates cache including boot.img
+    mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(cache_dir), "verify_root": False}, "SN1", mod.Progress(), [])
+    assert spd_called["n"] == 1
+
+    # Second run: between initial _load_flash_spec and prepare_local_cache, replace plan.json & delete boot.img
+    adb_state["rebooted"] = False
+
+    def swap_plan_and_delete_boot_on_lock(progress, timeout_seconds=7200):
+        plan_obj = json.loads((images / "plan.json").read_text(encoding="utf-8"))
+        plan_obj["entries"] = [e for e in plan_obj["entries"] if e.get("id") != "BOOT"]
+        (images / "plan.json").write_text(json.dumps(plan_obj), encoding="utf-8")
+        (images / "boot.img").unlink()
+        return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+
+    monkeypatch.setattr(mod, "acquire_host_lock", swap_plan_and_delete_boot_on_lock)
+    with pytest.raises(RuntimeError, match="boot\\.img"):
+        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(cache_dir), "verify_root": False}, "SN1", mod.Progress(), [])
+    assert spd_called["n"] == 1
+
+
+def test_u2_33_route_records_selected_dir_not_manifest_family_or_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(
+        tmp_path / "fw",
+        family="ACTUAL_FAM",
+        version="v_actual",
+        manifest_version="DISPLAY_VER_99",
+        models=["MLY-LX2"],
+    )
+    manifest_path = ver_dir / "manifest.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["family"] = "WRONG_FAM_IN_MANIFEST"
+    manifest_path.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+
+    res = mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
+    m = res["metrics"]
+    assert m["route"]["family"] == "ACTUAL_FAM"
+    assert m["route"]["version"] == "v_actual"
+    assert m["expected_version"] == "DISPLAY_VER_99"
+    assert "WRONG_FAM_IN_MANIFEST" not in m["route"].values()
+    assert "DISPLAY_VER_99" not in m["route"].values()
+
+
+def test_u2_34_identity_non_utf8_adb_output_returns_false_with_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    fake_adb = _make_executable(
+        tmp_path / "fake_adb.py",
+        """
+        import sys
+        args = sys.argv[1:]
+        if "ro.product.model" in args:
+            sys.stdout.write("MLY-LX2\\n")
+        elif "ro.product.device" in args:
+            sys.stdout.buffer.write(b"bad-\\xff\\xfe\\n")
+        else:
+            sys.stdout.write("MLY-LX2\\n")
+        """,
+    )
+    stub_spd = _make_executable(tmp_path / "stub_spd.py", "import sys; sys.exit(99)")
+    monkeypatch.setattr(mod, "resolve_adb", lambda: str(fake_adb))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(stub_spd))
+    monkeypatch.setattr(mod.sys, "argv", ["flash_firmware_unisoc_bsl.py", "--serial", "SN1", "--firmware-dir", str(ver_dir)])
+    monkeypatch.setenv("STP_STEP_PARAMS", "{}")
+
+    mod.main()
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["success"] is False
+    assert "route" in out["metrics"]
+    route = out["metrics"]["route"]
+    assert route["decided_by"] == "params"
+    assert route["model"] == "MLY-LX2"
+    assert route["device"] == ""
+    assert route["product_name"] == ""
+    assert route["family"] == "P525AA"
+    assert route["version"] == "v36"
+    assert route["manifest"] == str(ver_dir / "manifest.json")
+
+
+def test_u2_35_dry_run_takes_precedence_over_skip_if_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"], plan=_p525aa_plan())
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.version.incremental": "36",
+        },
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+
+    res = mod.run(
+        {
+            "firmware_dir": str(ver_dir),
+            "dry_run": True,
+            "skip_if_current": True,
+            "verify_incremental": "36",
+            "verify_build_type": "userdebug",
+        },
+        "SN1",
+        mod.Progress(),
+        [],
+    )
+    assert res.get("skipped") is not True
+    m = res["metrics"]
+    assert m["dry_run"] is True
+    assert m["fdl"]["fdl1"] == {"file": "fdl1-sign.bin", "base": "0x65000800"}
+    assert m["erases"] == ["uboot_log", "misc", "sysdumpdb", "metadata"]
+    assert m["skipped_erases"] == ["splloader", "l_runtimenv1"]
+    assert len(m["partitions"]) == 25
+    assert m["route"]["version"] == "v36"
