@@ -377,6 +377,7 @@ def validate_uploaded_jira_workbook_scope(
     *,
     manifest: Mapping[str, Any],
     uploaded_bytes: bytes,
+    uploaded_suffix: Optional[str],
 ) -> None:
     """证明上传表格属于登记交付范围：每一行的身份列都必须命中登记问题。
 
@@ -384,6 +385,14 @@ def validate_uploaded_jira_workbook_scope(
     绕过登记范围的后门。只有整张表可证明属于该登记范围时才放行，否则拒绝请求，
     子进程不会启动；``source=upload`` 的独立手工上传入口不受此约束。
     """
+    if (uploaded_suffix or "").lower() == ".xlsx":
+        # 平台运行环境只有 xlrd（仅 BIFF .xls），无法读取 OOXML .xlsx 来做范围证明；
+        # 绑定入口不接受无法校验的表格，避免「传了但没验」的假放行。
+        raise JiraDeliveryError(
+            400,
+            "source=delivery_version/compat_rerun attached table must be .xls "
+            "with registered identity columns; .xlsx cannot be verified in this runtime",
+        )
     registered_ids: set[int] = set()
     registered_keys: set[str] = set()
     registered_raws: set[str] = set()
@@ -517,6 +526,7 @@ def resolve_delivery_jira_input(
         uploaded_suffix = suffix
         validate_uploaded_jira_workbook_scope(
             manifest=manifest, uploaded_bytes=uploaded_bytes,
+            uploaded_suffix=uploaded_suffix,
         )
 
     label = f"delivery:{plan_run.id}:{plat}:v{version.version_no}"
@@ -629,6 +639,7 @@ def resolve_compat_rerun_jira_input(
         uploaded_suffix = suffix
         validate_uploaded_jira_workbook_scope(
             manifest=manifest, uploaded_bytes=uploaded_bytes,
+            uploaded_suffix=uploaded_suffix,
         )
 
     label = f"compat_rerun:{plan_run.id}:{plat}:r{rerun.id}"

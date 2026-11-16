@@ -1456,3 +1456,20 @@ def test_compat_rerun_uploaded_workbook_scope_is_enforced(
     entries = _captured(capture)
     assert len(entries) == 1 and [row["Id"] for row in entries[0]["rows"]] == [str(sig_id)]
 
+
+
+def test_bound_source_rejects_unverifiable_xlsx_table(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """运行环境只有 xlrd，无法为 .xlsx 证明范围；绑定入口 fail-closed。"""
+    fields, capture, _run, _version, _sig = _planner_audit_seed_jira(
+        db_session, env_roots, monkeypatch, tmp_path,
+    )
+    response = client.post(
+        "/api/v1/jira/runs", data=fields, headers=auth_headers,
+        files={"file": ("scope.xlsx", b"PK\x03\x04not-read", "application/vnd.ms-excel")},
+    )
+    assert response.status_code == 400
+    assert not capture.exists()
+    assert db_session.query(JiraRun).count() == 0
+
