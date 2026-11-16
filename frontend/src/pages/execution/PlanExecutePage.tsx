@@ -395,23 +395,6 @@ export default function PlanExecutePage() {
       deviceHostFilter === 'all' || String(device.host_id ?? 'unassigned') === deviceHostFilter),
     [allDevices, deviceHostFilter],
   );
-  const versionOptions = useMemo(
-    () => Array.from(new Set(devicesInHostScope.map((device: DeviceSummary) => device.build_display_id).filter(Boolean) as string[])).sort(),
-    [devicesInHostScope],
-  );
-  const modelOptions = useMemo(
-    () => Array.from(new Set(devicesInHostScope.map((device: DeviceSummary) => device.model).filter(Boolean) as string[])).sort(),
-    [devicesInHostScope],
-  );
-  const productOptions = useMemo(
-    () => Array.from(new Set(devicesInHostScope.map((device) => device.product).filter((value): value is string => Boolean(value)))).sort(),
-    [devicesInHostScope],
-  );
-  // 标签选项与版本/型号一致，随节点范围收窄
-  const tagOptions = useMemo(
-    () => Array.from(new Set(devicesInHostScope.flatMap((device: DeviceSummary) => device.tags ?? []))).sort(),
-    [devicesInHostScope],
-  );
   const hostOptions = useMemo(() => Array.from(new Map(allDevices.map((device: DeviceSummary) => {
     const id = String(device.host_id ?? 'unassigned');
     const host = hostMap.get(id);
@@ -445,6 +428,31 @@ export default function PlanExecutePage() {
     const rows = buildDeviceReadinessRows(allDevices, hostsList ?? []);
     return new Map(rows.map((row) => [row.device.id, row]));
   }, [allDevices, hostsList]);
+  const devicesInOptionScope = useMemo(
+    () =>
+      devicesInHostScope.filter(
+        (device: DeviceSummary) =>
+          !readyOnly || (isSchedulable(device) && Boolean(deviceReadinessByDeviceId.get(device.id)?.ready)),
+      ),
+    [devicesInHostScope, readyOnly, deviceReadinessByDeviceId],
+  );
+  const versionOptions = useMemo(
+    () => Array.from(new Set(devicesInOptionScope.map((device: DeviceSummary) => device.build_display_id).filter(Boolean) as string[])).sort(),
+    [devicesInOptionScope],
+  );
+  const modelOptions = useMemo(
+    () => Array.from(new Set(devicesInOptionScope.map((device: DeviceSummary) => device.model).filter(Boolean) as string[])).sort(),
+    [devicesInOptionScope],
+  );
+  const productOptions = useMemo(
+    () => Array.from(new Set(devicesInOptionScope.map((device) => device.product).filter((value): value is string => Boolean(value)))).sort(),
+    [devicesInOptionScope],
+  );
+  // 标签选项与版本/型号一致，随节点与就绪范围收窄
+  const tagOptions = useMemo(
+    () => Array.from(new Set(devicesInOptionScope.flatMap((device: DeviceSummary) => device.tags ?? []))).sort(),
+    [devicesInOptionScope],
+  );
   const readinessResult = useMemo(
     () => summarizeDeviceReadiness(selectedDevices, deviceReadinessByDeviceId),
     [selectedDevices, deviceReadinessByDeviceId],
