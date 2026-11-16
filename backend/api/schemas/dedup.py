@@ -8,9 +8,12 @@
 """
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
+
+from backend.api.schemas.base import ORMBaseModel
 
 
 class DedupArtifactOut(BaseModel):
@@ -147,6 +150,38 @@ class JiraRunStartOut(BaseModel):
     jira_project_key: Optional[str] = None
 
 
+class CompatRerunOut(ORMBaseModel):
+    """``GET /plan-runs/{id}/dedup/compat-reruns`` 单条兼容补跑登记。"""
+
+    id: int
+    plan_run_id: int
+    platform: str
+    request_key: str
+    requested_by: str
+    status: str
+    attempts: int
+    source_delivery_version_id: Optional[int] = None
+    source_delivery_version_no: Optional[int] = None
+    coverage_scope: dict[str, Any] = {}
+    source_records: list[dict[str, Any]] = []
+    missing_items: list[dict[str, Any]] = []
+    is_partial: bool = False
+    artifact_dir: Optional[str] = None
+    merge_xls_path: Optional[str] = None
+    manifest_path: Optional[str] = None
+    error: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class CompatRerunTriggerOut(BaseModel):
+    """``POST /plan-runs/{id}/dedup/compat-rerun`` 响应。"""
+
+    replayed: bool
+    rerun: CompatRerunOut
+
+
 class JiraRunCancelOut(BaseModel):
     """``POST /jira/runs/{console_run_id}/cancel`` 响应。
 
@@ -159,6 +194,8 @@ class JiraRunCancelOut(BaseModel):
 
 
 __all__ = [
+    "CompatRerunOut",
+    "CompatRerunTriggerOut",
     "DedupAgentConfigReloadOut",
     "DedupArtifactOut",
     "DedupExtractOut",

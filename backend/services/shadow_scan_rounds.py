@@ -171,15 +171,20 @@ def _advance_run(db, run_id, root, now, settings):
     if partition is not None and partition.shadow_settled_at is not None:
         return []
     rounds = facts.list_scan_rounds(db, plan_run_id=run_id, platform=_PLATFORM)
-    # 候选收集后可能已进入终态；未在 RUNNING 时建立影子轮的分区不启动。
-    if run.status != PlanRunStatus.RUNNING.value and not rounds:
+    is_dedup_first = (
+        partition is not None and partition.mode == facts.PARTITION_MODE_DEDUP_FIRST
+    )
+    # 候选收集后可能已进入终态；未在 RUNNING 时建立影子轮的 CURRENT 分区不启动。
+    # DEDUP_FIRST 分区（含 FAILED，ADR-0062 D15）即使尚无任何轮次，也必须补齐最后一轮。
+    if run.status != PlanRunStatus.RUNNING.value and not rounds and not is_dedup_first:
         return []
     units = _expected_units(db, run_id)
     if not units and not rounds:
         return []
-    facts.record_partition_mode(
-        db, plan_run_id=run_id, platform=_PLATFORM, mode=facts.PARTITION_MODE_CURRENT
-    )
+    if partition is None:
+        facts.record_partition_mode(
+            db, plan_run_id=run_id, platform=_PLATFORM, mode=facts.PARTITION_MODE_CURRENT
+        )
     for row in rounds:
         _refresh_round(db, row, root, now)
     new = None
@@ -370,9 +375,10 @@ def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
             or row.status == facts.SCAN_ROUND_STATUS_CLOSED
         ):
             return []
-        facts.record_partition_mode(
-            db, plan_run_id=plan_run_id, platform=_PLATFORM, mode=facts.PARTITION_MODE_CURRENT
-        )
+        if partition is None:
+            facts.record_partition_mode(
+                db, plan_run_id=plan_run_id, platform=_PLATFORM, mode=facts.PARTITION_MODE_CURRENT
+            )
         now = datetime.now(timezone.utc)
         _refresh_round(db, row, root, now)
         if row.status == facts.SCAN_ROUND_STATUS_CLOSED:
