@@ -44,7 +44,6 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from typing import Dict, List, Optional, Tuple
 
 _PROGRESS_PREFIX = "PROGRESS "
@@ -893,7 +892,9 @@ def run_spd_dump(
         or timeout_seconds <= 0
     ):
         raise ValueError(f"spd_dump_timeout_seconds must be a finite positive number, got {timeout_seconds!r}")
-    t0 = time.time()
+    # J8 (#4006 v1.2): stage duration must use the host monotonic clock so a wall-clock
+    # rollback inside the stage cannot extend the deadline.
+    t0 = time.monotonic()
     deadline = t0 + float(timeout_seconds)
     proc = subprocess.Popen(
         cmd,
@@ -918,14 +919,14 @@ def run_spd_dump(
                     tail.pop(0)
                 m = _LOAD_PART_RE.search(line)
                 if m:
-                    progress.stamp(stage="bsl-flash", partition=m.group(1), elapsed_s=round(time.time() - t0, 1))
+                    progress.stamp(stage="bsl-flash", partition=m.group(1), elapsed_s=round(time.monotonic() - t0, 1))
                 elif any(tag in line for tag in ("BSL_REP_VER", "FDL2", "erase_partition", "RESET")):
-                    progress.stamp(stage="bsl-flash", detail=line[:120], elapsed_s=round(time.time() - t0, 1))
+                    progress.stamp(stage="bsl-flash", detail=line[:120], elapsed_s=round(time.monotonic() - t0, 1))
         except (OSError, ValueError):
             pass
 
     try:
-        sleep_s = min(1.5, max(0.0, deadline - time.time()))
+        sleep_s = min(1.5, max(0.0, deadline - time.monotonic()))
         if sleep_s > 0:
             try:
                 early_rc = proc.wait(timeout=sleep_s)
@@ -939,26 +940,35 @@ def run_spd_dump(
             raise RuntimeError(
                 f"spd_dump exited prematurely (rc={early_rc}) before adb reboot autodloader"
             )
-        remaining_before_adb = deadline - time.time()
+        remaining_before_adb = deadline - time.monotonic()
         if remaining_before_adb <= 0:
             raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s before adb reboot autodloader")
 
         progress.stamp(stage="autodloader")
-        _LAST_REBOOT_SENT_AT["value"] = time.time()
+        # J8 (#4006 v1.2): the poll below is the last step before sending the reboot —
+        # no I/O (including PROGRESS output) or waiting may happen between this check and
+        # the run_adb call, so a spd_dump that exits during the stamp cannot receive a
+        # reboot into download mode without a flasher waiting.
+        final_rc = proc.poll()
+        if final_rc is not None:
+            raise RuntimeError(
+                f"spd_dump exited before adb reboot autodloader was sent (rc={final_rc})"
+            )
+        _LAST_REBOOT_SENT_AT["value"] = time.monotonic()
         rc_adb, out_adb, err_adb = run_adb(
             adb_bin, serial, ["reboot", "autodloader"], timeout=min(15.0, remaining_before_adb)
         )
         log.append(f"adb reboot autodloader -> rc={rc_adb} {out_adb} {err_adb}".strip())
         if rc_adb != 0:
             raise RuntimeError(f"adb reboot autodloader failed (rc={rc_adb}): {err_adb or out_adb}")
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
 
         reader = threading.Thread(target=_read_stdout, daemon=True)
         reader.start()
 
         while True:
-            remaining = deadline - time.time()
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
             rc = proc.poll()
@@ -966,16 +976,16 @@ def run_spd_dump(
                 break
             try:
                 rc = proc.wait(timeout=min(remaining, 0.2))
-                if time.time() >= deadline:
+                if time.monotonic() >= deadline:
                     raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
                 break
             except subprocess.TimeoutExpired:
                 continue
 
         reader.join(timeout=2)
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
-        elapsed = round(time.time() - t0, 1)
+        elapsed = round(time.monotonic() - t0, 1)
         log.extend(tail[-15:])
         if rc != 0:
             raise RuntimeError(f"spd_dump exited with rc={rc} after {elapsed}s: {' | '.join(tail[-5:])}")
@@ -1018,37 +1028,35 @@ def _read_boot_id(adb_bin: str, serial: str) -> str:
     return val
 
 
-def _read_uptime_seconds_with_ts(adb_bin: str, serial: str) -> Tuple[Optional[float], Optional[float]]:
+def _read_uptime_with_window(adb_bin: str, serial: str) -> Tuple[Optional[float], float, float]:
+    """Read /proc/uptime once, returning (u, T0, T1) per J9 (#4006 v1.2).
+
+    T0 is taken from the host monotonic clock immediately before the read command is
+    issued and T1 immediately after it returns. The device samples u at some moment
+    inside [T0, T1], so its boot moment lies within [T0 - u, T1 - u]. Read failure,
+    timeout, empty or non-finite output yields u=None (no evidence).
+    """
+    t0 = time.monotonic()
     rc, out, _ = run_adb(adb_bin, serial, ["shell", "cat", "/proc/uptime"], timeout=10)
-    read_at = time.time()
+    t1 = time.monotonic()
     if rc != 0 or not out.strip():
-        return None, None
+        return None, t0, t1
     try:
         val = float(out.strip().split()[0])
     except (ValueError, IndexError):
-        return None, None
+        return None, t0, t1
     if not math.isfinite(val) or val < 0:
-        return None, None
-    return val, read_at
-
-
-def _read_uptime_seconds(adb_bin: str, serial: str) -> Optional[float]:
-    val, _ = _read_uptime_seconds_with_ts(adb_bin, serial)
-    return val
+        return None, t0, t1
+    return val, t0, t1
 
 
 def _capture_pre_reboot_evidence(adb_bin: str, serial: str) -> dict:
-    boot_id = _read_boot_id(adb_bin, serial)
-    uptime = _read_uptime_seconds(adb_bin, serial)
-    nonce = uuid.uuid4().hex[:16]
-    rc_set, _, _ = run_adb(adb_bin, serial, ["shell", "setprop", "debug.stp_bsl_nonce", nonce], timeout=10)
-    nonce_set = rc_set == 0 and getprop(adb_bin, serial, "debug.stp_bsl_nonce") == nonce
-    return {
-        "pre_boot_id": boot_id,
-        "pre_uptime": uptime,
-        "nonce": nonce if nonce_set else "",
-        "nonce_set": nonce_set,
-    }
+    """Capture pre-flash reboot evidence (J9 #4006 v1.2).
+
+    Only /proc/sys/kernel/random/boot_id is read here. Volatile properties are neither
+    evidence nor veto, and uptime evidence only needs one successful post-flash read.
+    """
+    return {"pre_boot_id": _read_boot_id(adb_bin, serial)}
 
 
 def _verify_post_reboot_evidence(
@@ -1057,54 +1065,61 @@ def _verify_post_reboot_evidence(
     pre: dict,
     reboot_sent_at: Optional[float] = None,
 ) -> dict:
-    post_boot_id = _read_boot_id(adb_bin, serial)
-    post_uptime, post_uptime_ts = _read_uptime_seconds_with_ts(adb_bin, serial)
-    rc_nonce, post_nonce_out, _ = run_adb(
-        adb_bin, serial, ["shell", "getprop", "debug.stp_bsl_nonce"], timeout=10
-    )
-    post_nonce = post_nonce_out.strip() if rc_nonce == 0 else None
+    """Verify reboot evidence per J9 (#4006 v1.2).
 
+    R is the host monotonic moment taken before `adb reboot autodloader` was sent.
+    /proc/uptime is read once after the flash: T0 before, T1 after (monotonic), u is
+    the read value, so the device boot moment lies in [T0-u, T1-u].
+
+    Positive evidence (only): boot_id read successfully before and after and different;
+    or T0-u later than R. Veto: boot_id read successfully both times and identical;
+    or T1-u not later than R. Any veto, or no positive evidence at all, is a failure.
+    When T0-u is not later than R but T1-u is, uptime provides no evidence (adb return
+    latency cannot make an unrebooted device pass).
+    """
     pre_boot_id = pre.get("pre_boot_id") or ""
-    if pre_boot_id and post_boot_id and pre_boot_id == post_boot_id:
+    post_boot_id = _read_boot_id(adb_bin, serial)
+    post_uptime, uptime_t0, uptime_t1 = _read_uptime_with_window(adb_bin, serial)
+
+    boot_id_both_read = bool(pre_boot_id) and bool(post_boot_id)
+    boot_id_same = boot_id_both_read and pre_boot_id == post_boot_id
+    boot_id_changed = boot_id_both_read and pre_boot_id != post_boot_id
+
+    uptime_positive = False
+    uptime_veto = False
+    if post_uptime is not None and reboot_sent_at is not None:
+        if uptime_t0 - post_uptime > reboot_sent_at:
+            uptime_positive = True
+        if uptime_t1 - post_uptime <= reboot_sent_at:
+            uptime_veto = True
+
+    if boot_id_same:
         raise RuntimeError(f"device did not reboot: boot_id unchanged ({pre_boot_id})")
-
-    if pre.get("nonce_set") and post_nonce == pre.get("nonce"):
-        raise RuntimeError("device did not reboot: volatile debug.stp_bsl_nonce persisted")
-
-    estimated_boot_at: Optional[float] = None
-    if post_uptime is not None and post_uptime_ts is not None:
-        estimated_boot_at = post_uptime_ts - post_uptime
-        if reboot_sent_at is not None and estimated_boot_at <= reboot_sent_at:
-            raise RuntimeError(
-                "device did not reboot: estimated boot time "
-                f"({estimated_boot_at:.3f}) <= reboot command time ({reboot_sent_at:.3f})"
-            )
-
-    boot_id_changed = bool(pre_boot_id and post_boot_id and pre_boot_id != post_boot_id)
-    pre_uptime = pre.get("pre_uptime")
-    uptime_rebooted = bool(
-        pre_uptime is not None
-        and estimated_boot_at is not None
-        and reboot_sent_at is not None
-        and estimated_boot_at > reboot_sent_at
-    )
-
-    if not (boot_id_changed or uptime_rebooted):
+    if uptime_veto:
+        raise RuntimeError(
+            "device did not reboot: uptime readback contradicts a reboot after the command "
+            f"(boot moment no later than {uptime_t1 - post_uptime:.3f} on the monotonic clock, "
+            f"reboot sent at {reboot_sent_at:.3f}, uptime={post_uptime})"
+        )
+    if not (boot_id_changed or uptime_positive):
         raise RuntimeError(
             "no positive evidence that device rebooted "
-            f"(boot_id={pre_boot_id!r}->{post_boot_id!r}, uptime={pre_uptime}->{post_uptime}, "
-            f"estimated_boot_at={estimated_boot_at}, reboot_sent_at={reboot_sent_at}, "
-            f"nonce_set={pre.get('nonce_set')}, post_nonce={post_nonce!r})"
+            f"(boot_id={pre_boot_id!r}->{post_boot_id!r}, uptime={post_uptime!r}, "
+            f"uptime_window=[{uptime_t0:.3f}, {uptime_t1:.3f}], reboot_sent_at={reboot_sent_at})"
         )
 
     return {
         "boot_id_changed": boot_id_changed,
-        "uptime_rebooted": uptime_rebooted,
+        "uptime_positive": uptime_positive,
         "pre_boot_id": pre_boot_id,
         "post_boot_id": post_boot_id,
-        "pre_uptime": pre_uptime,
         "post_uptime": post_uptime,
-        "estimated_boot_at": estimated_boot_at,
+        "uptime_read_window": {"t0": uptime_t0, "t1": uptime_t1},
+        "boot_moment_bounds": (
+            [uptime_t0 - post_uptime, uptime_t1 - post_uptime]
+            if post_uptime is not None
+            else None
+        ),
         "reboot_sent_at": reboot_sent_at,
     }
 
@@ -1213,7 +1228,8 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
             pre_reboot = _capture_pre_reboot_evidence(adb_bin, serial)
             # Final download-port gate after cache preparation and immediately before spd_dump (J7).
             check_no_unisoc_download_port(route=route)
-            reboot_anchor = time.time()
+            # J9 (#4006 v1.2): R and the fallback anchor use the host monotonic clock.
+            reboot_anchor = time.monotonic()
             _LAST_REBOOT_SENT_AT["value"] = None
             flash_seconds = run_spd_dump(
                 cmd, adb_bin, serial, progress, log, timeout_seconds=spd_dump_timeout

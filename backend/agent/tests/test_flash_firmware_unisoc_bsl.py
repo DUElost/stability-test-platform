@@ -246,9 +246,11 @@ def _install_fake_adb(
     pre_boot_id: str = "boot-uuid-1",
     post_boot_id: str = "boot-uuid-2",
     boot_id_rc: int = 0,
+    post_boot_id_rc: Optional[int] = None,
     pre_uptime: str = "120.5 200.0",
     post_uptime: str = "12.3 20.0",
     uptime_rc: int = 0,
+    uptime_latency_seconds: float = 0.0,
     setprop_rc: int = 0,
     nonce_read_rc: int = 0,
     clock: Optional[dict] = None,
@@ -290,10 +292,14 @@ def _install_fake_adb(
             state["nonce"] = args[3]
             return 0, "", ""
         if args == ["shell", "cat", "/proc/sys/kernel/random/boot_id"]:
-            if boot_id_rc != 0:
-                return boot_id_rc, "", "boot_id unreadable"
+            rc = boot_id_rc if post_boot_id_rc is None else (boot_id_rc if not state["rebooted"] else post_boot_id_rc)
+            if rc != 0:
+                return rc, "", "boot_id unreadable"
             return 0, (post_boot_id if state["rebooted"] else pre_boot_id), ""
         if args == ["shell", "cat", "/proc/uptime"]:
+            # Simulate the adb round-trip latency so the post-read window [T0, T1] has width.
+            if clock is not None and uptime_latency_seconds > 0:
+                clock["now"] += uptime_latency_seconds
             if uptime_rc != 0:
                 return uptime_rc, "", "uptime unreadable"
             return 0, (post_uptime if state["rebooted"] else pre_uptime), ""
@@ -351,10 +357,15 @@ def _patch_advancing_clock(monkeypatch: pytest.MonkeyPatch, mod, *, start: float
     def fake_time() -> float:
         return state["now"]
 
+    def fake_monotonic() -> float:
+        # J8/J9 (#4006 v1.2) read the monotonic clock for stage duration and R/T0/T1;
+        # the fake clock advances it together with time.time().
+        return state["now"]
+
     def fake_sleep(seconds: float) -> None:
         state["now"] += float(seconds)
 
-    monkeypatch.setattr(mod, "time", SimpleNamespace(time=fake_time, sleep=fake_sleep))
+    monkeypatch.setattr(mod, "time", SimpleNamespace(time=fake_time, monotonic=fake_monotonic, sleep=fake_sleep))
     return state
 
 
@@ -938,7 +949,7 @@ def test_u2_14_rejects_when_spd_dump_exits_0_but_device_did_not_reboot(
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
 
-    # Device stays on same boot_id, uptime increases, nonce NOT cleared (did not reboot)
+    # Device stays on same boot_id (veto), post uptime window cannot be after the reboot (veto)
     def fake_run_adb(adb_bin: str, serial: str, args: List[str], timeout: int = 30):
         if args == ["reboot", "autodloader"]:
             return 0, "", ""
@@ -1208,6 +1219,8 @@ def test_u2_20_regression_p532aa_and_p525aa_match_section_3_3_facts(tmp_path: Pa
     assert "keep_charge" in cmd_532
     assert cmd_532[-1] == "reset"
     erased_532 = [cmd_532[i + 1] for i, t in enumerate(cmd_532) if t == "erase_part"]
+    # Erase command order assertion restored per #4006 §4 #21 (v1.2, B3 ruling).
+    assert erased_532 == ["uboot_log", "sd_klog", "misc", "sysdumpdb", "metadata"]
     assert set(erased_532) == {"uboot_log", "sd_klog", "misc", "sysdumpdb", "metadata"}
     assert len(erased_532) == 5
     written_532 = [cmd_532[i + 1] for i, t in enumerate(cmd_532) if t == "write_part"]
@@ -1225,6 +1238,7 @@ def test_u2_20_regression_p532aa_and_p525aa_match_section_3_3_facts(tmp_path: Pa
     assert "keep_charge" in cmd_525
     assert cmd_525[-1] == "reset"
     erased_525 = [cmd_525[i + 1] for i, t in enumerate(cmd_525) if t == "erase_part"]
+    assert erased_525 == ["uboot_log", "misc", "sysdumpdb", "metadata"]
     assert set(erased_525) == {"uboot_log", "misc", "sysdumpdb", "metadata"}
     assert len(erased_525) == 4
     written_525 = [cmd_525[i + 1] for i, t in enumerate(cmd_525) if t == "write_part"]
@@ -1492,17 +1506,49 @@ def test_u2_27_rejects_when_usb_bus_directory_missing(tmp_path: Path, monkeypatc
 def test_u2_28_rejects_when_total_phase_duration_exceeds_timeout_even_if_spd_dump_exits_0(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#4006 §4 #28 (v1.2): the stub spd_dump returns 0 after the reboot command was sent,
+    with the stage duration already over the limit. The test first observes the reboot
+    command being called (stub waits for its marker), then observes the stub returning 0
+    on its own (exit marker written before any kill), and the run must still fail."""
     import time as _real_time
 
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "fast_ok_spd.py", "import sys, time; time.sleep(0.08); sys.exit(0)")
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
 
+    reboot_marker = tmp_path / "reboot_called.json"
+    exit_marker = tmp_path / "spd_exit.json"
+    dummy_spd = _make_executable(
+        tmp_path / "late_ok_spd.py",
+        f"""
+        import json, sys, time
+        start = time.time()
+        marker = {str(reboot_marker)!r}
+        deadline = time.time() + 10.0
+        seen = None
+        while time.time() < deadline:
+            try:
+                seen = json.load(open(marker))
+                break
+            except (OSError, ValueError):
+                time.sleep(0.02)
+        if seen is None:
+            json.dump({{"rc": 3, "start": start, "exit": time.time()}}, open({str(exit_marker)!r}, "w"))
+            sys.exit(3)
+        time.sleep(1.0)
+        exit_ts = time.time()
+        json.dump({{"rc": 0, "start": start, "seen_reboot_at": seen["at"], "exit": exit_ts}},
+                  open({str(exit_marker)!r}, "w"))
+        sys.exit(0)
+        """,
+    )
+
     def slow_adb(adb_bin: str, serial: str, args: List[str], timeout: float = 30):
         if args == ["reboot", "autodloader"]:
-            _real_time.sleep(0.20)
+            with open(reboot_marker, "w", encoding="utf-8") as fh:
+                json.dump({"at": _real_time.time()}, fh)
+            _real_time.sleep(1.6)
             return 0, "", ""
         if args == ["shell", "dumpsys", "battery"]:
             return 0, "  level: 90\n", ""
@@ -1510,6 +1556,10 @@ def test_u2_28_rejects_when_total_phase_duration_exceeds_timeout_even_if_spd_dum
             if args[2] == "sys.boot_completed":
                 return 0, "1", ""
             return 0, {"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"}.get(args[2], ""), ""
+        if args == ["shell", "cat", "/proc/sys/kernel/random/boot_id"]:
+            return 0, "boot-before", ""
+        if args == ["shell", "id"]:
+            return 0, "uid=0(root) gid=0(root)", ""
         return 0, "", ""
 
     monkeypatch.setattr(mod, "run_adb", slow_adb)
@@ -1520,11 +1570,25 @@ def test_u2_28_rejects_when_total_phase_duration_exceeds_timeout_even_if_spd_dum
 
     with pytest.raises(RuntimeError, match="timed out"):
         mod.run(
-            {"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "spd_dump_timeout_seconds": 0.05},
+            {
+                "firmware_dir": str(ver_dir),
+                "cache_dir": str(tmp_path / "cache"),
+                "spd_dump_timeout_seconds": 2.0,
+                "verify_root": False,
+            },
             "SN1",
             mod.Progress(),
             [],
         )
+
+    assert reboot_marker.exists()
+    assert exit_marker.exists()
+    stub = json.loads(exit_marker.read_text(encoding="utf-8"))
+    # The stub completed on its own (not killed) with rc 0, after the reboot was sent,
+    # and its lifespan (the stage duration) was already over the 2.0s limit.
+    assert stub["rc"] == 0
+    assert stub["exit"] > stub["seen_reboot_at"]
+    assert stub["exit"] - stub["start"] > 2.0
 
 
 @pytest.mark.parametrize("bad_timeout", [0, -5, float("nan"), float("inf")])
@@ -1556,6 +1620,7 @@ def test_u2_29_rejects_non_positive_or_non_finite_spd_dump_timeout(
 def test_u2_30_rejects_when_spd_dump_exits_before_adb_reboot_without_calling_reboot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#4006 §4 #30 (a): the stub exits during the startup wait — no reboot is sent."""
     mod = _load_module()
     dummy_spd = _make_executable(tmp_path / "early_exit_spd.py", "import sys; sys.exit(0)")
     adb_calls: List[List[str]] = []
@@ -1566,9 +1631,61 @@ def test_u2_30_rejects_when_spd_dump_exits_before_adb_reboot_without_calling_reb
     assert ["reboot", "autodloader"] not in adb_calls
 
 
-def test_u2_31a_rejects_when_boot_id_unreadable_uptime_not_later_and_nonce_cleared(
+def test_u2_30b_rejects_when_spd_dump_exits_during_last_progress_stamp_before_reboot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#4006 §4 #30 (b) (v1.2): the stub exits during the last PROGRESS output before the
+    reboot is sent. The liveness check must be the last step before `adb reboot
+    autodloader`, so an exit during the stamp must be caught and no reboot may be sent."""
+    import time as _real_time
+
+    mod = _load_module()
+    exit_marker = tmp_path / "stub_exit.marker"
+    dummy_spd = _make_executable(
+        tmp_path / "exit_during_stamp_spd.py",
+        f"""
+        import sys, time
+        time.sleep(1.9)
+        open({str(exit_marker)!r}, "w").close()
+        sys.exit(0)
+        """,
+    )
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(monkeypatch, mod, adb_calls=adb_calls)
+
+    stamp_state = {"entered_autodloader_stamp": False, "saw_exit_during_stamp": False}
+
+    class StampBlockingProgress:
+        """Progress double whose 'autodloader' stamp blocks until the stub has exited,
+        so the stub provably terminates during the last PROGRESS output."""
+
+        def stamp(self, **fields) -> None:
+            if fields.get("stage") != "autodloader":
+                return
+            stamp_state["entered_autodloader_stamp"] = True
+            deadline = _real_time.time() + 5.0
+            while not exit_marker.exists() and _real_time.time() < deadline:
+                _real_time.sleep(0.02)
+            if exit_marker.exists():
+                stamp_state["saw_exit_during_stamp"] = True
+                _real_time.sleep(0.05)
+
+    with pytest.raises(RuntimeError, match="before adb reboot autodloader"):
+        mod.run_spd_dump(
+            [sys.executable, str(dummy_spd)], "adb", "SN1", StampBlockingProgress(), [], timeout_seconds=8
+        )
+
+    assert stamp_state["entered_autodloader_stamp"] is True
+    assert stamp_state["saw_exit_during_stamp"] is True
+    assert ["reboot", "autodloader"] not in adb_calls
+
+
+def test_u2_31a_rejects_when_boot_id_unreadable_and_uptime_window_straddles_reboot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4006 §4 #31 (a) v1.2: boot_id unreadable both times; the device did not reboot but
+    adb return latency widens the post-read window so T1-u is later than R while T0-u is
+    not — uptime provides no evidence and no positive evidence exists -> failure."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
     dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
@@ -1581,9 +1698,10 @@ def test_u2_31a_rejects_when_boot_id_unreadable_uptime_not_later_and_nonce_clear
         props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
         post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
         boot_id_rc=1,
-        pre_uptime="10.0 20.0",
-        post_uptime="50.0 80.0",
-        boot_advance_seconds=5.0,
+        pre_uptime="30.0 60.0",
+        post_uptime="30.0 60.0",
+        uptime_latency_seconds=2.0,
+        boot_advance_seconds=30.0,
         clock=clock,
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
@@ -1591,13 +1709,16 @@ def test_u2_31a_rejects_when_boot_id_unreadable_uptime_not_later_and_nonce_clear
     monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
-    with pytest.raises(RuntimeError, match="did not reboot"):
+    with pytest.raises(RuntimeError, match="no positive evidence"):
         mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
 
 
-def test_u2_31b_passes_when_boot_id_unreadable_and_estimated_boot_after_reboot_even_if_uptime_higher(
+def test_u2_31b_passes_when_boot_id_unreadable_and_uptime_window_starts_after_reboot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#4006 §4 #31 (b) v1.2: boot_id unreadable; T0-u later than R (fresh boot inside the
+    window start); the fixture's post uptime is larger than its pre uptime, so a decrease
+    heuristic would fail — the window rule passes. Green on 1.0.2 (regression)."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
     dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
@@ -1625,9 +1746,10 @@ def test_u2_31b_passes_when_boot_id_unreadable_and_estimated_boot_after_reboot_e
     assert res["metrics"]["duration_seconds"] >= 0
 
 
-def test_u2_31c_rejects_when_all_reboot_signals_fail_to_read(
+def test_u2_31c_rejects_when_boot_id_and_uptime_all_reads_fail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#4006 §4 #31 (c) v1.2: boot_id and uptime reads all fail -> no evidence -> failure."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
     dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
@@ -1641,8 +1763,6 @@ def test_u2_31c_rejects_when_all_reboot_signals_fail_to_read(
         post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
         boot_id_rc=1,
         uptime_rc=1,
-        setprop_rc=1,
-        nonce_read_rc=1,
         clock=clock,
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
@@ -1654,9 +1774,11 @@ def test_u2_31c_rejects_when_all_reboot_signals_fail_to_read(
         mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
 
 
-def test_u2_31d_passes_when_nonce_setprop_fails_and_boot_id_changes(
+def test_u2_31d_passes_when_boot_id_changes_and_uptime_read_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """#4006 §4 #31 (d) v1.2: boot_id differs before/after (positive) although the uptime
+    read fails -> pass. Green on 1.0.2 (regression)."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
     dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
@@ -1670,7 +1792,7 @@ def test_u2_31d_passes_when_nonce_setprop_fails_and_boot_id_changes(
         post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
         pre_boot_id="boot-1",
         post_boot_id="boot-2",
-        setprop_rc=1,
+        uptime_rc=1,
         clock=clock,
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
@@ -1681,6 +1803,161 @@ def test_u2_31d_passes_when_nonce_setprop_fails_and_boot_id_changes(
     res = mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
     assert res.get("skipped") is not True
     assert res["metrics"]["duration_seconds"] >= 0
+
+
+def test_u2_31e_rejects_when_boot_id_same_even_if_uptime_window_starts_after_reboot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4006 §4 #31 (e) v1.2: boot_id identical (veto) while the uptime window would give
+    positive evidence — a veto must win over positive evidence -> failure."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        pre_boot_id="boot-same",
+        post_boot_id="boot-same",
+        pre_uptime="5.0 10.0",
+        post_uptime="5.0 10.0",
+        boot_advance_seconds=30.0,
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    with pytest.raises(RuntimeError, match="did not reboot"):
+        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
+
+
+def test_u2_31f_rejects_when_boot_id_changes_but_uptime_window_not_after_reboot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4006 §4 #31 (f) v1.2: boot_id differs (positive) but T1-u is not later than R —
+    the uptime veto must win over the boot_id positive evidence -> failure."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        pre_boot_id="boot-1",
+        post_boot_id="boot-2",
+        pre_uptime="50.0 80.0",
+        post_uptime="50.0 80.0",
+        uptime_latency_seconds=2.0,
+        boot_advance_seconds=30.0,
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    with pytest.raises(RuntimeError, match="did not reboot"):
+        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
+
+
+def test_u2_31g_rejects_when_only_post_boot_id_readable_and_uptime_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4006 §4 #31 (g) v1.2: boot_id readable only after the flash (one side) and the
+    uptime read fails — one-sided boot_id is not evidence -> failure."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
+        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
+        boot_id_rc=1,
+        post_boot_id_rc=0,
+        post_boot_id="boot-post-only",
+        uptime_rc=1,
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    with pytest.raises(RuntimeError, match="no positive evidence"):
+        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
+
+
+def test_u2_36_wall_clock_rollback_inside_stage_still_times_out_on_monotonic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4006 §4 #36 (v1.2): the host wall clock is rolled back while the spd_dump stage is
+    running; the monotonic clock shows the stage duration over the limit -> failure.
+    Stage enforcement and R/T0/T1 use time.monotonic() (J8/J9 v1.2), so the rollback of
+    time.time() cannot extend the deadline."""
+    import time as _real_time
+
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    dummy_spd = _make_executable(tmp_path / "slow_ok_spd.py", "import sys, time; time.sleep(2.6); sys.exit(0)")
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    lock_file = tmp_path / "host.lock"
+
+    wall_state = {"rolled_back": False}
+
+    def fake_wall_time() -> float:
+        return _real_time.time() - (12.0 if wall_state["rolled_back"] else 0.0)
+
+    def fake_run_adb(adb_bin: str, serial: str, args: List[str], timeout: float = 30):
+        if args == ["reboot", "autodloader"]:
+            wall_state["rolled_back"] = True
+            return 0, "", ""
+        if args == ["shell", "dumpsys", "battery"]:
+            return 0, "  level: 90\n", ""
+        if args[:2] == ["shell", "getprop"]:
+            return 0, {
+                "ro.product.model": "MLY-LX2",
+                "ro.product.device": "MLY",
+                "ro.product.name": "MLY-LX2",
+                "ro.build.type": "userdebug",
+                "sys.boot_completed": "1",
+            }.get(args[2], ""), ""
+        if args == ["shell", "cat", "/proc/sys/kernel/random/boot_id"]:
+            return 0, "boot-before", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(mod, "time", SimpleNamespace(time=fake_wall_time, monotonic=_real_time.monotonic, sleep=_real_time.sleep))
+    monkeypatch.setattr(mod, "run_adb", fake_run_adb)
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        mod.run(
+            {
+                "firmware_dir": str(ver_dir),
+                "cache_dir": str(tmp_path / "cache"),
+                "spd_dump_timeout_seconds": 2.0,
+                "verify_root": False,
+            },
+            "SN1",
+            mod.Progress(),
+            [],
+        )
 
 
 def test_u2_32_rejects_when_plan_replaced_and_image_deleted_before_cache_prepare(
