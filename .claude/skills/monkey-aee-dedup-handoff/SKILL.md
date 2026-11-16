@@ -11,7 +11,7 @@ description: Monkey 长稳专项的 AEE 事件日志跨 PlanRun 去重汇总、�
 > `docs/design/2026-storage-roles-and-aliases.md` 为准，扫描/上送/合并协议以
 > `docs/design/2026-scan-upload-merge-contract.md` 为准。本文只写触发、顺序、命令模板与红线，不重复定义协议。
 > 校准来源：2026-11-05（run 1179/1193/1195/1198、1190/1196、1200）与 2026-11-12（P535AA 四 run、8 个 build）实跑。
-> 参考实现：`scripts/` 收录上述两批实跑脚本的清洗版（脱敏、标注 `CONFIG`），见「附录：固化参考脚本」。
+> 参考实现：`scripts/` 收录 `per-build` 管线实跑脚本的清洗版（脱敏、标注 `CONFIG`），见「附录：固化参考脚本」。
 
 适用条件：一个或多个 Monkey 长稳 PlanRun 需要合成一份 Jira 输入；事件日志可能在中心存储、也可能仍留在 Agent host；共享交付根可写。
 
@@ -86,7 +86,7 @@ UNC 写作 `\\172.21.x.x\jxtinno\sonic_tinno\<folder>\`（脱敏形态，实际�
       FROM job_instance ji JOIN device d ON d.id=ji.device_id
       WHERE ji.plan_run_id IN (<runs>);
       ```
-      预期：每个串号有 build；产品前缀与 `device.product` 一致（`MLD-NX3Carrier` 是 `sys_mssi_64_cn_armv82` 的唯一特殊映射，见 memory `reference_nx3_product_naming.md`）。
+      预期：每个串号有 build；产品前缀与 `device.product` 一致（`MLD-NX3Carrier` 的判别见 `docs/notes/feature/2026-10-15-device-product.md`）。
 - [ ] **向 Owner 确认四项并等回复**：① 按哪些 run 合并去重（建议含早期中止 run 的独有事件）；② 快照截止时间与 `RUNNING` run 是否按快照处理；③ 目标目录名中的日期（`<product>_<build>_<日期>_MonkeyAEEinfo`，同一 build 只建一个目录）；④ 是否并入既有目录、是否纳入基线事件、缺失事件是否补拉。
       查法：把上三步的表格与建议选项一屏列出，不自行拍板。历史里目录日期被多次改（`1102`→`1029`、`1102`→`1103`、统一 `1106`），执行者不得按首轮日期推断。
 - [ ] **确认磁盘与工具**：`df -h /home/debian13` 有余量；`/home/debian13/Start-Log-Scan/venv/bin/python` 与 `/home/debian13/start-log-scan-releases/2.1.0/venv/bin/python` 均可 `import xlrd, xlwt`；`soffice` 在场。
@@ -268,38 +268,28 @@ UNC 写作 `\\172.21.x.x\jxtinno\sonic_tinno\<folder>\`（脱敏形态，实际�
 - **Jira 表单列**：同上，但第 13 列为 `DeviceCount`；`Count` 与 `DeviceCount` 为整数。
 - **交付目录层级**：`<folder>/<串号>/aee_exp/<事件目录>/`，`*.DEC/__exp_main.txt` 位于事件目录内。
 - **两份扫描工具**：`/home/debian13/Start-Log-Scan`（V2.0.9，用于 `-m 0` 扫描）与 `/home/debian13/start-log-scan-releases/2.1.0`（V2.1.0，用于 `-dedup_org` 与所有 `xlrd`/`xlwt` 脚本）。仓库 `venv/bin/python` 不带 `xlrd`，不得用于读写这些表。
-- **实跑参考脚本**：已固化在 `scripts/`，清单、两套管线的数据契约与红线见下节；执行者不得依赖 `/home/debian13/tmp/<campaign>_*/` 仍在场。
+- **实跑参考脚本**：已固化在 `scripts/`（`per-build` 6 个），清单、数据契约与红线见下节；执行者不得依赖 `/home/debian13/tmp/<campaign>_*/` 仍在场。
 
 ## 附录：固化参考脚本（scripts/）
 
-`scripts/` 收录 2026-11 两批实跑脚本的清洗版：去掉硬编码口令与内网 IP 全地址、标注 `CONFIG` 区与来源，
-供执行者按 §2 的命令模板对照复用。执行者不得把它们当成通用工具原样执行。
+`scripts/` 收录 2026-11 实跑 `per-build` 管线的清洗版（6 个脚本）：去掉硬编码口令与内网 IP 全地址、
+标注 `CONFIG` 区与来源，供执行者按 §2 的命令模板对照复用。执行者不得把它们当成通用工具原样执行。
+`batch` 形态（单批次 5 页汇总工作簿、厂商表单回填）的上游脚本未收录，执行者按 §2 命令模板自行实现。
 
-两套管线的数据契约不同，执行者不得混用：
+数据链：`master_frozen.json` → `merge_input/<build>_org.xls` → `*_dedup_org_*.xls` + `*_members.json` → `result.json`。
 
-| 管线 | 适用形态 | 主清单 | 关键中间产物 |
-|---|---|---|---|
-| `per-build` | 一次交付含多个 build、由本流程直接生成 Jira 表单（P535AA 四 run / 8 build） | `master_frozen.json`（含 `build` 字段） | `merge_input/<build>_org.xls`、`*_dedup_org_*.xls`、`*_members.json`、`result.json` |
-| `batch` | 单批次出 5 页去重汇总工作簿，或厂商表单已存在需回填（run 1179/1193/1195/1198、1200、1190/1196） | `master_events.json` | `groups_final.json`、`event_sizes.json`、汇总工作簿、`count_sync_*.tsv` |
-
-| 脚本 | 管线 | 作用 | 对应 SOP |
-|---|---|---|---|
-| `01_freeze_events.py` | per-build | 冻结 `CUT` 快照、查 PG 写 `master_frozen.json`、按 build 汇总 | 阶段 A |
-| `02_stage_events.py` | per-build | 中心存储最小文件集 + Agent host tar 拉取到 `$STAGING` | 阶段 B |
-| `03_consolidate_dedup.py` | per-build | 生成合并输入 `_org.xls` 并跑 `-dedup_org` | 阶段 D |
-| `04_copy_representatives.py` | per-build | 整目录复制代表事件 + `.DEC`，记录失败清单 | 阶段 G |
-| `05_make_jira_form.py` | per-build | 直接生成含真实 `Count`/`DeviceCount` 的 Jira 表单 | 阶段 H 步骤 20 |
-| `06_verify_forms.py` | per-build | 校验各 build 表单行数、计数与 `Path` 存在 | 后置验证 |
-| `07_build_groups.py` | batch | 按 `*_members.json` 构建分组、本次/基线拆分、选代表 | 阶段 E |
-| `08_make_workbook.py` | batch | 生成 5 页去重汇总工作簿 | 阶段 F |
-| `09_make_extras.py` | batch | 导出 CSV 与 `manifest.json` | 阶段 F 步骤 15 |
-| `10_backfill_counts.py` | batch | 回填厂商表单 `Count`/`DeviceCount`，含同秒副本前缀回退与逐行账本 | 阶段 H 步骤 19 |
+| 脚本 | 作用 | 对应 SOP |
+|---|---|---|
+| `01_freeze_events.py` | 冻结 `CUT` 快照、查 PG 写 `master_frozen.json`、按 build 汇总 | 阶段 A |
+| `02_stage_events.py` | 中心存储最小文件集 + Agent host tar 拉取到 `$STAGING` | 阶段 B |
+| `03_consolidate_dedup.py` | 生成合并输入 `_org.xls` 并跑 `-dedup_org` | 阶段 D |
+| `04_copy_representatives.py` | 整目录复制代表事件 + `.DEC`，记录失败清单 | 阶段 G |
+| `05_make_jira_form.py` | 直接生成含真实 `Count`/`DeviceCount` 的 Jira 表单 | 阶段 H 步骤 20 |
+| `06_verify_forms.py` | 校验各 build 表单行数、计数与 `Path` 存在 | 后置验证 |
 
 红线：
 
 - **执行者必须先按现场改 `CONFIG` 区**（run 集合、`CUT`、锚点 run、build / folder / 目录名、工作目录），再运行脚本；执行者不得原样执行 2026-11 的常量。
 - **执行者必须用 `/home/debian13/start-log-scan-releases/2.1.0/venv/bin/python` 运行这些脚本**（含 `xlrd` / `xlwt`）；仓库 `venv/bin/python` 不带这两个库。
 - **执行者必须经环境变量 `PGHOST` / `PGUSER` / `PGDATABASE` / `PGPASSWORD` 提供查库目标与凭据**；`01_freeze_events.py` 缺失任一即 fail-closed 退出，`PGUSER` 必须取只读角色。执行者不得把值写回脚本、命令行或文档。
-- **执行者不得把 `scripts/` 里的参考实现当作生产工具或 CI 门禁**。脚本未参数化、未写测试、未在现场参数下复跑，只作可检索的实跑样本；权威逻辑以 §2 的命令模板为准。
-- **执行者不得把 `per-build` 脚本的输出喂给 `batch` 脚本**，两套主清单字段不同。
-- **执行者不得把内网 IP 全地址写回 `scripts/`**；UNC 用 `172.21.x.x` 脱敏形态。
+- **执行者不得把 `scripts/` 里的参考实现当作生产工具或 CI 门禁**。脚本未参数化、未写测试、未在现场参数下复跑，只作可检索的实跑样本；权威逻辑以 §2 的命令模板为准。- **执行者不得把内网 IP 全地址写回 `scripts/`**；UNC 用 `172.21.x.x` 脱敏形态。
