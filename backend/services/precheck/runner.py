@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Callable, Optional, TypeVar
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -51,6 +51,30 @@ from .watcher import find_mixed_watcher_inactive_host_ids
 from backend.services.state_machine import PlanRunStateMachine
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
+
+
+async def _run_sync_with_db(
+    own_session: bool,
+    db: Session,
+    fn: Callable[..., _T],
+    *args: Any,
+) -> _T:
+    """When ``own_session`` is True, open/close a fresh Session inside the worker thread (#4025).
+
+    Prevents ``CancelledError`` on ``drive_dispatch_gate`` from running ``db.close()`` on
+    the event loop while the ``to_thread`` worker is still using the same Session.
+    """
+    if not own_session:
+        return await asyncio.to_thread(fn, *args, db)
+    if db.in_transaction():
+        db.rollback()
+
+    def _run() -> _T:
+        with SessionLocal() as thread_db:
+            return fn(*args, thread_db)
+
+    return await asyncio.to_thread(_run)
 
 
 async def drive_dispatch_gate(
@@ -186,8 +210,12 @@ async def drive_dispatch_gate(
                     host_state["error"] = "no_mismatched_entries"
                     continue
 
-                ok_sync, err_sync = await asyncio.to_thread(
-                    precheck_sync._push_mismatched_scripts, hid, mismatched_entries, db
+                ok_sync, err_sync = await _run_sync_with_db(
+                    own_session,
+                    db,
+                    precheck_sync._push_mismatched_scripts,
+                    hid,
+                    mismatched_entries,
                 )
                 if ok_sync:
                     host_state["synced_at"] = utc_iso()
@@ -213,8 +241,11 @@ async def drive_dispatch_gate(
                         "lightweight_sync_failed host=%s error=%s — falling back to hot-update",
                         hid, err_sync,
                     )
-                    ok_hot, err_hot = await asyncio.to_thread(
-                        precheck_sync._sync_host_via_hot_update, hid, db
+                    ok_hot, err_hot = await _run_sync_with_db(
+                        own_session,
+                        db,
+                        precheck_sync._sync_host_via_hot_update,
+                        hid,
                     )
                     if ok_hot:
                         host_state["synced_at"] = utc_iso()
@@ -294,8 +325,11 @@ async def drive_dispatch_gate(
         db.refresh(pr)
         persist_dispatch_idempotency(pr, db)
 
-        await asyncio.to_thread(
-            complete_plan_run_dispatch, plan_run_id, db
+        await _run_sync_with_db(
+            own_session,
+            db,
+            complete_plan_run_dispatch,
+            plan_run_id,
         )
 
         db.expire(pr)

@@ -456,10 +456,14 @@ async def _drive_backflow(seed: dict, agent_secret: str, deadline: float) -> dic
             ],
         }
 
+        probe_stop = asyncio.Event()
+
         async def _probe_loop() -> None:
             """背景可响应性探针（heartbeat / health）——验收线 3 的测量面。"""
-            while True:
+            while not probe_stop.is_set():
                 for path, method in PROBE_ENDPOINTS:
+                    if probe_stop.is_set():
+                        break
                     started = time.perf_counter()
                     try:
                         if method == "post":
@@ -473,7 +477,10 @@ async def _drive_backflow(seed: dict, agent_secret: str, deadline: float) -> dic
                         p99_probe.append(
                             {"path": path, "status": status, "elapsed": time.perf_counter() - started}
                         )
-                await asyncio.sleep(0.2)
+                try:
+                    await asyncio.wait_for(probe_stop.wait(), timeout=0.2)
+                except asyncio.TimeoutError:
+                    pass
 
         probe_task = asyncio.create_task(_probe_loop())
 
@@ -497,11 +504,15 @@ async def _drive_backflow(seed: dict, agent_secret: str, deadline: float) -> dic
                 break
             await asyncio.sleep(REPLAY_INTERVAL_SECONDS)
 
-        probe_task.cancel()
+        probe_stop.set()
         try:
-            await probe_task
-        except asyncio.CancelledError:
-            pass
+            await asyncio.wait_for(probe_task, timeout=10.0)
+        except asyncio.TimeoutError:
+            probe_task.cancel()
+            try:
+                await probe_task
+            except asyncio.CancelledError:
+                pass
 
     return {"results": results, "probe": p99_probe, "rounds": round_log, "pending": pending}
 
