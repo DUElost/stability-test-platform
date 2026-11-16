@@ -23,16 +23,19 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.agent.contracts.evidence_layout import (
     EvidenceLayoutError,
     assert_no_symlinks,
+    collection_folder_from_event_path,
     copytree_no_symlinks,
 )
 from backend.core.artifact_paths import (
@@ -40,6 +43,7 @@ from backend.core.artifact_paths import (
     resolve_evidence_event_path,
     resolve_extract_event_src,
 )
+from backend.core.database import SessionLocal
 from backend.core.storage_root import resolve_shared_storage_root
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.issue_fact import CompatRerun
@@ -262,39 +266,53 @@ def trigger_compat_rerun(
     resolved_key = (request_key or "").strip() or (
         f"compat-{plan_run_id}-{plat}-v{delivery.version_no if delivery else 0}"
     )
-    existing = facts.get_compat_rerun_by_request(
-        db, plan_run_id=plan_run_id, platform=plat, request_key=resolved_key,
-    )
-    if existing is not None:
-        if existing.status == facts.COMPAT_RERUN_STATUS_COMPLETED:
-            return CompatRerunOutcome(rerun=existing, replayed=True)
-        if existing.status in {
-            facts.COMPAT_RERUN_STATUS_PENDING,
-            facts.COMPAT_RERUN_STATUS_RUNNING,
-        }:
-            raise CompatRerunError(
-                409, f"compat rerun {existing.id} is currently {existing.status.lower()}",
-            )
-        rerun = existing
-    else:
-        rerun = facts.record_compat_rerun(
-            db,
-            plan_run_id=plan_run_id,
-            platform=plat,
-            request_key=resolved_key,
-            requested_by=requested_by,
-            source_delivery_version_id=delivery.id if delivery is not None else None,
-            source_delivery_version_no=delivery.version_no if delivery is not None else None,
+    # 失败登记要写到独立行：主事务会被路由层回滚，先把交付版本的标识取成
+    # 本地值，回滚后 ORM 属性不再可靠。
+    source_dv_id = delivery.id if delivery is not None else None
+    source_dv_no = delivery.version_no if delivery is not None else None
+    try:
+        existing = facts.get_compat_rerun_by_request(
+            db, plan_run_id=plan_run_id, platform=plat, request_key=resolved_key,
         )
+        if existing is not None:
+            if existing.status == facts.COMPAT_RERUN_STATUS_COMPLETED:
+                return CompatRerunOutcome(rerun=existing, replayed=True)
+            if existing.status in {
+                facts.COMPAT_RERUN_STATUS_PENDING,
+                facts.COMPAT_RERUN_STATUS_RUNNING,
+            }:
+                raise CompatRerunError(
+                    409, f"compat rerun {existing.id} is currently {existing.status.lower()}",
+                )
+            rerun = existing
+        else:
+            rerun = facts.record_compat_rerun(
+                db,
+                plan_run_id=plan_run_id,
+                platform=plat,
+                request_key=resolved_key,
+                requested_by=requested_by,
+                source_delivery_version_id=source_dv_id,
+                source_delivery_version_no=source_dv_no,
+            )
 
-    attempt_no = int(rerun.attempts or 0) + 1
-    facts.update_compat_rerun(
-        db, row=rerun,
-        status=facts.COMPAT_RERUN_STATUS_PENDING,
-        attempts=attempt_no,
-        error=None,
-    )
-    db.flush()
+        attempt_no = int(rerun.attempts or 0) + 1
+        facts.update_compat_rerun(
+            db, row=rerun,
+            status=facts.COMPAT_RERUN_STATUS_PENDING,
+            attempts=attempt_no,
+            error=None,
+        )
+        db.flush()
+    except IntegrityError:
+        # 并发同 key 触发：唯一约束仲裁失败。回滚本事务后让调用方重查，
+        # 命中已登记行时按重放/重试语义继续，不产生第二行。
+        db.rollback()
+        raise CompatRerunError(
+            409,
+            "compat rerun request_key already exists; re-issue the request "
+            "to reuse the registered attempt",
+        ) from None
 
     try:
         root_plan_run_id = int(plan_run.root_plan_run_id or plan_run.id)
@@ -374,7 +392,24 @@ def trigger_compat_rerun(
                 continue
 
             dest_name = src_path.name if src_path.is_dir() else dle_id_str
-            dest_event_dir = events_dir / dle.serial / dest_name
+            # 副本保留 aee 采集布局（{采集目录}/{serial}/aee_exp/{事件目录}），
+            # 让报表 Path 与现行产物一样可被消费方按目录结构解析
+            # （handoff/Jira 工具从 Path 反解 serial/entry）；解析失败回落平铺。
+            collection_folder = None
+            aee_subdir = "aee_exp"
+            try:
+                collection_folder, _entry = collection_folder_from_event_path(
+                    dle.local_path or "", serial=dle.serial,
+                )
+                aee_subdir = Path(dle.local_path).parts[-2]
+            except EvidenceLayoutError:
+                collection_folder = None
+            if collection_folder:
+                dest_event_dir = (
+                    events_dir / collection_folder / dle.serial / aee_subdir / dest_name
+                )
+            else:
+                dest_event_dir = events_dir / dle.serial / dest_name
             if dest_event_dir.exists():
                 shutil.rmtree(dest_event_dir)
             if src_path.is_dir():
@@ -397,8 +432,16 @@ def trigger_compat_rerun(
             })
 
         is_partial = bool(missing_items)
+        # 15 列现行 merge 格式。列值只能来自 G1 已持久化的工具事实；
+        # 工具在 merge 输出里承载的 Detail/ExpType/CurProcess/Activity/Rom_Ram
+        # 等原文不在事实层（signature sidecar 只有 exp_class/package/caused_by），
+        # 平台不复刻工具解析规则，这些列留空并登记为偏离（见 Agent Note）。
+        occ_by_dle: dict[str, Any] = {}
+        for occurrence, dle in pairs:
+            occ_by_dle.setdefault(str(dle.id), occurrence)
+        run_build_version = str(plan_run.build_version or "")
         xls_rows: list[dict[str, Any]] = []
-        for issue in all_issues:
+        for row_order, issue in enumerate(all_issues):
             sig_id = int(issue["signature_id"])
             representative_dle = str(issue.get("representative_dle_id") or "")
             copied_path = copied_by_dle.get(representative_dle, "")
@@ -409,34 +452,46 @@ def trigger_compat_rerun(
                         break
             issue_stats = stats.get(sig_id, {})
             versions = issue_stats.get("build_versions") or list(issue.get("build_versions") or [])
-            occurrences = sorted(
-                (
-                    occurrence for occurrence, _dle in pairs
-                    if int(occurrence.signature_id) == sig_id
-                ),
-                key=lambda item: (item.observed_at, str(item.id)),
+            # ExpTime 取代表事件的发生时间，与 Path 指向的副本一致；
+            # 以 asctime(UTC) 呈现（现行产物是采集侧本地时区串，DB 只存 UTC）。
+            representative_occurrence = occ_by_dle.get(representative_dle)
+            if representative_occurrence is None:
+                for dle_id_str, signature_ids in sorted(sigs_by_dle.items()):
+                    if sig_id in signature_ids and dle_id_str in occ_by_dle:
+                        representative_occurrence = occ_by_dle[dle_id_str]
+                        break
+            observed_at = (
+                representative_occurrence.observed_at
+                if representative_occurrence is not None else None
             )
-            exp_times = [
-                occurrence.observed_at.isoformat()
-                for occurrence in occurrences if occurrence.observed_at
-            ]
-            serials = sorted({
-                occurrence.serial for occurrence in occurrences if occurrence.serial
-            })
+            exp_time = (
+                time.asctime(time.gmtime(observed_at.timestamp()))
+                if observed_at is not None else ""
+            )
+            try:
+                signature_fields = json.loads(issue.get("signature_raw") or "{}")
+                if not isinstance(signature_fields, dict):
+                    signature_fields = {}
+            except ValueError:
+                signature_fields = {}
             xls_rows.append({
-                "Id": str(sig_id),
+                # Id 是 0 起行序（现行 merge 同），下游按行序建映射。
+                "Id": row_order,
                 "Path": copied_path,
-                "Version": ", ".join(versions),
-                "ExpTime": exp_times[-1] if exp_times else "",
-                "ExpClass": str(issue.get("event_type") or ""),
-                "ExpType": str(issue.get("normalized_key") or ""),
-                "CurProcess": str(issue.get("signature_raw") or ""),
-                "Package": "",
-                "Detail": str(issue.get("signature_raw") or ""),
-                "CausedBy": "",
+                "Version": run_build_version or ";".join(sorted(versions)),
+                "ExpTime": exp_time,
+                "ExpClass": str(issue.get("event_type") or signature_fields.get("exp_class") or ""),
+                # 以下三列在事实层无载体，登记为空缺偏离。
+                "ExpType": "",
+                "CurProcess": "",
+                "Package": str(signature_fields.get("package") or ""),
+                "Detail": "",
+                "CausedBy": str(signature_fields.get("caused_by") or ""),
+                "extraTag": "",
                 "Count": int(issue_stats.get("occurrences", 0)),
-                "DeviceId": ",".join(serials),
-                "Device Count": int(issue_stats.get("machines", 0)),
+                "Activity": "",
+                "DeviceCount": int(issue_stats.get("machines", 0)),
+                "Rom_Ram": "",
             })
 
         merge_xls_path = write_dedup_xls(
@@ -488,19 +543,75 @@ def trigger_compat_rerun(
         return CompatRerunOutcome(rerun=rerun, replayed=False)
     except Exception as exc:
         logger.exception(
-            "compat_rerun_failed rerun_id=%d plan_run=%d platform=%s",
-            rerun.id, plan_run_id, plat,
+            "compat_rerun_failed rerun_id=%s plan_run=%d platform=%s",
+            getattr(rerun, "id", None), plan_run_id, plat,
         )
-        facts.update_compat_rerun(
-            db, row=rerun,
-            status=facts.COMPAT_RERUN_STATUS_FAILED,
+        # 路由层对 CompatRerunError 回滚主事务（get_db 不 commit）；失败登记
+        # 必须独立提交，否则同 key 重试会新建行，D15 的幂等重试只在服务级
+        # 测试里成立。先回滚主事务丢弃半途状态，再由独立会话写失败终态。
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception(
+                "compat_rerun_rollback_failed plan_run=%d platform=%s", plan_run_id, plat,
+            )
+        _record_failed_registration(
+            plan_run_id=plan_run_id,
+            platform=plat,
+            request_key=resolved_key,
+            requested_by=requested_by,
+            source_delivery_version_id=source_dv_id,
+            source_delivery_version_no=source_dv_no,
             attempts=attempt_no,
-            error=str(exc)[:1024],
+            error=exc,
         )
-        db.flush()
         if isinstance(exc, CompatRerunError):
             raise
         raise CompatRerunError(500, f"compat rerun failed: {exc}") from exc
+
+
+def _record_failed_registration(
+    *,
+    plan_run_id: int,
+    platform: str,
+    request_key: str,
+    requested_by: str,
+    source_delivery_version_id: Optional[int],
+    source_delivery_version_no: Optional[int],
+    attempts: int,
+    error: Exception,
+) -> Optional[CompatRerun]:
+    """独立会话登记失败终态；主事务已被回滚，登记行以同 key 幂等落库。"""
+    try:
+        with SessionLocal() as failure_db:
+            row = facts.get_compat_rerun_by_request(
+                failure_db, plan_run_id=plan_run_id, platform=platform,
+                request_key=request_key,
+            )
+            if row is None:
+                row = facts.record_compat_rerun(
+                    failure_db,
+                    plan_run_id=plan_run_id,
+                    platform=platform,
+                    request_key=request_key,
+                    requested_by=requested_by,
+                    source_delivery_version_id=source_delivery_version_id,
+                    source_delivery_version_no=source_delivery_version_no,
+                )
+            facts.update_compat_rerun(
+                failure_db, row=row,
+                status=facts.COMPAT_RERUN_STATUS_FAILED,
+                attempts=attempts,
+                error=str(error)[:1024],
+            )
+            failure_db.commit()
+            return row
+    except Exception:
+        logger.exception(
+            "compat_rerun_failure_register_failed plan_run=%d platform=%s "
+            "request_key=%s", plan_run_id, platform, request_key,
+        )
+        return None
 
 
 def list_compat_reruns_for_partition(

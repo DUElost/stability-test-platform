@@ -349,3 +349,65 @@ def test_current_partition_unobserved_terminal_run_still_skipped(g8_env):
     with factory() as db:
         assert facts.list_scan_rounds(db, plan_run_id=run_id, platform="mtk") == []
     queued.assert_not_called()
+
+
+def _verified_publication(db, run_id, dle, *, state):
+    """登记代表发布记录；state 传 VERIFIED 时先 PENDING 再推进（服务层同序）。"""
+    primary = f"{run_id}_compat"
+    event = "2026_1116_100000_123_db.74.ANR"
+    publication = facts.record_evidence_publication(
+        db, plan_run_id=run_id, platform="mtk", dle_id=dle.id,
+        root_plan_run_id=run_id,
+        source_kind=facts.PUBLICATION_SOURCE_LOCAL,
+        source_path="/src", collection_folder=primary,
+        naming_rule_version="v1",
+        destination_rel_path=f"evidence/{primary}/{dle.serial}/{event}",
+        state=facts.PUBLICATION_STATE_PENDING,
+    )
+    if state == facts.PUBLICATION_STATE_VERIFIED:
+        facts.update_evidence_publication_state(
+            db, row=publication, state=facts.PUBLICATION_STATE_VERIFIED,
+            checksum="c" * 64, size_bytes=1,
+        )
+    db.flush()
+    return publication
+
+
+@pytest.mark.parametrize("publication_state,expected_status,expected_reason", [
+    (
+        facts.PUBLICATION_STATE_VERIFIED,
+        delivery.DELIVERY_STATUS_READY_WITH_GAPS,
+        delivery.REASON_GAPS_PRESENT,
+    ),
+    (
+        facts.PUBLICATION_STATE_PENDING,
+        delivery.DELIVERY_STATUS_NOT_READY,
+        delivery.REASON_REPRESENTATIVE_RETRYING,
+    ),
+])
+def test_sweep_registers_delivery_and_d9_judges_publish_states(
+    g8_env, publication_state, expected_status, expected_reason,
+):
+    """部分覆盖/待校验也必须经 sweep 登记交付版本（D9 第 2 条按登记判定）。"""
+    factory, _settings, queued, root, make_run, _set_hosts = g8_env
+    with factory() as db:
+        run = make_run(db, status="FAILED")
+        _mode(db, run.id)
+        _final_round(db, run.id, coverage=("RECEIVED", "MISSING"), merge_status="OK")
+        dle = _dle(db, run.id)
+        _selection(db, run.id, dle)
+        _verified_publication(db, run.id, dle, state=publication_state)
+        db.commit()
+        run_id = run.id
+
+    ep.sweep_evidence_publications(now=datetime.now(timezone.utc))
+
+    with factory() as db:
+        versions = facts.list_delivery_versions(db, plan_run_id=run_id, platform="mtk")
+        decision = delivery.current_delivery_decision(
+            db, plan_run_id=run_id, platform="mtk",
+        )
+    assert [row.version_no for row in versions] == [1]
+    assert (decision.status, decision.reason) == (expected_status, expected_reason)
+    export = root / "_meta" / str(run_id) / "_delivery" / "mtk" / "v1.json"
+    assert export.is_file()

@@ -1749,7 +1749,10 @@ def enqueue_dedup_terminal_sync(
         logger.error("enqueue_dedup_terminal_sync failed plan_run=%d: %s", plan_run_id, e)
 
 
-#: 现行 merge 报表（aeeexp）的表头顺序；兼容补跑产物必须保持同一格式。
+#: 现行 merge 报表（aeeexp）的表头顺序（15 列，对拍 origin 产物
+#: ``dedup/{run}/merge/{plat}/Result_MergeFiles.xls``）；兼容补跑产物必须保持
+#: 同一列头。注意第 6 列是带尾随空格的 ``"ExpType "``，第 14 列是 ``DeviceCount``
+#: （org 报表同一位置是 ``DeviceId``，merge 聚合后改名）。
 DEDUP_XLS_HEADERS: tuple[str, ...] = (
     "Id",
     "Path",
@@ -1761,9 +1764,11 @@ DEDUP_XLS_HEADERS: tuple[str, ...] = (
     "Package",
     "Detail",
     "CausedBy",
+    "extraTag",
     "Count",
-    "DeviceId",
-    "Device Count",
+    "Activity",
+    "DeviceCount",
+    "Rom_Ram",
 )
 _XLS_CELL_MAX_LEN = 32000
 
@@ -1776,7 +1781,9 @@ def write_dedup_xls(
 ) -> Path:
     """原子写出与现行 merge 同格式的 ``aeeexp`` Excel（.xls）。
 
-    只用于受控兼容补跑等需要独立产物的路径；不改变现行工具输出。
+    只用于受控兼容补跑等需要独立产物的路径；不改变现行工具输出。列值语义
+    （哪些列由平台事实填充、哪些列登记为空缺偏离）见 ``compat_rerun`` 与
+    Agent Note 的偏离说明；``Id`` 是 0 起行序，下游按行序建映射。
     """
     import xlwt
 

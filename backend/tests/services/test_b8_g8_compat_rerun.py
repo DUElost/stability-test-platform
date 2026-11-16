@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -44,6 +45,16 @@ def _model():
 
 PLATFORM = "mtk"
 HOST = "host-g8"
+# 合法采集目录名（get_aee_log_folder_name 形态）；副本布局按它保留 aee 结构。
+COLLECTION_FOLDER = "MLD-NX3-P535AA-HONOR-NX3-16-1031V78_1031_MonkeyAEEinfo"
+
+_EVENT_SEQ = {"n": 0}
+
+
+def _event_name() -> str:
+    """合法 AEE 事件目录名（副本布局派生要求事件名过 is_event_dir_basename）。"""
+    _EVENT_SEQ["n"] += 1
+    return f"2026_1116_100000_{_EVENT_SEQ['n']:03d}_db.74.ANR"
 
 
 def _settings(monkeypatch):
@@ -68,6 +79,7 @@ def compat_env(db_session, tmp_path, monkeypatch):
         monkeypatch.setattr(
             compat_module, "resolve_shared_storage_root", lambda: str(tmp_path),
         )
+        monkeypatch.setattr(compat_module, "SessionLocal", factory)
     from backend.core import artifact_paths, storage_root
 
     for module in (artifact_paths, storage_root):
@@ -116,7 +128,8 @@ def _dle(
 ):
     row = DeviceLogEvent(
         serial=serial, platform="MTK", event_type="JE", state=state,
-        local_path=local_path or f"/data/aee/{serial}/aee_exp/{event}",
+        local_path=local_path
+        or f"/data/aee/{COLLECTION_FOLDER}/{serial}/aee_exp/{event}",
         remote_path=remote_path, host_id=HOST, plan_run_id=run.id,
         occurrence_key=occurrence_key or f"{serial}-{event}",
         detected_at=datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc),
@@ -124,7 +137,11 @@ def _dle(
     db.add(row)
     db.flush()
     signature = facts.record_issue_signature(
-        db, signature_raw=json.dumps({"exp_class": "JE", "event": event}),
+        db,
+        signature_raw=json.dumps({
+            "exp_class": "JE", "event": event,
+            "package": f"pkg.{serial}", "caused_by": f"caused-{serial}",
+        }),
         normalized_key=f"key-{serial}-{event}", platform=PLATFORM, event_type="JE",
         seen_at=datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc),
     )
@@ -179,6 +196,16 @@ def _version(db, run, *, no, issue_ids=(), event_ids=()):
     )
 
 
+#: 现行 merge 产物（aeeexp）的 15 列表头，逐字对拍
+#: ``/mnt/stp-log/dedup/{run}/merge/{plat}/Result_MergeFiles.xls``（2026-11-16，
+#: run 1216）；第 6 列带尾随空格，第 14 列是 DeviceCount（org 报表为 DeviceId）。
+MERGE_HEADERS_15 = [
+    "Id", "Path", "Version", "ExpTime", "ExpClass", "ExpType ",
+    "CurProcess", "Package", "Detail", "CausedBy", "extraTag",
+    "Count", "Activity", "DeviceCount", "Rom_Ram",
+]
+
+
 def _read_report(path: str) -> list[dict]:
     book = xlrd.open_workbook(path)
     sheet = book.sheet_by_index(0)
@@ -188,6 +215,14 @@ def _read_report(path: str) -> list[dict]:
          for column in range(sheet.ncols)}
         for row in range(1, sheet.nrows)
     ]
+
+
+def _read_raw_headers(path: str) -> list[str]:
+    book = xlrd.open_workbook(path)
+    sheet = book.sheet_by_index(0)
+    headers = [str(sheet.cell_value(0, column)) for column in range(sheet.ncols)]
+    book.release_resources()
+    return headers
 
 
 def _snapshot(db, run):
@@ -228,15 +263,20 @@ def test_full_source_archived_and_local_preserves_facts(compat_env):
     factory, root = compat_env
     with factory() as db:
         run = _run(db)
+        arch_name = _event_name()
         archived, sig_a, occ_a = _dle(
-            db, run, serial="SN-ARCH", event="evt-arch", state="ARCHIVED",
-            remote_path=str(_event_dir(root, "devices", str(run.id), "evt-arch")),
+            db, run, serial="SN-ARCH", event=arch_name, state="ARCHIVED",
+            remote_path=str(_event_dir(root, "devices", str(run.id), arch_name)),
         )
         local_root = root / "agent-local"
         local_root.mkdir()
         local, sig_l, occ_l = _dle(
             db, run, serial="SN-LOCAL", event="evt-local", state="LOCAL",
-            local_path=str(_event_dir(local_root, "SN-LOCAL", "evt-local")),
+            local_path=str(
+                _event_dir(
+                    local_root, COLLECTION_FOLDER, "SN-LOCAL", "aee_exp", _event_name(),
+                )
+            ),
         )
         _version(
             db, run, no=1,
@@ -264,15 +304,38 @@ def test_full_source_archived_and_local_preserves_facts(compat_env):
             "center_remote_verified", "agent_local_original",
         }
         assert outcome.rerun.coverage_scope["covered_events"] == 2
+        assert _read_raw_headers(outcome.rerun.merge_xls_path) == MERGE_HEADERS_15
         rows = _read_report(outcome.rerun.merge_xls_path)
         assert len(rows) == 2
-        assert list(rows[0]) == [
-            "Id", "Path", "Version", "ExpTime", "ExpClass", "ExpType",
-            "CurProcess", "Package", "Detail", "CausedBy", "Count",
-            "DeviceId", "Device Count",
-        ]
-        assert all(row["Count"] == 1 for row in rows)
-        assert "/compat_reruns/" in outcome.rerun.merge_xls_path
+        by_caused = {row["CausedBy"]: row for row in rows}
+        assert set(by_caused) == {"caused-SN-ARCH", "caused-SN-LOCAL"}
+        arch = by_caused["caused-SN-ARCH"]
+        local_row = by_caused["caused-SN-LOCAL"]
+        # Id 是 0 起行序（现行 merge 同），不是 signature_id。
+        assert (rows[0]["Id"], rows[1]["Id"]) == (0, 1)
+        assert rows[0]["CausedBy"] == "caused-SN-ARCH"
+        for row in (arch, local_row):
+            # 事实层可忠实复原的列。
+            assert row["Count"] == 1
+            assert row["DeviceCount"] == 1
+            assert row["ExpClass"] == "JE"
+            assert row["Package"].startswith("pkg.")
+            assert row["Version"] == "V1"
+            assert "/compat_reruns/" in row["Path"] and "/aee_exp/" in row["Path"]
+            # 事实层无载体、平台不复刻工具解析规则：登记为空缺偏离（Agent Note）。
+            assert row["ExpType"] == ""
+            assert row["CurProcess"] == ""
+            assert row["Detail"] == ""
+            assert row["Activity"] == ""
+            assert row["Rom_Ram"] == ""
+            assert row["extraTag"] == ""
+        assert arch["ExpTime"] == time.asctime(
+            time.gmtime(archived.detected_at.timestamp()),
+        )
+        assert arch["Path"].endswith(f"aee_exp/{arch_name}")
+        assert local_row["Path"].endswith(
+            f"aee_exp/{Path(local.local_path).name}"
+        )
         manifest = json.loads(Path(outcome.rerun.manifest_path).read_text("utf-8"))
         assert manifest["is_partial"] is False
         assert manifest["source_records"] == outcome.rerun.source_records
@@ -314,8 +377,10 @@ def test_pruned_without_center_copy_is_partial_and_never_uses_local(compat_env):
         assert outcome.rerun.coverage_scope["covered_events"] == 0
         rows = _read_report(outcome.rerun.merge_xls_path)
         assert len(rows) == 1
+        assert rows[0]["Id"] == 0
         assert rows[0]["Path"] == ""
         assert rows[0]["Count"] == 1
+        assert rows[0]["DeviceCount"] == 1
         assert _snapshot(db, run) == before
 
 
@@ -391,7 +456,7 @@ def test_failed_attempt_retries_same_row_and_increments_attempts(compat_env):
         db.commit()
         run_id = run.id
 
-    def broken_copy(_src, _dst):
+    def broken_copy(_src, _dst, **_kwargs):
         raise OSError("copy failed")
 
     CompatRerunError, trigger_compat_rerun = _api()
@@ -485,9 +550,14 @@ def test_delivery_version_scope_prevents_cross_version_counts(compat_env):
             request_key="v2", delivery_version_no=2,
         )
         db.commit()
-        rows = {row["Id"]: row for row in _read_report(v2.rerun.merge_xls_path)}
+        rows = _read_report(v2.rerun.merge_xls_path)
         assert len(rows) == 2
-        assert rows[str(sig.id)]["Count"] == 2
+        # Id 是 0 起行序；all_issues 按 signature_id 升序 → 第一行是 sig。
+        assert (rows[0]["Id"], rows[1]["Id"]) == (0, 1)
+        assert rows[0]["Count"] == 2
+        assert rows[0]["DeviceCount"] == 2
+        assert rows[1]["Count"] == 1
+        assert rows[1]["DeviceCount"] == 1
 
 
 def test_route_is_admin_only_and_replay_is_visible(
@@ -531,6 +601,112 @@ def test_route_is_admin_only_and_replay_is_visible(
     )
     assert listed.status_code == 200
     assert len(listed.json()["data"]) == 1
+
+
+def test_route_failure_registers_and_retry_reuses_row(
+    compat_env, client, admin_headers,
+):
+    """真实路由失败→失败登记持久化→同 key 重试复用同一行并递增 attempts。
+
+    复核 B-1 的路由探针：失败路径经 HTTP 入口触发（copy 注入 OSError），
+    服务必须用独立会话持久化 FAILED，路由回滚不得丢弃登记。
+    """
+    CompatRerunError, _trigger = _api()
+    from backend.services import compat_rerun as compat_module
+
+    factory, root = compat_env
+    with factory() as db:
+        run = _run(db)
+        dle, sig, _occ = _dle(
+            db, run, serial="SN-ROUTE", event="evt-route",
+            remote_path=str(_event_dir(root, "devices", str(run.id), "evt-route")),
+        )
+        _version(db, run, no=1, issue_ids=[sig.id], event_ids=[dle.id])
+        db.commit()
+        run_id = run.id
+
+    original_copy = compat_module.copytree_no_symlinks
+
+    def broken_copy(_src, _dst, **_kwargs):
+        raise OSError("copy failed")
+
+    compat_module.copytree_no_symlinks = broken_copy
+    try:
+        failed = client.post(
+            f"/api/v1/plan-runs/{run_id}/dedup/compat-rerun",
+            params={"platform": PLATFORM, "request_key": "route-retry"},
+            headers=admin_headers,
+        )
+    finally:
+        compat_module.copytree_no_symlinks = original_copy
+    assert failed.status_code == 500
+
+    with factory() as db:
+        row = facts.get_compat_rerun_by_request(
+            db, plan_run_id=run_id, platform=PLATFORM, request_key="route-retry",
+        )
+        assert row is not None
+        assert row.status == facts.COMPAT_RERUN_STATUS_FAILED
+        assert row.attempts == 1
+        assert "copy failed" in (row.error or "")
+        first_id = row.id
+
+    retried = client.post(
+        f"/api/v1/plan-runs/{run_id}/dedup/compat-rerun",
+        params={"platform": PLATFORM, "request_key": "route-retry"},
+        headers=admin_headers,
+    )
+    assert retried.status_code == 200, retried.text
+    payload = retried.json()["data"]
+    assert payload["replayed"] is False
+    assert payload["rerun"]["id"] == first_id
+    assert payload["rerun"]["status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
+    assert payload["rerun"]["attempts"] == 2
+
+    with factory() as db:
+        assert db.query(_model()).filter_by(plan_run_id=run_id).count() == 1
+        final = facts.get_compat_rerun_by_request(
+            db, plan_run_id=run_id, platform=PLATFORM, request_key="route-retry",
+        )
+        assert final.attempts == 2
+        assert final.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+
+
+def test_concurrent_request_key_conflict_maps_to_409(
+    compat_env, client, admin_headers,
+):
+    """并发同 key 触发的唯一约束冲突映射为 409，不再 500。"""
+    CompatRerunError, _trigger = _api()
+    factory, _root = compat_env
+    with factory() as db:
+        run = _run(db)
+        db.commit()
+        run_id = run.id
+
+    from sqlalchemy.exc import IntegrityError
+
+    def conflicting_insert(*args, **kwargs):
+        raise IntegrityError("simulated concurrent insert", None, None)
+
+    original_record = facts.record_compat_rerun
+    facts.record_compat_rerun = conflicting_insert
+    try:
+        resp = client.post(
+            f"/api/v1/plan-runs/{run_id}/dedup/compat-rerun",
+            params={"platform": PLATFORM, "request_key": "conflict"},
+            headers=admin_headers,
+        )
+    finally:
+        facts.record_compat_rerun = original_record
+    assert resp.status_code == 409
+    assert "request_key" in resp.json()["detail"]
+
+    replay = client.post(
+        f"/api/v1/plan-runs/{run_id}/dedup/compat-rerun",
+        params={"platform": PLATFORM, "request_key": "conflict"},
+        headers=admin_headers,
+    )
+    assert replay.status_code == 200, replay.text
 
 
 def test_scope_requires_admin_and_dedup_first(compat_env):
