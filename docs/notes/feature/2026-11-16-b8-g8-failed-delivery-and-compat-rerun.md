@@ -1,6 +1,6 @@
 # B8 G8 FAILED 日志交付与受控兼容补跑（#4031）
 
-Status: implemented（Draft PR，待独立复核）
+Status: implemented
 Class: feature
 
 日期：2026-11-16　基线：origin/main@73144bf9　批次：#3800

@@ -93,6 +93,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "bulk_assign_project_models",
     "bulk_swipe_trail",
     "clear_device_intent",  # #3159 host 设备面意图位清除；与 retire/unretire_host 同族
+    "compat_rerun_trigger",  # B8 G8 受控兼容补跑触发；business 90d
     "create",
     "create_project",
     "create_version",
