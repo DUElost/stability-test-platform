@@ -25,9 +25,11 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
+import openpyxl
 import xlrd
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -333,10 +335,31 @@ def _build_manifest_and_xls_rows(
     return manifest, tuple(xls_rows)
 
 
-_IDENTITY_ID_HEADERS = ("id", "signature_id", "signature id")
-_IDENTITY_KEY_HEADERS = ("exptype", "exp_type", "norm_key", "normalized_key", "normalized key")
-_IDENTITY_RAW_HEADERS = ("detail", "curprocess", "signature_raw", "signature raw")
-_IDENTITY_PATH_HEADERS = ("path", "representative_verified_path", "representative verified path")
+@dataclass(frozen=True)
+class _WorkbookSheet:
+    """上传工作簿的一个 sheet：原始表头与非空数据行（保留物理行号）。"""
+
+    name: str
+    headers: tuple[str, ...]
+    rows: tuple[tuple[int, tuple[str, ...]], ...]
+
+
+def _cell_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value == value and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "<na>"} else text
+
+
+def _header_text(value: Any) -> str:
+    """表头保留原始文本（含 ``ExpType `` 的尾随空格），只把空值归一为空串。"""
+    if value is None:
+        return ""
+    if isinstance(value, float) and value == value and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def _coerce_signature_id(value: object) -> Optional[int]:
@@ -349,28 +372,159 @@ def _coerce_signature_id(value: object) -> Optional[int]:
         return None
 
 
-def _read_uploaded_workbook_rows(payload: bytes) -> list[tuple[str, int, dict[str, str]]]:
-    """读取上传表格的非空数据行（保留 sheet 名与行号用于拒绝时定位）。"""
+def _read_workbook_sheets(payload: bytes, suffix: str) -> list[_WorkbookSheet]:
+    """读取 .xls（xlrd）或 .xlsx（openpyxl），保留原始表头文本。"""
+    sheets: list[_WorkbookSheet] = []
+    if suffix == ".xlsx":
+        try:
+            book = openpyxl.load_workbook(BytesIO(payload), read_only=True, data_only=True)
+        except Exception as exc:
+            raise JiraDeliveryError(400, f"uploaded file is not a readable Excel workbook: {exc}") from exc
+        try:
+            for sheet in book.worksheets:
+                rows = list(sheet.iter_rows(values_only=True))
+                if not rows:
+                    continue
+                headers = tuple(_header_text(value) for value in rows[0])
+                if not any(header.strip() for header in headers):
+                    continue
+                data: list[tuple[int, tuple[str, ...]]] = []
+                for row_no, values in enumerate(rows[1:], start=2):
+                    cells = tuple(_cell_text(value) for value in values)
+                    if not any(cells):
+                        continue
+                    data.append((row_no, cells))
+                sheets.append(_WorkbookSheet(name=sheet.title, headers=headers, rows=tuple(data)))
+        finally:
+            book.close()
+        return sheets
+
     try:
         book = xlrd.open_workbook(file_contents=payload, on_demand=True)
     except Exception as exc:  # xlrd 对损坏/非 Excel 载荷抛多种异常
         raise JiraDeliveryError(400, f"uploaded file is not a readable Excel workbook: {exc}") from exc
-    rows: list[tuple[str, int, dict[str, str]]] = []
     try:
         for sheet in book.sheets():
             if sheet.nrows < 1:
                 continue
-            headers = [str(sheet.cell_value(0, c)).strip().lower() for c in range(sheet.ncols)]
-            if not any(headers):
+            headers = tuple(_header_text(sheet.cell_value(0, c)) for c in range(sheet.ncols))
+            if not any(header.strip() for header in headers):
                 continue
+            data = []
             for row_idx in range(1, sheet.nrows):
-                values = [str(sheet.cell_value(row_idx, c)).strip() for c in range(sheet.ncols)]
-                if not any(values):
+                cells = tuple(_cell_text(sheet.cell_value(row_idx, c)) for c in range(sheet.ncols))
+                if not any(cells):
                     continue
-                rows.append((sheet.name, row_idx + 1, dict(zip(headers, values, strict=False))))
+                data.append((row_idx + 1, cells))
+            sheets.append(_WorkbookSheet(name=sheet.name, headers=headers, rows=tuple(data)))
     finally:
         book.release_resources()
-    return rows
+    return sheets
+
+
+_DEDUP_SIGNATURE_HEADERS = ("Id", "Signature ID")
+_DEDUP_KEY_HEADERS = ("ExpType ",)
+_DEDUP_RAW_HEADERS = ("Detail", "CurProcess")
+_DEDUP_PATH_HEADERS = ("Path",)
+
+_CREATE_SIGNATURE_ALIASES = frozenset({"signature id", "signature_id", "signatureid", "id"})
+_CREATE_OCCURRENCE_ALIASES = frozenset({"occurrence ids", "occurrence_ids", "occurrenceids"})
+_CREATE_OCCURRENCE_KEY_ALIASES = frozenset({"occurrence keys", "occurrence_keys", "occurrencekeys"})
+
+
+def _header_indexes(sheet: _WorkbookSheet, schema: str) -> dict[str, int | list[int]]:
+    """校验表头冲突并返回实际消费字段的列号。
+
+    重复列、大小写冲突与同一字段的别名冲突在启动前拒绝；返回的列号就是工具
+    实际消费的列，避免平台校验的字段与被工具读取的字段不一致。
+    """
+    normalized = [header.strip().casefold() for header in sheet.headers]
+    seen: dict[str, int] = {}
+    for idx, name in enumerate(normalized):
+        if not name:
+            continue
+        if name in seen:
+            raise JiraDeliveryError(
+                409,
+                f"uploaded workbook header conflict in sheet {sheet.name!r}: "
+                f"duplicate column {sheet.headers[idx]!r} (case-insensitive)",
+            )
+        seen[name] = idx
+
+    if schema == "dedup":
+        def _pick(group: tuple[str, ...], label: str) -> Optional[int]:
+            found = [idx for idx, header in enumerate(sheet.headers) if header in group]
+            if len(found) > 1:
+                names = [sheet.headers[idx] for idx in found]
+                raise JiraDeliveryError(
+                    409,
+                    f"uploaded workbook header conflict in sheet {sheet.name!r}: "
+                    f"multiple {label} columns {names}",
+                )
+            return found[0] if found else None
+
+        raw_indexes = [
+            idx for idx, header in enumerate(sheet.headers) if header in _DEDUP_RAW_HEADERS
+        ]
+        return {
+            "signature": _pick(_DEDUP_SIGNATURE_HEADERS, "signature"),
+            "key": _pick(_DEDUP_KEY_HEADERS, "normalized key"),
+            "raw": raw_indexes,
+            "path": _pick(_DEDUP_PATH_HEADERS, "evidence path"),
+        }
+
+    def _alias_pick(aliases: frozenset[str], label: str, *, required: bool) -> Optional[int]:
+        found = [idx for idx, name in enumerate(normalized) if name in aliases]
+        if len(found) > 1:
+            names = [sheet.headers[idx] for idx in found]
+            raise JiraDeliveryError(
+                409,
+                f"uploaded workbook header conflict in sheet {sheet.name!r}: "
+                f"multiple {label} aliases {names}",
+            )
+        if required and not found:
+            raise JiraDeliveryError(
+                409,
+                f"uploaded workbook sheet {sheet.name!r} is missing the {label} column",
+            )
+        return found[0] if found else None
+
+    return {
+        "signature": _alias_pick(_CREATE_SIGNATURE_ALIASES, "Signature ID", required=True),
+        "occurrences": _alias_pick(_CREATE_OCCURRENCE_ALIASES, "Occurrence IDs", required=False),
+        "occurrence_keys": _alias_pick(_CREATE_OCCURRENCE_KEY_ALIASES, "Occurrence Keys", required=False),
+    }
+
+
+def _row_cell(cells: Sequence[str], col: Optional[int]) -> str:
+    return cells[int(col)] if col is not None and int(col) < len(cells) else ""
+
+
+def _parse_occurrence_ids(value: str) -> tuple[list[int], list[str]]:
+    """按厂商契约解析 Occurrence IDs：JSON 数组或逗号/分号分隔。"""
+    text = str(value or "").strip()
+    if not text:
+        return [], []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            raw_items = parsed
+        else:
+            raw_items = [item for item in text.replace(";", ",").split(",") if item.strip()]
+    else:
+        raw_items = [item for item in text.replace(";", ",").split(",") if item.strip()]
+    valid: list[int] = []
+    invalid: list[str] = []
+    for item in raw_items:
+        parsed = _coerce_signature_id(item)
+        if parsed is None:
+            invalid.append(str(item).strip())
+        else:
+            valid.append(parsed)
+    return valid, invalid
 
 
 def validate_uploaded_jira_workbook_scope(
@@ -378,23 +532,97 @@ def validate_uploaded_jira_workbook_scope(
     manifest: Mapping[str, Any],
     uploaded_bytes: bytes,
     uploaded_suffix: Optional[str],
+    stage: str,
 ) -> None:
-    """证明上传表格属于登记交付范围：每一行已填写的身份字段必须共同指向同一条登记关系。
+    """证明上传表格属于登记交付范围，并拒绝列/别名冲突。
 
     ``delivery_version`` / ``compat_rerun`` 入口允许附带表格，但附带表格不能成为
-    绕过登记范围的后门。``Id`` / ``ExpType`` / ``Detail`` / ``Path`` 任一已填字段
-    都必须与同一条登记问题（含其代表证据路径）一致；合法 Id 搭配其他问题、其他
-    版本或其他 run 的 Path 会被拒绝。只有整张表可证明时才放行，否则返回 409 且
-    子进程不会启动；``source=upload`` 的独立手工上传入口不受此约束。
+    绕过登记范围的后门。校验按工具实际消费的字段执行：
+
+    - ``upload_list``（去重 .xls）：``Id`` / ``Signature ID``、``ExpType ``、``Path``、
+      ``Detail`` / ``CurProcess``；同一行已填字段必须指向同一条登记问题。
+    - ``create``（厂商清单 .xlsx）：``Signature ID`` 与 ``Occurrence IDs``；签名必须
+      在登记范围，发生必须命中该签名的 ``attribution_candidates``。
+
+    重复列、大小写冲突、同一字段的别名冲突、范围外签名/发生均在启动子进程前返回
+    409；``source=upload`` 的独立手工上传入口不受此约束。
     """
-    if (uploaded_suffix or "").lower() == ".xlsx":
-        # 平台运行环境只有 xlrd（仅 BIFF .xls），无法读取 OOXML .xlsx 来做范围证明；
-        # 绑定入口不接受无法校验的表格，避免「传了但没验」的假放行。
+    if not uploaded_suffix or uploaded_suffix.lower() not in {".xls", ".xlsx"}:
+        raise JiraDeliveryError(400, "uploaded file must be .xls/.xlsx")
+    suffix = uploaded_suffix.lower()
+    if stage == "create" and suffix != ".xlsx":
+        # 阶段二厂商工具消费的是阶段一生成的 .xlsx 上传清单；去重 .xls 没有
+        # Summary/Occurrence 等列，交给工具只会失败，绑定入口提前拒绝。
         raise JiraDeliveryError(
             400,
-            "source=delivery_version/compat_rerun attached table must be .xls "
-            "with registered identity columns; .xlsx cannot be verified in this runtime",
+            "stage=create attached table must be the vendor-generated .xlsx upload list",
         )
+    sheets = _read_workbook_sheets(uploaded_bytes, suffix)
+    if not sheets or not any(sheet.rows for sheet in sheets):
+        raise JiraDeliveryError(
+            409, "uploaded table has no data rows to prove registered delivery scope",
+        )
+
+    if stage == "create":
+        registered_ids = {
+            sig_id for item in (manifest.get("issues") or [])
+            if isinstance(item, Mapping)
+            and (sig_id := _coerce_signature_id(item.get("signature_id"))) is not None
+        }
+        candidates_by_sig: dict[int, set[int]] = {}
+        for item in manifest.get("attribution_candidates") or []:
+            if not isinstance(item, Mapping):
+                continue
+            sig_id = _coerce_signature_id(item.get("signature_id"))
+            occ_id = _coerce_signature_id(item.get("occurrence_id"))
+            if sig_id is None or occ_id is None:
+                continue
+            candidates_by_sig.setdefault(sig_id, set()).add(occ_id)
+        if not registered_ids:
+            raise JiraDeliveryError(
+                409,
+                "registered delivery scope contains no issues; an attached table cannot be proven in scope",
+            )
+        rejected: list[str] = []
+        for sheet in sheets:
+            columns = _header_indexes(sheet, "create")
+            signature_col = int(columns["signature"])
+            occurrences_col = columns["occurrences"]
+            occurrences_col = int(occurrences_col) if occurrences_col is not None else None
+            for row_no, cells in sheet.rows:
+                signature = _coerce_signature_id(
+                    cells[signature_col] if signature_col < len(cells) else "",
+                )
+                if signature is None or signature not in registered_ids:
+                    rejected.append(
+                        f"{sheet.name}!{row_no} signature_id outside registered scope "
+                        f"({cells[signature_col] if signature_col < len(cells) else ''!r})",
+                    )
+                    continue
+                if occurrences_col is None:
+                    continue
+                raw_ids = cells[occurrences_col] if occurrences_col < len(cells) else ""
+                occurrence_ids, invalid = _parse_occurrence_ids(raw_ids)
+                if invalid:
+                    rejected.append(f"{sheet.name}!{row_no} invalid occurrence ids {invalid}")
+                    continue
+                out_of_scope = [
+                    occ for occ in occurrence_ids
+                    if occ not in candidates_by_sig.get(signature, set())
+                ]
+                if out_of_scope:
+                    rejected.append(
+                        f"{sheet.name}!{row_no} occurrence_ids outside signature {signature}: {out_of_scope}",
+                    )
+        if rejected:
+            detail = "; ".join(rejected[:5])
+            suffix_text = "" if len(rejected) <= 5 else f" (+{len(rejected) - 5} more)"
+            raise JiraDeliveryError(
+                409,
+                f"uploaded table contains rows outside registered delivery scope: {detail}{suffix_text}",
+            )
+        return
+
     relations: list[dict[str, object]] = []
     seen_relations: set[tuple[Optional[int], str, str, str]] = set()
     for item in manifest.get("issues") or []:
@@ -417,50 +645,48 @@ def validate_uploaded_jira_workbook_scope(
         if sig_id is None or any(rel["id"] == sig_id for rel in relations):
             continue
         relations.append({"id": sig_id, "key": "", "raw": "", "path": ""})
-
     if not relations:
         raise JiraDeliveryError(
             409,
             "registered delivery scope contains no issues; an attached table cannot be proven in scope",
         )
 
-    rows = _read_uploaded_workbook_rows(uploaded_bytes)
-    if not rows:
-        raise JiraDeliveryError(
-            409, "uploaded table has no data rows to prove registered delivery scope",
-        )
-
-    def _first_value(row: Mapping[str, str], headers: tuple[str, ...]) -> str:
-        return next((row[h] for h in headers if row.get(h)), "")
-
-    rejected: list[str] = []
-    for sheet_name, row_no, row in rows:
-        id_raw = _first_value(row, _IDENTITY_ID_HEADERS)
-        key_raw = _first_value(row, _IDENTITY_KEY_HEADERS)
-        raw_val = _first_value(row, _IDENTITY_RAW_HEADERS)
-        path_val = _first_value(row, _IDENTITY_PATH_HEADERS)
-        if not any((id_raw, key_raw, raw_val, path_val)):
-            rejected.append(f"{sheet_name}!{row_no} has no registered identity value")
-            continue
-        row_id = _coerce_signature_id(id_raw)
-        bound = any(
-            (not id_raw or row_id == rel["id"])
-            and (not key_raw or key_raw == rel["key"])
-            and (not raw_val or raw_val == rel["raw"])
-            and (not path_val or path_val == rel["path"])
-            for rel in relations
-        )
-        if not bound:
-            rejected.append(
-                f"{sheet_name}!{row_no} identity/path do not bind to one registered issue "
-                f"(id={id_raw or '-'}, key={key_raw or '-'}, path={path_val or '-'})",
+    rejected = []
+    for sheet in sheets:
+        columns = _header_indexes(sheet, "dedup")
+        signature_col = columns["signature"]
+        key_col = columns["key"]
+        path_col = columns["path"]
+        raw_cols = [int(idx) for idx in columns["raw"] or []]
+        for row_no, cells in sheet.rows:
+            id_raw = _row_cell(cells, signature_col)
+            key_raw = _row_cell(cells, key_col)
+            path_val = _row_cell(cells, path_col)
+            raw_values = [
+                value for value in (_row_cell(cells, idx) for idx in raw_cols) if value
+            ]
+            if not any((id_raw, key_raw, path_val, raw_values)):
+                rejected.append(f"{sheet.name}!{row_no} has no registered identity value")
+                continue
+            row_id = _coerce_signature_id(id_raw)
+            bound = any(
+                (not id_raw or row_id == rel["id"])
+                and (not key_raw or key_raw == rel["key"])
+                and (not path_val or path_val == rel["path"])
+                and all(raw in (rel["raw"],) for raw in raw_values)
+                for rel in relations
             )
+            if not bound:
+                rejected.append(
+                    f"{sheet.name}!{row_no} identity/path do not bind to one registered issue "
+                    f"(id={id_raw or '-'}, key={key_raw or '-'}, path={path_val or '-'})",
+                )
     if rejected:
         detail = "; ".join(rejected[:5])
-        suffix = "" if len(rejected) <= 5 else f" (+{len(rejected) - 5} more)"
+        suffix_text = "" if len(rejected) <= 5 else f" (+{len(rejected) - 5} more)"
         raise JiraDeliveryError(
             409,
-            f"uploaded table contains rows outside registered delivery scope: {detail}{suffix}",
+            f"uploaded table contains rows outside registered delivery scope: {detail}{suffix_text}",
         )
 
 
@@ -535,7 +761,7 @@ def resolve_delivery_jira_input(
         uploaded_suffix = suffix
         validate_uploaded_jira_workbook_scope(
             manifest=manifest, uploaded_bytes=uploaded_bytes,
-            uploaded_suffix=uploaded_suffix,
+            uploaded_suffix=uploaded_suffix, stage=stage,
         )
 
     label = f"delivery:{plan_run.id}:{plat}:v{version.version_no}"
@@ -648,7 +874,7 @@ def resolve_compat_rerun_jira_input(
         uploaded_suffix = suffix
         validate_uploaded_jira_workbook_scope(
             manifest=manifest, uploaded_bytes=uploaded_bytes,
-            uploaded_suffix=uploaded_suffix,
+            uploaded_suffix=uploaded_suffix, stage=stage,
         )
 
     label = f"compat_rerun:{plan_run.id}:{plat}:r{rerun.id}"
@@ -731,25 +957,95 @@ def prepare_isolated_jira_workspace(
     )
 
 
+def _sanitize_vendor_gap(entry: object) -> Optional[dict[str, Any]]:
+    """把厂商 gaps 条目收敛为可查询的 JSON 字段，保留契约中的诊断信息。"""
+    if not isinstance(entry, Mapping):
+        return None
+    kind = str(entry.get("kind") or "").strip()
+    if not kind:
+        return None
+    gap: dict[str, Any] = {"kind": kind, "source": "vendor_attribution"}
+    for field in (
+        "stage", "row", "workbook_row", "signature_id", "occurrence_ids",
+        "occurrence_keys", "reason", "duplicate_occurrence_ids",
+        "raw_signature_id", "raw_occurrence_ids",
+    ):
+        if field not in entry:
+            continue
+        value = entry[field]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            gap[field] = value
+        elif isinstance(value, (list, tuple)):
+            gap[field] = [
+                item for item in value if isinstance(item, (str, int, float, bool))
+            ]
+    return gap
+
+
+def _dedupe_gaps(gaps: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for gap in gaps:
+        key = json.dumps(gap, ensure_ascii=False, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(dict(gap))
+    if len(out) <= 500:
+        return out
+    return out[:499] + [{
+        "kind": "attribution_gaps_truncated",
+        "source": "platform",
+        "reason": f"{len(out) - 499} additional gaps omitted",
+    }]
+
+
 def _extract_vendor_result_artifacts(
     workspace_dir: Optional[str],
-) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
-    """从隔离工作区读取可验证归因输出与（若有）厂商 result JSON 列表。"""
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+    """读取 #27 契约的 links / gaps 与（若有）厂商 result JSON 列表。"""
     if not workspace_dir:
-        return [], [], []
+        return [], [], [], []
     ws = Path(workspace_dir).resolve(strict=False)
     if not ws.is_dir():
-        return [], [], []
+        return [], [], [], []
 
     structured_links: list[dict[str, Any]] = []
+    artifact_gaps: list[dict[str, Any]] = []
     for attr_name in ("attribution.json", "jira_attribution.json"):
         attr_file = ws / attr_name
         if attr_file.is_file() and not attr_file.is_symlink():
             try:
                 data = json.loads(attr_file.read_text(encoding="utf-8"))
             except (OSError, ValueError):
+                artifact_gaps.append({
+                    "kind": "vendor_attribution_artifact_unreadable",
+                    "source": "vendor_attribution",
+                    "reason": f"{attr_name} is not valid JSON",
+                })
                 continue
-            items = data.get("links") if isinstance(data, Mapping) else data
+            if isinstance(data, Mapping):
+                schema = str(data.get("schema") or "").strip()
+                contract = str(data.get("contract_version") or "").strip()
+                if schema and schema != "stp.jira_attribution/v1":
+                    artifact_gaps.append({
+                        "kind": "vendor_attribution_contract_mismatch",
+                        "source": "vendor_attribution",
+                        "reason": f"unsupported artifact schema {schema!r}",
+                    })
+                if contract and contract != "b8-g8-attribution-v1":
+                    artifact_gaps.append({
+                        "kind": "vendor_attribution_contract_mismatch",
+                        "source": "vendor_attribution",
+                        "reason": f"unsupported contract version {contract!r}",
+                    })
+                for entry in data.get("gaps") or []:
+                    gap = _sanitize_vendor_gap(entry)
+                    if gap is not None:
+                        artifact_gaps.append(gap)
+                items = data.get("links")
+            else:
+                items = data
             if isinstance(items, list):
                 for entry in items:
                     if isinstance(entry, Mapping):
@@ -787,7 +1083,7 @@ def _extract_vendor_result_artifacts(
                         "evidence_source": "vendor_result_json",
                     })
 
-    return structured_links, result_keys, result_rows
+    return structured_links, result_keys, result_rows, artifact_gaps
 
 
 def _upsert_jira_occurrence_links(
@@ -883,7 +1179,7 @@ def record_jira_run_completion(
         return False
 
     stdout_keys = parse_issue_keys(log_lines)
-    structured_links, result_keys, result_rows = _extract_vendor_result_artifacts(
+    structured_links, result_keys, result_rows, vendor_gaps = _extract_vendor_result_artifacts(
         jira_run.workspace_dir,
     )
     all_keys = _dedupe_preserve_order([*stdout_keys, *result_keys])
@@ -912,7 +1208,7 @@ def record_jira_run_completion(
 
     verified_links: list[dict[str, Any]] = []
     attributed_keys: set[str] = set()
-    gaps: list[dict[str, Any]] = []
+    gaps: list[dict[str, Any]] = list(vendor_gaps)
     seen_link_keys: set[tuple[int, str]] = set()
 
     for item in structured_links:
@@ -975,14 +1271,17 @@ def record_jira_run_completion(
             db, signature_id=sig_id, issue_keys=_dedupe_preserve_order(sig_keys),
         )
 
-    if jira_run.stage != "create" or not all_keys:
+    gaps = _dedupe_gaps(gaps)
+    if jira_run.stage != "create":
         jira_run.attribution_status = ATTRIBUTION_NOT_APPLICABLE
     elif verified_links and not gaps:
         jira_run.attribution_status = ATTRIBUTION_VERIFIED
     elif verified_links:
         jira_run.attribution_status = ATTRIBUTION_PARTIAL
-    else:
+    elif gaps:
         jira_run.attribution_status = ATTRIBUTION_UNATTRIBUTED
+    else:
+        jira_run.attribution_status = ATTRIBUTION_NOT_APPLICABLE
     jira_run.attribution_gaps = gaps
 
     if jira_run.compat_rerun_id is not None:

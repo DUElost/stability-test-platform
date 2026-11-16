@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import openpyxl
 import pytest
 import xlrd
 from sqlalchemy.orm import sessionmaker
@@ -62,6 +63,7 @@ SERIAL_2 = "AZ6Q100002"
 EVENT_DIR_1 = "2026_1101_100000_101_db.74.ANR"
 EVENT_DIR_2 = "2026_1101_100500_202_db.74.JE"
 EVENT_DIR_3 = "2026_1102_110000_303_db.74.NE"
+FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "jira"
 
 
 @pytest.fixture(autouse=True)
@@ -339,17 +341,27 @@ def _install_vendor_double(tool_dir: Path, capture_file: Path, *, mode: str = "u
     tool_dir.mkdir(parents=True, exist_ok=True)
     common = textwrap.dedent(
         f"""
-        import json, os, sys, pathlib, xlrd
+        import json, os, sys, pathlib
 
         CAPTURE = pathlib.Path({str(capture_file)!r})
 
         def record(stage, xls_path):
-            book = xlrd.open_workbook(xls_path)
-            sheet = book.sheet_by_name("aeeexp")
-            headers = [sheet.cell_value(0, c) for c in range(sheet.ncols)]
-            rows = []
-            for r in range(1, sheet.nrows):
-                rows.append(dict(zip(headers, [sheet.cell_value(r, c) for c in range(sheet.ncols)])))
+            if str(xls_path).lower().endswith(".xlsx"):
+                import openpyxl
+                book = openpyxl.load_workbook(xls_path, data_only=True, read_only=True)
+                sheet = book.active
+                all_rows = list(sheet.iter_rows(values_only=True))
+                headers = ["" if value is None else str(value) for value in all_rows[0]]
+                rows = [dict(zip(headers, values, strict=False)) for values in all_rows[1:]]
+                book.close()
+            else:
+                import xlrd
+                book = xlrd.open_workbook(xls_path)
+                sheet = book.sheet_by_name("aeeexp")
+                headers = [sheet.cell_value(0, c) for c in range(sheet.ncols)]
+                rows = []
+                for r in range(1, sheet.nrows):
+                    rows.append(dict(zip(headers, [sheet.cell_value(r, c) for c in range(sheet.ncols)])))
             entry = {{
                 "stage": stage,
                 "cwd": os.getcwd(),
@@ -459,7 +471,9 @@ def _install_vendor_double(tool_dir: Path, capture_file: Path, *, mode: str = "u
             """
         ).strip()
 
-    (tool_dir / "create_transsion_jira_batch_from_excel.py").write_text(create_body + "\n", encoding="utf-8")
+    for vendor in ("transsion", "tinno"):
+        (tool_dir / f"generate_{vendor}_jira_upload_list.py").write_text(gen_script + "\n", encoding="utf-8")
+        (tool_dir / f"create_{vendor}_jira_batch_from_excel.py").write_text(create_body + "\n", encoding="utf-8")
 
 
 def _wait_jira_terminal(db, console_run_id: str, timeout: float = 8.0) -> JiraRun:
@@ -803,7 +817,7 @@ def test_jira_attribution_verified_vs_unprovable_gaps_and_lifecycle(
     r_up = client.post(
         "/api/v1/jira/runs",
         data={"vendor": "transsion", "stage": "create", "source": "upload"},
-        files={"file": ("JIRA_Upload_List_test.xlsx", cur_xls.read_bytes(), "application/vnd.ms-excel")},
+        files={"file": ("JIRA_Upload_List_test.xls", cur_xls.read_bytes(), "application/vnd.ms-excel")},
         headers=auth_headers,
     )
     assert r_up.status_code == 200
@@ -1309,6 +1323,7 @@ def test_uploaded_workbook_in_registered_scope_reaches_vendor_unchanged(
     fields, capture, run, version, signature_id = _planner_audit_seed_jira(
         db_session, env_roots, monkeypatch, tmp_path,
     )
+    fields["stage"] = "upload_list"
     resolved = jira_delivery.resolve_delivery_jira_input(
         db_session, plan_run_id=run.id, platform="mtk",
         delivery_version_no=None, delivery_version_id=version.id, stage="create",
@@ -1434,7 +1449,7 @@ def test_compat_rerun_uploaded_workbook_scope_is_enforced(
     assert outcome.rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED
     resolved = jira_delivery.resolve_compat_rerun_jira_input(
         db_session, plan_run_id=run.id, platform="mtk",
-        compat_rerun_id=outcome.rerun.id, stage="create",
+        compat_rerun_id=outcome.rerun.id, stage="upload_list",
     )
     registered_path = resolved.manifest["issues"][0]["representative_verified_path"]
     assert registered_path
@@ -1445,7 +1460,7 @@ def test_compat_rerun_uploaded_workbook_scope_is_enforced(
     monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
     monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
     fields = {
-        "source": "compat_rerun", "vendor": "transsion", "stage": "create",
+        "source": "compat_rerun", "vendor": "transsion", "stage": "upload_list",
         "plan_run_id": str(run.id), "platform": "mtk",
         "compat_rerun_id": str(outcome.rerun.id), "dry_run": "false",
     }
@@ -1629,7 +1644,7 @@ def test_compat_rerun_row_identity_and_path_must_bind_one_registered_issue(
 
     resolved = jira_delivery.resolve_compat_rerun_jira_input(
         db_session, plan_run_id=run.id, platform="mtk",
-        compat_rerun_id=outcome.rerun.id, stage="create",
+        compat_rerun_id=outcome.rerun.id, stage="upload_list",
     )
     paths = {int(item["signature_id"]): item["representative_verified_path"] for item in resolved.manifest["issues"]}
     path_a, path_b = paths[sig_a], paths[sig_b]
@@ -1646,7 +1661,7 @@ def test_compat_rerun_row_identity_and_path_must_bind_one_registered_issue(
     monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
     monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
     fields = {
-        "source": "compat_rerun", "vendor": "transsion", "stage": "create",
+        "source": "compat_rerun", "vendor": "transsion", "stage": "upload_list",
         "plan_run_id": str(run.id), "platform": "mtk",
         "compat_rerun_id": str(outcome.rerun.id), "dry_run": "false",
     }
@@ -1672,4 +1687,326 @@ def test_compat_rerun_row_identity_and_path_must_bind_one_registered_issue(
     _wait_jira_terminal(db_session, accepted.json()["data"]["console_run_id"])
     rows = _captured(capture)[0]["rows"]
     assert rows[0]["Id"] == str(sig_a) and rows[0]["Path"] == path_a
+
+
+
+def _write_vendor_workbook(tmp_path, vendor: str, rows: list[dict]) -> Path:
+    """加载厂商真实生成的清单，按人工复核后的行序/子集重写标识后另存。"""
+    src = FIXTURE_DIR / f"{vendor}_upload_list_real.xlsx"
+    assert src.is_file(), src
+    wb = openpyxl.load_workbook(src)
+    ws = wb.active
+    headers = {str(cell.value).strip(): cell.column for cell in ws[1] if cell.value is not None}
+    original = [list(values) for values in ws.iter_rows(min_row=2, values_only=True)]
+    ws.delete_rows(2, max(ws.max_row - 1, 0))
+    for offset, row in enumerate(rows, start=2):
+        base = list(original[int(row.get("source_index", 0))])
+        for col, value in enumerate(base, start=1):
+            ws.cell(offset, col).value = value
+        ws.cell(offset, headers["Signature ID"]).value = str(row["signature_id"])
+        ws.cell(offset, headers["Occurrence IDs"]).value = json.dumps(row["occurrence_ids"])
+        ws.cell(offset, headers["Occurrence Keys"]).value = json.dumps(
+            row.get("occurrence_keys", [f"k{item}" for item in row["occurrence_ids"]]),
+        )
+        ws.cell(offset, headers["Occurrence Count"]).value = len(row["occurrence_ids"])
+        ws.cell(offset, headers["Attribution Status"]).value = row.get("status", "OK")
+        ws.cell(offset, headers["Source Excel Row"]).value = offset
+    out = tmp_path / f"{vendor}-reviewed.xlsx"
+    wb.save(out)
+    wb.close()
+    return out
+
+
+def _seed_xlsx_scope(db_session, env_roots):
+    _seed_host(db_session, "g8-xlsx")
+    run = _seed_plan_run(db_session, plan_name="g8-xlsx")
+    facts.record_partition_mode(
+        db_session, plan_run_id=run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST,
+    )
+
+    def _issue(plan_run, serial, event_dir, raw, key, occ, event_type="ANR"):
+        return _seed_dle_and_fact(
+            db_session, plan_run_id=plan_run.id, root_run_id=run.id, host_id="g8-xlsx",
+            serial=serial, event_type=event_type, sig_raw=raw, norm_key=key,
+            occ_key=occ, folder=FOLDER_A, event_dir=event_dir, nfs_root=env_roots.nfs_root,
+        )
+
+    dle_a, sig_a, occ_a = _issue(run, SERIAL_1, EVENT_DIR_1, "g8.xlsx.a", "g8-xlsx-a", "g8-xlsx-a-occ")
+    dle_b, sig_b, occ_b = _issue(run, SERIAL_2, EVENT_DIR_2, "g8.xlsx.b", "g8-xlsx-b", "g8-xlsx-b-occ", "JE")
+    dle_c, sig_c, occ_c = _issue(run, "AZ6Q100003", EVENT_DIR_3, "g8.xlsx.c", "g8-xlsx-c", "g8-xlsx-c-occ", "NE")
+    foreign_run = _seed_plan_run(db_session, plan_name="g8-xlsx-foreign", root_id=run.id)
+    dle_d, sig_d, occ_d = _seed_dle_and_fact(
+        db_session, plan_run_id=foreign_run.id, root_run_id=run.id, host_id="g8-xlsx",
+        serial="AZ6Q100004", event_type="ANR", sig_raw="g8.xlsx.d", norm_key="g8-xlsx-d",
+        occ_key="g8-xlsx-d-occ", folder=FOLDER_A, event_dir=EVENT_DIR_1,
+        nfs_root=env_roots.nfs_root,
+    )
+    db_session.commit()
+    dv1 = _register_dv(
+        db_session, plan_run_id=run.id, version_no=1, issue_ids=[sig_a, sig_b],
+        event_ids=[str(dle_a.id), str(dle_b.id)], nfs_root=env_roots.nfs_root,
+    )
+    _register_dv(
+        db_session, plan_run_id=run.id, version_no=2, issue_ids=[sig_c],
+        event_ids=[str(dle_c.id)], nfs_root=env_roots.nfs_root,
+    )
+    db_session.commit()
+    return SimpleNamespace(
+        run=run, dv1=dv1, sig_a=sig_a, sig_b=sig_b, sig_c=sig_c, sig_d=sig_d,
+        occ_a=occ_a, occ_b=occ_b, occ_c=occ_c, occ_d=occ_d,
+    )
+
+
+@pytest.mark.parametrize("vendor", ["transsion", "tinno"])
+def test_bound_xlsx_from_real_vendor_workbook_keeps_identity_after_reorder_and_filter(
+    vendor, client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """需求 2：两套真实工具生成的 .xlsx 重排/筛选后仍按标识绑定原交付版本。"""
+    scope = _seed_xlsx_scope(db_session, env_roots)
+    capture = tmp_path / f"{vendor}-xlsx-capture.jsonl"
+    tool = tmp_path / f"{vendor}-xlsx-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv(f"STP_JIRA_{vendor.upper()}_PYTHON", sys.executable)
+    monkeypatch.setenv(f"STP_JIRA_{vendor.upper()}_DIR", str(tool))
+    workbook = _write_vendor_workbook(tmp_path, vendor, [
+        {"source_index": 1, "signature_id": scope.sig_b, "occurrence_ids": [scope.occ_b]},
+        {"source_index": 0, "signature_id": scope.sig_a, "occurrence_ids": [scope.occ_a]},
+    ])
+    response = client.post(
+        "/api/v1/jira/runs",
+        data={
+            "vendor": vendor, "stage": "create", "source": "delivery_version",
+            "plan_run_id": str(scope.run.id), "platform": "mtk",
+            "delivery_version_id": str(scope.dv1.id), "dry_run": "false",
+        },
+        headers=auth_headers,
+        files={"file": (workbook.name, workbook.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 200, response.text
+    _wait_jira_terminal(db_session, response.json()["data"]["console_run_id"])
+    received = _captured(capture)[0]["rows"]
+    assert [row["Signature ID"] for row in received] == [str(scope.sig_b), str(scope.sig_a)]
+    assert [json.loads(row["Occurrence IDs"]) for row in received] == [[scope.occ_b], [scope.occ_a]]
+
+
+@pytest.mark.parametrize("vendor", ["transsion", "tinno"])
+@pytest.mark.parametrize(
+    "label,signature_key,occurrence_key",
+    [
+        ("different-run", "sig_d", "occ_d"),
+        ("different-version", "sig_c", "occ_c"),
+        ("conflicting-identifier", "sig_a", "occ_b"),
+        ("out-of-scope-evidence", "sig_a", None),
+    ],
+)
+def test_bound_xlsx_rejects_foreign_or_conflicting_identity(
+    vendor, label, signature_key, occurrence_key,
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """需求 2 负向：跨 run、跨版本、冲突标识、范围外发生均零启动。"""
+    scope = _seed_xlsx_scope(db_session, env_roots)
+    capture = tmp_path / f"{vendor}-{label}-capture.jsonl"
+    tool = tmp_path / f"{vendor}-{label}-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv(f"STP_JIRA_{vendor.upper()}_PYTHON", sys.executable)
+    monkeypatch.setenv(f"STP_JIRA_{vendor.upper()}_DIR", str(tool))
+    signature_id = getattr(scope, signature_key)
+    occurrence_id = 999999 if occurrence_key is None else getattr(scope, occurrence_key)
+    workbook = _write_vendor_workbook(tmp_path, vendor, [
+        {"source_index": 0, "signature_id": signature_id, "occurrence_ids": [occurrence_id]},
+    ])
+    response = client.post(
+        "/api/v1/jira/runs",
+        data={
+            "vendor": vendor, "stage": "create", "source": "delivery_version",
+            "plan_run_id": str(scope.run.id), "platform": "mtk",
+            "delivery_version_id": str(scope.dv1.id), "dry_run": "false",
+        },
+        headers=auth_headers,
+        files={"file": (workbook.name, workbook.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert 400 <= response.status_code < 500, (label, response.text)
+    assert not capture.exists(), label
+    assert db_session.query(JiraRun).count() == 0, label
+
+
+def test_create_schema_alias_conflict_is_rejected_before_start(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """同一字段的多个别名列必须在启动前拒绝，避免平台与工具选列不一致。"""
+    scope = _seed_xlsx_scope(db_session, env_roots)
+    capture = tmp_path / "alias-capture.jsonl"
+    tool = tmp_path / "alias-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
+    monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Signature ID", "signature_id", "Occurrence IDs"])
+    ws.append([str(scope.sig_a), str(scope.sig_a), json.dumps([scope.occ_a])])
+    path = tmp_path / "alias-conflict.xlsx"
+    wb.save(path)
+    wb.close()
+    response = client.post(
+        "/api/v1/jira/runs",
+        data={
+            "vendor": "transsion", "stage": "create", "source": "delivery_version",
+            "plan_run_id": str(scope.run.id), "platform": "mtk",
+            "delivery_version_id": str(scope.dv1.id), "dry_run": "false",
+        },
+        headers=auth_headers,
+        files={"file": (path.name, path.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert 400 <= response.status_code < 500
+    assert not capture.exists()
+
+
+def test_planner_audit_duplicate_normalized_headers_cannot_hide_foreign_path(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """反例：Path 指向另一 run、path 指向合法路径，重复归一化表头不得掩盖。"""
+    import xlwt
+
+    fields, capture, run, _version, signature_id = _planner_audit_seed_jira(
+        db_session, env_roots, monkeypatch, tmp_path,
+    )
+    fields["stage"] = "upload_list"
+    foreign_run = _seed_plan_run(db_session, plan_name="g8-other-run", root_id=run.id)
+    _seed_dle_and_fact(
+        db_session, plan_run_id=foreign_run.id, root_run_id=run.id, host_id="g8-planner",
+        serial=SERIAL_2, event_type="JE", sig_raw="g8.foreign", norm_key="g8-foreign",
+        occ_key="g8-case-distinct-foreign", folder=FOLDER_A, event_dir=EVENT_DIR_2,
+        nfs_root=env_roots.nfs_root,
+    )
+    db_session.commit()
+    legitimate = env_roots.nfs_root / "evidence" / f"{run.id}_{FOLDER_A}" / SERIAL_1 / EVENT_DIR_1
+    foreign = legitimate.parent.parent / SERIAL_2 / EVENT_DIR_2
+    assert legitimate.is_dir() and foreign.is_dir()
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("aeeexp")
+    for index, (header, value) in enumerate((
+        ("Id", str(signature_id)), ("ExpType ", "g8-bound"),
+        ("Path", str(foreign)), ("path", str(legitimate)),
+    )):
+        sheet.write(0, index, header)
+        sheet.write(1, index, value)
+    workbook_path = tmp_path / "duplicate-case-paths.xls"
+    workbook.save(str(workbook_path))
+    response = client.post(
+        "/api/v1/jira/runs", data=fields, headers=auth_headers,
+        files={"file": (workbook_path.name, workbook_path.read_bytes(), "application/vnd.ms-excel")},
+    )
+    if response.status_code == 200:
+        _wait_jira_terminal(db_session, response.json()["data"]["console_run_id"])
+    rows = [row for call in _captured(capture) for row in call["rows"]]
+    assert 400 <= response.status_code < 500 and not rows, (
+        response.status_code, [(row.get("Path"), row.get("path")) for row in rows],
+    )
+
+
+def test_planner_audit_vendor_gap_without_key_is_preserved(
+    db_session, env_roots, monkeypatch, tmp_path,
+):
+    """反例：仅有 unknown_signature_id、没有 Jira key 时缺口仍须可查询。"""
+    _fields, _capture, run, version, signature_id = _planner_audit_seed_jira(
+        db_session, env_roots, monkeypatch, tmp_path,
+    )
+    workspace = tmp_path / "vendor-attribution"
+    workspace.mkdir()
+    (workspace / "attribution.json").write_text(json.dumps({
+        "schema": "stp.jira_attribution/v1",
+        "stage": "create",
+        "links": [],
+        "gaps": [{
+            "kind": "unknown_signature_id", "stage": "create", "row": 1,
+            "workbook_row": 2, "signature_id": signature_id + 9000,
+            "occurrence_ids": [], "reason": "outside bound manifest",
+        }],
+    }))
+    row = JiraRun(
+        console_run_id="con-audit-vendor-gap", vendor="transsion", stage="create",
+        status="RUNNING", plan_run_id=run.id, platform="mtk",
+        delivery_version_id=version.id, workspace_dir=str(workspace),
+    )
+    db_session.add(row)
+    db_session.commit()
+    assert jira_delivery.record_jira_run_completion(
+        db_session, jira_run=row, status="SUCCESS", exit_code=0,
+        ended_at=datetime.now(timezone.utc), error=None, log_lines=[],
+    )
+    db_session.commit()
+    assert row.issue_keys == []
+    assert row.attribution_status == jira_delivery.ATTRIBUTION_UNATTRIBUTED
+    assert any(gap["kind"] == "unknown_signature_id" for gap in row.attribution_gaps), (
+        row.attribution_status, row.attribution_gaps,
+    )
+
+
+def test_vendor_links_and_gaps_are_both_persisted_and_replay_is_idempotent(
+    db_session, env_roots, monkeypatch, tmp_path,
+):
+    """需求 3：有效关联与缺口并存；越界关联不落库；回调重放不重复写入。"""
+    _seed_host(db_session, "g8-attr")
+    run = _seed_plan_run(db_session, plan_name="g8-attr")
+    facts.record_partition_mode(
+        db_session, plan_run_id=run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST,
+    )
+    dle, signature_id, occurrence_id = _seed_dle_and_fact(
+        db_session, plan_run_id=run.id, root_run_id=run.id, host_id="g8-attr",
+        serial=SERIAL_1, event_type="ANR", sig_raw="g8.attr.a", norm_key="g8-attr-a",
+        occ_key="g8-attr-occ", folder=FOLDER_A, event_dir=EVENT_DIR_1,
+        nfs_root=env_roots.nfs_root,
+    )
+    version = _register_dv(
+        db_session, plan_run_id=run.id, version_no=1, issue_ids=[signature_id],
+        event_ids=[str(dle.id)], nfs_root=env_roots.nfs_root,
+    )
+    db_session.commit()
+    workspace = tmp_path / "vendor-links-and-gaps"
+    workspace.mkdir()
+    (workspace / "manifest.json").write_text(json.dumps({
+        "schema": "stp.jira_delivery_input/v1",
+        "issue_ids": [signature_id],
+        "attribution_candidates": [
+            {"signature_id": signature_id, "occurrence_id": occurrence_id},
+        ],
+    }))
+    (workspace / "attribution.json").write_text(json.dumps({
+        "schema": "stp.jira_attribution/v1",
+        "contract_version": "b8-g8-attribution-v1",
+        "stage": "create",
+        "links": [
+            {"issue_key": "STB-1", "signature_id": signature_id, "occurrence_id": occurrence_id},
+            {"issue_key": "STB-9", "signature_id": signature_id, "occurrence_id": 999999},
+        ],
+        "gaps": [{"kind": "unknown_signature_id", "signature_id": signature_id + 1}],
+    }))
+    row = JiraRun(
+        console_run_id="con-attr-links-gaps", vendor="transsion", stage="create",
+        status="RUNNING", plan_run_id=run.id, platform="mtk",
+        delivery_version_id=version.id, workspace_dir=str(workspace),
+    )
+    db_session.add(row)
+    db_session.commit()
+    assert jira_delivery.record_jira_run_completion(
+        db_session, jira_run=row, status="SUCCESS", exit_code=0,
+        ended_at=datetime.now(timezone.utc), error=None, log_lines=["STB-1"],
+    )
+    db_session.commit()
+    assert row.attribution_status == jira_delivery.ATTRIBUTION_PARTIAL
+    kinds = {gap["kind"] for gap in row.attribution_gaps}
+    assert {"unknown_signature_id", "unverified_link_scope"} <= kinds
+    links = db_session.query(JiraOccurrenceLink).filter_by(jira_run_id=row.id).all()
+    assert [(item.signature_id, item.occurrence_id, item.issue_key) for item in links] == [
+        (signature_id, occurrence_id, "STB-1"),
+    ]
+    link_count = len(links)
+    gap_count = len(row.attribution_gaps)
+    assert jira_delivery.record_jira_run_completion(
+        db_session, jira_run=row, status="FAILED", exit_code=1,
+        ended_at=datetime.now(timezone.utc), error="late replay", log_lines=["STB-1"],
+    ) is False
+    db_session.commit()
+    assert db_session.query(JiraOccurrenceLink).filter_by(jira_run_id=row.id).count() == link_count
+    assert len(row.attribution_gaps) == gap_count
 

@@ -32,9 +32,14 @@ Class: feature
 
 5. **平台侧阻塞返修（2026-11-16，固定反例基线 `90ef7f65`）**：
    - **附带表格不得绕过登记范围**：`resolve_delivery_jira_input` 与 `resolve_compat_rerun_jira_input` 在收到附带表格时调用 `validate_uploaded_jira_workbook_scope`，逐行读取身份字段（`Id` / `ExpType` / `Detail`·`CurProcess` / `Path`）。每一行已填写的字段必须**共同指向同一条登记问题**：按 `manifest.issues` 的 `(signature_id, normalized_key, signature_raw, representative_verified_path)` 关系逐项严格比对，合法 Id 搭配同版本另一问题、跨版本或跨 run 的 Path 均拒绝。空表、无身份字段或任一行无法绑定均返回 409，且发生在准备隔离工作区与启动子进程之前。独立 `source=upload` 手工上传入口保持原行为。
-   - 边界：当前厂商阶段一输出 `JIRA_Upload_List_*.xlsx` 不保留 `Id` / `ExpType` 等身份列，因此作为 `delivery_version` / `compat_rerun` 附带表格时无法证明范围而会被拒绝；运行环境只有 `xlrd`（仅 BIFF `.xls`），无法读取 OOXML `.xlsx` 做范围证明，绑定入口对 `.xlsx` 一并 fail-closed（400）。这两类表仍走既有独立手工上传入口，工具侧透传 ID 由已提请的规划者裁定处理（见 Decision 2）。
+   - 边界：绑定入口按阶段区分格式——`stage=upload_list` 接受去重 `.xls`（按 `Id` / `ExpType ` / `Path` / `Detail`·`CurProcess` 校验），`stage=create` 必须使用工具仓 #27 生成的 `.xlsx` 上传清单（按 `Signature ID` / `Occurrence IDs` 校验）；阶段/格式错配 fail-closed（400）。独立 `source=upload` 不受此限制。
    - **登记提交成功前不启动工具**：`POST /api/v1/jira/runs` 的 `JiraRun` INSERT/COMMIT 异常不再被吞掉后继续启动，改为记录日志并返回 500；子进程启动次数为 0，数据库不留半登记行。
    - 新的只读 `.xls` 读取点按 #739 依赖收敛门禁登记到 `tests/test_excel_dependency_inventory.py` 与 `docs/notes/process/2026-09-20-dependency-convergence-739.md`；不新增写侧或产物格式。
+
+6. **输入字段一致性与 #27 归因产物消费（2026-11-16，反例基线 `7c4cdddc2`，工具联调基线 `24f86c89`）**：
+   - **列冲突前置拒绝**：读取工作簿时保留原始表头并按 `strip().casefold()` 查重；重复列、大小写冲突（如 `Path` + `path`）与同一字段的别名冲突（如 `Signature ID` + `signature_id`）在准备隔离工作区与启动子进程之前返回 409。返回的列号即工具实际消费的列，避免平台校验的字段与被工具读取的字段不一致。
+   - **绑定 .xlsx**：新增 `openpyxl` 只读解析工具仓 #27 产出的上传清单；`stage=create` 按 `Signature ID` 与 `Occurrence IDs` 逐行校验，签名必须在 manifest 登记范围、发生必须命中该签名的 `attribution_candidates`。支持人工重排/筛选（按标识而非行号）；跨 run、跨版本、冲突标识与范围外发生均拒绝。`.xlsx` 只用于阶段二，去重 `.xls` 只用于阶段一。
+   - **消费 links / gaps**：`record_jira_run_completion` 读取 `attribution.json` 的 `links` 与 `gaps`，保留 #27 契约的 `kind` / `stage` / `row` / `workbook_row` / `signature_id` / `occurrence_ids` / `reason` 等诊断字段；越界 link 只记 `unverified_link_scope` 不落库；重复回调仍由终态门卫幂等短路。状态判定：`stage != create` → `NOT_APPLICABLE`；有 link 无 gap → `VERIFIED`；有 link 有 gap → `PARTIAL`；无 link 有 gap → `UNATTRIBUTED`；无 link 无 gap → `NOT_APPLICABLE`。
 
 ## Alternatives
 
@@ -44,7 +49,7 @@ Class: feature
 ## Verification
 
 - 隔离 PG16（testcontainers）+ 临时文件系统 + 真实 `RunConsole` 子进程替身回归：
-  - `.venv/bin/python scripts/run_pytest.py -q backend/tests/services/test_b8_g8_jira_delivery_and_compat.py backend/tests/api/test_dedup_jira_endpoints.py backend/tests/services/test_b8_g7_partition_consumers.py backend/tests/services/test_shadow_delivery.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/services/test_jira_vendor_engine.py tests/test_api_response_shape_contract.py tests/test_excel_dependency_inventory.py tests/test_api_4xx_advice_has_real_exit.py` → **164 passed**（含本轮同行绑定 2 个用例）；`test_b8_g8_jira_delivery_and_compat.py` 单文件 → **12 passed**。
+  - `.venv/bin/python scripts/run_pytest.py -q backend/tests/services/test_b8_g8_jira_delivery_and_compat.py backend/tests/api/test_dedup_jira_endpoints.py backend/tests/services/test_b8_g7_partition_consumers.py backend/tests/services/test_shadow_delivery.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/services/test_jira_vendor_engine.py tests/test_api_response_shape_contract.py tests/test_excel_dependency_inventory.py tests/test_api_4xx_advice_has_real_exit.py` → **178 passed**；`test_b8_g8_jira_delivery_and_compat.py` 单文件 → **26 passed**。
   - `.venv/bin/python scripts/run_pytest.py -v backend/tests/test_migration_guard.py backend/tests/test_schema_sync_guard.py backend/tests/test_health_schema_revision.py backend/tests/migration/test_delivery_generation_migration.py` → **27 passed**。
 - 空 PG16 迁移与 schema 对齐验证：
   - `alembic upgrade head` → `alembic downgrade b8g6d0e1f234` → `alembic upgrade head` → `backend/scripts/check_schema_sync.py` → **0 新增 diff**（`EMPTY_PG16_MIGRATION_AND_SCHEMA_SYNC_OK`）。
@@ -52,6 +57,12 @@ Class: feature
   - 固定反例基线 `90ef7f65`（独立 detached worktree）：6 个探针中 **4 failed / 2 passed**——`delivery_version` 范围外表格返回 200 且替身读到 `foreign-to-delivery`、登记事务失败仍返回 200 并启动子进程、`compat_rerun` 范围外表格返回 200、不可读取的 `.xlsx` 附带表返回 200 并启动；两个正向探针（范围内表格、启动前登记可见）通过。
   - 返修后新 HEAD：同 6 个探针 **6 passed**；范围外请求均 4xx、启动次数为 0，范围内表格与登记范围一致，登记事务失败返回 500 且零启动。
   - 第二轮同行绑定（反例基线 `81177701a`）：`delivery_version` / `compat_rerun` 各一个用例覆盖“合法 Id + 同版本另一问题 Path / 跨版本 Path / 跨 run Path”；基线首个场景即返回 200 并启动替身（该实现按 Id、ExpType 分别命中即放行，不校验 Path 与同一关系），新 HEAD 三类均 4xx、零启动，正向行（Id 与 Path 同行一致）通过并核对替身收到的表格。
+  - 第三轮输入校验 / xlsx / 归因（反例基线 `7c4cdddc2`，工具联调基线 `24f86c89`）：
+    - 重复归一化表头（`Path` 指向另一 run、`path` 指向合法路径）：基线返回 200 并启动替身，新 HEAD 409、零启动。
+    - 厂商仅 gaps（`unknown_signature_id`，无 Jira key）：基线 `NOT_APPLICABLE` 且 `attribution_gaps=[]`，新 HEAD `UNATTRIBUTED` 且缺口可查询。
+    - 真实工作簿：传音与天珑阶段一脚本各生成 3 行清单；重排/筛选后按 `Signature ID` / `Occurrence IDs` 绑定原 `DeliveryVersion`，两套均 200 且替身实收行与登记一致；跨 run、跨版本、冲突标识、范围外发生（4 场景 × 2 工具）全部 4xx、零启动。
+    - 两套真实工具归因模块（模拟 Jira 结果）各产出 4 条 `links` + 2 条 `duplicate_occurrence_id` gaps；平台消费后为 `PARTIAL`，越界 link 不落库，回调重放不重复写入。
+    - 基线探针 **4 failed**（2 个 `.xlsx` 正向 + 2 个 planner 反例）/ 新 HEAD **4 passed**。
 - 门禁与前端验证：
   - `.venv/bin/python scripts/run_gates.py check:quick` → **16 gates 全部通过**（含 `ruff`、`eslint`、`tsc`、`knip`、`compileall`、`layering`、`orphan-models`、`gov-surface`、`ai-work`、`god-files`、`inner-imports` 等）。
   - `cd frontend && npm run test -- --run` → **154 files / 1355 tests passed**。
@@ -61,5 +72,5 @@ Class: feature
 
 ## Revisit
 
-- 若规划者裁定升级 `DUElost/automation-toolkit`（`stability_Jira-Automation`），使其透传 `signature_id` / `occurrence_id` 并写回阶段二结果 JSON（且支持进程 `cwd` 输出），需对应补充结构化结果文件解析与工具包版本联调验证。
+- 工具仓 #27（`24f86c89`）已交付 `stp.jira_attribution/v1` 的 links/gaps 与工作区输出；真实 Jira 建单/匹配按 B8 阶段二安排执行，平台侧已消费契约产物并用模拟 Jira 结果完成联调。
 - 阶段二激活（`partition_mode` 切换）与生产发单仍需经 Owner 按 `#3800 §5` 另行放行，不随本 PR 自动生效。
