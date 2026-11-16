@@ -28,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
+import xlrd
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -332,6 +333,119 @@ def _build_manifest_and_xls_rows(
     return manifest, tuple(xls_rows)
 
 
+_IDENTITY_ID_HEADERS = ("id", "signature_id", "signature id")
+_IDENTITY_KEY_HEADERS = ("exptype", "exp_type", "norm_key", "normalized_key", "normalized key")
+_IDENTITY_RAW_HEADERS = ("detail", "curprocess", "signature_raw", "signature raw")
+_IDENTITY_PATH_HEADERS = ("path", "representative_verified_path", "representative verified path")
+
+
+def _coerce_signature_id(value: object) -> Optional[int]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_uploaded_workbook_rows(payload: bytes) -> list[tuple[str, int, dict[str, str]]]:
+    """读取上传表格的非空数据行（保留 sheet 名与行号用于拒绝时定位）。"""
+    try:
+        book = xlrd.open_workbook(file_contents=payload, on_demand=True)
+    except Exception as exc:  # xlrd 对损坏/非 Excel 载荷抛多种异常
+        raise JiraDeliveryError(400, f"uploaded file is not a readable Excel workbook: {exc}") from exc
+    rows: list[tuple[str, int, dict[str, str]]] = []
+    try:
+        for sheet in book.sheets():
+            if sheet.nrows < 1:
+                continue
+            headers = [str(sheet.cell_value(0, c)).strip().lower() for c in range(sheet.ncols)]
+            if not any(headers):
+                continue
+            for row_idx in range(1, sheet.nrows):
+                values = [str(sheet.cell_value(row_idx, c)).strip() for c in range(sheet.ncols)]
+                if not any(values):
+                    continue
+                rows.append((sheet.name, row_idx + 1, dict(zip(headers, values, strict=False))))
+    finally:
+        book.release_resources()
+    return rows
+
+
+def validate_uploaded_jira_workbook_scope(
+    *,
+    manifest: Mapping[str, Any],
+    uploaded_bytes: bytes,
+) -> None:
+    """证明上传表格属于登记交付范围：每一行的身份列都必须命中登记问题。
+
+    ``delivery_version`` / ``compat_rerun`` 入口允许附带表格，但附带表格不能成为
+    绕过登记范围的后门。只有整张表可证明属于该登记范围时才放行，否则拒绝请求，
+    子进程不会启动；``source=upload`` 的独立手工上传入口不受此约束。
+    """
+    registered_ids: set[int] = set()
+    registered_keys: set[str] = set()
+    registered_raws: set[str] = set()
+    registered_paths: set[str] = set()
+    for item in manifest.get("issue_ids") or []:
+        sig_id = _coerce_signature_id(item)
+        if sig_id is not None:
+            registered_ids.add(sig_id)
+    for item in manifest.get("issues") or []:
+        if not isinstance(item, Mapping):
+            continue
+        sig_id = _coerce_signature_id(item.get("signature_id"))
+        if sig_id is not None:
+            registered_ids.add(sig_id)
+        for value, bucket in (
+            (item.get("normalized_key"), registered_keys),
+            (item.get("signature_raw"), registered_raws),
+            (item.get("representative_verified_path"), registered_paths),
+        ):
+            text = str(value or "").strip()
+            if text:
+                bucket.add(text)
+
+    if not registered_ids and not registered_keys and not registered_raws and not registered_paths:
+        raise JiraDeliveryError(
+            409,
+            "registered delivery scope contains no issues; an attached table cannot be proven in scope",
+        )
+
+    rows = _read_uploaded_workbook_rows(uploaded_bytes)
+    if not rows:
+        raise JiraDeliveryError(
+            409, "uploaded table has no data rows to prove registered delivery scope",
+        )
+
+    def _matched(row: Mapping[str, str], headers: tuple[str, ...], bucket: set) -> bool:
+        return any(row.get(header) and row[header] in bucket for header in headers)
+
+    rejected: list[str] = []
+    for sheet_name, row_no, row in rows:
+        id_raw = next((row[h] for h in _IDENTITY_ID_HEADERS if row.get(h)), "")
+        key_raw = next((row[h] for h in _IDENTITY_KEY_HEADERS if row.get(h)), "")
+        id_ok = _coerce_signature_id(id_raw) in registered_ids if id_raw else False
+        key_ok = bool(key_raw) and key_raw in registered_keys
+        other_ok = _matched(row, _IDENTITY_RAW_HEADERS, registered_raws) or _matched(
+            row, _IDENTITY_PATH_HEADERS, registered_paths,
+        )
+        if id_raw and not id_ok:
+            rejected.append(f"{sheet_name}!{row_no} id={id_raw}")
+        elif key_raw and not key_ok:
+            rejected.append(f"{sheet_name}!{row_no} normalized_key={key_raw}")
+        elif not id_ok and not key_ok and not other_ok:
+            rejected.append(f"{sheet_name}!{row_no} has no registered identity value")
+    if rejected:
+        detail = "; ".join(rejected[:5])
+        suffix = "" if len(rejected) <= 5 else f" (+{len(rejected) - 5} more)"
+        raise JiraDeliveryError(
+            409,
+            f"uploaded table contains rows outside registered delivery scope: {detail}{suffix}",
+        )
+
+
 def resolve_delivery_jira_input(
     db: Session,
     *,
@@ -401,6 +515,9 @@ def resolve_delivery_jira_input(
         if suffix not in {".xls", ".xlsx"}:
             raise JiraDeliveryError(400, "uploaded file must be .xls/.xlsx")
         uploaded_suffix = suffix
+        validate_uploaded_jira_workbook_scope(
+            manifest=manifest, uploaded_bytes=uploaded_bytes,
+        )
 
     label = f"delivery:{plan_run.id}:{plat}:v{version.version_no}"
     return ResolvedJiraDeliveryInput(
@@ -510,6 +627,9 @@ def resolve_compat_rerun_jira_input(
         if suffix not in {".xls", ".xlsx"}:
             raise JiraDeliveryError(400, "uploaded file must be .xls/.xlsx")
         uploaded_suffix = suffix
+        validate_uploaded_jira_workbook_scope(
+            manifest=manifest, uploaded_bytes=uploaded_bytes,
+        )
 
     label = f"compat_rerun:{plan_run.id}:{plat}:r{rerun.id}"
     return ResolvedJiraDeliveryInput(

@@ -1240,3 +1240,219 @@ def test_controlled_compat_rerun_archived_pruned_partial_retry_and_no_dup_jira(
     list_resp = client.get(f"/api/v1/plan-runs/{run.id}/dedup/compat-reruns?platform=mtk", headers=admin_headers)
     assert list_resp.status_code == 200
     assert len(list_resp.json()["data"]) == 2
+
+
+def _planner_audit_seed_jira(db_session, env_roots, monkeypatch, tmp_path):
+    """构造一个合法 DEDUP_FIRST 交付版本与 recording 替身工具（create 快速退出）。"""
+    _seed_host(db_session, "g8-planner")
+    run = _seed_plan_run(db_session, plan_name="g8-planner")
+    facts.record_partition_mode(
+        db_session, plan_run_id=run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST,
+    )
+    event, signature_id, _ = _seed_dle_and_fact(
+        db_session, plan_run_id=run.id, root_run_id=run.id, host_id="g8-planner",
+        serial=SERIAL_1, event_type="ANR", sig_raw="g8.bound", norm_key="g8-bound",
+        occ_key="g8-planner-scope", folder=FOLDER_A, event_dir=EVENT_DIR_1,
+        nfs_root=env_roots.nfs_root,
+    )
+    version = _register_dv(
+        db_session, plan_run_id=run.id, version_no=1, issue_ids=[signature_id],
+        event_ids=[str(event.id)], nfs_root=env_roots.nfs_root,
+    )
+    db_session.commit()
+    capture = tmp_path / "g8-planner-capture.jsonl"
+    tool = tmp_path / "g8-planner-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
+    monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
+    fields = {
+        "source": "delivery_version", "vendor": "transsion", "stage": "create",
+        "plan_run_id": str(run.id), "platform": "mtk",
+        "delivery_version_id": str(version.id), "dry_run": "false",
+    }
+    return fields, capture, run, version, signature_id
+
+
+def _captured(rows_path: Path) -> list[dict]:
+    if not rows_path.exists():
+        return []
+    return [json.loads(line) for line in rows_path.read_text().splitlines() if line.strip()]
+
+
+def test_planner_audit_foreign_workbook_cannot_replace_bound_jira_input(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """反例 1：合法 delivery_version + 范围外表格，拒绝且零启动。"""
+    fields, capture, _run, _version, _sig = _planner_audit_seed_jira(
+        db_session, env_roots, monkeypatch, tmp_path,
+    )
+    cross_run_xls = jira_delivery.write_dedup_xls(
+        tmp_path / "foreign.xls", [{"Id": "999999", "ExpType ": "foreign-to-delivery"}],
+    )
+    response = client.post(
+        "/api/v1/jira/runs", data=fields, headers=auth_headers,
+        files={"file": ("foreign.xls", cross_run_xls.read_bytes(), "application/vnd.ms-excel")},
+    )
+    if response.status_code == 200:
+        _wait_jira_terminal(db_session, response.json()["data"]["console_run_id"])
+    rows = _captured(capture)
+    assert 400 <= response.status_code < 500 and not capture.exists(), (
+        response.status_code, [row.get("ExpType ") for entry in rows for row in entry["rows"]],
+    )
+    assert db_session.query(JiraRun).count() == 0
+
+
+def test_uploaded_workbook_in_registered_scope_reaches_vendor_unchanged(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """正向 1：范围内表格放行，替身实际读到的行仍属于登记范围。"""
+    fields, capture, run, _version, signature_id = _planner_audit_seed_jira(
+        db_session, env_roots, monkeypatch, tmp_path,
+    )
+    scoped = [
+        item for item in facts.list_partition_delivery_issues(
+            db_session, plan_run_id=run.id, platform="mtk",
+        )
+        if int(item["signature_id"]) == signature_id
+    ]
+    assert scoped
+    legit_rows = [
+        {"Id": str(item["signature_id"]), "ExpType ": item["normalized_key"], "Detail": item["signature_raw"]}
+        for item in scoped
+    ]
+    legit_xls = jira_delivery.write_dedup_xls(tmp_path / "legit.xls", legit_rows)
+    response = client.post(
+        "/api/v1/jira/runs", data=fields, headers=auth_headers,
+        files={"file": ("legit.xls", legit_xls.read_bytes(), "application/vnd.ms-excel")},
+    )
+    assert response.status_code == 200, response.text
+    _wait_jira_terminal(db_session, response.json()["data"]["console_run_id"])
+    entries = _captured(capture)
+    assert len(entries) == 1
+    received = entries[0]["rows"]
+    assert [row["Id"] for row in received] == [str(signature_id)]
+    assert received[0]["ExpType "] == scoped[0]["normalized_key"]
+
+
+def test_planner_audit_no_jira_subprocess_without_committed_registration(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """反例 2：登记事务失败时返回错误、零启动、数据库无 JiraRun。"""
+    from sqlalchemy import text as sa_text
+    from sqlalchemy.orm import Session
+
+    fields, capture, _run, _version, _sig = _planner_audit_seed_jira(
+        db_session, env_roots, monkeypatch, tmp_path,
+    )
+
+    class DbWithCommitFailure(Session):
+        def commit(self):
+            self.execute(sa_text("SELECT 1 / 0"))
+            super().commit()
+
+    monkeypatch.setattr(
+        "backend.api.routes.dedup.SessionLocal",
+        sessionmaker(bind=db_session.get_bind(), class_=DbWithCommitFailure),
+    )
+    response = client.post("/api/v1/jira/runs", data=fields, headers=auth_headers)
+    if response.status_code == 200:
+        deadline = time.monotonic() + 3
+        while not capture.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    assert db_session.query(JiraRun).count() == 0
+    assert response.status_code >= 500 and not capture.exists(), (response.status_code, capture.exists())
+
+
+def test_registration_is_visible_from_independent_session_before_vendor_start(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """正向 2：启动前登记已提交，独立会话可读到该 JiraRun。"""
+    fields, capture, _run, _version, _sig = _planner_audit_seed_jira(
+        db_session, env_roots, monkeypatch, tmp_path,
+    )
+    observed: dict[str, int] = {}
+    original_start = RunConsole.start
+
+    def checked_start(self, *, run_key, cmd, cwd=None, env=None, label="", on_complete=None, run_id=None):
+        with sessionmaker(bind=db_session.get_bind())() as probe:
+            observed["rows"] = probe.query(JiraRun).filter_by(console_run_id=run_id).count()
+        return original_start(
+            self, run_key=run_key, cmd=cmd, cwd=cwd, env=env, label=label,
+            on_complete=on_complete, run_id=run_id,
+        )
+
+    monkeypatch.setattr(RunConsole, "start", checked_start)
+    response = client.post("/api/v1/jira/runs", data=fields, headers=auth_headers)
+    assert response.status_code == 200, response.text
+    row = _wait_jira_terminal(db_session, response.json()["data"]["console_run_id"])
+    assert observed == {"rows": 1}
+    assert row.status == "SUCCESS"  # 子进程立即退出也能写回终态
+    assert capture.exists()
+
+
+def test_compat_rerun_uploaded_workbook_scope_is_enforced(
+    client, admin_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """两个入口同等约束：兼容补跑附带的表格也必须落在登记范围。"""
+    _seed_host(db_session, "g8-compat")
+    run = _seed_plan_run(db_session, plan_name="g8-compat")
+    facts.record_partition_mode(
+        db_session, plan_run_id=run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST,
+    )
+    local_root = tmp_path / "agent_local"
+    dle, sig_id, _ = _seed_dle_and_fact(
+        db_session, plan_run_id=run.id, root_run_id=run.id, host_id="g8-compat",
+        serial=SERIAL_1, event_type="ANR", sig_raw="g8.compat.bound", norm_key="g8-compat-bound",
+        occ_key="g8-compat-scope", folder=FOLDER_A, event_dir=EVENT_DIR_1,
+        nfs_root=env_roots.nfs_root, dle_state="ARCHIVED", verified_pub=False,
+        local_root=local_root,
+    )
+    _register_dv(
+        db_session, plan_run_id=run.id, version_no=1, issue_ids=[sig_id],
+        event_ids=[str(dle.id)], nfs_root=env_roots.nfs_root,
+    )
+    db_session.commit()
+    outcome = compat_rerun.trigger_compat_rerun(
+        db_session, plan_run_id=run.id, platform="mtk", requested_by="owner",
+        requester_role="admin", request_key="g8-scope", delivery_version_no=1,
+        local_source_roots={"g8-compat": str(local_root)},
+    )
+    db_session.commit()
+    assert outcome.rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+
+    capture = tmp_path / "g8-compat-capture.jsonl"
+    tool = tmp_path / "g8-compat-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
+    monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
+    fields = {
+        "source": "compat_rerun", "vendor": "transsion", "stage": "create",
+        "plan_run_id": str(run.id), "platform": "mtk",
+        "compat_rerun_id": str(outcome.rerun.id), "dry_run": "false",
+    }
+
+    foreign = jira_delivery.write_dedup_xls(
+        tmp_path / "foreign-compat.xls", [{"Id": "999999", "ExpType ": "foreign-to-compat"}],
+    )
+    rejected = client.post(
+        "/api/v1/jira/runs", data=fields, headers=admin_headers,
+        files={"file": ("foreign-compat.xls", foreign.read_bytes(), "application/vnd.ms-excel")},
+    )
+    assert 400 <= rejected.status_code < 500
+    assert not capture.exists()
+    assert db_session.query(JiraRun).count() == 0
+
+    legit = jira_delivery.write_dedup_xls(
+        tmp_path / "legit-compat.xls",
+        [{"Id": str(sig_id), "ExpType ": "g8-compat-bound"}],
+    )
+    accepted = client.post(
+        "/api/v1/jira/runs", data=fields, headers=admin_headers,
+        files={"file": ("legit-compat.xls", legit.read_bytes(), "application/vnd.ms-excel")},
+    )
+    assert accepted.status_code == 200, accepted.text
+    _wait_jira_terminal(db_session, accepted.json()["data"]["console_run_id"])
+    entries = _captured(capture)
+    assert len(entries) == 1 and [row["Id"] for row in entries[0]["rows"]] == [str(sig_id)]
+

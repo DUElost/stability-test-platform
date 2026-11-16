@@ -32,6 +32,7 @@ _INVENTORY: dict[str, set[str]] = {
     "backend/agent/install_selfcheck.py": {"xlwt"},
     "backend/services/dedup_extract.py": {"xlrd"},
     "backend/services/dedup_scan.py": {"xlrd", "xlwt"},
+    "backend/services/jira_delivery.py": {"xlrd"},
     "backend/services/scan_membership.py": {"xlrd"},
 }
 

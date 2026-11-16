@@ -419,8 +419,14 @@ async def start_jira_run(
                 created_by_user_id=getattr(_user, "id", None),
             ))
             db2.commit()
-    except Exception:
+    except Exception as exc:
         logger.exception("jira_run_persist_failed run_id=%s", console_run_id)
+        # 登记事务未提交成功时不得启动厂商工具：否则回调/审计找不到 JiraRun，
+        # 提单既无法定位输入范围也无法回写终态。
+        raise HTTPException(
+            status_code=500,
+            detail="failed to persist jira run registration; vendor tool was not started",
+        ) from exc
 
     try:
         RunConsole.instance().start(

@@ -22,6 +22,7 @@ Class: process
 |---|---|
 | `backend/services/dedup_scan.py:1176-1201`（`_rewrite_merge_report_paths_to_center`） | `.xls` **读 + 写回**：xlrd 打开 `Result_MergeFiles*.xls`，xlwt 重建同 sheet 并把 `Path` 列改写为中心可达路径（其余列原值保留；本就是「重建」，不保格式/公式） |
 | `backend/services/dedup_extract.py:84-92` | `.xls` **读**：抽取链读 merge 报告 |
+| `backend/services/jira_delivery.py`（2026-11-16，B8 G8 / #4023） | 只读校验 `delivery_version` / `compat_rerun` 附带表格的签名与归一化键是否落在登记交付范围，校验通过才启动厂商工具；不写 `.xls`，格式迁移阶段 3 同步移除该读取点 |
 | `backend/services/scan_membership.py`（2026-11-07，B8 G4 / #3877） | 只读影子轮 org.xls，核实映射行数、Path 与 DeviceId；ADR-0062 D12 第 3 条和本单不改变 xls 格式，沿用 xlrd，不新增写侧；格式迁移阶段 3 同步移除此读取点 |
 | `backend/agent/aee/scan_scope.py`（2026-11-04，B8 G3） | 上传前只读既有 org 报表，校验 serial 并生成逐行伴随映射；#3800 / ADR-0062 D12 第 3 条规定 xls 格式不变，因此使用 xlrd 2.0.2，不启动格式迁移 |
 | `backend/agent/install_selfcheck.py`（2026-10-09 补登记） | 在实际 Agent 解释器中导入 xlwt 并初始化 Workbook，提前检查既有 Scan-Result-GT `.xls` 导出依赖；不新增产物格式或业务导出入口 |
