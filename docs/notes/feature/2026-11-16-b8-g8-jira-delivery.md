@@ -47,7 +47,7 @@ Class: feature
 ## Verification
 
 - 隔离 PG16（testcontainers）+ 临时文件系统 + 真实 `RunConsole` 子进程替身回归：
-  - `.venv/bin/python scripts/run_pytest.py -q backend/tests/services/test_b8_g8_jira_delivery_and_compat.py backend/tests/api/test_dedup_jira_endpoints.py backend/tests/services/test_b8_g7_partition_consumers.py backend/tests/services/test_shadow_delivery.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/services/test_jira_vendor_engine.py tests/test_api_response_shape_contract.py tests/test_excel_dependency_inventory.py tests/test_api_4xx_advice_has_real_exit.py` → **178 passed**；`test_b8_g8_jira_delivery_and_compat.py` 单文件 → **26 passed**。
+  - `.venv/bin/python scripts/run_pytest.py -q backend/tests/services/test_b8_g8_jira_delivery_and_compat.py backend/tests/api/test_dedup_jira_endpoints.py backend/tests/services/test_b8_g7_partition_consumers.py backend/tests/services/test_shadow_delivery.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/services/test_jira_vendor_engine.py tests/test_api_response_shape_contract.py tests/test_excel_dependency_inventory.py tests/test_api_4xx_advice_has_real_exit.py` → **180 passed**；`test_b8_g8_jira_delivery_and_compat.py` 单文件 → **28 passed**。
   - `.venv/bin/python scripts/run_pytest.py -v backend/tests/test_migration_guard.py backend/tests/test_schema_sync_guard.py backend/tests/test_health_schema_revision.py backend/tests/migration/test_delivery_generation_migration.py` → **27 passed**。
 - 空 PG16 迁移与 schema 对齐验证：
   - `alembic upgrade head` → `alembic downgrade b8g6d0e1f234` → `alembic upgrade head` → `backend/scripts/check_schema_sync.py` → **0 新增 diff**（`EMPTY_PG16_MIGRATION_AND_SCHEMA_SYNC_OK`）。
@@ -56,7 +56,7 @@ Class: feature
   - 返修后新 HEAD：同 6 个探针 **6 passed**；范围外请求均 4xx、启动次数为 0，范围内表格与登记范围一致，登记事务失败返回 500 且零启动。
   - 第二轮同行绑定（反例基线 `81177701a`）：`delivery_version` / `compat_rerun` 各一个用例覆盖“合法 Id + 同版本另一问题 Path / 跨版本 Path / 跨 run Path”；基线首个场景即返回 200 并启动替身（该实现按 Id、ExpType 分别命中即放行，不校验 Path 与同一关系），新 HEAD 三类均 4xx、零启动，正向行（Id 与 Path 同行一致）通过并核对替身收到的表格。
   - 第三轮输入校验 / xlsx / 归因（反例基线 `7c4cdddc2`，工具联调基线 `24f86c89`）：
-    - 重复归一化表头（`Path` 指向另一 run、`path` 指向合法路径）：基线返回 200 并启动替身，新 HEAD 409、零启动。
+    - 重复列 / 大小写冲突 / 别名冲突（含 `Path` 指向另一 run、`path` 指向合法路径）在 `delivery_version` 与 `compat_rerun` 两个入口覆盖：基线返回 200 并启动替身，新 HEAD 409、零启动。
     - 厂商仅 gaps（`unknown_signature_id`，无 Jira key）：基线 `NOT_APPLICABLE` 且 `attribution_gaps=[]`，新 HEAD `UNATTRIBUTED` 且缺口可查询。
     - 真实工作簿：传音与天珑阶段一脚本各生成 3 行清单；重排/筛选后按 `Signature ID` / `Occurrence IDs` 绑定原 `DeliveryVersion`，两套均 200 且替身实收行与登记一致；跨 run、跨版本、冲突标识、范围外发生（4 场景 × 2 工具）全部 4xx、零启动。
     - 两套真实工具归因模块（模拟 Jira 结果）各产出 4 条 `links` + 2 条 `duplicate_occurrence_id` gaps；平台消费后为 `PARTIAL`，越界 link 不落库，回调重放不重复写入。

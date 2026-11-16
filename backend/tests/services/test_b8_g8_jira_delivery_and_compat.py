@@ -2010,3 +2010,99 @@ def test_vendor_links_and_gaps_are_both_persisted_and_replay_is_idempotent(
     assert db_session.query(JiraOccurrenceLink).filter_by(jira_run_id=row.id).count() == link_count
     assert len(row.attribution_gaps) == gap_count
 
+
+
+def test_delivery_version_header_conflicts_are_rejected_before_start(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """需求 1：重复列、大小写冲突与同字段别名冲突都在启动前拒绝。"""
+    import xlwt
+
+    fields, capture, _run, _version, signature_id = _planner_audit_seed_jira(
+        db_session, env_roots, monkeypatch, tmp_path,
+    )
+    fields["stage"] = "upload_list"
+    cases = {
+        "duplicate-exact": [
+            ("Id", str(signature_id)), ("Path", "/tmp/a"), ("Path", "/tmp/b"),
+        ],
+        "alias-conflict": [
+            ("Id", str(signature_id)), ("Signature ID", str(signature_id)),
+        ],
+        "case-conflict": [
+            ("Id", str(signature_id)), ("Path", "/tmp/foreign"), ("path", "/tmp/legit"),
+        ],
+    }
+    for label, columns in cases.items():
+        workbook = xlwt.Workbook()
+        sheet = workbook.add_sheet("aeeexp")
+        for index, (header, value) in enumerate(columns):
+            sheet.write(0, index, header)
+            sheet.write(1, index, value)
+        path = tmp_path / f"{label}.xls"
+        workbook.save(str(path))
+        response = client.post(
+            "/api/v1/jira/runs", data=fields, headers=auth_headers,
+            files={"file": (path.name, path.read_bytes(), "application/vnd.ms-excel")},
+        )
+        assert 400 <= response.status_code < 500, (label, response.text)
+        assert not capture.exists(), label
+        assert db_session.query(JiraRun).count() == 0, label
+
+
+def test_compat_rerun_duplicate_header_conflict_is_rejected_before_start(
+    client, admin_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """需求 1：compat_rerun 同样拒绝 Path/path 重复归一化表头。"""
+    import xlwt
+
+    scope = _seed_xlsx_scope(db_session, env_roots)
+    outcome = compat_rerun.trigger_compat_rerun(
+        db_session, plan_run_id=scope.run.id, platform="mtk", requested_by="owner",
+        requester_role="admin", request_key="g8-dup-header", delivery_version_no=1,
+    )
+    db_session.commit()
+    assert outcome.rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+    resolved = jira_delivery.resolve_compat_rerun_jira_input(
+        db_session, plan_run_id=scope.run.id, platform="mtk",
+        compat_rerun_id=outcome.rerun.id, stage="upload_list",
+    )
+    legitimate = {
+        int(item["signature_id"]): item["representative_verified_path"]
+        for item in resolved.manifest["issues"]
+    }[scope.sig_a]
+    foreign = jira_delivery.resolve_delivery_jira_input(
+        db_session, plan_run_id=scope.run.id, platform="mtk",
+        delivery_version_no=2, stage="upload_list",
+    ).manifest["issues"][0]["representative_verified_path"]
+    assert legitimate and foreign and legitimate != foreign
+
+    capture = tmp_path / "compat-dup-capture.jsonl"
+    tool = tmp_path / "compat-dup-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
+    monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("aeeexp")
+    for index, (header, value) in enumerate((
+        ("Id", str(scope.sig_a)), ("ExpType ", "g8-xlsx-a"),
+        ("Path", str(foreign)), ("path", str(legitimate)),
+    )):
+        sheet.write(0, index, header)
+        sheet.write(1, index, value)
+    path = tmp_path / "compat-duplicate-case.xls"
+    workbook.save(str(path))
+    response = client.post(
+        "/api/v1/jira/runs",
+        data={
+            "source": "compat_rerun", "vendor": "transsion", "stage": "upload_list",
+            "plan_run_id": str(scope.run.id), "platform": "mtk",
+            "compat_rerun_id": str(outcome.rerun.id), "dry_run": "false",
+        },
+        headers=admin_headers,
+        files={"file": (path.name, path.read_bytes(), "application/vnd.ms-excel")},
+    )
+    assert 400 <= response.status_code < 500, response.text
+    assert not capture.exists()
+    assert db_session.query(JiraRun).count() == 0
+
