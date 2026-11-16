@@ -2,7 +2,8 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { FilterSearchInput, FilterWorkbench } from '@/components/ui/filter-bar';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import {
   Table,
   TableBody,
@@ -19,12 +20,11 @@ import { api, toApiError, type Plan } from '@/utils/api';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { Plus, Edit, Trash2, Search, FileText, Play } from 'lucide-react';
+import { Plus, Edit, Trash2, FileText, Play, Layers } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
-import { FORM } from '@/design-system';
 import { LAYOUT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatLocalDate } from '@/utils/format';
@@ -43,17 +43,20 @@ function SpecialtyFilterSelect({
   });
 
   return (
-    <select
+    <SearchableSelect
       value={value ?? 'all'}
-      onChange={(e) => onChange(e.target.value === 'all' ? undefined : e.target.value)}
-      className={`${FORM.select} w-36`}
-      data-testid="plan-specialty-filter"
-    >
-      <option value="all">全部专项</option>
-      {specialties?.map((s) => (
-        <option key={s.key} value={s.key}>{s.display_name}</option>
-      ))}
-    </select>
+      onChange={(next) => onChange(next === 'all' ? undefined : next)}
+      options={(specialties ?? []).map((s) => ({
+        value: s.key,
+        label: s.display_name,
+      }))}
+      allLabel="全部专项"
+      searchPlaceholder="搜索专项..."
+      icon={<Layers />}
+      ariaLabel="按专项筛选"
+      className="w-full sm:w-40"
+      testId="plan-specialty-filter"
+    />
   );
 }
 
@@ -159,31 +162,43 @@ export default function PlanListPage() {
         <DashboardStatCard label="链式 Plan" value={stats.chained} />
       </div>
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <div className="relative min-w-0 flex-1">
-          <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4', TEXT.subtitle)} />
-          <Input
-            type="search"
-            placeholder="搜索 Plan 名称或描述..."
+      <FilterWorkbench
+        headerLeft={
+          <span className="text-xs font-medium text-muted-foreground tabular-nums">
+            共 {filtered.length} 个 Plan
+          </span>
+        }
+        headerRight={
+          <Button size="sm" onClick={() => navigate('/orchestration/plans/new')} className="shrink-0">
+            <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
+          </Button>
+        }
+        hasAnyActiveFilter={Boolean(search || projectKey || specialtyKey)}
+        onResetAll={() => {
+          setSearch('');
+          setProjectKey(undefined);
+          setSpecialtyKey(undefined);
+        }}
+      >
+        <div className="flex flex-wrap items-center gap-2.5">
+          <FilterSearchInput
+            id="plan-search"
             value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="pl-9"
-            data-testid="plan-search"
+            onChange={setSearch}
+            placeholder="搜索 Plan 名称或描述..."
+            ariaLabel="搜索 Plan"
+            testId="plan-search"
+            className="flex-1 min-w-[200px] sm:max-w-sm"
           />
-        </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <ProjectFilterSelect
             value={projectKey}
             onChange={setProjectKey}
-            className="w-44"
+            className="w-full sm:w-44"
             testId="plan-project-filter"
           />
           <SpecialtyFilterSelect value={specialtyKey} onChange={setSpecialtyKey} />
-          <Button onClick={() => navigate('/orchestration/plans/new')} className="shrink-0">
-            <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
-          </Button>
         </div>
-      </div>
+      </FilterWorkbench>
 
       {isLoading ? (
         <PageSkeleton>

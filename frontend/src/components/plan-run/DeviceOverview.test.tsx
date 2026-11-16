@@ -149,11 +149,8 @@ describe('DeviceOverview', () => {
     await waitFor(() => expect(withoutName).toHaveTextContent('10.0.0.2'));
 
     const filter = screen.getByTestId('device-host-filter');
-    await waitFor(() =>
-      expect(within(filter).getByRole('option', { name: /node-a/ })).toBeInTheDocument(),
-    );
-    // 筛选的 value 仍是 host_id（回传父组件的语义不变）
-    expect(within(filter).getByRole('option', { name: /node-a/ })).toHaveValue('host-101');
+    fireEvent.click(filter);
+    expect(await screen.findByRole('option', { name: /node-a/ })).toBeInTheDocument();
   });
 
   // #3350（ADR-0023 D3）：current_step 的脚本身份（快照派生）只在表格视图显示
@@ -212,9 +209,8 @@ describe('DeviceOverview', () => {
     );
     fireEvent.click(screen.getByTestId('device-status-filter-backoff'));
     expect(onStatus).toHaveBeenCalledWith('backoff');
-    fireEvent.change(screen.getByTestId('device-host-filter'), {
-      target: { value: 'host-202' },
-    });
+    fireEvent.click(screen.getByTestId('device-host-filter'));
+    fireEvent.click(screen.getByRole('option', { name: /host-202/ }));
     expect(onHost).toHaveBeenCalledWith('host-202');
   });
 
