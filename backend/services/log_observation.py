@@ -51,6 +51,9 @@ _DLE_RISK_PLACEHOLDER_EVENT_TYPES = frozenset(
 _DLE_RISK_EVENT_TYPES = tuple(
     sorted(_DLE_RISK_FAMILY_EVENT_TYPES | _DLE_RISK_CONCRETE_EVENT_TYPES),
 )
+#: 公开别名（B8 G7 / #3886）：异常观测面按同一事件类型集合取 DLE，
+#: 不再让 watcher-summary 自带一份清单。旧私有名保留兼容。
+ANOMALY_DLE_EVENT_TYPES = _DLE_RISK_EVENT_TYPES
 # #1956：异常类信号的类别**真源**（风险汇总 / 异常仪表盘共用）。
 # 曾经两处各写一份清单，结果仪表盘漏掉 UNIVIEW——事件采到了却不进仪表盘。
 # 现由此单一常量派生，并有防漂移测试守卫（见 tests 里的 sync 用例）。
@@ -66,13 +69,16 @@ def _rows_from_device_log_events(
 ) -> list[tuple]:
     """DLE-backed subtype counts (authority per ADR-0028).
 
-    Ruled semantics (#783, 2026-09-12): the count is **distinct event artifact
-    paths** per subtype (``COUNT(DISTINCT COALESCE(remote_path, local_path))``),
-    not raw event rows. This matches the DLE model where a path identifies one
-    uploaded event artifact; multiple signals referencing the same artifact are
-    the same event and must not inflate the risk bucket. ``_classify_subtype``
-    thresholds therefore read "distinct event artifacts", not "event
-    occurrences". Changing this needs a product ruling (see Revisit).
+    B8 G7 / #3886 口径修订：计数单位改为**发生身份**——
+    ``COUNT(DISTINCT COALESCE(occurrence_key, 'dle:' || id::text))``。
+    原口径按 ``COALESCE(remote_path, local_path)`` 去重，两个后果在「先去重」
+    分区上不可接受：未被选中的发生只有 local_path（路径数量被当成发生数量），
+    而代表上传、HddSpill 或路径改写会改变同一发生的键，可能让已累计的计数下降。
+    发生身份由 G1 契约计算，重扫 / 迟到补报 / 溢出副本共享同一键；身份不可证明
+    （key 为空）时按 DLE 行计，与 fail-open 语义一致。
+
+    同一发生被多条 DLE 观察时只计一次；一个事件目录承载多个问题时，问题映射
+    仍由 issue_occurrence_event 表达。阈值继续读「发生数」，口径见 PR 记录。
 
     ``by_job=True`` 时按 job 分桶（``(job_id, subtype, count)``，供 #2365 的
     逐 job 判定用）；两种形态共用同一 SELECT/WHERE 字面量，过滤器不会各写一份
@@ -82,7 +88,7 @@ def _rows_from_device_log_events(
     sql = text(f"""
         SELECT
             {prefix}COALESCE(NULLIF(event_subtype, ''), event_type) AS subtype,
-            COUNT(DISTINCT COALESCE(remote_path, local_path)) AS dedup_count
+            COUNT(DISTINCT COALESCE(occurrence_key, 'dle:' || id::text)) AS dedup_count
         FROM device_log_event
         WHERE job_id = ANY(:job_ids)
           AND (

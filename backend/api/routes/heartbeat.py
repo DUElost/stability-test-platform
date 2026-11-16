@@ -2,14 +2,14 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.core.device_serial import is_placeholder_serial
-from backend.core.database import get_db
+from backend.core.database import SessionLocal, get_db
 from backend.core.host_identity import allocate_host_id
 from backend.models.host import Host, Device
 from backend.models.device_lease import DeviceLease
@@ -185,16 +185,37 @@ def _mark_missing_devices_offline(
     return changed_devices
 
 
-@router.post("/heartbeat")
-async def heartbeat(
+def _process_heartbeat_in_thread(
     payload: HeartbeatIn,
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_agent_secret),
-):
-    response, ws_device_updates = await asyncio.to_thread(
-        _process_heartbeat_with_db, payload, db
-    )
+    db_provider: Optional[Callable[[], Any]] = None,
+) -> tuple[dict, List[Dict[str, Any]]]:
+    """在 worker 线程内独立开/关 DB 会话（#4025）。
 
+    避免将事件循环上 ``Depends(get_db)`` 产生的 Session 传入 ``asyncio.to_thread``：
+    一旦协程在 ``await`` 期间被取消，FastAPI 会在事件循环上提前 ``db.close()``，
+    而仍在运行的工作线程随后会静默从连接池重取连接并遗留未关闭事务。
+    """
+    if db_provider is None:
+        with SessionLocal() as db:
+            return _process_heartbeat_with_db(payload, db)
+
+    resource = db_provider()
+    if hasattr(resource, "__next__"):
+        try:
+            db = next(resource)
+        except StopIteration as exc:
+            raise RuntimeError("get_db override yielded no session") from exc
+        try:
+            return _process_heartbeat_with_db(payload, db)
+        finally:
+            resource.close()
+    return _process_heartbeat_with_db(payload, resource)
+
+
+async def _finish_heartbeat(
+    response: dict,
+    ws_device_updates: List[Dict[str, Any]],
+) -> dict:
     if ws_device_updates:
         try:
             from backend.realtime.socketio_server import broadcast_device_update
@@ -206,6 +227,31 @@ async def heartbeat(
 
     schedule_dashboard_summary_push()
     return response
+
+
+@router.post("/heartbeat", operation_id="heartbeat_api_v1_heartbeat_post")
+async def heartbeat_route(
+    payload: HeartbeatIn,
+    request: Request,
+    _: bool = Depends(verify_agent_secret),
+):
+    db_provider = request.app.dependency_overrides.get(get_db)
+    response, ws_device_updates = await asyncio.to_thread(
+        _process_heartbeat_in_thread, payload, db_provider
+    )
+    return await _finish_heartbeat(response, ws_device_updates)
+
+
+async def heartbeat(
+    payload: HeartbeatIn,
+    db: Session,
+    _: bool = True,
+):
+    """兼容直接以 ``await heartbeat(payload, db)`` 调用的测试入口。"""
+    response, ws_device_updates = await asyncio.to_thread(
+        _process_heartbeat_with_db, payload, db
+    )
+    return await _finish_heartbeat(response, ws_device_updates)
 
 
 def _process_heartbeat_with_db(

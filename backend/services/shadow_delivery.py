@@ -89,6 +89,8 @@ class DeliverySnapshot:
     gaps: tuple[dict, ...]
     primary_folders: tuple
     issues: tuple[dict, ...]
+    # 代表发布状态（signature_id -> VERIFIED/RETRYING/FAILED）；CURRENT 分区为 None。
+    publish_status: Optional[dict[int, str]] = None
 
 
 def _utcnow() -> datetime:
@@ -243,7 +245,7 @@ def _publication_view(
 
 
 def build_delivery_snapshot(
-    db: Session, *, plan_run_id: int, platform: str,
+    db: Session, *, plan_run_id: int, platform: str, lock_rounds: bool = True,
 ) -> Optional[DeliverySnapshot]:
     """按当前事实计算交付物版本内容；没有终态最后一轮时返回 None。
 
@@ -257,7 +259,11 @@ def build_delivery_snapshot(
     mode = partition.mode if partition is not None else facts.PARTITION_MODE_CURRENT
     if mode not in {facts.PARTITION_MODE_CURRENT, facts.PARTITION_MODE_DEDUP_FIRST}:
         return None
-    rounds = facts.list_scan_rounds(db, plan_run_id=plan_run_id, platform=platform)
+    rounds = (
+        facts.list_scan_rounds(db, plan_run_id=plan_run_id, platform=platform)
+        if lock_rounds
+        else facts.list_scan_rounds_for_read(db, plan_run_id=plan_run_id, platform=platform)
+    )
     final = next(
         (row for row in rounds if row.kind == facts.SCAN_ROUND_KIND_FINAL), None,
     )
@@ -331,6 +337,7 @@ def build_delivery_snapshot(
         gaps=tuple(gaps),
         primary_folders=primary_folders,
         issues=tuple(issues),
+        publish_status=publish_status,
     )
 
 
@@ -459,6 +466,43 @@ def evaluate_version_status(
         representatives=representatives,
         publish_status=publish_status,
     )
+
+
+def current_delivery_decision(
+    db: Session, *, plan_run_id: int, platform: str,
+) -> DeliveryDecision:
+    """按当前事实判定一个分区的交付状态（D9 第 5 条，不落库）。
+
+    调用方是消费方（归档完成判据、状态 API、能力目录）：已登记版本也按当前事实
+    重算，因为「重试中」会随时间变化。没有终态最后一轮时按第 1 条记未就绪。
+    """
+    snapshot = build_delivery_snapshot(
+        db, plan_run_id=plan_run_id, platform=platform, lock_rounds=False,
+    )
+    if snapshot is None:
+        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_FINAL_ROUND_NOT_CLOSED)
+    rounds = [
+        {
+            "round_no": row.round_no,
+            "kind": row.kind,
+            "status": row.status,
+            "merge_status": row.merge_status,
+        }
+        for row in facts.list_scan_rounds_for_read(
+            db, plan_run_id=plan_run_id, platform=platform,
+        )
+    ]
+    return evaluate_delivery_status(
+        rounds=rounds,
+        effective_coverage=snapshot.effective_coverage,
+        representatives=snapshot.issues,
+        publish_status=snapshot.publish_status,
+    )
+
+
+def delivery_is_archive_complete(decision: DeliveryDecision) -> bool:
+    """D16 / G7：先去重分区的归档完成判据 = 就绪或就绪但有缺口。"""
+    return decision.status in {DELIVERY_STATUS_READY, DELIVERY_STATUS_READY_WITH_GAPS}
 
 
 def register_delivery_version(

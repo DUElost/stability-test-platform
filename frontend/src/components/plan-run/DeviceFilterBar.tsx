@@ -1,4 +1,5 @@
-import { Filter } from 'lucide-react';
+import { Filter, Server } from 'lucide-react';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import { FILTER_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type { DeviceLinkStatus, DeviceUiStatus } from '@/utils/api/types';
@@ -121,22 +122,20 @@ export default function DeviceFilterBar({
       {hosts.length > 0 && (
         <>
           <span className={FILTER_CHIP.divider} />
-          <span className={cn('mr-1 text-[11px] font-semibold uppercase tracking-wider', TEXT.subtitle)}>
-            Host
-          </span>
-          <select
-            data-testid={hostTestIdPrefix}
+          <SearchableSelect
             value={hostFilter}
-            onChange={(e) => onHostFilterChange(e.target.value)}
-            className="rounded-md border bg-card px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary/20"
-          >
-            <option value="all">全部 ({total})</option>
-            {hosts.map((h) => (
-              <option key={h} value={h}>
-                {hostLabelFor ? hostLabelFor(h) : h} ({byHost[h] ?? 0})
-              </option>
-            ))}
-          </select>
+            onChange={(val) => onHostFilterChange(val as string | 'all')}
+            options={hosts.map((h) => ({
+              value: h,
+              label: `${hostLabelFor ? hostLabelFor(h) : h} (${byHost[h] ?? 0})`,
+            }))}
+            allLabel={`全部主机 (${total})`}
+            searchPlaceholder="搜索主机..."
+            icon={<Server />}
+            ariaLabel="按主机筛选"
+            testId={hostTestIdPrefix}
+            className="w-44"
+          />
         </>
       )}
     </div>

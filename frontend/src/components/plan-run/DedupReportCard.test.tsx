@@ -448,4 +448,101 @@ describe('DedupReportCard', () => {
     expect(link).toHaveAttribute('href', '/api/v1/plan-runs/1/artifacts/42/download');
     expect(link).toHaveTextContent('下载');
   });
+
+  it('B8 G7: 分区行显示模式、覆盖、交付、发生与缺口', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+      partitions: [
+        {
+          platform: 'mtk',
+          mode: 'DEDUP_FIRST',
+          mode_recorded: true,
+          delivery: {
+            status: 'READY_WITH_GAPS',
+            reason: 'gaps_present',
+            archive_complete: true,
+            version_no: 2,
+            software_versions: ['V78'],
+            round_ids: [7],
+            coverage: { expected: 4, covered: 3, missing: [] },
+            issues: 2,
+            occurrences: 5,
+            machines: 3,
+            observed_events: 6,
+            representatives: { selected: 2, published: 1, pending: 0, failed: 1 },
+            gaps: [{ kind: 'publish_failed', signature_id: 9 }],
+            pending_items: [],
+            primary_folders: ['11_x_MonkeyAEEinfo'],
+          },
+          rounds: [],
+          capabilities: {
+            extract: false,
+            current_merge: false,
+            delivery_merge: true,
+            delivery_download: true,
+          },
+        },
+        {
+          platform: 'unisoc',
+          mode: 'CURRENT',
+          mode_recorded: true,
+          delivery: null,
+          observed_events: 2,
+          machines: 1,
+          rounds: [],
+          capabilities: {
+            extract: true,
+            current_merge: true,
+            delivery_merge: false,
+            delivery_download: false,
+          },
+        },
+      ],
+    });
+
+    render(<DedupReportCard runId={1} />, { wrapper });
+
+    const mtk = await screen.findByTestId('partition-mtk');
+    expect(mtk.textContent).toContain('先去重');
+    expect(mtk.textContent).toContain('就绪但有缺口');
+    expect(mtk.textContent).toContain('覆盖 3/4');
+    expect(mtk.textContent).toContain('发生 5');
+    expect(mtk.textContent).toContain('代表 1/2');
+    expect(screen.getByTestId('partition-mtk-gaps').textContent).toContain('缺口 1');
+    const unisoc = screen.getByTestId('partition-unisoc');
+    expect(unisoc.textContent).toContain('现行');
+    expect(unisoc.textContent).toContain('观察 2 条');
+    // 混合运行仍可 extract（现行侧存在）。
+    expect(screen.getByTestId('dedup-extract-btn')).toBeEnabled();
+  });
+
+  it('B8 G7: 只有先去重分区时 extract 按钮禁用', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+      partitions: [
+        {
+          platform: 'mtk',
+          mode: 'DEDUP_FIRST',
+          mode_recorded: true,
+          delivery: null,
+          observed_events: 3,
+          machines: 2,
+          rounds: [],
+          capabilities: {
+            extract: false,
+            current_merge: false,
+            delivery_merge: true,
+            delivery_download: true,
+          },
+        },
+      ],
+    });
+
+    render(<DedupReportCard runId={1} />, { wrapper });
+
+    expect(await screen.findByTestId('partition-mtk')).toBeTruthy();
+    expect(screen.getByTestId('dedup-extract-btn')).toBeDisabled();
+  });
 });

@@ -16,6 +16,7 @@ from backend.api.schemas.case_result import (
 )
 from backend.api.schemas.plan_run import PlanRunLogEventOut, PlanRunLogEventsOut
 from backend.models.job import JobInstance
+from backend.services import issue_fact_store as facts
 from backend.services.case_result_ingest import list_plan_run_test_case_results
 from backend.services.device_log_event import (
     list_plan_run_device_log_event_platforms,
@@ -41,6 +42,9 @@ def build_plan_run_log_events(
         state=state,
         platform=platform,
     )
+    verified = facts.list_verified_publication_dle_ids(
+        db, plan_run_id=run_id, dle_ids=[row.id for row in rows],
+    )
     items = [
         PlanRunLogEventOut(
             id=str(row.id),
@@ -56,6 +60,7 @@ def build_plan_run_log_events(
             job_id=row.job_id,
             host_id=row.host_id,
             signal_seq_no=row.signal_seq_no,
+            delivery_evidence=str(row.id) in verified,
         )
         for row in rows
     ]

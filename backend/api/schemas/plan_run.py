@@ -508,6 +508,9 @@ class PlanRunLogEventOut(BaseModel):
     job_id: Optional[int] = None
     host_id: str
     signal_seq_no: Optional[int] = None
+    # B8 G7：先去重分区的代表证据已校验发布——即使 DLE 仍是 PRUNED / 没有
+    # remote_path，也可以从证据区下载（D9 第 6–7 条）。
+    delivery_evidence: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

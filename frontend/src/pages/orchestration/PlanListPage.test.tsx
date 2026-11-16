@@ -112,9 +112,8 @@ describe('PlanListPage', () => {
     // 初始不传 specialty_key（#3195：页大小 = 后端 `le` 上限 200）
     expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 200, undefined, undefined);
 
-    fireEvent.change(screen.getByTestId('plan-specialty-filter'), {
-      target: { value: 'mtbf' },
-    });
+    fireEvent.click(screen.getByTestId('plan-specialty-filter'));
+    fireEvent.click(await screen.findByRole('option', { name: 'MTBF' }));
 
     await waitFor(() =>
       expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 200, undefined, 'mtbf'),
@@ -142,9 +141,8 @@ describe('PlanListPage', () => {
     renderPage();
     await screen.findByText('PAGED-MTBF-0');
 
-    fireEvent.change(screen.getByTestId('plan-specialty-filter'), {
-      target: { value: 'mtbf' },
-    });
+    fireEvent.click(screen.getByTestId('plan-specialty-filter'));
+    fireEvent.click(await screen.findByRole('option', { name: 'MTBF' }));
 
     // 筛选生效后的第二页：页大小 200 + 偏移 200 + 原样透传的 specialty_key
     await waitFor(() =>

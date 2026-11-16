@@ -482,6 +482,22 @@ jobs:
               raise SystemExit(1)
           print(f"installer import closure loads on Python {sys.version.split()[0]}")
           PY
+      # #4011：Agent 运行时下限是 Python 3.10（`backend/agent/install_agent.sh:396` 与
+      # `backend/services/host_updater.py:316` 均以 `>= (3, 10)` 判定）。只靠 3.11
+      # 单测/编译会放过「把某依赖下限抬到仅支持 3.11+」的升级（如 #3964）。
+      #
+      # 与上方安装器冒烟共用同一 3.10 setup，且必须排在下方 3.11 setup **之前**；
+      # `--dry-run --ignore-installed` 按 3.10 从零解析 `backend/agent/requirements.txt`
+      # 全部依赖，不复用安装器冒烟装进 3.10 site-packages 的包。
+      # 步骤存在性、解释器版本与排序由 `tests/test_agent_requirements_python_floor.py` 守住。
+      - name: Resolve agent requirements on the floor interpreter
+        run: |
+          python - <<'PY'
+          import sys
+
+          assert sys.version_info[:2] == (3, 10), f"agent requirements floor step ran on {sys.version}"
+          PY
+          python -m pip install --dry-run --ignore-installed --disable-pip-version-check -r backend/agent/requirements.txt
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11"

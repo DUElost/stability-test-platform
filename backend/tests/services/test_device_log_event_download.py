@@ -19,6 +19,7 @@ from backend.services.device_log_event_download import (
 class TestDeviceLogEventDownload(unittest.TestCase):
     def test_missing_or_mismatched_event_404(self):
         db = MagicMock()
+        db.execute.return_value.scalar_one_or_none.return_value = None
         db.get.return_value = None
         with self.assertRaises(HTTPException) as ctx:
             build_device_log_event_download_response(
@@ -43,6 +44,7 @@ class TestDeviceLogEventDownload(unittest.TestCase):
         ev.state = "PRUNED"
         ev.remote_path = "/mnt/x"
         db = MagicMock()
+        db.execute.return_value.scalar_one_or_none.return_value = None
         db.get.return_value = ev
         with self.assertRaises(HTTPException) as ctx:
             build_device_log_event_download_response(
@@ -63,6 +65,7 @@ class TestDeviceLogEventDownload(unittest.TestCase):
             ev.state = "REMOTE"
             ev.remote_path = str(event_dir)
             db = MagicMock()
+            db.execute.return_value.scalar_one_or_none.return_value = None
             db.get.return_value = ev
             with patch.dict("os.environ", {"STP_AEE_NFS_ROOT": temp_dir}):
                 resp = build_device_log_event_download_response(
@@ -88,6 +91,7 @@ class TestDeviceLogEventDownload(unittest.TestCase):
             ev.state = "REMOTE"
             ev.remote_path = str(outside)
             db = MagicMock()
+            db.execute.return_value.scalar_one_or_none.return_value = None
             db.get.return_value = ev
             with patch.dict("os.environ", {"STP_AEE_NFS_ROOT": str(nfs)}):
                 with self.assertRaises(HTTPException) as ctx:

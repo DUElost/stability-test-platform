@@ -30,9 +30,13 @@ class _FakeConn:
         self.fail_times = fail_times
         self.message = message
         self.calls = 0
+        self.sqls: list[str] = []
         self.dialect = _FakeDialect()
 
-    def exec_driver_sql(self, _sql: str, _params=None):
+    def exec_driver_sql(self, sql: str, _params=None):
+        self.sqls.append(sql)
+        if sql.lstrip().upper().startswith("SET LOCAL"):
+            return None
         self.calls += 1
         if self.calls <= self.fail_times:
             raise OperationalError(
@@ -71,14 +75,17 @@ def test_truncate_drains_background_pool_before_truncate(monkeypatch):
 
     orig_exec = engine.conn.exec_driver_sql
 
-    def _record_exec(_sql: str, _params=None):
-        order.append("truncate")
-        return orig_exec(_sql, _params)
+    def _record_exec(sql: str, _params=None):
+        if sql.lstrip().upper().startswith("SET LOCAL"):
+            order.append("lock_timeout")
+        else:
+            order.append("truncate")
+        return orig_exec(sql, _params)
 
     engine.conn.exec_driver_sql = _record_exec
     _truncate_all_tables(engine, '"script"')
-    assert order == ["drain", "truncate"], (
-        f"清库前必须排空后台池，实际顺序 {order}"
+    assert order == ["drain", "lock_timeout", "truncate"], (
+        f"清库前必须排空后台池并设置 lock_timeout，实际顺序 {order}"
     )
 
 
@@ -93,6 +100,23 @@ def test_deadlock_raises_immediately_and_dumps_scene(monkeypatch):
     with pytest.raises(OperationalError):
         _truncate_all_tables(engine, '"script"')
     assert engine.conn.calls == 1, "重试已随根因收敛移除，死锁必须一次上抛"
+    assert dumps == [engine]
+
+
+def test_lock_timeout_raises_immediately_and_dumps_scene(monkeypatch):
+    """#4025：单向锁等触发 lock_timeout 时快速失败并采集持锁现场，不再无限挂死。"""
+    dumps: list[_FakeEngine] = []
+    monkeypatch.setattr(
+        "backend.tests.conftest._dump_deadlock_scene",
+        lambda engine: dumps.append(engine),
+    )
+    engine = _FakeEngine(
+        fail_times=99,
+        message="psycopg.errors.LockNotAvailable: canceling statement due to lock timeout",
+    )
+    with pytest.raises(OperationalError):
+        _truncate_all_tables(engine, '"script"')
+    assert engine.conn.calls == 1
     assert dumps == [engine]
 
 

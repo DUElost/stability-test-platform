@@ -11,7 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.agent.contracts.aee_event_dirs import event_dir_basename_from_path
+from backend.core.dedup_platform import scan_artifact_uri_platform
 from backend.models.plan_run_artifact import PlanRunArtifact
+from backend.services import issue_fact_store as facts
+from backend.services.partition_scope import partition_rows
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +209,7 @@ def run_extract_sync(plan_run_id: int) -> int:
       >= 0  number of items copied
       -1    no merge artifact
       -2    NFS root not configured
+      -3    no CURRENT partition (dedup-first only) -- ADR-0062 D13 第 4 条
     """
     # CodeQL py/path-injection (#70): all callers pass an int (FastAPI path
     # param / SAQ task), but normalize defensively before any DB query or path
@@ -229,18 +233,44 @@ def run_extract_sync(plan_run_id: int) -> int:
             mark_events_archived,
         )
 
+        # B8 G7 / D13 第 4 条：extract 是 run 级接口，但只作用于「现行」分区。
+        # 只有先去重分区的运行返回 -3（路由映射 409）；混合运行仍提取现行侧。
+        recorded_modes = facts.list_partition_modes(db, plan_run_id=plan_run_id)
+        if not recorded_modes:
+            # 没有模式记录的存量运行：不加平台过滤，行为与改动前逐字一致
+            # （设备平台的推断只用于展示，不能反过来收窄历史 extract）。
+            extract_platforms = None
+        else:
+            partitions = partition_rows(db, plan_run_id)
+            current_platforms_in_run = [
+                row["platform"] for row in partitions
+                if row["mode"] == facts.PARTITION_MODE_CURRENT
+            ]
+            if not current_platforms_in_run:
+                logger.info(
+                    "dedup_extract_skip_no_current_partition plan_run=%d",
+                    plan_run_id,
+                )
+                return -3
+            extract_platforms = current_platforms_in_run
+
         associate_unassigned_events_to_plan_run(db, plan_run_id)
         # #2316（方案 C）：已归属且**已上送完**（extractable 态）的事件目录搬进本 run
         # 作用域——此后由 run 级 purge 统一回收；必须早于下面的路径列举（列举读的就是
         # remote_path）。方案 A 的回收路径保留，兜底未关联/搬移失败/历史残留。
-        adopt_unassigned_event_dirs(db, plan_run_id)
+        # G7：先去重分区的溢出副本是 I4 保护源，不得在 extract 里搬动。
+        adopt_unassigned_event_dirs(db, plan_run_id, platforms=extract_platforms)
 
-        merge_rows = db.execute(
-            select(PlanRunArtifact).where(
-                PlanRunArtifact.plan_run_id == plan_run_id,
-                PlanRunArtifact.artifact_type == "merge_result_xls",
-            )
-        ).scalars().all()
+        merge_rows = [
+            row for row in db.execute(
+                select(PlanRunArtifact).where(
+                    PlanRunArtifact.plan_run_id == plan_run_id,
+                    PlanRunArtifact.artifact_type == "merge_result_xls",
+                )
+            ).scalars().all()
+            if extract_platforms is None
+            or scan_artifact_uri_platform(row.storage_uri) in extract_platforms
+        ]
         if not merge_rows:
             logger.warning("dedup_extract_skip_no_merge plan_run=%d", plan_run_id)
             return -1
@@ -259,7 +289,9 @@ def run_extract_sync(plan_run_id: int) -> int:
         missing_remote_paths = 0
         # #2186：缺口不能只留计数——"缺失 3"说不出缺的是哪 3 个，现场只能回中心存储手工比对。
         missing_items: list[str] = []
-        for raw in list_remote_paths_for_extract(db, plan_run_id):
+        for raw in list_remote_paths_for_extract(
+            db, plan_run_id, platforms=extract_platforms,
+        ):
             try:
                 located = resolve_extract_event_src(
                     raw,

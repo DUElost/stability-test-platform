@@ -171,13 +171,22 @@ def engine():
         _TEST_DB_CONTAINER.stop()
 
 
-def _dump_deadlock_scene(engine) -> None:
-    """#2074 取证：DeadlockDetected 时把锁环两侧落到表级（pid/state/relname/query）。
+_TRUNCATE_LOCK_TIMEOUT = "15s"
+_TRUNCATE_LOCK_CONFLICT_TOKENS = (
+    "DeadlockDetected",
+    "deadlock detected",
+    "LockNotAvailable",
+    "lock timeout",
+)
 
-    异常浮出时 TRUNCATE 事务已被 PG 判为牺牲者回滚，对侧会话仍在——此刻的
-    pg_stat_activity/pg_locks 快照就是「谁在持有、谁在等」的现场（#1273 时代
-    DETAIL 只给 relation oid，泄漏者无法定位）。诊断自身的任何异常都只记
-    日志，绝不掩盖原异常。
+
+def _dump_deadlock_scene(engine) -> None:
+    """#2074/#4025 取证：死锁或 lock_timeout 时把持锁/等锁双方落到表级（pid/state/relname/query）。
+
+    异常浮出时 TRUNCATE 事务已回滚，对侧会话仍在——此刻的 pg_stat_activity/pg_locks
+    快照就是「谁在持有、谁在等」的现场。纳入 relation 级已授予锁以定位纯单向锁等
+    （例如 idle in transaction 持 AccessShareLock/RowExclusiveLock 挡住 TRUNCATE）。
+    诊断自身的任何异常都只记日志，绝不掩盖原异常。
     """
     log = logging.getLogger("backend.tests.truncate_deadlock")
     try:
@@ -189,11 +198,16 @@ def _dump_deadlock_scene(engine) -> None:
                 "WHERE pid <> pg_backend_pid() AND datname = current_database()"
             )).all()
             locks = conn.execute(text(
-                "SELECT l.pid, coalesce(c.relname, '-') AS relname, l.mode, l.granted "
+                "SELECT l.pid, coalesce(c.relname, '-') AS relname, "
+                "       l.locktype, l.mode, l.granted "
                 "FROM pg_locks l "
+                "JOIN pg_stat_activity a ON a.pid = l.pid "
                 "LEFT JOIN pg_class c ON c.oid = l.relation "
                 "WHERE l.pid <> pg_backend_pid() "
-                "  AND (l.locktype IN ('tuple','transactionid') OR NOT l.granted) "
+                "  AND a.datname = current_database() "
+                "  AND (l.locktype IN ('tuple','transactionid') "
+                "       OR NOT l.granted "
+                "       OR (l.locktype = 'relation' AND c.relkind = 'r')) "
                 "ORDER BY l.pid, l.granted DESC, c.relname"
             )).all()
         log.warning(
@@ -205,22 +219,23 @@ def _dump_deadlock_scene(engine) -> None:
 
 
 def _truncate_all_tables(engine, table_names: str) -> None:
-    """清库（TRUNCATE ... RESTART IDENTITY CASCADE），先排空共享后台池（#2074）。
+    """清库（TRUNCATE ... RESTART IDENTITY CASCADE），先排空共享后台池（#2074/#4025）。
 
     TRUNCATE 取 AccessExclusiveLock；fire-and-forget 后台任务（通知 SAQ 降级
     直达、post_completion 缓存刷新——测试里 SAQ 不运行，通知全部走
     ``thread_pool`` 降级路径，各自自开 ``SessionLocal`` 多语句事务）若横跨到
-    下一个用例，其 AccessShare 与清库的 AccessExclusive 成环，PG 把 TRUNCATE
-    判为牺牲者抛 DeadlockDetected（#1273 的 7–8 个 setup ERROR 来源，出错
-    集合随运行漂移）。根因收敛 = 清库前 ``thread_pool.drain()`` 让在途短事务
-    落地；残余泄漏由 ``_dump_deadlock_scene`` 以表级粒度直接现形。
-    #1273 的 3 次退避重试已随根因收敛移除——它掩盖的正是这个泄漏（该 Note
-    的 Revisit 即此要求的常驻载体）。
+    下一个用例，其 AccessShare 与清库的 AccessExclusive 成环或形成单向锁等。
+    根因收敛 = 清库前 ``thread_pool.drain()`` 让在途短事务落地；同时设置
+    ``SET LOCAL lock_timeout`` 防止单向锁等拖满 CI 90min 超时，并在死锁或锁超时时
+    触发 ``_dump_deadlock_scene`` 以表级粒度直接现形。
     """
     thread_pool.drain(timeout=10.0)
     try:
         with engine.begin() as conn:
             if conn.dialect.name == "postgresql":
+                conn.exec_driver_sql(
+                    f"SET LOCAL lock_timeout = '{_TRUNCATE_LOCK_TIMEOUT}'"
+                )
                 conn.exec_driver_sql(
                     f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
                 )
@@ -228,7 +243,8 @@ def _truncate_all_tables(engine, table_names: str) -> None:
                 for table in reversed(Base.metadata.sorted_tables):
                     conn.execute(table.delete())
     except OperationalError as exc:
-        if "DeadlockDetected" in str(exc):
+        msg = str(exc)
+        if any(token in msg for token in _TRUNCATE_LOCK_CONFLICT_TOKENS):
             _dump_deadlock_scene(engine)
         raise
 

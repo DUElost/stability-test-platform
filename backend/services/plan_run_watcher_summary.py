@@ -52,7 +52,9 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan_run import PlanRun
 from backend.services.device_log_event import LATE_EVENT_GRACE
+from backend.models.device_log_event import DeviceLogEvent
 from backend.services.log_observation import (
+    ANOMALY_DLE_EVENT_TYPES,
     ANOMALY_SIGNAL_CATEGORIES,
     aggregate_signal_link_stats,
 )
@@ -472,6 +474,7 @@ def _load_deduped_aee_events(
             JobLogSignal.artifact_uri,
             JobLogSignal.detected_at,
             JobLogSignal.extra,
+            JobLogSignal.device_log_event_id,
         )
         .where(JobLogSignal.job_id.in_(job_ids))
         .where(JobLogSignal.detected_at >= cur_start)
@@ -482,6 +485,8 @@ def _load_deduped_aee_events(
     ).all()
 
     deduped: dict[str, dict[str, Any]] = {}
+    linked_dle_ids: set[Any] = set()
+    signal_basenames: set[str] = set()
     for row in rows:
         extra = row.extra if isinstance(row.extra, dict) else {}
         package_name = _infer_dashboard_package_name(
@@ -511,6 +516,73 @@ def _load_deduped_aee_events(
         existing = deduped.get(key)
         if existing is None or _prefer_deduped_event(candidate, existing):
             deduped[key] = candidate
+        if row.device_log_event_id is not None:
+            linked_dle_ids.add(row.device_log_event_id)
+        nfs_path = str(extra.get("nfs_path") or "").strip()
+        if nfs_path:
+            signal_basenames.add(Path(nfs_path).name)
+
+    # #3886（B8 G7）：摘要与详情必须同源同口径。详情列表的真源是 DLE；这里补入
+    # 「有 DLE、无对应 signal」的发生（历史上被少计的那类），已链接或有同 basename
+    # signal 的事件不重复计入。计数单位是发生身份，不是路径。
+    dle_rows = db.execute(
+        select(
+            DeviceLogEvent.id,
+            DeviceLogEvent.serial,
+            DeviceLogEvent.event_type,
+            DeviceLogEvent.event_subtype,
+            DeviceLogEvent.local_path,
+            DeviceLogEvent.remote_path,
+            DeviceLogEvent.detected_at,
+            DeviceLogEvent.occurrence_key,
+        )
+        .where(DeviceLogEvent.job_id.in_(job_ids))
+        .where(DeviceLogEvent.detected_at >= cur_start)
+        .where(DeviceLogEvent.detected_at <= window_end)
+        .where(func.upper(DeviceLogEvent.event_type).in_(
+            [value.upper() for value in ANOMALY_DLE_EVENT_TYPES],
+        ))
+    ).all()
+    for dle in dle_rows:
+        if dle.id in linked_dle_ids:
+            continue
+        basenames = {
+            Path(path).name for path in (dle.local_path, dle.remote_path) if path
+        }
+        if basenames & signal_basenames:
+            continue
+        category = (
+            str(dle.event_type).upper()
+            if str(dle.event_type).upper() in ANOMALY_SIGNAL_CATEGORIES
+            else "AEE"
+        )
+        extra = {
+            "event_type": dle.event_type,
+            "raw_event_type": dle.event_type,
+            "event_subtype": dle.event_subtype,
+        }
+        group, subtype = _infer_dashboard_event_group_and_subtype(
+            category,
+            extra,
+            path_on_device=dle.local_path or "",
+            artifact_uri=dle.remote_path,
+        )
+        candidate = {
+            "key": (
+                f"occ:{dle.occurrence_key}" if dle.occurrence_key else f"dle:{dle.id}"
+            ),
+            "group": group,
+            "subtype": subtype,
+            "package_name": _infer_dashboard_package_name(
+                extra, artifact_uri=dle.remote_path,
+            ),
+            "device_serial": dle.serial,
+            "detected_at": dle.detected_at,
+            # 无 signal 就没有 entry_origin：标 None 让分区页退回单视图，
+            # 不凭时间猜 baseline / runtime（宁可少分一类，也不误分类）。
+            "entry_origin": None,
+        }
+        deduped.setdefault(candidate["key"], candidate)
     return list(deduped.values())
 
 

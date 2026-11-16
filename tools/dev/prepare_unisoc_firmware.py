@@ -43,6 +43,8 @@ PRESERVE_IDS = {
     "NV_NR", "Modem_NR_DELTANV", "NV_CALI_NR",
     "UserData",
 }
+PRESERVE_TYPES = {"NV_COMM", "NV_COMM_SLOT"}
+DEFAULT_VERSION_PROP = "ro.build.sw_internal_version"
 
 # Erase entries in the scheme carry no image, only a target block.
 ERASE_IDS_PREFIX = "Erase"
@@ -196,7 +198,7 @@ def build_plan(pac: dict, images_dir: str, scheme: dict) -> dict:
             "partitions": parts,
             "flush_type": ftype,
         }
-        if fid in PRESERVE_IDS:
+        if fid in PRESERVE_IDS or ftype in PRESERVE_TYPES:
             item["preserve"] = True
         if not parts:
             item["partitions"] = []
@@ -227,12 +229,38 @@ def build_plan(pac: dict, images_dir: str, scheme: dict) -> dict:
                 erases.append(part)
                 seen_erases.add(part)
 
-    result = {"entries": plan}
+    result = {"entries": plan, "erases": erases}
     if fdl:
         result["fdl"] = fdl
-    if erases:
-        result["erases"] = erases
     return result
+
+
+def validate_plan(plan: dict) -> None:
+    """Ensure plan contains every required contract key before writing plan.json."""
+    errors = []
+    entries = plan.get("entries")
+    if not isinstance(entries, list) or not entries:
+        errors.append("entries must be a non-empty list")
+
+    fdl = plan.get("fdl")
+    if not isinstance(fdl, dict):
+        errors.append("missing fdl")
+    else:
+        for role in ("fdl1", "fdl2"):
+            info = fdl.get(role)
+            if not isinstance(info, dict):
+                errors.append(f"missing fdl.{role}")
+                continue
+            if not isinstance(info.get("file"), str) or not info["file"].strip():
+                errors.append(f"missing fdl.{role}.file")
+            if not isinstance(info.get("base"), str) or not info["base"].strip():
+                errors.append(f"missing fdl.{role}.base")
+
+    if not isinstance(plan.get("erases"), list):
+        errors.append("erases must be a list")
+
+    if errors:
+        raise SystemExit(f"invalid flash plan ({'; '.join(errors)})")
 
 
 def main() -> None:
@@ -243,9 +271,17 @@ def main() -> None:
     ap.add_argument("--version", default="")
     ap.add_argument("--no-extract", action="store_true", help="reuse images/ if present")
     ap.add_argument("--models", default="", help="comma separated model ids for manifest models[] and latest.json")
+    ap.add_argument(
+        "--version-prop",
+        default=DEFAULT_VERSION_PROP,
+        help=f"Android prop read back to verify installed version (default: {DEFAULT_VERSION_PROP})",
+    )
     ap.add_argument("--latest", action="store_true",
                     help="create/merge <parent>/latest.json pointer ({versions:{model:version}})")
     args = ap.parse_args()
+    version_prop = args.version_prop.strip()
+    if not version_prop:
+        raise SystemExit("--version-prop must not be empty")
 
     t0 = time.time()
     pac = parse_pac(args.pac)
@@ -287,8 +323,12 @@ def main() -> None:
         unsparse(src, dst)
 
     plan = build_plan(pac, images, scheme)
-    with open(os.path.join(images, "plan.json"), "w", encoding="utf-8") as f:
+    validate_plan(plan)
+    plan_path = os.path.join(images, "plan.json")
+    plan_tmp = plan_path + ".part"
+    with open(plan_tmp, "w", encoding="utf-8") as f:
         json.dump(plan, f, ensure_ascii=False, indent=2)
+    os.replace(plan_tmp, plan_path)
 
     version = args.version or pac["firmware"]
     models = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -296,7 +336,7 @@ def main() -> None:
         "platform": "unisoc",
         "family": args.family or pac["product"],
         "version": version,
-        "version_prop": "ro.build.sw_internal_version",
+        "version_prop": version_prop,
         "models": models,
         "pac_file": os.path.basename(args.pac),
         "pac_path": os.path.abspath(args.pac),

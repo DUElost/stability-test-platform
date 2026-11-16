@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Collection, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Collection, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -31,6 +31,8 @@ from backend.core.dedup_platform import (
 )
 from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
+from backend.services import issue_fact_store as facts
+from backend.services.partition_scope import partition_rows
 from backend.services.dedup import (
     get_control_plane_merge_engine,
     reset_merge_capability_cache_for_tests as _reset_engine_merge_cache,
@@ -735,6 +737,7 @@ def run_merge_all_platforms_sync(
     round_started_at: datetime | None = None,
     include_late_hosts: bool = False,
     allow_failed: bool = False,
+    platforms: Sequence[str] | None = None,
 ) -> str:
     """各平台 merge；返回 ``ok`` / ``skipped_failed`` / ``""``。
 
@@ -756,7 +759,10 @@ def run_merge_all_platforms_sync(
     saw_skip_failed = False
     saw_empty = False
     outcomes: dict[str, str] = {}
-    for platform in DEDUP_PLATFORMS:
+    targets = (
+        tuple(platforms) if platforms is not None else DEDUP_PLATFORMS
+    )
+    for platform in targets:
         result = run_merge_sync(
             plan_run_id,
             scan_round_id=scan_round_id,
@@ -785,6 +791,152 @@ def run_merge_all_platforms_sync(
     if saw_skip_failed and not saw_empty:
         return "skipped_failed"
     return ""
+
+
+def _partition_targets(plan_run_id: int) -> tuple[list[str], list[str]]:
+    """本 run 的 (现行平台, 先去重平台)；无分区记录时按纯现行处理。"""
+    from backend.core.database import SessionLocal
+
+    with SessionLocal() as db:
+        rows = partition_rows(db, plan_run_id=plan_run_id)
+    if not rows:
+        return list(DEDUP_PLATFORMS), []
+    current = [row["platform"] for row in rows
+               if row["mode"] == facts.PARTITION_MODE_CURRENT]
+    dedup = [row["platform"] for row in rows
+             if row["mode"] == facts.PARTITION_MODE_DEDUP_FIRST]
+    return current, dedup
+
+
+def run_merge_for_partitions_sync(
+    plan_run_id: int,
+    *,
+    scan_round_id: str | None = None,
+    round_started_at: datetime | None = None,
+    include_late_hosts: bool = False,
+    allow_failed: bool = False,
+) -> str:
+    """自动链入口：只对「现行」分区跑现行 merge（D14 第 1 条）。
+
+    纯先去重分区没有现行交付路径，返回 ok（不产生现行产物，也不算失败）；
+    缺模式存量仍按两个平台跑，与改动前逐字一致。
+    """
+    current, dedup = _partition_targets(plan_run_id)
+    if not current:
+        logger.info(
+            "merge_skip_no_current_partition plan_run=%d dedup_platforms=%s",
+            plan_run_id, dedup,
+        )
+        return "ok"
+    return run_merge_all_platforms_sync(
+        plan_run_id,
+        scan_round_id=scan_round_id,
+        round_started_at=round_started_at,
+        include_late_hosts=include_late_hosts,
+        allow_failed=allow_failed,
+        platforms=current,
+    )
+
+
+def run_manual_merge_sync(
+    plan_run_id: int,
+    *,
+    scan_round_id: str | None = None,
+    round_started_at: datetime | None = None,
+    include_late_hosts: bool = True,
+    allow_failed: bool = True,
+) -> dict:
+    """手动 merge：按分区模式分流（D16）。
+
+    - 现行分区：沿用既有手动合并（可含迟到主机回退，#3935）；
+    - 先去重分区：对最近一个已关闭的 FINAL / SUPPLEMENT 轮执行影子合并；轮次
+      已进入终态时 merge_round 直接返回，天然幂等，不产生新代次。
+
+    返回 {result, scan_round_id, round_started_at, outcomes}；result 为
+    ok / skipped_failed / 空串（真失败）/ no_round（纯先去重且无可合并轮次）。
+    """
+    from backend.core.database import SessionLocal
+    from backend.services.shadow_merge import run_shadow_merge
+
+    current, dedup = _partition_targets(plan_run_id)
+    outcomes: dict[str, str] = {}
+    shadow_round_id = None
+    shadow_round_started_at = None
+
+    with SessionLocal() as db:
+        for platform in dedup:
+            rounds = [
+                row for row in facts.list_scan_rounds_for_read(
+                    db, plan_run_id=plan_run_id, platform=platform,
+                )
+                if row.kind in {
+                    facts.SCAN_ROUND_KIND_FINAL, facts.SCAN_ROUND_KIND_SUPPLEMENT,
+                }
+                and row.status == facts.SCAN_ROUND_STATUS_CLOSED
+            ]
+            latest = max(rounds, key=lambda row: row.round_no, default=None)
+            if latest is None:
+                outcomes[platform] = "no_round"
+                continue
+            if shadow_round_id is None:
+                shadow_round_id = latest.id
+                shadow_round_started_at = latest.created_at
+            run_shadow_merge(plan_run_id, latest.id)
+            outcomes[platform] = "shadow"
+
+    result = "ok"
+    if current:
+        result = run_merge_all_platforms_sync(
+            plan_run_id,
+            scan_round_id=scan_round_id,
+            round_started_at=round_started_at,
+            include_late_hosts=include_late_hosts,
+            allow_failed=allow_failed,
+            platforms=current,
+        )
+        for platform, outcome in _last_merge_outcomes(plan_run_id).items():
+            if platform in current:
+                outcomes[platform] = outcome
+    if result != "ok" and dedup and all(
+        value == "shadow" for key, value in outcomes.items() if key in dedup
+    ):
+        # 现行侧无输入/被跳过、新链已合并：手动操作只要求「能做的都做了」，
+        # 不得把一侧的空输入伪装成另一侧的失败。留日志便于区分「空输入」与
+        # 「两侧都没做成」。
+        logger.info(
+            "manual_merge_partial plan_run=%d current_result=%s outcomes=%s",
+            plan_run_id, result, outcomes,
+        )
+        result = "ok"
+    if result == "ok" and not current and dedup and all(
+        value == "no_round" for value in outcomes.values()
+    ):
+        result = "no_round"
+    return {
+        "result": result,
+        "scan_round_id": str(shadow_round_id) if shadow_round_id is not None else None,
+        "round_started_at": shadow_round_started_at,
+        "outcomes": outcomes,
+    }
+
+
+def _last_merge_outcomes(plan_run_id: int) -> dict[str, str]:
+    """读 run_context.merge_platforms（手动合并后回报用；失败返回空）。"""
+    from backend.core.database import SessionLocal
+
+    try:
+        with SessionLocal() as db:
+            run = db.get(PlanRun, plan_run_id)
+            if run is None:
+                return {}
+            section = (run.run_context or {}).get("merge_platforms")
+            platforms = section.get("platforms") if isinstance(section, dict) else None
+            if not isinstance(platforms, dict):
+                return {}
+            return {str(key): str(value) for key, value in platforms.items()}
+    except Exception:
+        logger.warning("merge_outcomes_read_failed plan_run=%d", plan_run_id)
+        return {}
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
