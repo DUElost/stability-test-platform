@@ -2106,3 +2106,37 @@ def test_compat_rerun_duplicate_header_conflict_is_rejected_before_start(
     assert not capture.exists()
     assert db_session.query(JiraRun).count() == 0
 
+
+
+def test_bound_xlsx_ignores_autofilter_hidden_rows_like_vendor_tool(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """筛选排除行不提交：隐藏行即使标识越界也不应阻断可见行。"""
+    scope = _seed_xlsx_scope(db_session, env_roots)
+    capture = tmp_path / "hidden-capture.jsonl"
+    tool = tmp_path / "hidden-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
+    monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
+    workbook = _write_vendor_workbook(tmp_path, "transsion", [
+        {"source_index": 0, "signature_id": scope.sig_a, "occurrence_ids": [scope.occ_a]},
+        {"source_index": 0, "signature_id": scope.sig_d, "occurrence_ids": [scope.occ_d]},
+    ])
+    wb = openpyxl.load_workbook(workbook)
+    wb.active.row_dimensions[3].hidden = True
+    wb.save(workbook)
+    wb.close()
+    response = client.post(
+        "/api/v1/jira/runs",
+        data={
+            "vendor": "transsion", "stage": "create", "source": "delivery_version",
+            "plan_run_id": str(scope.run.id), "platform": "mtk",
+            "delivery_version_id": str(scope.dv1.id), "dry_run": "false",
+        },
+        headers=auth_headers,
+        files={"file": (workbook.name, workbook.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 200, response.text
+    _wait_jira_terminal(db_session, response.json()["data"]["console_run_id"])
+    rows = _captured(capture)[0]["rows"]
+    assert [row["Signature ID"] for row in rows] == [str(scope.sig_a), str(scope.sig_d)]

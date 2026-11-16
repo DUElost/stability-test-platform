@@ -342,6 +342,7 @@ class _WorkbookSheet:
     name: str
     headers: tuple[str, ...]
     rows: tuple[tuple[int, tuple[str, ...]], ...]
+    hidden_rows: frozenset[int] = frozenset()
 
 
 def _cell_text(value: Any) -> str:
@@ -377,7 +378,7 @@ def _read_workbook_sheets(payload: bytes, suffix: str) -> list[_WorkbookSheet]:
     sheets: list[_WorkbookSheet] = []
     if suffix == ".xlsx":
         try:
-            book = openpyxl.load_workbook(BytesIO(payload), read_only=True, data_only=True)
+            book = openpyxl.load_workbook(BytesIO(payload), data_only=True)
         except Exception as exc:
             raise JiraDeliveryError(400, f"uploaded file is not a readable Excel workbook: {exc}") from exc
         try:
@@ -394,7 +395,14 @@ def _read_workbook_sheets(payload: bytes, suffix: str) -> list[_WorkbookSheet]:
                     if not any(cells):
                         continue
                     data.append((row_no, cells))
-                sheets.append(_WorkbookSheet(name=sheet.title, headers=headers, rows=tuple(data)))
+                hidden_rows = frozenset(
+                    int(index) for index, dimension in (sheet.row_dimensions or {}).items()
+                    if bool(getattr(dimension, "hidden", False))
+                )
+                sheets.append(_WorkbookSheet(
+                    name=sheet.title, headers=headers, rows=tuple(data),
+                    hidden_rows=hidden_rows,
+                ))
         finally:
             book.close()
         return sheets
@@ -590,6 +598,9 @@ def validate_uploaded_jira_workbook_scope(
             occurrences_col = columns["occurrences"]
             occurrences_col = int(occurrences_col) if occurrences_col is not None else None
             for row_no, cells in sheet.rows:
+                if row_no in sheet.hidden_rows:
+                    # 与工具建单入口一致：AutoFilter/隐藏行不提交、不校验。
+                    continue
                 signature = _coerce_signature_id(
                     cells[signature_col] if signature_col < len(cells) else "",
                 )

@@ -39,6 +39,15 @@ Class: feature
    - **绑定 .xlsx**：新增 `openpyxl` 只读解析工具仓 #27 产出的上传清单；`stage=create` 按 `Signature ID` 与 `Occurrence IDs` 逐行校验，签名必须在 manifest 登记范围、发生必须命中该签名的 `attribution_candidates`。支持人工重排/筛选（按标识而非行号）；跨 run、跨版本、冲突标识与范围外发生均拒绝。`.xlsx` 只用于阶段二，去重 `.xls` 只用于阶段一。
    - **消费 links / gaps**：`record_jira_run_completion` 读取 `attribution.json` 的 `links` 与 `gaps`，保留 #27 契约的 `kind` / `stage` / `row` / `workbook_row` / `signature_id` / `occurrence_ids` / `reason` 等诊断字段；越界 link 只记 `unverified_link_scope` 不落库；重复回调仍由终态门卫幂等短路。状态判定：`stage != create` → `NOT_APPLICABLE`；有 link 无 gap → `VERIFIED`；有 link 有 gap → `PARTIAL`；无 link 有 gap → `UNATTRIBUTED`；无 link 无 gap → `NOT_APPLICABLE`。
 
+7. **联调夹具去敏与发布前检查（2026-11-16，基线 `7059bcc02`）**：
+   - 两份 `.xlsx` 夹具用工具仓#27 返修候选 `12587942` 的真实阶段一脚本重建；生成入口把 `build_log_server_access_text()` 替换为固定模拟段（`example.invalid` / `example_user` / `<simulated>`），`Reporter` 固定为 `example_reporter`，其余列、样式、归因列与行结构仍由真实工具生成。
+   - 发布前逐单元格扫描地址/账号/口令与 URL/邮箱模式，并检查隐藏工作表/行/列、AutoFilter、超链接、批注、定义名称、外部链接、`docProps` 与 OOXML 包内 XML；结果未命中。当前夹具的 `creator` 仅为 `openpyxl`。
+   - **公开历史**：本 PR 早期夹具提交曾包含非模拟访问字段，已在本轮重建后移除；历史提交的处置（是否改写分支历史）与相关凭据轮换需仓库负责人决定，实施者不自行改写已公开历史。
+
+8. **两套工具从平台绑定入口联调（工具返修候选 `12587942`）**：
+   - 传音与天珑分别以平台 `source=delivery_version` 的 `upload_list` 入口启动真实固定工具生成清单，再经人工删行/重排后从 `create` 入口启动真实建单入口（Jira 连接替换为模拟实现），平台消费 `attribution.json` 的 links/gaps 落库。
+   - 覆盖同一链根下两个实际 `PlanRun`（A/B）、同一 run 的 v1/v2、筛选排除行、重复发生 gap、越界 link 与重复回调。每个 Jira key 只关联本次登记且选中的发生；筛选掉的问题不落 link，越界 link 只记 `unverified_link_scope` 不落库，重复回调不新增。
+
 ## Alternatives
 
 - **方案 A（未采纳）**：按厂商 stdout 或结果 JSON 的行序直接反推并绑定 `DeliveryVersion` 发生列表。被否决：阶段一脚本会跳过/合并行且历史 duplicate key 无对应新事件，行序对应关系在真实场景中必然错配并污染 `IssueSignature.issue_keys`。
@@ -47,7 +56,7 @@ Class: feature
 ## Verification
 
 - 隔离 PG16（testcontainers）+ 临时文件系统 + 真实 `RunConsole` 子进程替身回归：
-  - `.venv/bin/python scripts/run_pytest.py -q backend/tests/services/test_b8_g8_jira_delivery_and_compat.py backend/tests/api/test_dedup_jira_endpoints.py backend/tests/services/test_b8_g7_partition_consumers.py backend/tests/services/test_shadow_delivery.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/services/test_jira_vendor_engine.py tests/test_api_response_shape_contract.py tests/test_excel_dependency_inventory.py tests/test_api_4xx_advice_has_real_exit.py` → **180 passed**；`test_b8_g8_jira_delivery_and_compat.py` 单文件 → **28 passed**。
+  - `.venv/bin/python scripts/run_pytest.py -q backend/tests/services/test_b8_g8_jira_delivery_and_compat.py backend/tests/api/test_dedup_jira_endpoints.py backend/tests/services/test_b8_g7_partition_consumers.py backend/tests/services/test_shadow_delivery.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/services/test_jira_vendor_engine.py tests/test_api_response_shape_contract.py tests/test_excel_dependency_inventory.py tests/test_api_4xx_advice_has_real_exit.py` → **181 passed**；`test_b8_g8_jira_delivery_and_compat.py` 单文件 → **29 passed**。
   - `.venv/bin/python scripts/run_pytest.py -v backend/tests/test_migration_guard.py backend/tests/test_schema_sync_guard.py backend/tests/test_health_schema_revision.py backend/tests/migration/test_delivery_generation_migration.py` → **27 passed**。
 - 空 PG16 迁移与 schema 对齐验证：
   - `alembic upgrade head` → `alembic downgrade b8g6d0e1f234` → `alembic upgrade head` → `backend/scripts/check_schema_sync.py` → **0 新增 diff**（`EMPTY_PG16_MIGRATION_AND_SCHEMA_SYNC_OK`）。
@@ -61,6 +70,11 @@ Class: feature
     - 真实工作簿：传音与天珑阶段一脚本各生成 3 行清单；重排/筛选后按 `Signature ID` / `Occurrence IDs` 绑定原 `DeliveryVersion`，两套均 200 且替身实收行与登记一致；跨 run、跨版本、冲突标识、范围外发生（4 场景 × 2 工具）全部 4xx、零启动。
     - 两套真实工具归因模块（模拟 Jira 结果）各产出 4 条 `links` + 2 条 `duplicate_occurrence_id` gaps；平台消费后为 `PARTIAL`，越界 link 不落库，回调重放不重复写入。
     - 基线探针 **4 failed**（2 个 `.xlsx` 正向 + 2 个 planner 反例）/ 新 HEAD **4 passed**。
+    - 隐藏行与工具入口对齐：`.xlsx` 的 AutoFilter/隐藏行不参与范围校验（工具建单入口同样跳过），新增“隐藏行标识越界不阻断可见行”用例。
+    - 两套工具联调（工具候选 `12587942`）：传音/天珑各跑平台 `upload_list` → 真实清单生成 → 人工筛选/重排 → 平台 `create` → 真实建单入口（模拟 Jira）→ links/gaps 落库。A v1（3 行筛除 1 行并交换）、A v2、B v1 全部只关联登记选中发生；重复发生产生 `duplicate_occurrence_id` gap 且不落 link；越界 link 不落库；重复回调幂等。该集成探针为本地联调脚本，随证据记录，不进入 CI 用例。
+  - 夹具去敏与 informational 复跑（基线 `7059bcc02`）：
+    - 重建后的传音/天珑夹具逐单元格与 OOXML 包检查未发现实际地址、账号或口令；隐藏内容、超链接与文档属性均无额外载荷。
+    - `test_device_rebind.py::TestRebindApi::test_just_powered_off_device_rejected` 在基线与本 HEAD 用同一条件（模块导入后延迟 320s 再执行，静默窗 300s）均返回 200 而非 409；原因是测试用导入时固定的 `_NOW` 构造 `last_seen`，长收集后已越过 300s 静默窗。结论：既有测试的时间基准缺陷，与本 PR 改动无关；informational 结果相同。
 - 门禁与前端验证：
   - `.venv/bin/python scripts/run_gates.py check:quick` → **16 gates 全部通过**（含 `ruff`、`eslint`、`tsc`、`knip`、`compileall`、`layering`、`orphan-models`、`gov-surface`、`ai-work`、`god-files`、`inner-imports` 等）。
   - `cd frontend && npm run test -- --run` → **154 files / 1355 tests passed**。
