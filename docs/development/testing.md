@@ -191,6 +191,15 @@ dev 栈与假 Agent 驱动的观测类陷阱（compose `-e` 转发、`/proc` 自
 不喂执行心跳、nginx 重启空响应、镜像无 `ps`/`pkill`）见
 `.agents/skills/test-env-self-check/SKILL.md` 与 `tools/dev/fake_agent.py` 模块头。
 
+### UI 筛选与工作台自检判据（#4000 / #4005 / #4016 复盘沉淀）
+
+改造列表页筛选栏或工作台交互时，Vitest 与 Playwright 预览巡检须同时覆盖以下 4 维，避免单点测试漏掉组合回归：
+
+1. **互斥造数下的组合交互路径**：构造「仅存在于离线/非就绪设备」的版本或型号，验证先切换状态/视图（如「空闲」「仅显示就绪」「仅看有标签」）再打开下拉时，不属于当前范围的选项**不得出现**。
+2. **视图/状态往返切换**：不仅测单向点击（如 `全部 → 需关注`），必须验证能正常切回（`需关注 → 全部`）且不出现参数覆盖导致的锁死。
+3. **激活态几何与同排控件对齐**：在 Playwright 实机预览中分别检查空闲态与**多条件激活态**（含 `重置筛选` 与 chips），核对同排主筛选控件（`FilterSearchInput`、`SearchableSelect`）高度一致（差值 `<= 2px`）且不发生意外折行。
+4. **双视口水平溢出与实机巡检脚本**：同时在 `1440×900` 与 `1280×800` 视口断言 `scrollWidth <= clientWidth`（`docOverflow === 0`）；`stp-ui-review` 可复用 [`tools/dev/ui_review_probe.mjs`](../../tools/dev/ui_review_probe.mjs) 执行自动巡检并人工审阅截图。
+
 ---
 
 ## 5. CI（`.github/workflows/ci.yml`）
