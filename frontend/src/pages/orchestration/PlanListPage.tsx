@@ -180,22 +180,24 @@ export default function PlanListPage() {
           setSpecialtyKey(undefined);
         }}
       >
-        <FilterSearchInput
-          id="plan-search"
-          value={search}
-          onChange={setSearch}
-          placeholder="搜索 Plan 名称或描述..."
-          ariaLabel="搜索 Plan"
-          testId="plan-search"
-          className="flex-1 min-w-[200px] sm:max-w-sm"
-        />
-        <ProjectFilterSelect
-          value={projectKey}
-          onChange={setProjectKey}
-          className="w-full sm:w-44"
-          testId="plan-project-filter"
-        />
-        <SpecialtyFilterSelect value={specialtyKey} onChange={setSpecialtyKey} />
+        <div className="flex flex-wrap items-center gap-2.5">
+          <FilterSearchInput
+            id="plan-search"
+            value={search}
+            onChange={setSearch}
+            placeholder="搜索 Plan 名称或描述..."
+            ariaLabel="搜索 Plan"
+            testId="plan-search"
+            className="flex-1 min-w-[200px] sm:max-w-sm"
+          />
+          <ProjectFilterSelect
+            value={projectKey}
+            onChange={setProjectKey}
+            className="w-full sm:w-44"
+            testId="plan-project-filter"
+          />
+          <SpecialtyFilterSelect value={specialtyKey} onChange={setSpecialtyKey} />
+        </div>
       </FilterWorkbench>
 
       {isLoading ? (
