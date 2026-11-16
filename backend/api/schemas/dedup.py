@@ -47,17 +47,39 @@ class DedupScanArchiveOut(BaseModel):
     hosts_expected: int = 0
 
 
+class DedupPartitionOut(BaseModel):
+    """一个分区（实际 PlanRun × 平台）的状态（ADR-0062 D13 / D16，B8 G7）。
+
+    delivery 只在「先去重」分区存在（D9 交付登记）；现行分区沿用 scan/merge/
+    extract，delivery 为 None。observed_events 与 delivery.occurrences 是两种口径：
+    前者是 DLE 观察数，后者是发生数（issue_occurrence 去重），见 #3886。
+    """
+
+    platform: str
+    mode: str
+    mode_recorded: bool = False
+    delivery: Optional[dict] = None
+    observed_events: Optional[int] = None
+    machines: Optional[int] = None
+    rounds: list[dict] = []
+    capabilities: dict = {}
+
+
 class DedupStatusOut(BaseModel):
     """``GET /plan-runs/{id}/dedup/status`` 响应（scan/merge 产物 + 完备性 + 失败位）。
 
     ``scan_failed`` 来源是 ``PlanRun.result_summary``，``archive`` 来源是 ``run_context``，
     两者与 ``artifacts`` 表各自独立——所以这里三个字段都可能单独缺失。
+
+    ``partitions`` 是 B8 G7 新增的分区视图：模式、覆盖、交付与缺口按分区独立；
+    旧字段保持原样，存量运行（无模式记录）表现为两个平台都为 CURRENT。
     """
 
     plan_run_id: int
     artifacts: list[DedupArtifactOut]
     archive: Optional[DedupScanArchiveOut] = None
     scan_failed: bool = False
+    partitions: list[DedupPartitionOut] = []
 
 
 class DedupSkippedHostOut(BaseModel):
@@ -141,6 +163,7 @@ __all__ = [
     "DedupArtifactOut",
     "DedupExtractOut",
     "DedupMergeTriggerOut",
+    "DedupPartitionOut",
     "DedupScanArchiveOut",
     "DedupScanTriggerOut",
     "DedupSkippedHostOut",

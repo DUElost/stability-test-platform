@@ -1715,6 +1715,10 @@ export interface PlanRunCapabilities {
   abort?: boolean;
   retry_dispatch?: boolean;
   final_archive?: boolean;
+  /** B8 G7：平台 -> CURRENT / DEDUP_FIRST；无记录的平台按 CURRENT 解释。 */
+  partition_modes?: Record<string, string>;
+  /** B8 G7 / D13 第 4 条：只有先去重分区时为 false（extract 会被拒绝）。 */
+  extract?: boolean;
 }
 
 /**
@@ -1982,6 +1986,8 @@ export interface RunContextUploadSummary {
   incomplete_reason?: string;
   /** 缺口下的补偿动作（当前只有 best_effort_extract）。 */
   compensation?: string;
+  /** B8 G7：按平台拆分的同一口径（total/local/pending/remote）。 */
+  by_platform?: Record<string, { total: number; local: number; pending: number; remote: number }>;
 }
 
 /** #300 P3-4: run_extract_sync 落 run_context.extract 的提取完成度。 */
@@ -2424,6 +2430,8 @@ export interface PlanRunLogEvent {
   job_id?: number | null;
   host_id: string;
   signal_seq_no?: number | null;
+  /** B8 G7：该事件已有已校验代表证据——即使 PRUNED/无 remote_path 也可从证据区下载。 */
+  delivery_evidence?: boolean;
 }
 
 export interface PlanRunLogEventsPayload {
@@ -2466,12 +2474,60 @@ export interface DedupScanArchive {
   [key: string]: unknown;
 }
 
+/**
+ * 一个分区（实际 PlanRun × 平台）的状态（ADR-0062 D13/D16，B8 G7）。
+ *
+ * `delivery` 只在「先去重」分区存在；现行分区的 delivery 为 null。
+ * `delivery.occurrences` 是发生数（issue_occurrence 去重），`observed_events`
+ * 是 DLE 观察数——两者不是同一口径（#3886）。
+ */
+export interface DedupPartition {
+  platform: string;
+  mode: 'CURRENT' | 'DEDUP_FIRST' | string;
+  mode_recorded: boolean;
+  delivery?: {
+    status: string;
+    reason: string;
+    archive_complete: boolean;
+    version_no: number | null;
+    software_versions: string[];
+    round_ids: number[];
+    coverage: { expected: number; covered: number; missing: Array<Record<string, unknown>> };
+    issues: number;
+    occurrences: number;
+    machines: number;
+    observed_events: number;
+    representatives: { selected: number; published: number; pending: number; failed: number };
+    gaps: Array<Record<string, unknown>>;
+    pending_items: unknown[];
+    primary_folders: string[];
+  } | null;
+  observed_events?: number | null;
+  machines?: number | null;
+  rounds: Array<{
+    round_no: number;
+    kind: string;
+    status: string;
+    merge_status: string | null;
+    merge_generation: number;
+    closed_at: string | null;
+  }>;
+  capabilities: {
+    extract: boolean;
+    current_merge: boolean;
+    delivery_merge: boolean;
+    delivery_download: boolean;
+  };
+}
+
 /** `GET /plan-runs/{id}/dedup/status`。对应后端 `DedupStatusOut`（#2129 契约对拍轴线 C）。 */
 export interface DedupStatusPayload {
   plan_run_id: number;
   artifacts: DedupArtifact[];
   archive?: DedupScanArchive | null;
   scan_failed?: boolean;
+  /** B8 G7：按分区的模式、覆盖、交付与缺口。 */
+  partitions?: DedupPartition[];
 }
 
 /** 本轮 scan 未纳入的主机。对应后端 `DedupSkippedHostOut`（#2187 轴线 C）。 */

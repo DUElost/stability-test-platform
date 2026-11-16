@@ -36,6 +36,7 @@ from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
+from backend.services.partition_scope import run_capabilities
 from backend.services.plan_run_read_common import (
     aware as _aware,
     iso as _iso,
@@ -363,10 +364,16 @@ def build_plan_run_detail(
         plan_run_id=pr.id,
         read_at=pr.started_at,
     )
-    return (_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs],
-                          plan_name=resolve_plan_name(db, pr),
-                          device_count=device_count,
-                          parameter_projection=projection))
+    detail = _plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs],
+                           plan_name=resolve_plan_name(db, pr),
+                           device_count=device_count,
+                           parameter_projection=projection)
+    # B8 G7 / D16：能力目录按分区模式给出可用操作（extract 只在有「现行」分区时
+    # 可用）。只加在详情，列表不做逐行分区查询。
+    capabilities = dict(detail.capabilities or {})
+    capabilities.update(run_capabilities(db, pr.id))
+    detail.capabilities = capabilities
+    return detail
 
 
 

@@ -221,7 +221,8 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
                       {displayPath(ev)}
                     </td>
                     <td className="px-2 py-1.5 whitespace-nowrap">
-                      {ev.remote_path && (ev.state === 'REMOTE' || ev.state === 'ARCHIVED') ? (
+                      {ev.delivery_evidence ||
+                      (ev.remote_path && (ev.state === 'REMOTE' || ev.state === 'ARCHIVED')) ? (
                         <a
                           href={api.planRuns.logEventDownloadUrl(runId, ev.id)}
                           className="text-primary underline-offset-2 hover:underline"
