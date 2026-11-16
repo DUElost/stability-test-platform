@@ -8,5 +8,6 @@
   `stp.jira_delivery_input/v1` manifest；命令分别为：
   - `python generate_transsion_jira_upload_list.py --add-main-excel input.xls ... --output-dir <ws> --attribution-manifest <ws>/manifest.json`
   - `python generate_tinno_jira_upload_list.py --add-main-excel input.xls ... --output-dir <ws> --attribution-manifest <ws>/manifest.json`
-- 测试只把身份列改写为当次数据库登记值并重排/筛选，不重建列结构；不连接真实
-  Jira，未使用真实凭据。
+- 公开夹具保留两套工具的原始表头、行序与归因字段。描述、PS 访问段和人员字段
+  已替换为模拟文本。夹具不包含实际日志服务器的访问配置。
+- 测试按当次数据库登记改写身份列并重排或筛选，使用 Jira 替身。
