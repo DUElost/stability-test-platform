@@ -163,12 +163,16 @@ export default function PlanListPage() {
       </div>
 
       <FilterWorkbench
+        headerLeft={
+          <span className="text-xs font-medium text-muted-foreground tabular-nums">
+            共 {filtered.length} 个 Plan
+          </span>
+        }
         headerRight={
           <Button size="sm" onClick={() => navigate('/orchestration/plans/new')} className="shrink-0">
             <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
           </Button>
         }
-        matchSummary={`共 ${filtered.length} 个 Plan`}
         hasAnyActiveFilter={Boolean(search || projectKey || specialtyKey)}
         onResetAll={() => {
           setSearch('');
@@ -183,7 +187,7 @@ export default function PlanListPage() {
           placeholder="搜索 Plan 名称或描述..."
           ariaLabel="搜索 Plan"
           testId="plan-search"
-          className="flex-1 min-w-[200px]"
+          className="flex-1 min-w-[200px] sm:max-w-sm"
         />
         <ProjectFilterSelect
           value={projectKey}
