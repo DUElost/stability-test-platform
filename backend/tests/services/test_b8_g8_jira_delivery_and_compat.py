@@ -1306,9 +1306,15 @@ def test_uploaded_workbook_in_registered_scope_reaches_vendor_unchanged(
     client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
 ):
     """正向 1：范围内表格放行，替身实际读到的行仍属于登记范围。"""
-    fields, capture, run, _version, signature_id = _planner_audit_seed_jira(
+    fields, capture, run, version, signature_id = _planner_audit_seed_jira(
         db_session, env_roots, monkeypatch, tmp_path,
     )
+    resolved = jira_delivery.resolve_delivery_jira_input(
+        db_session, plan_run_id=run.id, platform="mtk",
+        delivery_version_no=None, delivery_version_id=version.id, stage="create",
+    )
+    registered_path = resolved.manifest["issues"][0]["representative_verified_path"]
+    assert registered_path
     scoped = [
         item for item in facts.list_partition_delivery_issues(
             db_session, plan_run_id=run.id, platform="mtk",
@@ -1317,7 +1323,12 @@ def test_uploaded_workbook_in_registered_scope_reaches_vendor_unchanged(
     ]
     assert scoped
     legit_rows = [
-        {"Id": str(item["signature_id"]), "ExpType ": item["normalized_key"], "Detail": item["signature_raw"]}
+        {
+            "Id": str(item["signature_id"]),
+            "ExpType ": item["normalized_key"],
+            "Detail": item["signature_raw"],
+            "Path": registered_path,
+        }
         for item in scoped
     ]
     legit_xls = jira_delivery.write_dedup_xls(tmp_path / "legit.xls", legit_rows)
@@ -1332,6 +1343,7 @@ def test_uploaded_workbook_in_registered_scope_reaches_vendor_unchanged(
     received = entries[0]["rows"]
     assert [row["Id"] for row in received] == [str(signature_id)]
     assert received[0]["ExpType "] == scoped[0]["normalized_key"]
+    assert received[0]["Path"] == registered_path
 
 
 def test_planner_audit_no_jira_subprocess_without_committed_registration(
@@ -1420,6 +1432,12 @@ def test_compat_rerun_uploaded_workbook_scope_is_enforced(
     )
     db_session.commit()
     assert outcome.rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+    resolved = jira_delivery.resolve_compat_rerun_jira_input(
+        db_session, plan_run_id=run.id, platform="mtk",
+        compat_rerun_id=outcome.rerun.id, stage="create",
+    )
+    registered_path = resolved.manifest["issues"][0]["representative_verified_path"]
+    assert registered_path
 
     capture = tmp_path / "g8-compat-capture.jsonl"
     tool = tmp_path / "g8-compat-tool"
@@ -1445,7 +1463,7 @@ def test_compat_rerun_uploaded_workbook_scope_is_enforced(
 
     legit = jira_delivery.write_dedup_xls(
         tmp_path / "legit-compat.xls",
-        [{"Id": str(sig_id), "ExpType ": "g8-compat-bound"}],
+        [{"Id": str(sig_id), "ExpType ": "g8-compat-bound", "Path": registered_path}],
     )
     accepted = client.post(
         "/api/v1/jira/runs", data=fields, headers=admin_headers,
@@ -1455,6 +1473,7 @@ def test_compat_rerun_uploaded_workbook_scope_is_enforced(
     _wait_jira_terminal(db_session, accepted.json()["data"]["console_run_id"])
     entries = _captured(capture)
     assert len(entries) == 1 and [row["Id"] for row in entries[0]["rows"]] == [str(sig_id)]
+    assert entries[0]["rows"][0]["Path"] == registered_path
 
 
 
@@ -1472,4 +1491,185 @@ def test_bound_source_rejects_unverifiable_xlsx_table(
     assert response.status_code == 400
     assert not capture.exists()
     assert db_session.query(JiraRun).count() == 0
+
+
+
+def _post_mixed_row(client, headers, fields, tmp_path, *, label, row):
+    xls = jira_delivery.write_dedup_xls(tmp_path / f"mixed-{label}.xls", [row])
+    return client.post(
+        "/api/v1/jira/runs", data=fields, headers=headers,
+        files={"file": (xls.name, xls.read_bytes(), "application/vnd.ms-excel")},
+    )
+
+
+def test_delivery_version_row_identity_and_path_must_bind_one_registered_issue(
+    client, auth_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """合法 Id 不能携带同版本另一问题 / 跨版本 / 跨 run 的 Path。"""
+    _seed_host(db_session, "g8-bind")
+    run = _seed_plan_run(db_session, plan_name="g8-bind")
+    facts.record_partition_mode(
+        db_session, plan_run_id=run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST,
+    )
+
+    def _issue(plan_run, serial, event_dir, raw, key, occ, event_type="ANR"):
+        dle, sig, _ = _seed_dle_and_fact(
+            db_session, plan_run_id=plan_run.id, root_run_id=run.id, host_id="g8-bind",
+            serial=serial, event_type=event_type, sig_raw=raw, norm_key=key,
+            occ_key=occ, folder=FOLDER_A, event_dir=event_dir, nfs_root=env_roots.nfs_root,
+        )
+        return dle, sig
+
+    dle_a, sig_a = _issue(run, SERIAL_1, EVENT_DIR_1, "g8.bind.a", "g8-bind-a", "g8-bind-a-occ")
+    dle_b, sig_b = _issue(run, SERIAL_2, EVENT_DIR_2, "g8.bind.b", "g8-bind-b", "g8-bind-b-occ", "JE")
+    dle_c, sig_c = _issue(run, "AZ6Q100003", EVENT_DIR_3, "g8.bind.c", "g8-bind-c", "g8-bind-c-occ", "NE")
+    foreign_run = _seed_plan_run(db_session, plan_name="g8-bind-foreign", root_id=run.id)
+    _issue(foreign_run, "AZ6Q100004", EVENT_DIR_1, "g8.bind.d", "g8-bind-d", "g8-bind-d-occ")
+    db_session.commit()
+
+    v1 = _register_dv(
+        db_session, plan_run_id=run.id, version_no=1, issue_ids=[sig_a, sig_b],
+        event_ids=[str(dle_a.id), str(dle_b.id)], nfs_root=env_roots.nfs_root,
+    )
+    v2 = _register_dv(
+        db_session, plan_run_id=run.id, version_no=2, issue_ids=[sig_c],
+        event_ids=[str(dle_c.id)], nfs_root=env_roots.nfs_root,
+    )
+    db_session.commit()
+
+    def _paths(version_id):
+        resolved = jira_delivery.resolve_delivery_jira_input(
+            db_session, plan_run_id=run.id, platform="mtk",
+            delivery_version_no=None, delivery_version_id=version_id, stage="upload_list",
+        )
+        return {int(item["signature_id"]): item["representative_verified_path"] for item in resolved.manifest["issues"]}
+
+    paths_v1 = _paths(v1.id)
+    paths_v2 = _paths(v2.id)
+    path_a, path_b, path_c = paths_v1[sig_a], paths_v1[sig_b], paths_v2[sig_c]
+    path_d = str(env_roots.nfs_root / "evidence" / f"{run.id}_{FOLDER_A}" / "AZ6Q100004" / EVENT_DIR_1)
+    assert path_a and path_b and path_c and path_d
+    assert (env_roots.nfs_root / "evidence" / f"{run.id}_{FOLDER_A}" / "AZ6Q100004" / EVENT_DIR_1).is_dir()
+
+    capture = tmp_path / "g8-bind-capture.jsonl"
+    tool = tmp_path / "g8-bind-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
+    monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
+    fields = {
+        "source": "delivery_version", "vendor": "transsion", "stage": "upload_list",
+        "plan_run_id": str(run.id), "platform": "mtk",
+        "delivery_version_id": str(v1.id), "dry_run": "false",
+    }
+
+    for label, foreign_path in {
+        "same-version-other-issue": path_b,
+        "cross-version": path_c,
+        "cross-run": path_d,
+    }.items():
+        response = _post_mixed_row(
+            client, auth_headers, fields, tmp_path, label=label,
+            row={"Id": str(sig_a), "ExpType ": "g8-bind-a", "Path": foreign_path},
+        )
+        assert 400 <= response.status_code < 500, (label, response.text)
+        assert not capture.exists(), label
+        assert db_session.query(JiraRun).count() == 0, label
+
+    accepted = _post_mixed_row(
+        client, auth_headers, fields, tmp_path, label="binding-ok",
+        row={"Id": str(sig_a), "ExpType ": "g8-bind-a", "Path": path_a},
+    )
+    assert accepted.status_code == 200, accepted.text
+    _wait_jira_terminal(db_session, accepted.json()["data"]["console_run_id"])
+    rows = _captured(capture)[0]["rows"]
+    assert rows[0]["Id"] == str(sig_a) and rows[0]["Path"] == path_a
+
+
+def test_compat_rerun_row_identity_and_path_must_bind_one_registered_issue(
+    client, admin_headers, db_session, env_roots, monkeypatch, tmp_path,
+):
+    """兼容补跑同样要求 Id 与 Path 指向同一登记问题。"""
+    _seed_host(db_session, "g8-cbind")
+    run = _seed_plan_run(db_session, plan_name="g8-cbind")
+    facts.record_partition_mode(
+        db_session, plan_run_id=run.id, platform="mtk", mode=facts.PARTITION_MODE_DEDUP_FIRST,
+    )
+
+    def _issue(plan_run, serial, event_dir, raw, key, occ, event_type="ANR"):
+        dle, sig, _ = _seed_dle_and_fact(
+            db_session, plan_run_id=plan_run.id, root_run_id=run.id, host_id="g8-cbind",
+            serial=serial, event_type=event_type, sig_raw=raw, norm_key=key,
+            occ_key=occ, folder=FOLDER_A, event_dir=event_dir, nfs_root=env_roots.nfs_root,
+            dle_state="PRUNED", verified_pub=True,
+        )
+        return dle, sig
+
+    dle_a, sig_a = _issue(run, SERIAL_1, EVENT_DIR_1, "g8.cbind.a", "g8-cbind-a", "g8-cbind-a-occ")
+    dle_b, sig_b = _issue(run, SERIAL_2, EVENT_DIR_2, "g8.cbind.b", "g8-cbind-b", "g8-cbind-b-occ", "JE")
+    dle_c, sig_c = _issue(run, "AZ6Q100003", EVENT_DIR_3, "g8.cbind.c", "g8-cbind-c", "g8-cbind-c-occ", "NE")
+    foreign_run = _seed_plan_run(db_session, plan_name="g8-cbind-foreign", root_id=run.id)
+    _issue(foreign_run, "AZ6Q100004", EVENT_DIR_1, "g8.cbind.d", "g8-cbind-d", "g8-cbind-d-occ")
+    db_session.commit()
+
+    _register_dv(
+        db_session, plan_run_id=run.id, version_no=1, issue_ids=[sig_a, sig_b],
+        event_ids=[str(dle_a.id), str(dle_b.id)], nfs_root=env_roots.nfs_root,
+    )
+    _register_dv(
+        db_session, plan_run_id=run.id, version_no=2, issue_ids=[sig_c],
+        event_ids=[str(dle_c.id)], nfs_root=env_roots.nfs_root,
+    )
+    db_session.commit()
+    outcome = compat_rerun.trigger_compat_rerun(
+        db_session, plan_run_id=run.id, platform="mtk", requested_by="owner",
+        requester_role="admin", request_key="g8-cbind", delivery_version_no=1,
+    )
+    db_session.commit()
+    assert outcome.rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+
+    resolved = jira_delivery.resolve_compat_rerun_jira_input(
+        db_session, plan_run_id=run.id, platform="mtk",
+        compat_rerun_id=outcome.rerun.id, stage="create",
+    )
+    paths = {int(item["signature_id"]): item["representative_verified_path"] for item in resolved.manifest["issues"]}
+    path_a, path_b = paths[sig_a], paths[sig_b]
+    path_c = jira_delivery.resolve_delivery_jira_input(
+        db_session, plan_run_id=run.id, platform="mtk",
+        delivery_version_no=2, stage="upload_list",
+    ).manifest["issues"][0]["representative_verified_path"]
+    path_d = str(env_roots.nfs_root / "evidence" / f"{run.id}_{FOLDER_A}" / "AZ6Q100004" / EVENT_DIR_1)
+    assert path_a and path_b and path_c and path_d
+
+    capture = tmp_path / "g8-cbind-capture.jsonl"
+    tool = tmp_path / "g8-cbind-tool"
+    _install_vendor_double(tool, capture, mode="fast_exit")
+    monkeypatch.setenv("STP_JIRA_TRANSSION_PYTHON", sys.executable)
+    monkeypatch.setenv("STP_JIRA_TRANSSION_DIR", str(tool))
+    fields = {
+        "source": "compat_rerun", "vendor": "transsion", "stage": "create",
+        "plan_run_id": str(run.id), "platform": "mtk",
+        "compat_rerun_id": str(outcome.rerun.id), "dry_run": "false",
+    }
+
+    for label, foreign_path in {
+        "same-version-other-issue": path_b,
+        "cross-version": path_c,
+        "cross-run": path_d,
+    }.items():
+        response = _post_mixed_row(
+            client, admin_headers, fields, tmp_path, label=f"compat-{label}",
+            row={"Id": str(sig_a), "ExpType ": "g8-cbind-a", "Path": foreign_path},
+        )
+        assert 400 <= response.status_code < 500, (label, response.text)
+        assert not capture.exists(), label
+        assert db_session.query(JiraRun).count() == 0, label
+
+    accepted = _post_mixed_row(
+        client, admin_headers, fields, tmp_path, label="compat-ok",
+        row={"Id": str(sig_a), "ExpType ": "g8-cbind-a", "Path": path_a},
+    )
+    assert accepted.status_code == 200, accepted.text
+    _wait_jira_terminal(db_session, accepted.json()["data"]["console_run_id"])
+    rows = _captured(capture)[0]["rows"]
+    assert rows[0]["Id"] == str(sig_a) and rows[0]["Path"] == path_a
 

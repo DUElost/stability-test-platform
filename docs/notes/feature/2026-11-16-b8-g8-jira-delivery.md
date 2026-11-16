@@ -31,7 +31,7 @@ Class: feature
    - 按 `(plan_run_id, platform, request_key)` 幂等重放或失败重试（`attempts` 递增）；**保持原 `DeviceLogEvent.state`（`ARCHIVED`/`PRUNED`，不写回 `LOCAL`）、原 `DeliveryVersion` 与累计发生数不变**；绑定同一 `compat_rerun_id` 的 `stage="create"` 在 `RUNNING`/`SUCCESS` 后拒绝重复消费（409）。
 
 5. **平台侧阻塞返修（2026-11-16，固定反例基线 `90ef7f65`）**：
-   - **附带表格不得绕过登记范围**：`resolve_delivery_jira_input` 与 `resolve_compat_rerun_jira_input` 在收到附带表格时调用 `validate_uploaded_jira_workbook_scope`，逐行读取身份列（`Id` / `ExpType` / `Detail`·`CurProcess` / `Path`），要求整张表都命中登记 `issue_ids`、`normalized_key`、`signature_raw` 或代表证据路径；空表、无身份列或任一行超范围均返回 409，且发生在准备隔离工作区与启动子进程之前。独立 `source=upload` 手工上传入口保持原行为。
+   - **附带表格不得绕过登记范围**：`resolve_delivery_jira_input` 与 `resolve_compat_rerun_jira_input` 在收到附带表格时调用 `validate_uploaded_jira_workbook_scope`，逐行读取身份字段（`Id` / `ExpType` / `Detail`·`CurProcess` / `Path`）。每一行已填写的字段必须**共同指向同一条登记问题**：按 `manifest.issues` 的 `(signature_id, normalized_key, signature_raw, representative_verified_path)` 关系逐项严格比对，合法 Id 搭配同版本另一问题、跨版本或跨 run 的 Path 均拒绝。空表、无身份字段或任一行无法绑定均返回 409，且发生在准备隔离工作区与启动子进程之前。独立 `source=upload` 手工上传入口保持原行为。
    - 边界：当前厂商阶段一输出 `JIRA_Upload_List_*.xlsx` 不保留 `Id` / `ExpType` 等身份列，因此作为 `delivery_version` / `compat_rerun` 附带表格时无法证明范围而会被拒绝；运行环境只有 `xlrd`（仅 BIFF `.xls`），无法读取 OOXML `.xlsx` 做范围证明，绑定入口对 `.xlsx` 一并 fail-closed（400）。这两类表仍走既有独立手工上传入口，工具侧透传 ID 由已提请的规划者裁定处理（见 Decision 2）。
    - **登记提交成功前不启动工具**：`POST /api/v1/jira/runs` 的 `JiraRun` INSERT/COMMIT 异常不再被吞掉后继续启动，改为记录日志并返回 500；子进程启动次数为 0，数据库不留半登记行。
    - 新的只读 `.xls` 读取点按 #739 依赖收敛门禁登记到 `tests/test_excel_dependency_inventory.py` 与 `docs/notes/process/2026-09-20-dependency-convergence-739.md`；不新增写侧或产物格式。
@@ -44,13 +44,14 @@ Class: feature
 ## Verification
 
 - 隔离 PG16（testcontainers）+ 临时文件系统 + 真实 `RunConsole` 子进程替身回归：
-  - `.venv/bin/python scripts/run_pytest.py -q backend/tests/services/test_b8_g8_jira_delivery_and_compat.py backend/tests/api/test_dedup_jira_endpoints.py backend/tests/services/test_b8_g7_partition_consumers.py backend/tests/services/test_shadow_delivery.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/services/test_jira_vendor_engine.py tests/test_api_response_shape_contract.py tests/test_excel_dependency_inventory.py tests/test_api_4xx_advice_has_real_exit.py` → **156 passed**。
+  - `.venv/bin/python scripts/run_pytest.py -q backend/tests/services/test_b8_g8_jira_delivery_and_compat.py backend/tests/api/test_dedup_jira_endpoints.py backend/tests/services/test_b8_g7_partition_consumers.py backend/tests/services/test_shadow_delivery.py backend/tests/services/test_shadow_scan_rounds.py backend/tests/services/test_jira_vendor_engine.py tests/test_api_response_shape_contract.py tests/test_excel_dependency_inventory.py tests/test_api_4xx_advice_has_real_exit.py` → **164 passed**（含本轮同行绑定 2 个用例）；`test_b8_g8_jira_delivery_and_compat.py` 单文件 → **12 passed**。
   - `.venv/bin/python scripts/run_pytest.py -v backend/tests/test_migration_guard.py backend/tests/test_schema_sync_guard.py backend/tests/test_health_schema_revision.py backend/tests/migration/test_delivery_generation_migration.py` → **27 passed**。
 - 空 PG16 迁移与 schema 对齐验证：
   - `alembic upgrade head` → `alembic downgrade b8g6d0e1f234` → `alembic upgrade head` → `backend/scripts/check_schema_sync.py` → **0 新增 diff**（`EMPTY_PG16_MIGRATION_AND_SCHEMA_SYNC_OK`）。
 - **平台侧阻塞红绿对照（同一探针，隔离 PG16 + 临时 FS + 真实替身子进程）**：
   - 固定反例基线 `90ef7f65`（独立 detached worktree）：6 个探针中 **4 failed / 2 passed**——`delivery_version` 范围外表格返回 200 且替身读到 `foreign-to-delivery`、登记事务失败仍返回 200 并启动子进程、`compat_rerun` 范围外表格返回 200、不可读取的 `.xlsx` 附带表返回 200 并启动；两个正向探针（范围内表格、启动前登记可见）通过。
   - 返修后新 HEAD：同 6 个探针 **6 passed**；范围外请求均 4xx、启动次数为 0，范围内表格与登记范围一致，登记事务失败返回 500 且零启动。
+  - 第二轮同行绑定（反例基线 `81177701a`）：`delivery_version` / `compat_rerun` 各一个用例覆盖“合法 Id + 同版本另一问题 Path / 跨版本 Path / 跨 run Path”；基线首个场景即返回 200 并启动替身（该实现按 Id、ExpType 分别命中即放行，不校验 Path 与同一关系），新 HEAD 三类均 4xx、零启动，正向行（Id 与 Path 同行一致）通过并核对替身收到的表格。
 - 门禁与前端验证：
   - `.venv/bin/python scripts/run_gates.py check:quick` → **16 gates 全部通过**（含 `ruff`、`eslint`、`tsc`、`knip`、`compileall`、`layering`、`orphan-models`、`gov-surface`、`ai-work`、`god-files`、`inner-imports` 等）。
   - `cd frontend && npm run test -- --run` → **154 files / 1355 tests passed**。

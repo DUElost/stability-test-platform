@@ -379,10 +379,12 @@ def validate_uploaded_jira_workbook_scope(
     uploaded_bytes: bytes,
     uploaded_suffix: Optional[str],
 ) -> None:
-    """证明上传表格属于登记交付范围：每一行的身份列都必须命中登记问题。
+    """证明上传表格属于登记交付范围：每一行已填写的身份字段必须共同指向同一条登记关系。
 
     ``delivery_version`` / ``compat_rerun`` 入口允许附带表格，但附带表格不能成为
-    绕过登记范围的后门。只有整张表可证明属于该登记范围时才放行，否则拒绝请求，
+    绕过登记范围的后门。``Id`` / ``ExpType`` / ``Detail`` / ``Path`` 任一已填字段
+    都必须与同一条登记问题（含其代表证据路径）一致；合法 Id 搭配其他问题、其他
+    版本或其他 run 的 Path 会被拒绝。只有整张表可证明时才放行，否则返回 409 且
     子进程不会启动；``source=upload`` 的独立手工上传入口不受此约束。
     """
     if (uploaded_suffix or "").lower() == ".xlsx":
@@ -393,30 +395,30 @@ def validate_uploaded_jira_workbook_scope(
             "source=delivery_version/compat_rerun attached table must be .xls "
             "with registered identity columns; .xlsx cannot be verified in this runtime",
         )
-    registered_ids: set[int] = set()
-    registered_keys: set[str] = set()
-    registered_raws: set[str] = set()
-    registered_paths: set[str] = set()
-    for item in manifest.get("issue_ids") or []:
-        sig_id = _coerce_signature_id(item)
-        if sig_id is not None:
-            registered_ids.add(sig_id)
+    relations: list[dict[str, object]] = []
+    seen_relations: set[tuple[Optional[int], str, str, str]] = set()
     for item in manifest.get("issues") or []:
         if not isinstance(item, Mapping):
             continue
-        sig_id = _coerce_signature_id(item.get("signature_id"))
-        if sig_id is not None:
-            registered_ids.add(sig_id)
-        for value, bucket in (
-            (item.get("normalized_key"), registered_keys),
-            (item.get("signature_raw"), registered_raws),
-            (item.get("representative_verified_path"), registered_paths),
-        ):
-            text = str(value or "").strip()
-            if text:
-                bucket.add(text)
+        relation = (
+            _coerce_signature_id(item.get("signature_id")),
+            str(item.get("normalized_key") or "").strip(),
+            str(item.get("signature_raw") or "").strip(),
+            str(item.get("representative_verified_path") or "").strip(),
+        )
+        if relation in seen_relations:
+            continue
+        seen_relations.add(relation)
+        relations.append({
+            "id": relation[0], "key": relation[1], "raw": relation[2], "path": relation[3],
+        })
+    for item in manifest.get("issue_ids") or []:
+        sig_id = _coerce_signature_id(item)
+        if sig_id is None or any(rel["id"] == sig_id for rel in relations):
+            continue
+        relations.append({"id": sig_id, "key": "", "raw": "", "path": ""})
 
-    if not registered_ids and not registered_keys and not registered_raws and not registered_paths:
+    if not relations:
         raise JiraDeliveryError(
             409,
             "registered delivery scope contains no issues; an attached table cannot be proven in scope",
@@ -428,24 +430,31 @@ def validate_uploaded_jira_workbook_scope(
             409, "uploaded table has no data rows to prove registered delivery scope",
         )
 
-    def _matched(row: Mapping[str, str], headers: tuple[str, ...], bucket: set) -> bool:
-        return any(row.get(header) and row[header] in bucket for header in headers)
+    def _first_value(row: Mapping[str, str], headers: tuple[str, ...]) -> str:
+        return next((row[h] for h in headers if row.get(h)), "")
 
     rejected: list[str] = []
     for sheet_name, row_no, row in rows:
-        id_raw = next((row[h] for h in _IDENTITY_ID_HEADERS if row.get(h)), "")
-        key_raw = next((row[h] for h in _IDENTITY_KEY_HEADERS if row.get(h)), "")
-        id_ok = _coerce_signature_id(id_raw) in registered_ids if id_raw else False
-        key_ok = bool(key_raw) and key_raw in registered_keys
-        other_ok = _matched(row, _IDENTITY_RAW_HEADERS, registered_raws) or _matched(
-            row, _IDENTITY_PATH_HEADERS, registered_paths,
-        )
-        if id_raw and not id_ok:
-            rejected.append(f"{sheet_name}!{row_no} id={id_raw}")
-        elif key_raw and not key_ok:
-            rejected.append(f"{sheet_name}!{row_no} normalized_key={key_raw}")
-        elif not id_ok and not key_ok and not other_ok:
+        id_raw = _first_value(row, _IDENTITY_ID_HEADERS)
+        key_raw = _first_value(row, _IDENTITY_KEY_HEADERS)
+        raw_val = _first_value(row, _IDENTITY_RAW_HEADERS)
+        path_val = _first_value(row, _IDENTITY_PATH_HEADERS)
+        if not any((id_raw, key_raw, raw_val, path_val)):
             rejected.append(f"{sheet_name}!{row_no} has no registered identity value")
+            continue
+        row_id = _coerce_signature_id(id_raw)
+        bound = any(
+            (not id_raw or row_id == rel["id"])
+            and (not key_raw or key_raw == rel["key"])
+            and (not raw_val or raw_val == rel["raw"])
+            and (not path_val or path_val == rel["path"])
+            for rel in relations
+        )
+        if not bound:
+            rejected.append(
+                f"{sheet_name}!{row_no} identity/path do not bind to one registered issue "
+                f"(id={id_raw or '-'}, key={key_raw or '-'}, path={path_val or '-'})",
+            )
     if rejected:
         detail = "; ".join(rejected[:5])
         suffix = "" if len(rejected) <= 5 else f" (+{len(rejected) - 5} more)"
