@@ -1446,6 +1446,50 @@ def get_compat_rerun_by_request(
     ).scalar_one_or_none()
 
 
+def get_compat_rerun_for_update(
+    db: Session, *, plan_run_id: int, platform: str, request_key: str,
+) -> Optional[CompatRerun]:
+    """行锁领取：并发同 key 重试在此串行化，锁内重读最新已提交状态（B1）。"""
+    return db.execute(
+        select(CompatRerun).where(
+            CompatRerun.plan_run_id == plan_run_id,
+            func.lower(CompatRerun.platform) == platform.lower(),
+            CompatRerun.request_key == request_key,
+        ).with_for_update().execution_options(populate_existing=True),
+    ).scalar_one_or_none()
+
+
+def guarded_compat_rerun_failure(
+    db: Session, *, rerun_id: int, attempts: Optional[int], error: str,
+) -> Optional[CompatRerun]:
+    """守卫式失败登记：绝不改写已完成的登记，也不把次数写回退（B1 迟到写回）。
+
+    行锁内重读最新已提交状态；COMPLETED 直接原样返回，attempts 低于现值的
+    迟到写回跳过。只推进 status/attempts/error，不触碰产物路径与完成时间。
+    """
+    row = db.execute(
+        select(CompatRerun).where(CompatRerun.id == rerun_id)
+        .with_for_update().execution_options(populate_existing=True),
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    if row.status == COMPAT_RERUN_STATUS_COMPLETED:
+        return row
+    if (
+        attempts is not None
+        and row.attempts is not None
+        and int(attempts) < int(row.attempts)
+    ):
+        return row
+    row.status = COMPAT_RERUN_STATUS_FAILED
+    if attempts is not None:
+        row.attempts = max(int(attempts), int(row.attempts or 0))
+    row.error = str(error)[:1024]
+    row.updated_at = _utcnow()
+    db.flush()
+    return row
+
+
 def list_compat_reruns(
     db: Session, *, plan_run_id: int, platform: Optional[str] = None,
 ) -> list[CompatRerun]:
@@ -1500,9 +1544,16 @@ def update_compat_rerun(
     manifest_path: Optional[str] = None,
     error: Optional[str] = None,
     completed_at: Optional[datetime] = None,
+    source_delivery_version_id: Optional[int] = None,
+    source_delivery_version_no: Optional[int] = None,
 ) -> CompatRerun:
+    """推进登记行；交付版本绑定只在行内尚未绑定时补写，已绑定值不可改（B3）。"""
     _require_one_of(status, _COMPAT_RERUN_STATUSES, "status")
     row.status = status
+    if source_delivery_version_id is not None and row.source_delivery_version_id is None:
+        row.source_delivery_version_id = int(source_delivery_version_id)
+    if source_delivery_version_no is not None and row.source_delivery_version_no is None:
+        row.source_delivery_version_no = int(source_delivery_version_no)
     if attempts is not None:
         row.attempts = int(attempts)
     if coverage_scope is not None:

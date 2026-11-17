@@ -1,14 +1,18 @@
 """B8 G8：受控兼容补跑服务（ADR-0062 D15 第 5–7 条，§11 场景 10）。
 
-设计不变量：
+设计不变量（#4031「第 2 轮复核后的返修判据」）：
 
 1. 仅限 Owner/admin 显式发起，目标必须为单个 ``DEDUP_FIRST`` 分区；
 2. 只消费同一发生仍受 I4 保护的 Agent 本地原件或中心已校验副本；已 ``PRUNED``
    的事件不得回头读本地原件，且永远不把 ``DeviceLogEvent.state`` 改回 ``LOCAL``；
-3. 独立登记 ``compat_rerun``（来源、覆盖、缺失清单、``is_partial``、独立产物），
-   不覆盖原 ``DeliveryVersion`` 权威、不改写原 ``DLE.state``、不改变累计发生数；
-4. 按 ``(plan_run_id, platform, request_key)`` 幂等；失败后同 ``request_key`` 重试
-   只从原登记推进并递增 ``attempts``，不重复累加计数。
+3. 同 key 的重试由一次尝试独占执行：领取走 ``FOR UPDATE`` 行锁，锁内重读最新
+   已提交状态；迟到的失败登记走守卫式写回，绝不改写已完成的登记或把次数回退；
+4. 同 key 绑定第一次接受的交付版本：重试省略版本沿用绑定版本，显式另一版本
+   在复制前 409；实际复制、计数、台账与 manifest 使用同一版本；
+5. 现行 15 列报表的列值取自已登记轮次的工具原生 org 报表（经伴随映射绑定到
+   本版本的发生），原生为空的字段保留为空；原生值无法复原时登记可定位到
+   发生与字段的缺口，全源可读但存在缺口时禁止登记为完成（FAILED）；
+   D15 允许的源缺失仍按部分成果登记并列出缺源范围。
 
 源选择顺序（同为已校验/仍可用的材料）：中心证据区已校验代表 → DLE
 ``remote_path`` 指向的中心事件目录 → 中心溢出副本 → I4 保护期内的 Agent 本地
@@ -23,12 +27,12 @@ import logging
 import os
 import shutil
 import tempfile
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
+import xlrd
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -46,7 +50,7 @@ from backend.core.artifact_paths import (
 from backend.core.database import SessionLocal
 from backend.core.storage_root import resolve_shared_storage_root
 from backend.models.device_log_event import DeviceLogEvent
-from backend.models.issue_fact import CompatRerun
+from backend.models.issue_fact import CompatRerun, DeliveryVersion
 from backend.models.plan_run import PlanRun
 from backend.services import issue_fact_store as facts
 from backend.services.dedup_scan import write_dedup_xls
@@ -55,6 +59,22 @@ logger = logging.getLogger(__name__)
 
 _ADMIN_ROLES = frozenset({"admin", "owner"})
 _COMPAT_ROOT_DIR = "compat_reruns"
+
+#: 兼容报表里由工具原生 org 报表承载的列（经伴随映射绑定到发生）；
+#: 原生行不可用时这些列的值无法复原，按缺口登记。
+NATIVE_SOURCED_FIELDS: tuple[str, ...] = (
+    "ExpTime",
+    "ExpClass",
+    "ExpType",
+    "CurProcess",
+    "Package",
+    "Detail",
+    "CausedBy",
+    "extraTag",
+    "Activity",
+    "Rom_Ram",
+    "Version",
+)
 
 
 @dataclass
@@ -215,6 +235,88 @@ def _scoped_issue_stats(pairs: list[tuple[Any, DeviceLogEvent]]) -> dict[int, di
     return stats
 
 
+def _load_native_index(
+    db: Session, *, delivery: Optional[DeliveryVersion], plan_run_id: int, platform: str,
+) -> dict[str, dict]:
+    """从已登记轮次的覆盖记录收集 (org 报表, 伴随映射行) → 发生绑定。
+
+    ``delivery_version.round_ids`` 指向本版本的依据轮次；轮次 expected_set 的
+    reports 记录 org 报表与其 mapping（伴随映射）路径。映射行携带
+    ``dle_id``/``row``（1 基 xls 行号），把工具原生 org 行绑定到发生。
+    """
+    native: dict[str, dict] = {}
+    if delivery is None:
+        return native
+    round_ids = {int(value) for value in (delivery.round_ids or [])}
+    if not round_ids:
+        return native
+    for round_row in facts.list_scan_rounds_for_read(
+        db, plan_run_id=plan_run_id, platform=platform,
+    ):
+        if round_row.id not in round_ids:
+            continue
+        for unit in round_row.expected_set or []:
+            for report in unit.get("reports") or []:
+                if report.get("empty_receipt"):
+                    continue
+                org_uri = report.get("storage_uri")
+                mapping_uri = report.get("mapping_uri")
+                if not org_uri or not mapping_uri:
+                    continue
+                try:
+                    mapping_data = json.loads(Path(mapping_uri).read_text("utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(mapping_data, dict):
+                    continue
+                for mapping_row in mapping_data.get("rows") or []:
+                    dle_id = mapping_row.get("dle_id")
+                    row_no = mapping_row.get("row")
+                    if not dle_id or not isinstance(row_no, int) or row_no < 1:
+                        continue
+                    native.setdefault(str(dle_id), {
+                        "org": str(org_uri),
+                        "xls_row": int(row_no),
+                        "round_id": round_row.id,
+                    })
+    return native
+
+
+def _read_org_row(
+    org_path: str, xls_row: int, cache: dict[tuple[str, int], Optional[dict]],
+) -> Optional[dict]:
+    """读取 org 报表一行（1 基行号）的原生列值；不可读时缓存 None。
+
+    缓存按 (文件, 行号) 键：同一 org 报表承载多个发生，跨行不得串值。
+    """
+    cache_key = (org_path, xls_row)
+    if cache_key in cache:
+        return cache[cache_key]
+    try:
+        book = xlrd.open_workbook(org_path, on_demand=True)
+        try:
+            sheet = book.sheet_by_index(0)
+            if sheet.nrows < xls_row:
+                cache[cache_key] = None
+                return None
+            headers = [
+                str(sheet.cell_value(0, column)).strip()
+                for column in range(sheet.ncols)
+            ]
+            cache[cache_key] = {
+                headers[column]: sheet.cell_value(xls_row - 1, column)
+                for column in range(sheet.ncols)
+            }
+        finally:
+            book.release_resources()
+    except Exception:
+        logger.warning(
+            "compat_rerun_org_row_unreadable path=%s row=%d", org_path, xls_row,
+        )
+        cache[cache_key] = None
+    return cache[cache_key]
+
+
 def trigger_compat_rerun(
     db: Session,
     *,
@@ -247,44 +349,107 @@ def trigger_compat_rerun(
     if not nfs_root:
         raise CompatRerunError(503, "shared storage root is not configured")
 
-    if delivery_version_no is not None:
+    resolved_key = (request_key or "").strip() or ""
+    # ── 交付版本解析（B3）：同 key 绑定第一次接受的版本 ──────────────────
+    # 预读登记行确定绑定；行锁领取后再做权威复核。
+    preexisting = (
+        facts.get_compat_rerun_by_request(
+            db, plan_run_id=plan_run_id, platform=plat, request_key=resolved_key,
+        )
+        if resolved_key else None
+    )
+    bound_no = (
+        preexisting.source_delivery_version_no
+        if preexisting is not None else None
+    )
+    if (
+        preexisting is not None
+        and delivery_version_no is not None
+        and bound_no is not None
+        and int(delivery_version_no) != int(bound_no)
+    ):
+        raise CompatRerunError(
+            409,
+            f"request_key {resolved_key!r} is bound to delivery version "
+            f"v{bound_no}; refusing explicit v{delivery_version_no} "
+            "(use a new request_key for another version)",
+        )
+    requested_no = (
+        bound_no if (preexisting is not None and bound_no is not None)
+        else delivery_version_no
+    )
+    if requested_no is not None:
         delivery = facts.get_delivery_version(
-            db, plan_run_id=plan_run_id, platform=plat,
-            version_no=delivery_version_no,
+            db, plan_run_id=plan_run_id, platform=plat, version_no=int(requested_no),
         )
         if delivery is None:
+            if preexisting is not None and bound_no is not None:
+                raise CompatRerunError(
+                    409,
+                    f"request_key {resolved_key!r} is bound to delivery version "
+                    f"v{bound_no}, which is no longer available",
+                )
             raise CompatRerunError(
                 404,
-                f"delivery version v{delivery_version_no} not found "
-                f"for plan_run={plan_run_id}",
+                f"delivery version v{requested_no} not found for plan_run={plan_run_id}",
             )
     else:
         delivery = facts.get_latest_delivery_version(
             db, plan_run_id=plan_run_id, platform=plat,
         )
-
-    resolved_key = (request_key or "").strip() or (
-        f"compat-{plan_run_id}-{plat}-v{delivery.version_no if delivery else 0}"
-    )
-    # 失败登记要写到独立行：主事务会被路由层回滚，先把交付版本的标识取成
-    # 本地值，回滚后 ORM 属性不再可靠。
+    # 失败登记要写到独立行：主事务会被路由层回滚，先把标识取成本地值。
     source_dv_id = delivery.id if delivery is not None else None
     source_dv_no = delivery.version_no if delivery is not None else None
+    if not resolved_key:
+        resolved_key = (
+            f"compat-{plan_run_id}-{plat}-v{source_dv_no if source_dv_no else 0}"
+        )
+
+    rerun_id: Optional[int] = None
+    attempt_no = 0
     try:
-        existing = facts.get_compat_rerun_by_request(
+        # ── 行锁领取（B1）：并发同 key 在此串行化，锁内重读最新已提交状态 ──
+        locked = facts.get_compat_rerun_for_update(
             db, plan_run_id=plan_run_id, platform=plat, request_key=resolved_key,
         )
-        if existing is not None:
-            if existing.status == facts.COMPAT_RERUN_STATUS_COMPLETED:
-                return CompatRerunOutcome(rerun=existing, replayed=True)
-            if existing.status in {
+        if locked is not None:
+            rerun = locked
+            rerun_id = int(locked.id)
+            if rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED:
+                return CompatRerunOutcome(rerun=rerun, replayed=True)
+            if rerun.status in {
                 facts.COMPAT_RERUN_STATUS_PENDING,
                 facts.COMPAT_RERUN_STATUS_RUNNING,
             }:
                 raise CompatRerunError(
-                    409, f"compat rerun {existing.id} is currently {existing.status.lower()}",
+                    409,
+                    f"compat rerun {rerun.id} is currently {rerun.status.lower()}",
                 )
-            rerun = existing
+            locked_bound = rerun.source_delivery_version_no
+            if (
+                locked_bound is not None
+                and delivery_version_no is not None
+                and int(delivery_version_no) != int(locked_bound)
+            ):
+                raise CompatRerunError(
+                    409,
+                    f"request_key {resolved_key!r} is bound to delivery version "
+                    f"v{locked_bound}; refusing explicit v{delivery_version_no}",
+                )
+            if locked_bound is not None and int(locked_bound) != int(source_dv_no or 0):
+                # 预读与锁内绑定不同（并发改写）：以锁内绑定为准重新解析。
+                delivery = facts.get_delivery_version(
+                    db, plan_run_id=plan_run_id, platform=plat,
+                    version_no=int(locked_bound),
+                )
+                if delivery is None:
+                    raise CompatRerunError(
+                        409,
+                        f"request_key {resolved_key!r} is bound to delivery version "
+                        f"v{locked_bound}, which is no longer available",
+                    )
+                source_dv_id = delivery.id
+                source_dv_no = delivery.version_no
         else:
             rerun = facts.record_compat_rerun(
                 db,
@@ -295,6 +460,7 @@ def trigger_compat_rerun(
                 source_delivery_version_id=source_dv_id,
                 source_delivery_version_no=source_dv_no,
             )
+            rerun_id = int(rerun.id)
 
         attempt_no = int(rerun.attempts or 0) + 1
         facts.update_compat_rerun(
@@ -302,8 +468,28 @@ def trigger_compat_rerun(
             status=facts.COMPAT_RERUN_STATUS_PENDING,
             attempts=attempt_no,
             error=None,
+            source_delivery_version_id=source_dv_id,
+            source_delivery_version_no=source_dv_no,
         )
         db.flush()
+
+        return _execute_compat_rerun(
+            db,
+            rerun=rerun,
+            rerun_id=rerun_id,
+            plan_run=plan_run,
+            plan_run_id=plan_run_id,
+            platform=plat,
+            resolved_key=resolved_key,
+            requested_by=requested_by,
+            delivery=delivery,
+            source_dv_id=source_dv_id,
+            source_dv_no=source_dv_no,
+            attempt_no=attempt_no,
+            nfs_root=nfs_root,
+            local_source_roots=local_source_roots or {},
+            copy_fn=copy_fn,
+        )
     except IntegrityError:
         # 并发同 key 触发：唯一约束仲裁失败。回滚本事务后让调用方重查，
         # 命中已登记行时按重放/重试语义继续，不产生第二行。
@@ -313,249 +499,23 @@ def trigger_compat_rerun(
             "compat rerun request_key already exists; re-issue the request "
             "to reuse the registered attempt",
         ) from None
-
-    try:
-        root_plan_run_id = int(plan_run.root_plan_run_id or plan_run.id)
-        issue_ids = [int(i) for i in (delivery.issue_ids or [])] if delivery else None
-        event_ids = [str(e) for e in (delivery.event_ids or [])] if delivery else None
-        pairs = facts.list_partition_occurrences_for_scope(
-            db,
-            plan_run_id=plan_run_id,
-            platform=plat,
-            signature_ids=issue_ids,
-            event_ids=event_ids,
-        )
-        all_issues = facts.list_partition_delivery_issues(
-            db, plan_run_id=plan_run_id, platform=plat,
-        )
-        if issue_ids is not None:
-            included = set(issue_ids)
-            all_issues = [
-                issue for issue in all_issues
-                if int(issue["signature_id"]) in included
-            ]
-        stats = _scoped_issue_stats(pairs)
-
-        publications = {
-            str(row.dle_id): row
-            for row in facts.list_partition_evidence_publications(
-                db, plan_run_id=plan_run_id, platform=plat,
-            )
-        }
-
-        dle_by_id: dict[str, DeviceLogEvent] = {}
-        sigs_by_dle: dict[str, set[int]] = {}
-        for occurrence, dle in pairs:
-            key = str(dle.id)
-            dle_by_id[key] = dle
-            sigs_by_dle.setdefault(key, set()).add(int(occurrence.signature_id))
-
-        artifact_dir = (
-            Path(nfs_root).resolve(strict=False)
-            / _COMPAT_ROOT_DIR
-            / str(plan_run_id)
-            / plat
-            / f"r{rerun.id}"
-        )
-        events_dir = artifact_dir / "events"
-        events_dir.mkdir(parents=True, exist_ok=True)
-        copier = copy_fn or (
-            lambda src, dst: copytree_no_symlinks(src, dst, dest_root=events_dir)
-        )
-
-        source_records: list[dict[str, Any]] = []
-        missing_items: list[dict[str, Any]] = []
-        copied_by_dle: dict[str, str] = {}
-        local_roots = local_source_roots or {}
-
-        for dle_id_str in sorted(dle_by_id):
-            dle = dle_by_id[dle_id_str]
-            publication = publications.get(dle_id_str)
-            spill = facts.get_spill_ledger(db, dle_id=dle.id)
-            src_path, source_kind, i4_status = _resolve_dle_compat_source(
-                dle=dle,
-                root_plan_run_id=root_plan_run_id,
-                nfs_root=nfs_root,
-                publication=publication,
-                spill_record=spill,
-                local_source_roots=local_roots,
-            )
-            if src_path is None or source_kind is None:
-                missing_items.append({
-                    "dle_id": dle_id_str,
-                    "serial": dle.serial,
-                    "host_id": dle.host_id,
-                    "dle_state": dle.state,
-                    "signature_ids": sorted(sigs_by_dle.get(dle_id_str, ())),
-                    "reason": i4_status,
-                })
-                continue
-
-            dest_name = src_path.name if src_path.is_dir() else dle_id_str
-            # 副本保留 aee 采集布局（{采集目录}/{serial}/aee_exp/{事件目录}），
-            # 让报表 Path 与现行产物一样可被消费方按目录结构解析
-            # （handoff/Jira 工具从 Path 反解 serial/entry）；解析失败回落平铺。
-            collection_folder = None
-            aee_subdir = "aee_exp"
-            try:
-                collection_folder, _entry = collection_folder_from_event_path(
-                    dle.local_path or "", serial=dle.serial,
-                )
-                aee_subdir = Path(dle.local_path).parts[-2]
-            except EvidenceLayoutError:
-                collection_folder = None
-            if collection_folder:
-                dest_event_dir = (
-                    events_dir / collection_folder / dle.serial / aee_subdir / dest_name
-                )
-            else:
-                dest_event_dir = events_dir / dle.serial / dest_name
-            if dest_event_dir.exists():
-                shutil.rmtree(dest_event_dir)
-            if src_path.is_dir():
-                copier(src_path, dest_event_dir)
-            else:
-                dest_event_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_path, dest_event_dir / src_path.name)
-
-            copied_by_dle[dle_id_str] = str(dest_event_dir)
-            source_records.append({
-                "dle_id": dle_id_str,
-                "serial": dle.serial,
-                "host_id": dle.host_id,
-                "original_dle_state": dle.state,
-                "source_kind": source_kind,
-                "i4_status": i4_status,
-                "source_path": str(src_path),
-                "copied_path": str(dest_event_dir),
-                "digest_sha256": _tree_sha256(dest_event_dir),
-            })
-
-        is_partial = bool(missing_items)
-        # 15 列现行 merge 格式。列值只能来自 G1 已持久化的工具事实；
-        # 工具在 merge 输出里承载的 Detail/ExpType/CurProcess/Activity/Rom_Ram
-        # 等原文不在事实层（signature sidecar 只有 exp_class/package/caused_by），
-        # 平台不复刻工具解析规则，这些列留空并登记为偏离（见 Agent Note）。
-        occ_by_dle: dict[str, Any] = {}
-        for occurrence, dle in pairs:
-            occ_by_dle.setdefault(str(dle.id), occurrence)
-        run_build_version = str(plan_run.build_version or "")
-        xls_rows: list[dict[str, Any]] = []
-        for row_order, issue in enumerate(all_issues):
-            sig_id = int(issue["signature_id"])
-            representative_dle = str(issue.get("representative_dle_id") or "")
-            copied_path = copied_by_dle.get(representative_dle, "")
-            if not copied_path:
-                for dle_id_str, signature_ids in sorted(sigs_by_dle.items()):
-                    if sig_id in signature_ids and dle_id_str in copied_by_dle:
-                        copied_path = copied_by_dle[dle_id_str]
-                        break
-            issue_stats = stats.get(sig_id, {})
-            versions = issue_stats.get("build_versions") or list(issue.get("build_versions") or [])
-            # ExpTime 取代表事件的发生时间，与 Path 指向的副本一致；
-            # 以 asctime(UTC) 呈现（现行产物是采集侧本地时区串，DB 只存 UTC）。
-            representative_occurrence = occ_by_dle.get(representative_dle)
-            if representative_occurrence is None:
-                for dle_id_str, signature_ids in sorted(sigs_by_dle.items()):
-                    if sig_id in signature_ids and dle_id_str in occ_by_dle:
-                        representative_occurrence = occ_by_dle[dle_id_str]
-                        break
-            observed_at = (
-                representative_occurrence.observed_at
-                if representative_occurrence is not None else None
-            )
-            exp_time = (
-                time.asctime(time.gmtime(observed_at.timestamp()))
-                if observed_at is not None else ""
-            )
-            try:
-                signature_fields = json.loads(issue.get("signature_raw") or "{}")
-                if not isinstance(signature_fields, dict):
-                    signature_fields = {}
-            except ValueError:
-                signature_fields = {}
-            xls_rows.append({
-                # Id 是 0 起行序（现行 merge 同），下游按行序建映射。
-                "Id": row_order,
-                "Path": copied_path,
-                "Version": run_build_version or ";".join(sorted(versions)),
-                "ExpTime": exp_time,
-                "ExpClass": str(issue.get("event_type") or signature_fields.get("exp_class") or ""),
-                # 以下三列在事实层无载体，登记为空缺偏离。
-                "ExpType": "",
-                "CurProcess": "",
-                "Package": str(signature_fields.get("package") or ""),
-                "Detail": "",
-                "CausedBy": str(signature_fields.get("caused_by") or ""),
-                "extraTag": "",
-                "Count": int(issue_stats.get("occurrences", 0)),
-                "Activity": "",
-                "DeviceCount": int(issue_stats.get("machines", 0)),
-                "Rom_Ram": "",
-            })
-
-        merge_xls_path = write_dedup_xls(
-            artifact_dir
-            / f"Result_MergeFiles_Compat_{plan_run_id}_{plat}_r{rerun.id}.xls",
-            xls_rows,
-        )
-        coverage_scope = {
-            "total_events": len(dle_by_id),
-            "covered_events": len(source_records),
-            "missing_events": len(missing_items),
-            "issue_ids": sorted(int(issue["signature_id"]) for issue in all_issues),
-            "covered_dle_ids": sorted(copied_by_dle),
-            "missing_dle_ids": sorted(item["dle_id"] for item in missing_items),
-            "is_partial": is_partial,
-        }
-        manifest_path = artifact_dir / "compat_manifest.json"
-        _atomic_write_json(manifest_path, {
-            "schema": "stp.compat_rerun_manifest/v1",
-            "compat_rerun_id": int(rerun.id),
-            "plan_run_id": int(plan_run_id),
-            "platform": plat,
-            "request_key": resolved_key,
-            "requested_by": requested_by,
-            "source_delivery_version_id": rerun.source_delivery_version_id,
-            "source_delivery_version_no": rerun.source_delivery_version_no,
-            "is_partial": is_partial,
-            "coverage_scope": coverage_scope,
-            "source_records": source_records,
-            "missing_items": missing_items,
-            "merge_xls_path": str(merge_xls_path),
-        })
-
-        facts.update_compat_rerun(
-            db, row=rerun,
-            status=facts.COMPAT_RERUN_STATUS_COMPLETED,
-            attempts=attempt_no,
-            coverage_scope=coverage_scope,
-            source_records=source_records,
-            missing_items=missing_items,
-            is_partial=is_partial,
-            artifact_dir=str(artifact_dir),
-            merge_xls_path=str(merge_xls_path),
-            manifest_path=str(manifest_path),
-            error=None,
-            completed_at=_utcnow(),
-        )
-        db.flush()
-        return CompatRerunOutcome(rerun=rerun, replayed=False)
     except Exception as exc:
         logger.exception(
             "compat_rerun_failed rerun_id=%s plan_run=%d platform=%s",
-            getattr(rerun, "id", None), plan_run_id, plat,
+            rerun_id, plan_run_id, plat,
         )
         # 路由层对 CompatRerunError 回滚主事务（get_db 不 commit）；失败登记
         # 必须独立提交，否则同 key 重试会新建行，D15 的幂等重试只在服务级
-        # 测试里成立。先回滚主事务丢弃半途状态，再由独立会话写失败终态。
+        # 测试里成立。先回滚主事务丢弃半途状态，再走守卫式写回。
         try:
             db.rollback()
         except Exception:
             logger.exception(
-                "compat_rerun_rollback_failed plan_run=%d platform=%s", plan_run_id, plat,
+                "compat_rerun_rollback_failed plan_run=%d platform=%s",
+                plan_run_id, plat,
             )
         _record_failed_registration(
+            rerun_id=rerun_id,
             plan_run_id=plan_run_id,
             platform=plat,
             request_key=resolved_key,
@@ -570,8 +530,343 @@ def trigger_compat_rerun(
         raise CompatRerunError(500, f"compat rerun failed: {exc}") from exc
 
 
+def _execute_compat_rerun(
+    db: Session,
+    *,
+    rerun: CompatRerun,
+    rerun_id: int,
+    plan_run: PlanRun,
+    plan_run_id: int,
+    platform: str,
+    resolved_key: str,
+    requested_by: str,
+    delivery: Optional[DeliveryVersion],
+    source_dv_id: Optional[int],
+    source_dv_no: Optional[int],
+    attempt_no: int,
+    nfs_root: str,
+    local_source_roots: Mapping[str, str],
+    copy_fn: Optional[Callable[[Path, Path], None]],
+) -> CompatRerunOutcome:
+    """领取成功后的复制、原生列值装配与登记推进；调用方持有行锁。"""
+    root_plan_run_id = int(plan_run.root_plan_run_id or plan_run.id)
+    issue_ids = [int(i) for i in (delivery.issue_ids or [])] if delivery else None
+    event_ids = [str(e) for e in (delivery.event_ids or [])] if delivery else None
+    pairs = facts.list_partition_occurrences_for_scope(
+        db,
+        plan_run_id=plan_run_id,
+        platform=platform,
+        signature_ids=issue_ids,
+        event_ids=event_ids,
+    )
+    all_issues = facts.list_partition_delivery_issues(
+        db, plan_run_id=plan_run_id, platform=platform,
+    )
+    if issue_ids is not None:
+        included = set(issue_ids)
+        all_issues = [
+            issue for issue in all_issues
+            if int(issue["signature_id"]) in included
+        ]
+    stats = _scoped_issue_stats(pairs)
+    native_index = _load_native_index(
+        db, delivery=delivery, plan_run_id=plan_run_id, platform=platform,
+    )
+
+    publications = {
+        str(row.dle_id): row
+        for row in facts.list_partition_evidence_publications(
+            db, plan_run_id=plan_run_id, platform=platform,
+        )
+    }
+
+    dle_by_id: dict[str, DeviceLogEvent] = {}
+    sigs_by_dle: dict[str, set[int]] = {}
+    occ_by_dle: dict[str, Any] = {}
+    for occurrence, dle in pairs:
+        key = str(dle.id)
+        dle_by_id[key] = dle
+        sigs_by_dle.setdefault(key, set()).add(int(occurrence.signature_id))
+        occ_by_dle.setdefault(key, occurrence)
+
+    artifact_dir = (
+        Path(nfs_root).resolve(strict=False)
+        / _COMPAT_ROOT_DIR
+        / str(plan_run_id)
+        / platform
+        / f"r{rerun_id}"
+    )
+    events_dir = artifact_dir / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    copier = copy_fn or (
+        lambda src, dst: copytree_no_symlinks(src, dst, dest_root=events_dir)
+    )
+
+    source_records: list[dict[str, Any]] = []
+    missing_items: list[dict[str, Any]] = []
+    copied_by_dle: dict[str, str] = {}
+
+    for dle_id_str in sorted(dle_by_id):
+        dle = dle_by_id[dle_id_str]
+        publication = publications.get(dle_id_str)
+        spill = facts.get_spill_ledger(db, dle_id=dle.id)
+        src_path, source_kind, i4_status = _resolve_dle_compat_source(
+            dle=dle,
+            root_plan_run_id=root_plan_run_id,
+            nfs_root=nfs_root,
+            publication=publication,
+            spill_record=spill,
+            local_source_roots=local_source_roots,
+        )
+        if src_path is None or source_kind is None:
+            missing_items.append({
+                "dle_id": dle_id_str,
+                "serial": dle.serial,
+                "host_id": dle.host_id,
+                "dle_state": dle.state,
+                "signature_ids": sorted(sigs_by_dle.get(dle_id_str, ())),
+                "reason": i4_status,
+            })
+            continue
+
+        dest_name = src_path.name if src_path.is_dir() else dle_id_str
+        # 副本保留 aee 采集布局（{采集目录}/{serial}/aee_exp/{事件目录}），
+        # 让报表 Path 与现行产物一样可被消费方按目录结构解析
+        # （handoff/Jira 工具从 Path 反解 serial/entry）；解析失败回落平铺。
+        collection_folder = None
+        aee_subdir = "aee_exp"
+        try:
+            collection_folder, _entry = collection_folder_from_event_path(
+                dle.local_path or "", serial=dle.serial,
+            )
+            aee_subdir = Path(dle.local_path).parts[-2]
+        except EvidenceLayoutError:
+            collection_folder = None
+        if collection_folder:
+            dest_event_dir = (
+                events_dir / collection_folder / dle.serial / aee_subdir / dest_name
+            )
+        else:
+            dest_event_dir = events_dir / dle.serial / dest_name
+        if dest_event_dir.exists():
+            shutil.rmtree(dest_event_dir)
+        if src_path.is_dir():
+            copier(src_path, dest_event_dir)
+        else:
+            dest_event_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_path, dest_event_dir / src_path.name)
+
+        copied_by_dle[dle_id_str] = str(dest_event_dir)
+        source_records.append({
+            "dle_id": dle_id_str,
+            "serial": dle.serial,
+            "host_id": dle.host_id,
+            "original_dle_state": dle.state,
+            "source_kind": source_kind,
+            "i4_status": i4_status,
+            "source_path": str(src_path),
+            "copied_path": str(dest_event_dir),
+            "digest_sha256": _tree_sha256(dest_event_dir),
+        })
+
+    is_partial = bool(missing_items)
+    # ── 现行 15 列装配（B2）：列值取自已登记轮次的工具原生 org 行 ──────────
+    # 行发生的确定：代表发生已复制 → 用代表；否则取同问题内已复制的替补
+    # 发生；无任何已复制材料但代表有原生记录时仍用代表（Path 留空）。
+    # Path/ExpTime 及其余发生相关字段始终来自同一个实际发生。
+    org_row_cache: dict[str, Optional[dict]] = {}
+    field_gaps: list[dict[str, Any]] = []
+    binding_rows: list[dict[str, Any]] = []
+    run_build_version = str(plan_run.build_version or "")
+    xls_rows: list[dict[str, Any]] = []
+    for row_order, issue in enumerate(all_issues):
+        sig_id = int(issue["signature_id"])
+        representative_dle = str(issue.get("representative_dle_id") or "")
+        row_dle = None
+        if representative_dle and representative_dle in copied_by_dle:
+            row_dle = representative_dle
+        else:
+            for dle_id_str, signature_ids in sorted(sigs_by_dle.items()):
+                if sig_id in signature_ids and dle_id_str in copied_by_dle:
+                    row_dle = dle_id_str
+                    break
+        row_occurrence = occ_by_dle.get(row_dle) if row_dle else None
+        native = native_index.get(row_dle) if row_dle else None
+        native_row = (
+            _read_org_row(native["org"], native["xls_row"], org_row_cache)
+            if native else None
+        )
+        if row_dle is None and native_index.get(representative_dle):
+            # 无可复制材料，但代表发生有原生记录：沿用代表（Path 留空）。
+            row_dle = representative_dle
+            native = native_index.get(row_dle)
+            native_row = _read_org_row(
+                native["org"], native["xls_row"], org_row_cache,
+            )
+        if row_dle is None:
+            row_dle = representative_dle or None
+        if row_dle and native_row is None:
+            field_gaps.append({
+                "signature_id": sig_id,
+                "dle_id": row_dle,
+                "org_report": native["org"] if native else None,
+                "org_row": native["xls_row"] if native else None,
+                "reason": (
+                    "org_row_unreadable" if native
+                    else "org_report_or_mapping_unavailable"
+                ),
+                "fields": list(NATIVE_SOURCED_FIELDS),
+            })
+
+        copied_path = copied_by_dle.get(row_dle, "") if row_dle else ""
+        issue_stats = stats.get(sig_id, {})
+        if native_row is not None:
+            # 原生行在：逐字取工具值；原生为空的字段保留为空。
+            exp_time = str(native_row.get("ExpTime") or "")
+            exp_class = str(native_row.get("ExpClass") or "")
+            exp_type = str(native_row.get("ExpType") or "")
+            cur_process = str(native_row.get("CurProcess") or "")
+            package = str(native_row.get("Package") or "")
+            detail = str(native_row.get("Detail") or "")
+            caused_by = str(native_row.get("CausedBy") or "")
+            extra_tag = str(native_row.get("extraTag") or "")
+            activity = str(native_row.get("Activity") or "")
+            rom_ram = str(native_row.get("Rom_Ram") or "")
+            version = str(native_row.get("Version") or "")
+        else:
+            # 原生行不可用：登记缺口；已注册的工具签名事实仍可填充，
+            # 其余发生相关列留空（时区无法从 DB 事实复原，不再近似）。
+            try:
+                signature_fields = json.loads(issue.get("signature_raw") or "{}")
+                if not isinstance(signature_fields, dict):
+                    signature_fields = {}
+            except ValueError:
+                signature_fields = {}
+            exp_time = ""
+            exp_class = str(
+                issue.get("event_type") or signature_fields.get("exp_class") or ""
+            )
+            exp_type = ""
+            cur_process = ""
+            package = str(signature_fields.get("package") or "")
+            detail = ""
+            caused_by = str(signature_fields.get("caused_by") or "")
+            extra_tag = ""
+            activity = ""
+            rom_ram = ""
+            version = run_build_version or ";".join(
+                sorted(issue_stats.get("build_versions")
+                       or list(issue.get("build_versions") or []))
+            )
+        binding_rows.append({
+            "id": row_order,
+            "signature_id": sig_id,
+            "dle_id": row_dle,
+            "occurrence_id": (
+                str(row_occurrence.id) if row_occurrence is not None else None
+            ),
+            "is_substitute": bool(
+                row_dle and representative_dle and row_dle != representative_dle
+            ),
+            "org_report": native["org"] if native else None,
+            "org_row": native["xls_row"] if native else None,
+        })
+        xls_rows.append({
+            # Id 是 0 起行序（现行 merge 同），下游按行序建映射。
+            "Id": row_order,
+            "Path": copied_path,
+            "Version": version,
+            "ExpTime": exp_time,
+            "ExpClass": exp_class,
+            "ExpType": exp_type,
+            "CurProcess": cur_process,
+            "Package": package,
+            "Detail": detail,
+            "CausedBy": caused_by,
+            "extraTag": extra_tag,
+            "Count": int(issue_stats.get("occurrences", 0)),
+            "Activity": activity,
+            "DeviceCount": int(issue_stats.get("machines", 0)),
+            "Rom_Ram": rom_ram,
+        })
+
+    merge_xls_path = write_dedup_xls(
+        artifact_dir
+        / f"Result_MergeFiles_Compat_{plan_run_id}_{platform}_r{rerun_id}.xls",
+        xls_rows,
+    )
+    coverage_scope = {
+        "total_events": len(dle_by_id),
+        "covered_events": len(source_records),
+        "missing_events": len(missing_items),
+        "issue_ids": sorted(int(issue["signature_id"]) for issue in all_issues),
+        "covered_dle_ids": sorted(copied_by_dle),
+        "missing_dle_ids": sorted(item["dle_id"] for item in missing_items),
+        "is_partial": is_partial,
+        "field_gaps": field_gaps,
+        "delivery_version_no": source_dv_no,
+    }
+    manifest_path = artifact_dir / "compat_manifest.json"
+    # 全源可读但原生非空值无法复原时禁止登记为完成（#4031 判据 3）；
+    # D15 允许的源缺失仍按部分成果登记。
+    if field_gaps and not is_partial:
+        registered_status = facts.COMPAT_RERUN_STATUS_FAILED
+        error_summary = (
+            "native values unreconstructable for "
+            f"{len(field_gaps)} occurrence(s); fields: "
+            + ",".join(sorted({f for gap in field_gaps for f in gap["fields"]}))
+        )
+    else:
+        registered_status = facts.COMPAT_RERUN_STATUS_COMPLETED
+        error_summary = None
+    _atomic_write_json(manifest_path, {
+        "schema": "stp.compat_rerun_manifest/v1",
+        "compat_rerun_id": int(rerun_id),
+        "plan_run_id": int(plan_run_id),
+        "platform": platform,
+        "request_key": resolved_key,
+        "requested_by": requested_by,
+        "source_delivery_version_id": source_dv_id,
+        "source_delivery_version_no": source_dv_no,
+        "registered_status": registered_status,
+        "is_partial": is_partial,
+        "coverage_scope": coverage_scope,
+        "source_records": source_records,
+        "missing_items": missing_items,
+        "field_gaps": field_gaps,
+        "binding": {
+            "delivery_version_no": source_dv_no,
+            "issue_ids": sorted(int(issue["signature_id"]) for issue in all_issues),
+            "event_ids": [str(e) for e in (delivery.event_ids or [])] if delivery else [],
+            "rows": binding_rows,
+        },
+        "merge_xls_path": str(merge_xls_path),
+    })
+
+    facts.update_compat_rerun(
+        db, row=rerun,
+        status=registered_status,
+        attempts=attempt_no,
+        coverage_scope=coverage_scope,
+        source_records=source_records,
+        missing_items=missing_items,
+        is_partial=is_partial,
+        artifact_dir=str(artifact_dir),
+        merge_xls_path=str(merge_xls_path),
+        manifest_path=str(manifest_path),
+        error=error_summary,
+        completed_at=(
+            _utcnow()
+            if registered_status == facts.COMPAT_RERUN_STATUS_COMPLETED else None
+        ),
+    )
+    db.flush()
+    return CompatRerunOutcome(rerun=rerun, replayed=False)
+
+
 def _record_failed_registration(
     *,
+    rerun_id: Optional[int],
     plan_run_id: int,
     platform: str,
     request_key: str,
@@ -581,15 +876,25 @@ def _record_failed_registration(
     attempts: int,
     error: Exception,
 ) -> Optional[CompatRerun]:
-    """独立会话登记失败终态；主事务已被回滚，登记行以同 key 幂等落库。"""
+    """独立会话登记失败终态；主事务已被回滚，登记行以同 key 幂等落库。
+
+    写回走守卫式更新（B1 迟到写回）：绝不改写已完成的登记，也不把次数写回退。
+    """
     try:
         with SessionLocal() as failure_db:
-            row = facts.get_compat_rerun_by_request(
-                failure_db, plan_run_id=plan_run_id, platform=platform,
-                request_key=request_key,
-            )
-            if row is None:
-                row = facts.record_compat_rerun(
+            row = None
+            if rerun_id is not None:
+                row = facts.guarded_compat_rerun_failure(
+                    failure_db, rerun_id=rerun_id,
+                    attempts=attempts, error=str(error),
+                )
+            if row is not None:
+                failure_db.commit()
+                return row
+            # 首次尝试：主事务回滚吞掉了登记行；独立补插失败行，与并发领取
+            # 的插入由唯一约束仲裁，命中后仍走守卫式写回。
+            try:
+                new_row = facts.record_compat_rerun(
                     failure_db,
                     plan_run_id=plan_run_id,
                     platform=platform,
@@ -598,14 +903,28 @@ def _record_failed_registration(
                     source_delivery_version_id=source_delivery_version_id,
                     source_delivery_version_no=source_delivery_version_no,
                 )
-            facts.update_compat_rerun(
-                failure_db, row=row,
-                status=facts.COMPAT_RERUN_STATUS_FAILED,
-                attempts=attempts,
-                error=str(error)[:1024],
-            )
-            failure_db.commit()
-            return row
+                facts.update_compat_rerun(
+                    failure_db, row=new_row,
+                    status=facts.COMPAT_RERUN_STATUS_FAILED,
+                    attempts=attempts,
+                    error=str(error),
+                )
+                failure_db.commit()
+                return new_row
+            except IntegrityError:
+                failure_db.rollback()
+                winner = facts.get_compat_rerun_by_request(
+                    failure_db, plan_run_id=plan_run_id, platform=platform,
+                    request_key=request_key,
+                )
+                if winner is not None:
+                    row = facts.guarded_compat_rerun_failure(
+                        failure_db, rerun_id=int(winner.id),
+                        attempts=attempts, error=str(error),
+                    )
+                    failure_db.commit()
+                    return row
+                return None
     except Exception:
         logger.exception(
             "compat_rerun_failure_register_failed plan_run=%d platform=%s "
