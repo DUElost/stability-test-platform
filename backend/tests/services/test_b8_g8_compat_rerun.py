@@ -27,6 +27,7 @@ from uuid import uuid4
 import pytest
 import xlrd
 import xlwt
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from backend.models.device_log_event import DeviceLogEvent
@@ -543,9 +544,17 @@ def test_substitute_row_fields_come_from_substitute_occurrence(compat_env):
         assert [item["dle_id"] for item in outcome.rerun.missing_items] == [str(rep.id)]
         rows = _read_report(outcome.rerun.merge_xls_path)
         assert len(rows) == 1
-        # Path 与 ExpTime 必须来自同一替补发生（sub 的 org 行，Nov 17）。
+        # Path 与 ExpTime 及其他发生相关字段必须来自同一替补发生（sub 的 org 行，Nov 17）。
         assert rows[0]["Path"].endswith(f"aee_exp/{sub_name}")
         assert rows[0]["ExpTime"] == "Sun Nov 17 10:40:46 CST 2026"
+        assert rows[0]["ExpClass"] == "ANR"
+        assert rows[0]["ExpType"] == "exp_type_SN-SUB"
+        assert rows[0]["CurProcess"] == "proc.SN-SUB"
+        assert rows[0]["Package"] == "orgpkg.SN-SUB"
+        assert rows[0]["Detail"].startswith("Device_id: SN-SUB")
+        assert rows[0]["CausedBy"] == "org-caused-SN-SUB"
+        assert rows[0]["Version"] == "ORGV-SN-SUB"
+        assert rows[0]["Rom_Ram"] == "128GB+6GB"
         manifest = json.loads(Path(outcome.rerun.manifest_path).read_text("utf-8"))
         binding_row = manifest["binding"]["rows"][0]
         assert binding_row["dle_id"] == str(sub.id)
@@ -846,15 +855,8 @@ def test_same_key_explicit_other_version_rejected_before_copy(compat_env):
             db, run, no=2, issue_ids=[sig.id, _sig2.id],
             event_ids=[first.id, second.id], round_id=round_id,
         )
-        # 预置已完成登记（绑定 v1），验证 409 不触碰任何状态。
-        bound = facts.record_compat_rerun(
-            db, plan_run_id=run.id, platform=PLATFORM, request_key="vb",
-            requested_by="owner", source_delivery_version_no=1,
-        )
-        facts.update_compat_rerun(
-            db, row=bound, status=facts.COMPAT_RERUN_STATUS_COMPLETED,
-            attempts=1, completed_at=datetime.now(timezone.utc),
-        )
+        # 预置 v1 失败登记（R2 反例原形）；409 必须不触碰该行。
+        _seed_failed_registration(db, run, key="vb", version_no=1)
         db.commit()
         run_id = run.id
 
@@ -885,9 +887,10 @@ def test_same_key_explicit_other_version_rejected_before_copy(compat_env):
         row = facts.get_compat_rerun_by_request(
             db, plan_run_id=run_id, platform=PLATFORM, request_key="vb",
         )
-        assert row.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+        assert row.status == facts.COMPAT_RERUN_STATUS_FAILED
         assert row.attempts == 1
         assert row.source_delivery_version_no == 1
+        assert row.error == "prior failure"
 
 
 def test_new_key_explicit_v2_executes_independently(compat_env):
@@ -983,6 +986,10 @@ def test_concurrent_retry_single_copy_two_sessions(compat_env):
     def attempt(name):
         try:
             with factory() as db:
+                pg_pid = (
+                    db.execute(text("SELECT pg_backend_pid()")).scalar()
+                    if db.get_bind().dialect.name == "postgresql" else None
+                )
                 outcome = trigger_compat_rerun(
                     db, plan_run_id=run_id, platform=PLATFORM,
                     requested_by="owner", requester_role="admin",
@@ -993,6 +1000,7 @@ def test_concurrent_retry_single_copy_two_sessions(compat_env):
                     "replayed": outcome.replayed,
                     "status": outcome.rerun.status,
                     "attempts": outcome.rerun.attempts,
+                    "pg_pid": pg_pid,
                 }
         except Exception as exc:  # noqa: BLE001 — 探针按类型归类
             results[name] = {"error": getattr(exc, "status_code", type(exc).__name__)}
@@ -1015,6 +1023,9 @@ def test_concurrent_retry_single_copy_two_sessions(compat_env):
     assert results["a"]["replayed"] is False
     assert results["a"]["status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
     assert results["b"]["replayed"] is True
+    if results["a"]["pg_pid"] is not None:
+        # 两个并发请求确实落在不同 PG16 后端会话。
+        assert results["a"]["pg_pid"] != results["b"]["pg_pid"], results
     with factory() as db:
         row = facts.get_compat_rerun_by_request(
             db, plan_run_id=run_id, platform=PLATFORM, request_key="cc",
