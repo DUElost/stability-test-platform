@@ -15,7 +15,8 @@ import LiveConsole from '@/components/console/LiveConsole';
 import { dedup } from '@/utils/api/dedup';
 import { InlineEmpty } from '@/components/ui/empty-state';
 import { InlineError } from '@/components/ui/error-state';
-import { FORM, INTERACTIVE, TEXT } from '@/design-system';
+import { SearchableSelect } from '@/components/ui/searchable-select';
+import { INTERACTIVE, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
 
@@ -61,23 +62,27 @@ export default function JiraRunHistory({ planRunId, title }: Props = {}) {
           <CardTitle>{title ?? (scoped ? '本 PlanRun 提单历史' : '历史提交记录')}</CardTitle>
           <div className="flex items-center gap-2">
             {!scoped && (
-              <select
-                aria-label="按厂商过滤"
-                className={cn(FORM.select, 'min-w-0 h-9')}
+              <SearchableSelect
                 value={vendor}
-                onChange={e => setVendor(e.target.value)}
-              >
-                {VENDORS.map(v => <option key={v || 'all'} value={v}>{v || '全部厂商'}</option>)}
-              </select>
+                onChange={setVendor}
+                options={VENDORS.filter(Boolean).map((v) => ({ value: v, label: v }))}
+                allValue=""
+                allLabel="全部厂商"
+                searchable={false}
+                ariaLabel="按厂商过滤"
+                className="w-32"
+              />
             )}
-            <select
-              aria-label="按状态过滤"
-              className={cn(FORM.select, 'min-w-0 h-9')}
+            <SearchableSelect
               value={status}
-              onChange={e => setStatus(e.target.value)}
-            >
-              {STATUSES.map(s => <option key={s || 'all'} value={s}>{s || '全部状态'}</option>)}
-            </select>
+              onChange={setStatus}
+              options={STATUSES.filter(Boolean).map((s) => ({ value: s, label: s }))}
+              allValue=""
+              allLabel="全部状态"
+              searchable={false}
+              ariaLabel="按状态过滤"
+              className="w-32"
+            />
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
               <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} />
             </Button>

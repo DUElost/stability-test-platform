@@ -91,7 +91,8 @@ describe('JiraRunHistory', () => {
     renderWithClient();
     await screen.findByText(/暂无提单记录/);
 
-    fireEvent.change(screen.getByLabelText('按厂商过滤'), { target: { value: 'tinno' } });
+    fireEvent.click(screen.getByRole('combobox', { name: '按厂商过滤' }));
+    fireEvent.click(screen.getByRole('option', { name: 'tinno' }));
 
     await waitFor(() =>
       expect(listRuns).toHaveBeenLastCalledWith({
