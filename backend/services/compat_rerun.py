@@ -11,8 +11,9 @@
    在复制前 409；实际复制、计数、台账与 manifest 使用同一版本；
 5. 现行 15 列报表的列值取自已登记轮次的工具原生 org 报表（经伴随映射绑定到
    本版本的发生），原生为空的字段保留为空；原生值无法复原时登记可定位到
-   发生与字段的缺口，全源可读但存在缺口时禁止登记为完成（FAILED）；
-   D15 允许的源缺失仍按部分成果登记并列出缺源范围。
+   发生与字段的缺口，存在缺口即禁止登记为完成（FAILED），不因其他发生的
+   缺源而放宽；D15 允许的源缺失仍按部分成果登记（is_partial 只反映源覆盖）
+   并列出缺源范围。
 
 源选择顺序（同为已校验/仍可用的材料）：中心证据区已校验代表 → DLE
 ``remote_path`` 指向的中心事件目录 → 中心溢出副本 → I4 保护期内的 Agent 本地
@@ -415,17 +416,11 @@ def trigger_compat_rerun(
         if locked is not None:
             rerun = locked
             rerun_id = int(locked.id)
-            if rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED:
-                return CompatRerunOutcome(rerun=rerun, replayed=True)
-            if rerun.status in {
-                facts.COMPAT_RERUN_STATUS_PENDING,
-                facts.COMPAT_RERUN_STATUS_RUNNING,
-            }:
-                raise CompatRerunError(
-                    409,
-                    f"compat rerun {rerun.id} is currently {rerun.status.lower()}",
-                )
             locked_bound = rerun.source_delivery_version_no
+            # B3：锁内先校验显式版本，再决定是否重放。并发交错下预读可能查
+            # 不到未提交的登记（另一请求尚在复制），若先按 COMPLETED 重放，
+            # 会把 v1 登记当作 v2 请求的结果返回；版本校验必须以锁内已提交
+            # 状态为准，拒绝发生在任何复制与重放之前。
             if (
                 locked_bound is not None
                 and delivery_version_no is not None
@@ -435,6 +430,16 @@ def trigger_compat_rerun(
                     409,
                     f"request_key {resolved_key!r} is bound to delivery version "
                     f"v{locked_bound}; refusing explicit v{delivery_version_no}",
+                )
+            if rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED:
+                return CompatRerunOutcome(rerun=rerun, replayed=True)
+            if rerun.status in {
+                facts.COMPAT_RERUN_STATUS_PENDING,
+                facts.COMPAT_RERUN_STATUS_RUNNING,
+            }:
+                raise CompatRerunError(
+                    409,
+                    f"compat rerun {rerun.id} is currently {rerun.status.lower()}",
                 )
             if locked_bound is not None and int(locked_bound) != int(source_dv_no or 0):
                 # 预读与锁内绑定不同（并发改写）：以锁内绑定为准重新解析。
@@ -807,9 +812,10 @@ def _execute_compat_rerun(
         "delivery_version_no": source_dv_no,
     }
     manifest_path = artifact_dir / "compat_manifest.json"
-    # 全源可读但原生非空值无法复原时禁止登记为完成（#4031 判据 3）；
-    # D15 允许的源缺失仍按部分成果登记。
-    if field_gaps and not is_partial:
+    # 原生非空值无法复原时禁止登记为完成（#4031 判据 3）。缺口与缺源是两个
+    # 独立判定：已复制行的字段缺口不因其他发生缺源（is_partial）而被掩盖成
+    # 部分成果；D15 允许的源缺失仍按部分成果登记（is_partial 只反映源覆盖）。
+    if field_gaps:
         registered_status = facts.COMPAT_RERUN_STATUS_FAILED
         error_summary = (
             "native values unreconstructable for "

@@ -11,8 +11,9 @@
 - B3：同 key 绑定首次接受的交付版本——重试省略版本沿用绑定版本；显式另一
   版本在复制前 409；新 key 显式 v2 独立执行；复制/计数/台账/manifest 同版本；
 - B2：15 列现行格式的列值取自已登记轮次的原生 org 报表（经伴随映射绑定），
-  原生空列保留为空；原生值无法复原 → FAILED + 可定位到发生与字段的缺口；
-  选用替补发生时 Path/ExpTime 等发生相关字段来自同一实际发生。
+  原生空列保留为空；原生值无法复原 → FAILED + 可定位到发生与字段的缺口
+  （缺口与缺源独立判定，不因其他发生缺源被掩盖成部分成果）；选用替补发生时
+  Path/ExpTime 等发生相关字段来自同一实际发生。
 """
 
 from __future__ import annotations
@@ -502,6 +503,153 @@ def test_full_source_with_missing_org_report_fails_with_field_gaps(compat_env):
         assert rows[0]["Path"] != ""
         assert rows[0]["ExpTime"] == ""
         assert rows[0]["Detail"] == ""
+
+
+def _seed_gap_and_missing_pair(db, root, run, *, serial_a, serial_b):
+    """B2 组合夹具：A 可复制（轮次 1，org 缺失）、B 缺源（轮次 2，org 可读）。"""
+    name_a = _event_name()
+    dle_a, sig_a, _occ_a = _dle(
+        db, run, serial=serial_a, event=name_a, state="ARCHIVED",
+        remote_path=str(_event_dir(root, "devices", str(run.id), name_a)),
+    )
+    dle_b, sig_b, _occ_b = _dle(
+        db, run, serial=serial_b, event=_event_name(), state="PRUNED",
+    )
+    round_one = _seed_native_round(
+        db, root, run, [dle_a], round_no=1, drop_org=True,
+    )
+    round_two = _seed_native_round(db, root, run, [dle_b], round_no=2)
+    facts.record_delivery_version(
+        db, plan_run_id=run.id, platform=PLATFORM, version_no=1,
+        software_versions=["V1"], round_ids=[round_one, round_two],
+        basis_rounds=[
+            {"round_id": round_one, "merge_generation": 1},
+            {"round_id": round_two, "merge_generation": 1},
+        ],
+        effective_coverage=[], issue_ids=[sig_a.id, sig_b.id],
+        event_ids=[str(dle_a.id), str(dle_b.id)],
+        stats_snapshot_version="a" * 64,
+    )
+    db.flush()
+    return dle_a, sig_a, dle_b, sig_b
+
+
+def test_field_gap_on_copied_row_fails_even_when_another_source_missing(compat_env):
+    """B2 组合：A 已复制但原生字段缺失、B 缺源 → 仍登记 FAILED（缺口不被缺源掩盖）。
+
+    台账与 manifest 均为 FAILED；is_partial 仍反映源覆盖（缺源清单只列 B），
+    field_gaps 只定位 A 的发生与字段；A 的 XLS 行 Path 指向副本、缺口字段为空。
+    """
+    CompatRerunError, trigger_compat_rerun = _api()
+    factory, root = compat_env
+    with factory() as db:
+        run = _run(db)
+        dle_a, sig_a, dle_b, _sig_b = _seed_gap_and_missing_pair(
+            db, root, run, serial_a="SN-GA", serial_b="SN-GB",
+        )
+        db.commit()
+        run_id, copied_id, missing_id = run.id, dle_a.id, dle_b.id
+
+    with factory() as db:
+        outcome = trigger_compat_rerun(
+            db, plan_run_id=run_id, platform=PLATFORM,
+            requested_by="owner", requester_role="admin", delivery_version_no=1,
+        )
+        db.commit()
+        assert outcome.rerun.status == facts.COMPAT_RERUN_STATUS_FAILED
+        assert "native values unreconstructable" in (outcome.rerun.error or "")
+        assert outcome.rerun.completed_at is None
+        # 源覆盖轴：B 缺源 → is_partial + 缺源清单只列 B。
+        assert outcome.rerun.is_partial is True
+        assert [item["dle_id"] for item in outcome.rerun.missing_items] == [
+            str(missing_id)
+        ]
+        assert outcome.rerun.coverage_scope["covered_events"] == 1
+        # 字段轴：缺口只定位 A（已复制行）的发生与字段。
+        gaps = outcome.rerun.coverage_scope["field_gaps"]
+        assert [gap["dle_id"] for gap in gaps] == [str(copied_id)]
+        assert gaps[0]["signature_id"] == sig_a.id
+        assert gaps[0]["reason"] == "org_row_unreadable"
+        assert "Detail" in gaps[0]["fields"]
+        assert "ExpTime" in gaps[0]["fields"]
+        manifest = json.loads(Path(outcome.rerun.manifest_path).read_text("utf-8"))
+        assert manifest["registered_status"] == facts.COMPAT_RERUN_STATUS_FAILED
+        assert manifest["is_partial"] is True
+        assert [item["dle_id"] for item in manifest["missing_items"]] == [
+            str(missing_id)
+        ]
+        assert [gap["dle_id"] for gap in manifest["field_gaps"]] == [str(copied_id)]
+        rows = _read_report(outcome.rerun.merge_xls_path)
+        by_caused = {row["CausedBy"]: row for row in rows}
+        # A 原生行缺失：CausedBy 来自已注册签名事实（非 org 原生值）。
+        copied_row = by_caused["caused-SN-GA"]
+        missing_row = by_caused["org-caused-SN-GB"]
+        assert "/compat_reruns/" in copied_row["Path"]
+        assert copied_row["ExpTime"] == ""
+        assert copied_row["Detail"] == ""
+        # B 缺源但原生行可读：仍按原生行写字段，Path 留空。
+        assert missing_row["Path"] == ""
+        assert missing_row["ExpTime"] == "Sun Nov 16 10:40:46 CST 2026"
+
+
+def test_missing_source_only_is_partial_and_keeps_native_fields(compat_env):
+    """B2 对照：仅缺源、已复制行字段齐全 → 保留部分成果（COMPLETED + partial）。"""
+    CompatRerunError, trigger_compat_rerun = _api()
+    factory, root = compat_env
+    with factory() as db:
+        run = _run(db)
+        name_a = _event_name()
+        dle_a, sig_a, _occ_a = _dle(
+            db, run, serial="SN-PA", event=name_a, state="ARCHIVED",
+            remote_path=str(_event_dir(root, "devices", str(run.id), name_a)),
+        )
+        dle_b, sig_b, _occ_b = _dle(
+            db, run, serial="SN-PB", event=_event_name(), state="PRUNED",
+        )
+        round_one = _seed_native_round(db, root, run, [dle_a], round_no=1)
+        round_two = _seed_native_round(db, root, run, [dle_b], round_no=2)
+        facts.record_delivery_version(
+            db, plan_run_id=run.id, platform=PLATFORM, version_no=1,
+            software_versions=["V1"], round_ids=[round_one, round_two],
+            basis_rounds=[
+                {"round_id": round_one, "merge_generation": 1},
+                {"round_id": round_two, "merge_generation": 1},
+            ],
+            effective_coverage=[], issue_ids=[sig_a.id, sig_b.id],
+            event_ids=[str(dle_a.id), str(dle_b.id)],
+            stats_snapshot_version="a" * 64,
+        )
+        db.commit()
+        run_id = run.id
+
+    with factory() as db:
+        outcome = trigger_compat_rerun(
+            db, plan_run_id=run_id, platform=PLATFORM,
+            requested_by="owner", requester_role="admin", delivery_version_no=1,
+        )
+        db.commit()
+        assert outcome.rerun.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+        assert outcome.rerun.error is None
+        assert outcome.rerun.completed_at is not None
+        assert outcome.rerun.is_partial is True
+        assert [item["dle_id"] for item in outcome.rerun.missing_items] == [
+            str(dle_b.id)
+        ]
+        assert outcome.rerun.coverage_scope["field_gaps"] == []
+        manifest = json.loads(Path(outcome.rerun.manifest_path).read_text("utf-8"))
+        assert manifest["registered_status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
+        assert manifest["field_gaps"] == []
+        rows = _read_report(outcome.rerun.merge_xls_path)
+        by_caused = {row["CausedBy"]: row for row in rows}
+        copied_row = by_caused["org-caused-SN-PA"]
+        missing_row = by_caused["org-caused-SN-PB"]
+        # 已复制行字段齐全：原生列值逐字保留。
+        assert "/compat_reruns/" in copied_row["Path"]
+        assert copied_row["ExpTime"] == "Sun Nov 16 10:40:46 CST 2026"
+        assert copied_row["Detail"].startswith("Device_id: SN-PA")
+        # 缺源行按原生行写字段，Path 留空。
+        assert missing_row["Path"] == ""
+        assert missing_row["ExpTime"] == "Sun Nov 16 10:40:46 CST 2026"
 
 
 def test_substitute_row_fields_come_from_substitute_occurrence(compat_env):
@@ -1130,6 +1278,182 @@ def test_late_failure_write_preserves_committed_completion(compat_env):
         manifest = json.loads(Path(row.manifest_path).read_text("utf-8"))
         assert manifest["registered_status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
         assert manifest["coverage_scope"]["covered_events"] == 1
+
+
+def test_concurrent_precommit_other_version_rejected_in_lock(compat_env):
+    """B3 并发交错：A 以 v1 复制未提交、B 以 v2 预读无登记；A 提交后 B 锁内
+    读到 COMPLETED/v1 → 必须先校验版本再决定重放，返回 409 且实际复制为零，
+    v1 的状态、尝试次数、版本与产物原样保全；同 key 同版本与省略版本的合法
+    重放继续通过。
+    """
+    CompatRerunError, trigger_compat_rerun = _api()
+    from backend.services import compat_rerun as compat_module
+
+    factory, root = compat_env
+    with factory() as db:
+        run = _run(db)
+        name_one = _event_name()
+        first, sig, _occ = _dle(
+            db, run, serial="SN-B3G", event=name_one,
+            remote_path=str(_event_dir(root, "devices", str(run.id), name_one)),
+        )
+        name_two = _event_name()
+        second, _sig2, _occ2 = _dle(
+            db, run, serial="SN-B3H", event=name_two,
+            remote_path=str(_event_dir(root, "devices", str(run.id), name_two)),
+        )
+        round_id = _seed_native_round(db, root, run, [first, second])
+        _version(db, run, no=1, issue_ids=[sig.id], event_ids=[first.id],
+                 round_id=round_id)
+        _version(
+            db, run, no=2, issue_ids=[sig.id, _sig2.id],
+            event_ids=[first.id, second.id], round_id=round_id,
+        )
+        db.commit()
+        run_id, first_id = run.id, first.id
+
+    a_in_copy = threading.Event()
+    b_resolved = threading.Event()
+    a_committed = threading.Event()
+    copy_calls = {"n": 0}
+    call_lock = threading.Lock()
+    lock_pids = {}
+    original_copy = compat_module.copytree_no_symlinks
+    original_get_dv = facts.get_delivery_version
+    original_lock = facts.get_compat_rerun_for_update
+
+    def gated_copy(src, dst, **kwargs):
+        # A 停在复制中（主事务未提交），等 B 完成预读后再继续。
+        a_in_copy.set()
+        assert b_resolved.wait(timeout=15)
+        with call_lock:
+            copy_calls["n"] += 1
+        return original_copy(src, dst, **kwargs)
+
+    def gated_get_dv(db, **kwargs):
+        row = original_get_dv(db, **kwargs)
+        if int(kwargs.get("version_no") or 0) == 2:
+            # B 的预读已发生（A 尚未提交），停在锁前等 A 提交。
+            b_resolved.set()
+            assert a_committed.wait(timeout=15)
+        return row
+
+    def observing_lock(db, **kwargs):
+        row = original_lock(db, **kwargs)
+        try:
+            pid = db.execute(text("SELECT pg_backend_pid()")).scalar()
+        except Exception:  # noqa: BLE001 — 非后端方言时跳过
+            pid = None
+        lock_pids["b" if row is not None else "a"] = pid
+        return row
+
+    results: dict[str, dict] = {}
+
+    def attempt(name, version_no):
+        try:
+            with factory() as db:
+                outcome = trigger_compat_rerun(
+                    db, plan_run_id=run_id, platform=PLATFORM,
+                    requested_by="owner", requester_role="admin",
+                    request_key="crossv", delivery_version_no=version_no,
+                )
+                db.commit()
+                results[name] = {
+                    "replayed": outcome.replayed,
+                    "status": outcome.rerun.status,
+                    "version": outcome.rerun.source_delivery_version_no,
+                    "attempts": outcome.rerun.attempts,
+                }
+                if name == "a":
+                    a_committed.set()
+        except Exception as exc:  # noqa: BLE001 — 探针按类型归类
+            results[name] = {
+                "error": getattr(exc, "status_code", type(exc).__name__),
+                "detail": str(exc),
+            }
+
+    compat_module.copytree_no_symlinks = gated_copy
+    facts.get_delivery_version = gated_get_dv
+    facts.get_compat_rerun_for_update = observing_lock
+    threads = []
+    try:
+        thread_a = threading.Thread(target=attempt, args=("a", 1))
+        threads.append(thread_a)
+        thread_a.start()
+        assert a_in_copy.wait(timeout=15)
+        thread_b = threading.Thread(target=attempt, args=("b", 2))
+        threads.append(thread_b)
+        thread_b.start()
+        thread_a.join(timeout=20)
+        thread_b.join(timeout=20)
+    finally:
+        compat_module.copytree_no_symlinks = original_copy
+        facts.get_delivery_version = original_get_dv
+        facts.get_compat_rerun_for_update = original_lock
+    assert not any(thread.is_alive() for thread in threads), results
+    # A 以 v1 完成；B 显式 v2 在锁内被拒（409），未发生任何重放或复制。
+    assert results["a"] == {
+        "replayed": False,
+        "status": facts.COMPAT_RERUN_STATUS_COMPLETED,
+        "version": 1,
+        "attempts": 1,
+    }, results
+    assert results["b"]["error"] == 409, results
+    assert "bound to delivery version v1" in results["b"]["detail"], results
+    assert copy_calls["n"] == 1, results
+    if lock_pids.get("a") is not None and lock_pids.get("b") is not None:
+        # 两个并发请求落在不同 PG16 后端会话。
+        assert lock_pids["a"] != lock_pids["b"], lock_pids
+
+    with factory() as db:
+        row = facts.get_compat_rerun_by_request(
+            db, plan_run_id=run_id, platform=PLATFORM, request_key="crossv",
+        )
+        assert db.query(_model()).filter_by(plan_run_id=run_id).count() == 1
+        assert row.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+        assert row.attempts == 1
+        assert row.source_delivery_version_no == 1
+        assert row.error is None
+        assert row.completed_at is not None
+        assert row.merge_xls_path and row.manifest_path
+        manifest = json.loads(Path(row.manifest_path).read_text("utf-8"))
+        assert manifest["registered_status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
+        assert manifest["source_delivery_version_no"] == 1
+        assert manifest["coverage_scope"]["covered_dle_ids"] == [str(first_id)]
+        stale_completed_at = row.completed_at
+        stale_manifest_path = row.manifest_path
+        stale_xls_path = row.merge_xls_path
+
+    # 同 key 同版本的合法重放继续通过（返回 v1 登记，不新增尝试）。
+    with factory() as db:
+        replay_same = trigger_compat_rerun(
+            db, plan_run_id=run_id, platform=PLATFORM,
+            requested_by="owner", requester_role="admin",
+            request_key="crossv", delivery_version_no=1,
+        )
+        db.commit()
+        assert replay_same.replayed is True
+        assert replay_same.rerun.attempts == 1
+    # 省略版本的合法重放沿用绑定版本。
+    with factory() as db:
+        replay_omit = trigger_compat_rerun(
+            db, plan_run_id=run_id, platform=PLATFORM,
+            requested_by="owner", requester_role="admin",
+            request_key="crossv",
+        )
+        db.commit()
+        assert replay_omit.replayed is True
+        assert replay_omit.rerun.attempts == 1
+        assert replay_omit.rerun.source_delivery_version_no == 1
+
+    with factory() as db:
+        row = facts.get_compat_rerun_by_request(
+            db, plan_run_id=run_id, platform=PLATFORM, request_key="crossv",
+        )
+        assert db.query(_model()).filter_by(plan_run_id=run_id).count() == 1
+        assert row.completed_at == stale_completed_at
+        assert row.manifest_path == stale_manifest_path
+        assert row.merge_xls_path == stale_xls_path
 
 
 def test_route_is_admin_only_and_replay_is_visible(

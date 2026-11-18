@@ -5,6 +5,7 @@ Class: feature
 
 日期：2026-11-16　基线：origin/main@73144bf9　批次：#3800
 R2 返修：2026-11-17（判据见 #4031「第 2 轮复核后的返修判据」）
+R3 返修：2026-11-18（判据见 #4034 评论 6948566219 / #4031 返修判据 2、3）
 
 ## Decision
 
@@ -130,6 +131,25 @@ R2 实现 HEAD：`71fa97afe070642ee3023dea50f67802a59010a6`（服务、路由、
 独占、版本绑定与原生列值。R1 声明的「六列留空」偏离自 R2 起只出现在原生材料
 缺失形态，且该形态登记 FAILED 或部分成果，不再静默登记为完成。
 
+### 第 3 轮定向独立复核返修（R3，复核 HEAD `03adb0bc2`）
+
+R3 结论「需修改」两项（[评论 6948566219]），按 #4031 返修判据 2、3 返修：
+
+1. **B2 缺口组合被缺源掩盖（判据 3）**。完成判断原为 `field_gaps and not
+   is_partial`：A 已复制但原生字段无法复原、B 缺源时，全局缺源状态
+   （is_partial）把 A 的字段缺口掩盖成 COMPLETED + partial，违反「原生非空值
+   无法复原时禁止将该产物登记为完成」。返修：**缺口与缺源是两个独立判定**——
+   存在 `field_gaps` 即登记 FAILED（台账与 manifest 一致，`completed_at` 为空），
+   不因其他发生缺源而放宽；`is_partial` 只反映源覆盖，缺源清单照列；
+   仅缺源且已复制行字段齐全时仍保留部分成果（COMPLETED + partial）。
+2. **B3 并发交错绕过版本校验（判据 2）**。锁内先按 COMPLETED 重放、后校验
+   显式版本：A 以 v1 复制未提交时，B 以 v2 预读查不到未提交登记；A 提交后
+   B 锁内读到 COMPLETED/v1 直接重放 200，把 v1 登记当作 v2 请求的结果返回。
+   返修：锁内**先校验显式版本、再决定重放**——`locked_bound` 与显式版本不一致
+   时在任何复制与重放之前 409；同 key 同版本与省略版本的合法重放不受影响；
+   拒绝路径走守卫式写回，COMPLETED 行原样（状态、次数、版本、产物、
+   `completed_at`）。
+
 ### 与已退回 #4026 的关系
 
 只复用属于本单的服务形态：`shadow_scan_rounds` / `issue_fact_store` /
@@ -213,6 +233,30 @@ D9 既有判定、CURRENT 分区不追溯与无模式存量兼容，属于「不
 | B1 并发同 key | 两个请求均 `replayed=false`，attempts 2（PG 后端 83/84） | 复制计数 1，后到者 replay，两后端 PID 不同 |
 | B1 迟到失败 | 已提交行被改回 `FAILED` | 保全 `COMPLETED/2`、产物路径与完成时间 |
 
+### R3 同探针基线 RED / 返修 HEAD GREEN
+
+固定反例基线 `03adb0bc26038b797ceaa9baee9ee8481bef9e30`（第 3 轮复核 HEAD）与
+R3 返修 HEAD 使用同一探针文件
+`backend/tests/services/test_b8_g8_compat_rerun_route_probes.py`（两端 SHA-256
+`9c1107e696ed6e3619aad4dbb051d9acc4397eab803f2c0a4deab4e8f74053f3` 逐字节相同）；
+隔离 PG16、每请求独立会话（生产 `get_db` 语义：不自动提交）+ 独立观测会话、
+临时文件系统、真实 HTTP 路由。基线 checkout 只放探针文件，余为基线代码。
+
+```bash
+# 基线（detached 03adb0bc2）与返修 HEAD 同命令
+env -u DATABASE_URL -u TEST_DATABASE_URL \
+  ./scripts/project_python.sh scripts/run_pytest.py \
+  backend/tests/services/test_b8_g8_compat_rerun_route_probes.py -q
+```
+
+- 基线 **2 failed / 1 passed**；返修 HEAD **3 passed**。基线失败原话：
+  - B2 组合缺口：`AssertionError: assert 'COMPLETED' == 'FAILED'`
+    （A 已复制但原生字段缺失 + B 缺源 → 仍登记完成，缺源掩盖字段缺口）；
+  - B3 并发交错：`assert 200 == 409`（B 显式 v2 锁内读到 COMPLETED/v1 直接
+    重放 200，未校验显式版本）。
+- 对照组（仅缺源、已复制行字段齐全 → COMPLETED + partial）在基线同样通过，
+  证明 RED 来自缺口判定本身而非夹具。
+
 ### 回归与门禁
 
 本轮（R2）实跑：
@@ -256,6 +300,33 @@ R1 阶段的历史实跑（保留）：
 - 六项 required CI：`lint` / `CodeQL` / `pr-typecheck` / `pr-compileall` /
   `pr-agent-tests` / `pr-migrate-empty-db` 以 Draft PR 的 GitHub checks 为准；
   本地只报告已实际运行的命令，未把本地结果当作 CI 通过。
+
+R3 阶段实跑（返修 HEAD，含 origin/main@`d954b44c6` 依赖合入）：
+
+```bash
+env -u DATABASE_URL -u TEST_DATABASE_URL \
+  ./scripts/project_python.sh scripts/run_pytest.py \
+  backend/tests/services/test_b8_g8_failed_delivery.py \
+  backend/tests/services/test_b8_g8_compat_rerun.py \
+  backend/tests/services/test_b8_g8_compat_rerun_route_probes.py \
+  backend/tests/api/test_b8_g8_legacy_report_scope.py \
+  backend/tests/services/test_b8_g7_partition_consumers.py \
+  backend/tests/services/test_b8_g6_evidence_publication.py \
+  backend/tests/services/test_shadow_scan_rounds.py \
+  backend/tests/services/test_shadow_delivery.py \
+  backend/tests/api/test_dedup_jira_endpoints.py \
+  backend/tests/test_audit_action_retention_guard_3017.py \
+  tests/test_api_response_shape_contract.py \
+  tests/test_excel_dependency_inventory.py -q
+env -u DATABASE_URL -u TEST_DATABASE_URL \
+  ./scripts/project_python.sh scripts/run_gates.py check:quick
+```
+
+- 定向回归 **218 passed**（R2 基线 212 + 新增服务级 3 + 路由级探针 3；含
+  B1 并发/迟到写回、原生 XLS 对拍、替补同行一致性、FAILED 最终轮与 D9 sweep
+  回归）。
+- `check:quick` 结果见下节实跑记录；六项 required CI 以 PR #4034 推送后
+  的 GitHub checks 为准。
 
 ## Revisit
 
