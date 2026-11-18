@@ -10,6 +10,9 @@
 - **E-1 事件目录双份占用**：`devices/` 与 `jira/` 的字节/文件/目录数与重合 run 数；
 - **E-1b merge 报表双份**：`dedup/{run}/merge/**` 与 `jira/{run}/merge/**`；
 - **E-3 控制面本地 `merge_result/`**：子目录数、字节、最新 mtime（体积与增速代理）。
+- **B8 U5 派生族容量**：`compat_reruns/{run}/{platform}/r{id}` 的独立单元数、字节与最大
+  若干条（#4045）。它按「run × 平台 × 一笔补跑登记」三级键存活，因此单列
+  `derived_family_usage`，**不进** `run_counts` / `top_runs_by_bytes`。
 
 顶层族清单不是本脚本自带的一份，而是与 retention purge 桶**同源**（#2188）：见
 ``backend/storage_families.py``。其中 ``devices`` / ``dedup`` / ``jira`` / ``_meta``
@@ -17,10 +20,16 @@
 不进 ``run_counts`` / ``top_runs_by_bytes``（把 ``jobs/{job_id}`` 报成 run，会让 E-2 的
 「与 DB 里应已清理 run 清单对账」产出既非漏删也非干净的第三种读数）。
 
+``compat_reruns`` 是第四种分桶维度（派生族，三级键）：它跟着 run 编号建目录，却按逐笔
+补跑登记独立回收，所以既不能进 run 分解，也不能只留一个总量数——候选清单必须能按
+``run/platform/r{id}`` 与登记台账对拍（#4045）。
+
 **不覆盖**（脚本内不猜，需另行采集）：
 
 - E-2 retention 后残留：需要「应当已被清理的 run 清单」（来自控制面 DB）。本脚本只报告
   各 run 在全部族中的目录分布，由运维与 DB 对账；
+- 派生族的**可回收性**：`compat_reruns/**` 是否已到期，需要 `compat_rerun` 台账的终态与
+  时间戳（#4045 第 2 刀，待 Owner 裁决到期锚点）；本脚本只报容量，不判可回收；
 - E-4 merge 端到端耗时：需要日志时间差；
 - E-5 历史 JIRA 外链有效率：需要 JIRA 侧采样。
 
@@ -55,6 +64,7 @@ from typing import Iterable, Optional
 from backend.storage_families import (
     ALL_FAMILIES,
     CHAIN_FAMILIES,
+    DERIVED_FAMILIES,
     JOBS_FAMILY,
     MERGE_REPORT_FAMILIES,
     NON_KEY_ENTRIES,
@@ -245,6 +255,67 @@ def collect_chain_usage(
     return out
 
 
+def _derived_unit_dirs(family_root: Path) -> dict[str, Path]:
+    """``{run/platform/r{id}: path}``——派生族的独立存活单元是三级叶子目录。
+
+    只认 ``r`` + 十进制的叶子名（登记主键形态）：其它名字宁可**少报**，也不给运维对账
+    造出第三种读数——那正是 #2188 把 ``jobs`` 报成 run 时踩过的失效形态。
+    """
+    out: dict[str, Path] = {}
+    if not family_root.is_dir():
+        return out
+    for run_name, run_path in _run_dirs(family_root).items():
+        for platform_name, platform_path in _run_dirs(run_path).items():
+            for unit_name, unit_path in _run_dirs(platform_path).items():
+                if not (unit_name.startswith("r") and unit_name[1:].isdigit()):
+                    continue
+                out[f"{run_name}/{platform_name}/{unit_name}"] = unit_path
+    return out
+
+
+def collect_derived_usage(
+    center_root: Path,
+    *,
+    control_plane_root: Optional[Path] = None,
+    top: int = 10,
+) -> dict[str, dict]:
+    """派生族（``compat_reruns/``）的容量可见性：独立单元数、总量与最大若干条（#4045）。
+
+    与 :func:`collect_chain_usage` 一样**不按 run 分解**，但计数单位不同：链族一个文件夹
+    是「主 run_采集目录」，派生族一个单元是「run × 平台 × 一笔补跑登记」。Dry-run 的候选
+    清单落在同一层，两边必须能逐条对拍，因此这里按单元而非按 run 排行。
+
+    族根存在但为空也要出现（``independent_units=0``）——「族还没被用过」与「族不在读数里」
+    是两种不同事实，后者就是 #2188 的漏桶形态。
+    """
+    out: dict[str, dict] = {}
+    for family in DERIVED_FAMILIES:
+        root = Path(storage_root_for_family(
+            family, log_root=str(center_root),
+            control_plane_root=str(control_plane_root or center_root),
+        )) / family
+        if not root.is_dir():
+            continue
+        units = _derived_unit_dirs(root)
+        usage = [walk_usage(path) for path in units.values()]
+        ranked = sorted(
+            ((name, item.bytes) for name, item in
+             zip(units.keys(), usage, strict=False)),
+            key=lambda row: row[1], reverse=True,
+        )
+        out[family] = {
+            "independent_units": len(units),
+            "distinct_runs": len({name.split("/", 1)[0] for name in units}),
+            "bytes": sum(item.bytes for item in usage),
+            "files": sum(item.files for item in usage),
+            "dirs": sum(item.dirs for item in usage),
+            "top_units": [
+                {"name": name, "bytes": size} for name, size in ranked[: max(0, top)]
+            ],
+        }
+    return out
+
+
 def collect_duplication(
     by_family: dict[str, dict[str, Usage]],
 ) -> dict[str, dict[str, int | float | list[str]]]:
@@ -365,6 +436,10 @@ def collect_baseline(
         "chain_family_usage": collect_chain_usage(
             center_root, control_plane_root=control_plane_root, top=top,
         ),
+        # B8 U5（#4045）：派生族按 run/platform/r{id} 独立单元单列，**不进** run_counts。
+        "derived_family_usage": collect_derived_usage(
+            center_root, control_plane_root=control_plane_root, top=top,
+        ),
         "merge_subdir_usage": collect_merge_subdir_usage(center_root),
         "local_merge_result": collect_local_merge_result(merge_result_root),
         "top_runs_by_bytes": [
@@ -372,6 +447,7 @@ def collect_baseline(
         ],
         "not_covered": [
             "E-2 retention 残留：需控制面 DB 的『应已清理 run』清单做对账",
+            "派生族可回收性：需 compat_rerun 台账的终态与时间戳（#4045 第 2 刀）",
             "E-4 merge 端到端耗时：需日志时间差",
             "E-5 JIRA 外链有效率：需 JIRA 侧采样",
         ],
@@ -415,6 +491,17 @@ def format_report(report: dict) -> str:
             f"files={usage['files']}"
         )
         for row in usage.get("top_folders", []):
+            lines.append(f"  {_human_bytes(int(row['bytes'])):>10}  {row['name']}")
+    for family, usage in report.get("derived_family_usage", {}).items():
+        lines.append(
+            f"-- {family}/ (run/platform/rerun-keyed, per-entry reclaim only) --"
+        )
+        lines.append(
+            f"  units={usage['independent_units']} runs={usage['distinct_runs']} "
+            f"bytes={_human_bytes(int(usage['bytes']))} files={usage['files']} "
+            f"dirs={usage['dirs']}"
+        )
+        for row in usage.get("top_units", []):
             lines.append(f"  {_human_bytes(int(row['bytes'])):>10}  {row['name']}")
     local = report["local_merge_result"]
     if local is not None:

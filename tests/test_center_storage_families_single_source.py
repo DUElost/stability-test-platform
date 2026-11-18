@@ -62,7 +62,10 @@ EXCLUDE_PREFIXES = (
 
 
 def test_all_families_is_derived_not_a_fourth_copy() -> None:
-    assert sf.ALL_FAMILIES == sf.RUN_FAMILIES + (sf.JOBS_FAMILY,) + sf.CHAIN_FAMILIES
+    assert sf.ALL_FAMILIES == (
+        sf.RUN_FAMILIES + (sf.JOBS_FAMILY,)
+        + sf.CHAIN_FAMILIES + sf.DERIVED_FAMILIES
+    )
     assert len(set(sf.ALL_FAMILIES)) == len(sf.ALL_FAMILIES)
 
 
@@ -81,12 +84,35 @@ def test_evidence_is_chain_level_and_on_the_log_root() -> None:
     assert sf.EVIDENCE_FAMILY not in mcs.RUN_FAMILIES
 
 
+def test_compat_reruns_is_derived_and_never_run_purged() -> None:
+    """B8 U5（#4045）：补跑派生族按「run × 平台 × 一笔登记」独立存活。
+
+    目录名带 run 不等于 run 生命周期产物：它必须被登记为独立族（否则 E-2 对账对该族
+    结构性不可见——#2188 的漏桶形态），又**不得**进按 run 的无条件清理清单（否则一笔
+    仍在重试或被引用的补跑产物会随 run 消失）。两个方向都由断言钉住。
+    """
+    assert sf.COMPAT_RERUNS_FAMILY == "compat_reruns"
+    assert sf.DERIVED_FAMILIES == (sf.COMPAT_RERUNS_FAMILY,)
+    assert sf.COMPAT_RERUNS_FAMILY not in sf.RUN_FAMILIES
+    assert sf.COMPAT_RERUNS_FAMILY in sf.ALL_FAMILIES
+    assert sf.FAMILY_STORAGE_ROOTS[sf.COMPAT_RERUNS_FAMILY] == "log"
+    assert sf.storage_root_for_family(
+        sf.COMPAT_RERUNS_FAMILY, log_root="/log", control_plane_root="/cp",
+    ) == "/log"
+    # 写侧（按 run 清理）与读侧（按 run 分解）都必须看不见这一族。
+    assert sf.COMPAT_RERUNS_FAMILY not in cron_scheduler.RUN_FAMILIES
+    assert sf.COMPAT_RERUNS_FAMILY not in mcs.RUN_FAMILIES
+    # 但容量读数必须看得见它。
+    assert sf.COMPAT_RERUNS_FAMILY in mcs.DERIVED_FAMILIES
+
+
 def test_consumers_reference_the_same_objects_not_local_rebindings() -> None:
     """写侧（retention）与读侧（测量）必须引用正本对象本身。"""
     assert cron_scheduler.RUN_FAMILIES is sf.RUN_FAMILIES
     assert cron_scheduler.JOBS_FAMILY is sf.JOBS_FAMILY
     assert mcs.RUN_FAMILIES is sf.RUN_FAMILIES
     assert mcs.ALL_FAMILIES is sf.ALL_FAMILIES
+    assert mcs.DERIVED_FAMILIES is sf.DERIVED_FAMILIES
 
 
 def test_purged_run_families_are_all_measurable() -> None:
