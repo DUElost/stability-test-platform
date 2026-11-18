@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -119,23 +119,30 @@ describe('AuditLogPage 筛选（#628）', () => {
 
 
   describe('筛选候选与写入词表同源（#2629）', () => {
-    /** 读 `<select>` 的实际候选值（不含哨兵） */
-    async function resourceOptionValues(): Promise<string[]> {
-      const select = await screen.findByTestId('audit-resource-filter');
-      return Array.from((select as HTMLSelectElement).options)
-        .map((o) => o.value)
-        .filter((v) => v !== 'all');
+    /** 打开资源 `SearchableSelect` 并读取候选文本（不含哨兵「全部资源」） */
+    async function openAndReadResourceOptionTexts(): Promise<string[]> {
+      const trigger = await screen.findByTestId('audit-resource-filter');
+      fireEvent.click(trigger);
+      const options = within(screen.getByRole('listbox'))
+        .getAllByRole('option')
+        .map((o) => o.textContent ?? '');
+      fireEvent.click(trigger);
+      return options.filter((text) => text !== '全部资源');
     }
 
     it('资源下拉的选项 = facets 返回值，死选项不再存在', async () => {
       renderPage();
       await waitFor(() => expect(mocks.auditFacets).toHaveBeenCalled());
 
-      expect(await resourceOptionValues()).toEqual(['session', 'plan_run', 'plan']);
+      const texts = await openAndReadResourceOptionTexts();
+      expect(texts).toHaveLength(3);
+      expect(texts[0]).toContain('会话/登录');
+      expect(texts[1]).toContain('计划运行');
+      expect(texts[2]).toContain('Plan');
 
       // 本单修掉的 6 个死选项（写入侧根本不存在）——它们唯一的贡献是「共 0 条」
       for (const dead of ['tool', 'tool_category', 'template']) {
-        expect(await resourceOptionValues()).not.toContain(dead);
+        expect(texts.join(' ')).not.toContain(dead);
       }
       const datalistValues = () => Array.from(
         document.querySelectorAll('#audit-action-options option'),
@@ -148,23 +155,23 @@ describe('AuditLogPage 筛选（#628）', () => {
 
     it('选项上带真实条数，且未映射的值按原字面量展示（不编中文标签）', async () => {
       renderPage();
-      const select = await screen.findByTestId('audit-resource-filter');
-      await waitFor(() =>
-        expect((select as HTMLSelectElement).options[1].textContent).toContain('160'),
-      );
-      const texts = Array.from((select as HTMLSelectElement).options).map((o) => o.textContent);
-      // session 有映射（会话/登录）；plan_run 有映射；没有映射的值不会凭空得中文名
-      expect(texts[1]).toContain('会话/登录');
-      expect(texts[2]).toContain('计划运行');
-      expect(texts[3]).toContain('Plan（4）');
+      await waitFor(() => expect(mocks.auditFacets).toHaveBeenCalled());
+
+      const texts = await openAndReadResourceOptionTexts();
+      expect(texts[0]).toContain('会话/登录');
+      expect(texts[0]).toContain('160');
+      expect(texts[1]).toContain('计划运行');
+      expect(texts[2]).toContain('Plan');
+      expect(texts[2]).toContain('4');
     });
 
     it('选中 facets 里的资源即按该字面量精确筛（下拉值与参数一一对应）', async () => {
       renderPage();
-      const select = await screen.findByTestId('audit-resource-filter');
-      await waitFor(async () => expect(await resourceOptionValues()).toContain('plan_run'));
+      await waitFor(() => expect(mocks.auditFacets).toHaveBeenCalled());
 
-      fireEvent.change(select, { target: { value: 'plan_run' } });
+      const trigger = await screen.findByTestId('audit-resource-filter');
+      fireEvent.click(trigger);
+      fireEvent.click(screen.getByRole('option', { name: /计划运行/ }));
       await waitFor(() =>
         expect(mocks.auditList).toHaveBeenLastCalledWith(
           0, 50, expect.objectContaining({ resource_type: 'plan_run' }),
@@ -196,11 +203,13 @@ describe('AuditLogPage 筛选（#628）', () => {
       mocks.auditFacets.mockRejectedValue(new Error('boom'));
       renderPage();
 
-      const select = await screen.findByTestId('audit-resource-filter');
+      const trigger = await screen.findByTestId('audit-resource-filter');
       await waitFor(() => expect(mocks.auditList).toHaveBeenCalled());
       // 只剩哨兵「全部资源」——宁缺毋假
-      expect(Array.from((select as HTMLSelectElement).options).map((o) => o.value))
-        .toEqual(['all']);
+      fireEvent.click(trigger);
+      expect(
+        within(screen.getByRole('listbox')).getAllByRole('option').map((o) => o.textContent),
+      ).toEqual(['全部资源']);
       // 操作维度本来就是自由输入，仍可用
       expect(screen.getByTestId('audit-action-filter')).toBeTruthy();
     });
