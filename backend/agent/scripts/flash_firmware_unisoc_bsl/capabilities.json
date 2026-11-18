@@ -1,1 +1,1 @@
-{"capabilities": ["progress_stamps"]}
+{"capabilities": ["progress_stamps"], "requires_tools": {"spd_dump": {"version": "20261113", "env": "STP_SPD_DUMP_DIR"}}}

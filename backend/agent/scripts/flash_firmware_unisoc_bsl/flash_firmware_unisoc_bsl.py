@@ -21,7 +21,8 @@ Implements Scheme 2 flashing inside the STP agent script contract:
 STP agent script contract:
     env  STP_DEVICE_SERIAL          target serial (required)
          STP_ADB_PATH               default "adb"
-         STP_SPD_DUMP_PATH          default "/usr/local/bin/spd_dump" (or PATH)
+         STP_SPD_DUMP_DIR           registered tool package root (requires_tools spd_dump);
+                                    must contain an executable spd_dump; no fallback since 1.0.4
          STP_NFS_ROOT               default "/mnt/stp-aee"
          STP_FLASH_FIRMWARE_ROOT    optional override for {STP_NFS_ROOT}/firmware
          STP_FLASH_FIRMWARE_VERSION optional override for version
@@ -377,17 +378,27 @@ def resolve_adb() -> str:
     return _env("STP_ADB_PATH", "adb") or "adb"
 
 
-def resolve_spd_dump() -> str:
-    candidates = [
-        _env("STP_SPD_DUMP_PATH", ""),
-        shutil.which("spd_dump") or "",
-        "/usr/local/bin/spd_dump",
-        "/usr/bin/spd_dump",
-    ]
-    for c in candidates:
-        if c and os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    raise RuntimeError("spd_dump executable not found (checked STP_SPD_DUMP_PATH, PATH, /usr/local/bin/spd_dump)")
+def resolve_spd_dump(route: Optional[dict] = None) -> str:
+    """L2 (#4006 v1.3): spd_dump 只来自 STP_SPD_DUMP_DIR（注册工具包根）。
+
+    1.0.4 删除 STP_SPD_DUMP_PATH / PATH / 固定路径三种回退；拒绝带路由。
+    """
+    tool_dir = _env("STP_SPD_DUMP_DIR", "").strip()
+    if not tool_dir:
+        raise FlashRejectedError(
+            "STP_SPD_DUMP_DIR is not set: spd_dump must come from the registered tool "
+            "package (requires_tools spd_dump); STP_SPD_DUMP_PATH / PATH / fixed-path "
+            "fallbacks were removed in 1.0.4",
+            route=route,
+        )
+    candidate = os.path.join(tool_dir, "spd_dump")
+    if not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
+        raise FlashRejectedError(
+            f"spd_dump not found or not executable under STP_SPD_DUMP_DIR: {candidate!r} "
+            "(the tool package root must contain an executable spd_dump)",
+            route=route,
+        )
+    return candidate
 
 
 def run_adb(adb_bin: str, serial: str, args: List[str], timeout: float = 30) -> Tuple[int, str, str]:
@@ -1127,12 +1138,13 @@ def _verify_post_reboot_evidence(
 def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
     t0 = time.time()
     adb_bin = resolve_adb()
-    spd_dump_bin = resolve_spd_dump()
-    progress.stamp(stage="preflight", serial=serial, spd_dump=spd_dump_bin)
 
     route: Optional[dict] = None
     try:
         _, fw_dir, manifest, route = resolve_firmware_target(args, adb_bin, serial)
+        # L2 (#4006 v1.3): 工具路径解析放在路由建立之后——找不到工具的拒绝结果必须带路由。
+        spd_dump_bin = resolve_spd_dump(route)
+        progress.stamp(stage="preflight", serial=serial, spd_dump=spd_dump_bin)
         spec = _load_flash_spec(fw_dir, route=route)
 
         skip_battery = _bool(args.get("skip_battery"), False)
