@@ -22,8 +22,9 @@ from backend.models.plan_run import PlanRun
 from backend.models.host import Host
 from backend.services import issue_fact_store as facts
 from backend.services import shadow_delivery
+from backend.services import partition_capability
+from backend.services import partition_mode_admission as admission
 from backend.services.artifact_digest import ARTIFACT_KIND_CODE, compute_desired_artifact_digest
-from backend.services.agent_version_info import resolve_agent_code_sync_status
 from backend.services.dedup_scan import _SCAN_TASK_SAQ_TIMEOUT
 from backend.services.plan_run_scan_scope import (
     build_scan_now_payload,
@@ -182,8 +183,17 @@ def _advance_run(db, run_id, root, now, settings):
     if not units and not rounds:
         return []
     if partition is None:
-        facts.record_partition_mode(
-            db, plan_run_id=run_id, platform=_PLATFORM, mode=facts.PARTITION_MODE_CURRENT
+        # D3 第 1 条：轮次登记与随后的下发都是受模式影响的动作，模式必须先在同事务内固化。
+        # 主干此前无条件写 CURRENT；现在由 #4043 的准入决定（白名单 + 能力证据 + 旧链副作用），
+        # 已固化分区原样读回、不改写。影子入口保留「观察到的分区必有一行」的既有记账——
+        # #3875 的 settled 出口把终态写在模式行上，取消它会让已观察分区每轮重复处理。
+        admission.fixate_partition_mode(
+            db,
+            run_id,
+            platform=_PLATFORM,
+            entrypoint=admission.ENTRY_SHADOW_SWEEP,
+            settings=settings,
+            record_current_fallback=True,
         )
     for row in rounds:
         _refresh_round(db, row, root, now)
@@ -336,20 +346,14 @@ def sweep_shadow_scan_rounds(*, now=None):
 
 
 def _shadow_capability_verified(host, desired_digest):
-    # 过渡预筛（#3875 / v1.23）：仅给当前摘要一致的 host 预约。
-    # 实际下发由 Socket.IO 握手能力按目标 SID 判定。
-    # 6704562784：旧摘要不是当前心跳的证明，必须同时核对上报时间与在线状态。
-    return bool(
-        host is not None
-        and host.status == "ONLINE"
-        and host.agent_artifact_digest_reported_at is not None
-        and host.last_heartbeat is not None
-        and host.agent_artifact_digest_reported_at >= host.last_heartbeat
-        and resolve_agent_code_sync_status(
-            agent_artifact_digest=host.agent_artifact_digest,
-            desired_artifact_digest=desired_digest,
-        ) == "matched"
-    )
+    """下发守卫的能力预筛（#3875 / v1.23）。
+
+    判据住在 :mod:`backend.services.partition_capability`：模式准入（#4043）与实际下发必须
+    读**同一份**可核验能力证据（Owner 裁定 6975368043），不能一处放行、一处拒绝。
+    6704562784：旧摘要不是当前心跳的证明，判据里同时核对上报时间、心跳与在线状态。
+    #4044 收口时只替换该模块里的证据来源，本函数与调用点不改。
+    """
+    return partition_capability.host_scan_round_capability(host, desired_digest).verified
 
 
 def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
@@ -376,8 +380,13 @@ def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
         ):
             return []
         if partition is None:
-            facts.record_partition_mode(
-                db, plan_run_id=plan_run_id, platform=_PLATFORM, mode=facts.PARTITION_MODE_CURRENT
+            # 同上：本函数提交后立刻返回下发载荷，模式必须在同一事务、同一次提交里固化。
+            admission.fixate_partition_mode(
+                db,
+                plan_run_id,
+                platform=_PLATFORM,
+                entrypoint=admission.ENTRY_SHADOW_PREPARE,
+                record_current_fallback=True,
             )
         now = datetime.now(timezone.utc)
         _refresh_round(db, row, root, now)

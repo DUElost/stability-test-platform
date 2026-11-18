@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from backend.core.dedup_platform import DEDUP_PLATFORMS
 from backend.core.task_queue import get_queue
 from backend.services import shadow_scan_rounds
+from backend.services import partition_mode_admission
 from saq import Job as SaqJob
 
 logger = logging.getLogger(__name__)
@@ -465,6 +466,15 @@ async def scan_task(
 
     logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
 
+    # ADR-0062 D3 第 1 条（#4043）：旧链的第一个受模式影响的动作就是向 Agent 下发 scan_now
+    # （随后才有报表、登记与分流）。模式决定必须在下发之前独立提交，不能等 merge/extract
+    # 或影子轮再补写——否则旧链已经按「无记录=现行」分流过一次。
+    await asyncio_to_thread(
+        partition_mode_admission.fixate_partition_mode_at_entry,
+        plan_run_id,
+        entrypoint=partition_mode_admission.ENTRY_SCAN_TASK,
+    )
+
     # Watermark for this round's completeness check, taken before scan_now goes
     # out: artifacts registered earlier belong to a previous incremental round.
     round_started_at = datetime.now(timezone.utc)
@@ -675,6 +685,14 @@ async def upload_task(ctx: dict, *, plan_run_id: int, scan_round_id: str | None 
     from backend.services.dedup_extract import collect_upload_event_dir_names
 
     logger.info("saq_upload_start plan_run=%d", plan_run_id)
+
+    # 同上：标记 UPLOAD_PENDING 就是旧链上传的分流点（D8 第 6 条），先去重分区不得被标记。
+    # upload_task 也会被单独重试/重放，所以这里再固化一次，不等 scan_task 的结果。
+    await asyncio_to_thread(
+        partition_mode_admission.fixate_partition_mode_at_entry,
+        plan_run_id,
+        entrypoint=partition_mode_admission.ENTRY_UPLOAD_TASK,
+    )
 
     try:
         def _mark() -> int:

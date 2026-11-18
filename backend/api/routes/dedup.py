@@ -76,6 +76,7 @@ from backend.services.legacy_report_scope import (
     LegacyReportScopeError,
     resolve_legacy_report_artifact,
 )
+from backend.services import partition_mode_admission
 from backend.services.partition_scope import partition_rows, partition_views
 from backend.services.plan_run_artifact_download import (
     build_plan_run_artifact_download_response,
@@ -720,6 +721,12 @@ async def trigger_merge(
 
     # G7 / D16：手动 merge 按分区模式分流。现行分区沿用既有扫描产物前置；
     # 纯先去重分区没有 scan 产物，改为对已关闭轮次做幂等影子合并。
+    # ADR-0062 D3 第 1 条（#4043）：下面这次 partition_rows 读取本身就是本请求的第一个
+    # 分流点（决定要不要「先跑 scan」），所以模式必须在此之前提交；自动 merge_task 的分流点
+    # 在 ``dedup_scan._partition_targets``，两处共用同一份准入决定，落库只有一条记录。
+    partition_mode_admission.fixate_partition_mode_at_entry(
+        run_id, entrypoint=partition_mode_admission.ENTRY_MERGE_ROUTE,
+    )
     partitions = partition_rows(db, run_id)
     current = [row["platform"] for row in partitions
                if row["mode"] == facts.PARTITION_MODE_CURRENT]

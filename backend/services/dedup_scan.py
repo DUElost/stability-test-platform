@@ -32,6 +32,7 @@ from backend.core.dedup_platform import (
 from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services import issue_fact_store as facts
+from backend.services import partition_mode_admission
 from backend.services.partition_scope import partition_rows
 from backend.services.dedup import (
     get_control_plane_merge_engine,
@@ -794,9 +795,18 @@ def run_merge_all_platforms_sync(
 
 
 def _partition_targets(plan_run_id: int) -> tuple[list[str], list[str]]:
-    """本 run 的 (现行平台, 先去重平台)；无分区记录时按纯现行处理。"""
+    """本 run 的 (现行平台, 先去重平台)；无分区记录时按纯现行处理。
+
+    merge 的输入范围**就是**一次按模式的分流（现行平台跑旧 merge，先去重平台走影子轮），
+    所以这里先固化模式再读（ADR-0062 D3 第 1 条 / #4043）。自动 merge_task、手动 merge 路由与
+    兼容补跑共用本函数，分流只可能发生在决定落库之后。落库范围由准入决定：未获批的存量分区
+    不会被这里补写记录（D13 第 2 条），继续按「无记录=现行」解释。
+    """
     from backend.core.database import SessionLocal
 
+    partition_mode_admission.fixate_partition_mode_at_entry(
+        plan_run_id, entrypoint=partition_mode_admission.ENTRY_MERGE,
+    )
     with SessionLocal() as db:
         rows = partition_rows(db, plan_run_id=plan_run_id)
     if not rows:

@@ -14,6 +14,7 @@ from backend.agent.contracts.aee_event_dirs import event_dir_basename_from_path
 from backend.core.dedup_platform import scan_artifact_uri_platform
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services import issue_fact_store as facts
+from backend.services import partition_mode_admission
 from backend.services.partition_scope import partition_rows
 
 logger = logging.getLogger(__name__)
@@ -231,6 +232,13 @@ def run_extract_sync(plan_run_id: int) -> int:
             associate_unassigned_events_to_plan_run,
             list_remote_paths_for_extract,
             mark_events_archived,
+        )
+
+        # ADR-0062 D3 第 1 条 / D14 第 1 条（#4043）：下面的平台范围就是 extract 的分流点
+        # （先去重分区不提取，只由 D9 交付物出口交付），所以模式必须先于它独立提交。
+        # 自动 extract_task 与手动 extract 路由共用本函数。
+        partition_mode_admission.fixate_partition_mode_at_entry(
+            plan_run_id, entrypoint=partition_mode_admission.ENTRY_EXTRACT,
         )
 
         # B8 G7 / D13 第 4 条：extract 是 run 级接口，但只作用于「现行」分区。
