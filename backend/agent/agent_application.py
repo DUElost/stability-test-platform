@@ -111,7 +111,10 @@ class AgentApplication:
         adb = AdbWrapper(adb_path=identity.adb_path)
         ensure_adb_server_on_startup(identity.adb_path)
         sio_client, early_control_queue = connect_socketio_with_early_control(
-            api_url, identity.host_id, identity.agent_secret
+            api_url,
+            identity.host_id,
+            identity.agent_secret,
+            agent_instance_id=identity.agent_instance_id,
         )
         stores = initialize_local_stores(
             api_url=api_url, agent_secret=identity.agent_secret

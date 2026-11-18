@@ -29,6 +29,7 @@ from backend.core.cors import get_cors_allowed_origins
 from backend.core.database import AsyncSessionLocal
 from backend.core.metrics import record_agent_rpc, record_socketio_connection
 from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
+from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ class AgentNamespace(socketio.AsyncNamespace):
         super().__init__(namespace)
         self._host_to_sid: dict[str, str] = {}
         self._sid_capabilities: dict[str, frozenset[str]] = {}
+        self._sid_instance_ids: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     def get_sid(self, host_id: str) -> Optional[str]:
@@ -186,6 +188,10 @@ class AgentNamespace(socketio.AsyncNamespace):
     def get_capabilities(self, sid: str) -> frozenset[str]:
         """Return only the capabilities declared by this connection."""
         return self._sid_capabilities.get(sid, frozenset())
+
+    def get_agent_instance_id(self, sid: str) -> str:
+        """Return the Agent process instance bound to this connection."""
+        return self._sid_instance_ids.get(sid, "")
 
     def connected_host_ids(self) -> list[str]:
         """Return host_ids with an active connection (testing helper)."""
@@ -219,13 +225,17 @@ class AgentNamespace(socketio.AsyncNamespace):
             if isinstance(capabilities, list) and all(isinstance(cap, str) for cap in capabilities)
             else frozenset()
         )
+        agent_instance_id = auth.get("agent_instance_id")
+        instance_id = agent_instance_id if isinstance(agent_instance_id, str) else ""
         async with self._lock:
             host_key = str(host_id)
             previous_sid = self._host_to_sid.get(host_key)
             if previous_sid is not None and previous_sid != sid:
                 self._sid_capabilities.pop(previous_sid, None)
+                self._sid_instance_ids.pop(previous_sid, None)
             self._host_to_sid[host_key] = sid
             self._sid_capabilities[sid] = declared
+            self._sid_instance_ids[sid] = instance_id
 
         await self.enter_room(sid, f"agent:{host_id}")
         from backend.realtime.agent_sid_registry import register_agent_owner
@@ -239,6 +249,7 @@ class AgentNamespace(socketio.AsyncNamespace):
             host_id = session.get("host_id")
         async with self._lock:
             self._sid_capabilities.pop(sid, None)
+            self._sid_instance_ids.pop(sid, None)
             if host_id and self._host_to_sid.get(str(host_id)) == sid:
                 self._host_to_sid.pop(str(host_id), None)
         if host_id:
@@ -879,13 +890,22 @@ async def call_agent_control(
     return await _send_agent_control(host_id, command, payload, **call_kwargs)
 
 
-async def call_shadow_scan_control(host_id: str, *, payload: dict) -> bool | None:
-    """Return None for an unverified connection, otherwise the usual ACK result."""
+async def call_shadow_scan_control(
+    host_id: str, *, payload: dict, required_instance_id: str,
+) -> bool | None:
+    """Return None for an unverified connection or stale capability binding.
+
+    The local SID must declare ``scan_round_v1`` and belong to the same Agent
+    process instance whose current heartbeat supplied the capability evidence.
+    Room fallback is never used for shadow dispatch.
+    """
     ns = _agent_ns
     if ns is None:
         return None
     sid = ns.get_sid(host_id)
-    if not sid or "scan_round_v1" not in ns.get_capabilities(sid):
+    if not sid or SCAN_ROUND_V1 not in ns.get_capabilities(sid):
+        return None
+    if not required_instance_id or ns.get_agent_instance_id(sid) != required_instance_id:
         return None
     # Send to the verified SID even if the host reconnects during the send.
     return await _send_agent_control(
