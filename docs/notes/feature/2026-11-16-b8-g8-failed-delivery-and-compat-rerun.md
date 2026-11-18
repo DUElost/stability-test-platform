@@ -238,7 +238,7 @@ D9 既有判定、CURRENT 分区不追溯与无模式存量兼容，属于「不
 固定反例基线 `03adb0bc26038b797ceaa9baee9ee8481bef9e30`（第 3 轮复核 HEAD）与
 R3 返修 HEAD 使用同一探针文件
 `backend/tests/services/test_b8_g8_compat_rerun_route_probes.py`（两端 SHA-256
-`9c1107e696ed6e3619aad4dbb051d9acc4397eab803f2c0a4deab4e8f74053f3` 逐字节相同）；
+`4bb71515bca9f6002f8f2995d71cbb904a5be9317ed0220e6cdb01862683de76` 逐字节相同）；
 隔离 PG16、每请求独立会话（生产 `get_db` 语义：不自动提交）+ 独立观测会话、
 临时文件系统、真实 HTTP 路由。基线 checkout 只放探针文件，余为基线代码。
 

@@ -37,7 +37,8 @@ from backend.tests.services.test_b8_g8_compat_rerun import (
     _run,
     _seed_native_round,
     _version,
-    compat_env,
+    # pytest 夹具按本模块命名空间解析，compat_env 必须可被 route_env 依名取到。
+    compat_env,  # noqa: F401
 )
 
 ROUTE = "/api/v1/plan-runs/{run_id}/dedup/compat-rerun"
