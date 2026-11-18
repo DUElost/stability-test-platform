@@ -441,7 +441,7 @@ def test_run_acquires_host_lock_before_preparing_local_cache(tmp_path: Path, mon
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: "/usr/local/bin/spd_dump")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/usr/local/bin/spd_dump")
 
     lock_file = tmp_path / "host.lock"
 
@@ -681,7 +681,7 @@ def test_u2_05_rejects_identity_mismatch_across_all_three_routes_without_flash(
     spd_called = {"n": 0}
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
     monkeypatch.setenv("STP_FLASH_FIRMWARE_ROOT", str(fw_root))
     monkeypatch.delenv("STP_FLASH_FIRMWARE_VERSION", raising=False)
@@ -786,7 +786,7 @@ def test_u2_08_erase_whitelist_excludes_non_whitelist_and_reports_skipped(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: "/usr/local/bin/spd_dump")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/usr/local/bin/spd_dump")
 
     cmd = mod.build_spd_dump_args("/usr/local/bin/spd_dump", str(ver_dir / "images"), str(tmp_path / "s.img"))
     erased = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "erase_part"]
@@ -828,7 +828,7 @@ def test_u2_10_battery_gate_rejects_low_or_unreadable_and_allows_skip_battery(
     sysfs_base = _make_fake_sysfs(tmp_path)
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: "/usr/local/bin/spd_dump")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/usr/local/bin/spd_dump")
 
     base_props = {"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"}
 
@@ -860,7 +860,7 @@ def test_u2_11_rejects_when_unisoc_download_port_already_on_usb_bus(
     spd_called = {"n": 0}
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
 
     with pytest.raises(RuntimeError, match="1782:4d00"):
@@ -976,7 +976,7 @@ def test_u2_14_rejects_when_spd_dump_exits_0_but_device_did_not_reboot(
     monkeypatch.setattr(mod, "run_adb", fake_run_adb)
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(
         mod,
         "acquire_host_lock",
@@ -1026,7 +1026,7 @@ def test_u2_15_rejects_when_post_flash_version_mismatch_manifest_version(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(
         mod,
         "acquire_host_lock",
@@ -1104,7 +1104,7 @@ def test_u2_17_same_length_plan_json_replacement_uses_new_fdl_address(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: "/usr/local/bin/spd_dump")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/usr/local/bin/spd_dump")
     monkeypatch.setattr(
         mod,
         "acquire_host_lock",
@@ -1171,7 +1171,7 @@ def test_u2_19_dry_run_returns_fdl_erases_skipped_partitions_and_route(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: "/usr/local/bin/spd_dump")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/usr/local/bin/spd_dump")
 
     res = mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
     m = res["metrics"]
@@ -1266,7 +1266,7 @@ def test_u2_j9_version_readback_cannot_be_disabled(tmp_path: Path, monkeypatch: 
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="WRONG"):
@@ -1291,7 +1291,7 @@ def test_u2_j11_main_emits_route_on_rejection_and_success(
 
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
     clock = _patch_advancing_clock(monkeypatch, mod)
     monkeypatch.setattr(mod.sys, "argv", ["flash_firmware_unisoc_bsl.py", "--serial", "SN1", "--firmware-dir", str(ver_dir)])
@@ -1377,7 +1377,7 @@ def test_u2_23_super_raw_non_default_filename_used_in_cmd_and_dry_run(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     dry_res = mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
@@ -1472,7 +1472,7 @@ def test_u2_26_rejects_download_port_appearing_during_cache_prepare_without_spd_
 
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
     monkeypatch.setattr(mod, "prepare_local_cache", prepare_then_plug_download_port)
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
@@ -1495,7 +1495,7 @@ def test_u2_27_rejects_when_usb_bus_directory_missing(tmp_path: Path, monkeypatc
     spd_called = {"n": 0}
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(missing_sysfs), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
 
     with pytest.raises(RuntimeError, match="no_such_sysfs_usb"):
@@ -1565,7 +1565,7 @@ def test_u2_28_rejects_when_total_phase_duration_exceeds_timeout_even_if_spd_dum
     monkeypatch.setattr(mod, "run_adb", slow_adb)
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="timed out"):
@@ -1608,7 +1608,7 @@ def test_u2_29_rejects_non_positive_or_non_finite_spd_dump_timeout(
     spd_called = {"n": 0}
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
 
     with pytest.raises(RuntimeError, match="spd_dump_timeout_seconds"):
@@ -1706,7 +1706,7 @@ def test_u2_31a_rejects_when_boot_id_unreadable_and_uptime_window_straddles_rebo
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="no positive evidence"):
@@ -1738,7 +1738,7 @@ def test_u2_31b_passes_when_boot_id_unreadable_and_uptime_window_starts_after_re
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     res = mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
@@ -1767,7 +1767,7 @@ def test_u2_31c_rejects_when_boot_id_and_uptime_all_reads_fail(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="no positive evidence"):
@@ -1797,7 +1797,7 @@ def test_u2_31d_passes_when_boot_id_changes_and_uptime_read_fails(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     res = mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
@@ -1830,7 +1830,7 @@ def test_u2_31e_rejects_when_boot_id_same_even_if_uptime_window_starts_after_reb
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="did not reboot"):
@@ -1863,7 +1863,7 @@ def test_u2_31f_rejects_when_boot_id_changes_but_uptime_window_not_after_reboot(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="did not reboot"):
@@ -1894,7 +1894,7 @@ def test_u2_31g_rejects_when_only_post_boot_id_readable_and_uptime_read_fails(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="no positive evidence"):
@@ -1943,7 +1943,7 @@ def test_u2_36_wall_clock_rollback_inside_stage_still_times_out_on_monotonic(
     monkeypatch.setattr(mod, "run_adb", fake_run_adb)
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(dummy_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(dummy_spd))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="timed out"):
@@ -1979,7 +1979,7 @@ def test_u2_32_rejects_when_plan_replaced_and_image_deleted_before_cache_prepare
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     spd_called = {"n": 0}
@@ -2037,7 +2037,7 @@ def test_u2_33_route_records_selected_dir_not_manifest_family_or_version(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
 
     res = mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
     m = res["metrics"]
@@ -2068,7 +2068,7 @@ def test_u2_34_identity_non_utf8_adb_output_returns_false_with_route(
     )
     stub_spd = _make_executable(tmp_path / "stub_spd.py", "import sys; sys.exit(99)")
     monkeypatch.setattr(mod, "resolve_adb", lambda: str(fake_adb))
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(stub_spd))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(stub_spd))
     monkeypatch.setattr(mod.sys, "argv", ["flash_firmware_unisoc_bsl.py", "--serial", "SN1", "--firmware-dir", str(ver_dir)])
     monkeypatch.setenv("STP_STEP_PARAMS", "{}")
 
@@ -2105,7 +2105,7 @@ def test_u2_35_dry_run_takes_precedence_over_skip_if_current(
     )
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda: str(tmp_path / "spd_dump_stub"))
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
 
     res = mod.run(
         {
@@ -2127,3 +2127,76 @@ def test_u2_35_dry_run_takes_precedence_over_skip_if_current(
     assert m["skipped_erases"] == ["splloader", "l_runtimenv1"]
     assert len(m["partitions"]) == 25
     assert m["route"]["version"] == "v36"
+
+
+# ── U4: spd_dump 工具包（STP_SPD_DUMP_DIR，#4006 §3.2 L1–L4 / §4 U4 第 1–3、6 条）──
+
+
+def _u4_firmware_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Route-establishable firmware + fake adb env for U4 tests (identity OK, battery 85%)."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path)
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    return mod, ver_dir
+
+
+def test_u4_1_6_rejects_without_stp_spd_dump_dir_and_carries_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # U4 第 1 条（1.0.3 上为红）+ 第 6 条（v1.2）：未设置 STP_SPD_DUMP_DIR 必须拒绝，
+    # 且拒绝结果带路由（1.0.3 在路由建立前解析工具路径，失败结果无路由）。
+    mod, ver_dir = _u4_firmware_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("STP_SPD_DUMP_DIR", raising=False)
+    monkeypatch.delenv("STP_SPD_DUMP_PATH", raising=False)
+    with pytest.raises(mod.FlashRejectedError, match="STP_SPD_DUMP_DIR") as exc_info:
+        mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
+    route = exc_info.value.route
+    assert route, "U4 item 6: rejection must carry route"
+    assert route.get("family") == "P525AA"
+    assert route.get("version") == "v36"
+
+
+def test_u4_2_rejects_when_tool_dir_lacks_executable_spd_dump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # U4 第 2 条：键指向的目录里没有可执行的 spd_dump（缺文件 / 不可执行）→ 拒绝。
+    mod, ver_dir = _u4_firmware_env(tmp_path, monkeypatch)
+    empty_dir = tmp_path / "toolpkg-empty"
+    empty_dir.mkdir()
+    monkeypatch.setenv("STP_SPD_DUMP_DIR", str(empty_dir))
+    with pytest.raises(mod.FlashRejectedError, match="spd_dump"):
+        mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
+
+    noexec_dir = tmp_path / "toolpkg-noexec"
+    noexec_dir.mkdir()
+    (noexec_dir / "spd_dump").write_bytes(b"not really an elf")
+    os.chmod(noexec_dir / "spd_dump", 0o644)
+    monkeypatch.setenv("STP_SPD_DUMP_DIR", str(noexec_dir))
+    with pytest.raises(mod.FlashRejectedError, match="spd_dump"):
+        mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
+
+
+def test_u4_3_uses_tool_dir_even_when_path_has_another_spd_dump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # U4 第 3 条：STP_SPD_DUMP_DIR 正确时使用该目录下的文件，即使 PATH 中另有 spd_dump。
+    mod, _ver_dir = _u4_firmware_env(tmp_path, monkeypatch)
+    tool_dir = tmp_path / "toolpkg"
+    tool_dir.mkdir()
+    tool_bin = tool_dir / "spd_dump"
+    tool_bin.write_text("#!/bin/sh\nexit 0\n")
+    os.chmod(tool_bin, 0o755)
+    path_dir = tmp_path / "pathbin"
+    path_dir.mkdir()
+    (path_dir / "spd_dump").write_text("#!/bin/sh\nexit 0\n")
+    os.chmod(path_dir / "spd_dump", 0o755)
+    monkeypatch.setenv("PATH", str(path_dir))
+    monkeypatch.setenv("STP_SPD_DUMP_DIR", str(tool_dir))
+    assert mod.resolve_spd_dump({"family": "P525AA", "version": "v36"}) == str(tool_bin)
