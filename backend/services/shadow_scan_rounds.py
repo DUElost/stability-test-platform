@@ -298,6 +298,20 @@ def _advance_run(db, run_id, root, now, settings):
                     )
                 else:
                     if quiet:
+                        gaps = sorted(
+                            unit["host_id"] for unit in latest_delivery.expected_set
+                            if unit.get("reason") == "capability_unverified"
+                            and unit["coverage"] not in _COVERED
+                        )
+                        if is_dedup_first and gaps:
+                            # Owner 裁定 6975368043：能力失效不回退模式，只登记缺口。
+                            # settled 后不再建立补充轮，因此缺口必须在终态留下可核验证据，
+                            # 由生产验收/补跑工作面按 host 追认，不能被静默吞掉。
+                            logger.warning(
+                                "shadow_scan_settled_with_capability_gap plan_run=%d "
+                                "fact_round_id=%d platform=%s hosts=%s",
+                                run_id, latest_delivery.id, _PLATFORM, ",".join(gaps),
+                            )
                         facts.settle_shadow_partition(
                             db, plan_run_id=run_id, platform=_PLATFORM, settled_at=now,
                             report_wait_seconds=settings.stp_scan_round_report_wait_seconds,

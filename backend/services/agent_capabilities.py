@@ -8,26 +8,33 @@ does not prove the required capability.
 
 Verification rules (all must hold):
 
-- host exists, is ONLINE, and is not retired;
-- ``last_heartbeat`` is within ``HOST_HEARTBEAT_TIMEOUT_SECONDS`` (the same
-  freshness window the session watchdog uses);
-- capability evidence was written by that exact heartbeat
-  (``agent_capabilities_reported_at == last_heartbeat``);
+- host exists, is ONLINE (the control plane's existing liveness fact, kept
+  current by ``session_watchdog`` on ``HOST_HEARTBEAT_TIMEOUT_SECONDS``), and
+  is not retired;
+- ``last_heartbeat`` is present, i.e. this host has a current beat at all;
+- capability evidence was not superseded by a newer heartbeat
+  (``agent_capabilities_reported_at >= last_heartbeat``, the #3875 6704562784
+  operator: the reporting heartbeat must be the newest host fact);
 - the required capability is present in the heartbeat's explicit list;
 - the reporting ``agent_instance_id`` is present, so the send path can bind
   capability evidence to the local Socket.IO connection.
+
+Liveness is deliberately *not* recomputed here: shadow dispatch already keyed
+off ``Host.status`` under #3875, and a second wall-clock rule would reject hosts
+the watchdog still considers online (and make the scheduler's own clock the
+arbiter of fleet liveness). The capability predicate only adds "which beat
+proved it".
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.agent.contracts.capabilities import SCAN_ROUND_V1, normalize_capabilities
-from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.models.host import Host
 from backend.services.plan_run_scan_scope import (
     iter_plan_run_scan_hosts,
@@ -38,7 +45,6 @@ REASON_HOST_MISSING = "host_missing"
 REASON_HOST_OFFLINE = "host_offline"
 REASON_HOST_RETIRED = "host_retired"
 REASON_HEARTBEAT_MISSING = "heartbeat_missing"
-REASON_HEARTBEAT_STALE = "heartbeat_stale"
 REASON_CAPABILITY_NEVER_REPORTED = "capability_never_reported"
 REASON_CAPABILITY_NOT_CURRENT = "capability_not_current_heartbeat"
 REASON_CAPABILITY_MISSING = "capability_missing"
@@ -56,6 +62,9 @@ class HostCapabilityEvidence:
     heartbeat_at: datetime | None
     capability_reported_at: datetime | None
     retired: bool = False
+    #: 本次核验发生的时间。入场闸门要把「何时核验过全量预期 host」写进台账；
+    #: 判定本身不看它——存活口径归 session watchdog，不在这里重算。
+    evaluated_at: datetime | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -71,6 +80,7 @@ class HostCapabilityEvidence:
                 if self.capability_reported_at
                 else None
             ),
+            "evaluated_at": self.evaluated_at.isoformat() if self.evaluated_at else None,
             "retired": self.retired,
         }
 
@@ -110,7 +120,11 @@ def evaluate_host_capability(
             host_id="", verified=False, reason=REASON_HOST_MISSING,
             status=None, capabilities=(), instance_id=None,
             heartbeat_at=None, capability_reported_at=None, retired=retired,
+            evaluated_at=now,
         )
+    # 退役是 host 行自身的事实：调用方漏传 retired 参数时也必须 fail closed，
+    # 不能让「忘了看退役标记」变成把命令下发给已退役机器的通路。
+    retired = retired or host.retired_at is not None
     capabilities = normalize_capabilities(host.agent_capabilities)
     evidence = HostCapabilityEvidence(
         host_id=str(host.id),
@@ -122,6 +136,7 @@ def evaluate_host_capability(
         heartbeat_at=host.last_heartbeat,
         capability_reported_at=host.agent_capabilities_reported_at,
         retired=retired,
+        evaluated_at=now,
     )
     if host.status != "ONLINE":
         evidence = _with_reason(evidence, REASON_HOST_OFFLINE)
@@ -129,11 +144,9 @@ def evaluate_host_capability(
         evidence = _with_reason(evidence, REASON_HOST_RETIRED)
     elif host.last_heartbeat is None:
         evidence = _with_reason(evidence, REASON_HEARTBEAT_MISSING)
-    elif host.last_heartbeat < now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS):
-        evidence = _with_reason(evidence, REASON_HEARTBEAT_STALE)
     elif host.agent_capabilities_reported_at is None:
         evidence = _with_reason(evidence, REASON_CAPABILITY_NEVER_REPORTED)
-    elif host.agent_capabilities_reported_at != host.last_heartbeat:
+    elif host.agent_capabilities_reported_at < host.last_heartbeat:
         evidence = _with_reason(evidence, REASON_CAPABILITY_NOT_CURRENT)
     elif required not in capabilities:
         evidence = _with_reason(evidence, REASON_CAPABILITY_MISSING)

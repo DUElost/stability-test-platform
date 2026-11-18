@@ -10,6 +10,7 @@ from backend.core.settings.scheduler import SchedulerSettings
 from backend.models.host import Host
 from backend.services import issue_fact_store as facts, shadow_scan_rounds as shadow
 from backend.services import artifact_digest
+from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 from backend.agent.contracts.round_report_layout import round_manifest_path
 from backend.tests.services.test_shadow_scan_rounds import (
     shadow_env as shadow_env, _observe_running_run, _rows, _receipt, _delivery_rounds,
@@ -189,6 +190,7 @@ def test_unreadable_closed_manifest_allows_rounds_but_defers_settle_until_recove
 
 
 def test_capability_unverified_host_recovers_within_the_same_round(shadow_env, monkeypatch):
+    """#4044：能力恢复必须让**同一轮**重新可下发，不需要等新轮次，也不改分区模式。"""
     factory, run_id, root, queued, _settings = shadow_env
     now = datetime.now(timezone.utc)
     clock = Mock(wraps=datetime)
@@ -212,8 +214,11 @@ def test_capability_unverified_host_recovers_within_the_same_round(shadow_env, m
     clock.now.return_value = now + timedelta(seconds=120)
     with factory() as db:
         host = db.get(Host, "host-a")
-        host.agent_artifact_digest = artifact_digest.compute_desired_artifact_digest()
-        host.last_heartbeat = host.agent_artifact_digest_reported_at = clock.now.return_value
+        # 新构建的 Agent 上线并显式上报能力：证据与当前心跳同一时刻落列。
+        host.last_heartbeat = clock.now.return_value
+        host.agent_capabilities = [SCAN_ROUND_V1]
+        host.agent_capabilities_reported_at = clock.now.return_value
+        host.agent_capabilities_instance_id = "capable-agent"
         db.commit()
     queued.reset_mock()
     shadow.sweep_shadow_scan_rounds(now=clock.now.return_value)
@@ -233,16 +238,30 @@ def test_capability_unverified_host_recovers_within_the_same_round(shadow_env, m
     assert rows[0].expected_set[0]["coverage"] == "RECEIVED"
 
 
-@pytest.mark.parametrize("reported", [None, "", "sha256:" + "a" * 64, "matched"])
-def test_dynamic_digest_guard_marks_unverified_hosts_missing(shadow_env, monkeypatch, caplog, reported):
+@pytest.mark.parametrize("reported", [
+    None, [], ["scan_round_v2"], [SCAN_ROUND_V1],
+], ids=["never_reported", "empty_list", "foreign_capability", "capable"])
+def test_capability_guard_marks_unverified_hosts_missing(shadow_env, monkeypatch, caplog, reported):
+    """#4044 收口 #3875 的 digest 过渡判据：预筛只看当前心跳显式声明的能力。
+
+    原探针的四种摘要（缺失/空/异值/一致）在此换成四种能力证据；`capable` 分支还
+    保留了原测试的后半句——证明被撤回后，下一个可下发时间点必须立刻拒绝。
+    """
     factory, run_id, _root, _queued, _settings = shadow_env
-    # 计算真实当前载荷摘要；不在实现中维护版本或摘要名单。
-    desired = artifact_digest.compute_desired_artifact_digest(kind=artifact_digest.ARTIFACT_KIND_CODE)
-    actual = desired if reported == "matched" else reported
     heartbeat_at = datetime.now(timezone.utc)
     with factory() as db:
-        db.add(Host(id="host-a", hostname="shadow-capability-a", status="ONLINE", agent_artifact_digest=actual,
-            agent_artifact_digest_reported_at=heartbeat_at, last_heartbeat=heartbeat_at))
+        db.add(Host(id="host-a", hostname="shadow-capability-a", status="ONLINE",
+            last_heartbeat=heartbeat_at,
+            agent_capabilities=None if reported is None else list(reported),
+            agent_capabilities_reported_at=None if reported is None else heartbeat_at,
+            agent_capabilities_instance_id=None if reported is None else "agent-a"))
+        db.commit()
+    # 摘要列即使一致也不再参与准入——这正是「digest 过渡判据已收口」的反向断言。
+    with factory() as db:
+        host = db.get(Host, "host-a")
+        host.agent_artifact_digest = artifact_digest.compute_desired_artifact_digest(
+            kind=artifact_digest.ARTIFACT_KIND_CODE)
+        host.agent_artifact_digest_reported_at = heartbeat_at
         db.commit()
     monkeypatch.setattr(shadow, "iter_plan_run_scan_hosts", lambda *_: [("host-a", "ONLINE", False)])
     build = Mock(return_value={"device_serials": ["a"], "fact_round_id": 1})
@@ -251,13 +270,16 @@ def test_dynamic_digest_guard_marks_unverified_hosts_missing(shadow_env, monkeyp
     row = _rows(factory, run_id)[0]
     payloads = shadow.prepare_shadow_scan(run_id, row.id)
     unit = _rows(factory, run_id)[0].expected_set[0]
-    if reported == "matched":
+    if reported == [SCAN_ROUND_V1]:
         assert len(payloads) == 1
         assert build.call_args.kwargs["fact_round_id"] == row.id
         assert "reason" not in unit
-        # 发布改变 desired 后，下个可下发时间点立刻拒绝旧摘要。
-        monkeypatch.setattr(shadow, "compute_desired_artifact_digest", lambda **_: "sha256:" + "f" * 64)
+        # 能力被撤回（旧构建接管 / 心跳漏字段）后立刻拒绝，不沿用上一拍的证明。
         with factory() as db:
+            host = db.get(Host, "host-a")
+            host.agent_capabilities = []
+            host.agent_capabilities_reported_at = datetime.now(timezone.utc)
+            host.last_heartbeat = host.agent_capabilities_reported_at
             coverage = [dict(u) for u in facts.get_scan_round(db, round_id=row.id).expected_set]
             coverage[0].pop("last_dispatched_at")
             facts.record_scan_round_coverage(db, round_id=row.id, coverage=coverage)
@@ -271,10 +293,10 @@ def test_dynamic_digest_guard_marks_unverified_hosts_missing(shadow_env, monkeyp
     assert "shadow_scan_capability_unverified" in caplog.text
 
 
-def test_shadow_disabled_does_not_compute_digest_or_read_storage(monkeypatch):
+def test_shadow_disabled_does_not_read_capability_evidence_or_storage(monkeypatch):
     monkeypatch.setattr(shadow, "get_scheduler_settings", lambda: SchedulerSettings())
     no_io = Mock(side_effect=AssertionError("shadow disabled I/O"))
-    for name in ["SessionLocal", "resolve_shared_storage_root", "compute_desired_artifact_digest"]:
+    for name in ["SessionLocal", "resolve_shared_storage_root", "evaluate_host_capability"]:
         monkeypatch.setattr(shadow, name, no_io)
     shadow.sweep_shadow_scan_rounds()
     assert shadow.prepare_shadow_scan(42, 1) == []
@@ -284,6 +306,10 @@ def test_shadow_disabled_does_not_compute_digest_or_read_storage(monkeypatch):
 def test_old_agent_empty_heartbeat_cannot_dispatch_with_retained_new_digest(
     shadow_env, sample_host, client, monkeypatch,
 ):
+    """旧 Agent 接管同一 host：摘要列仍留着新构建的值，也不能沿用上一实例的证明。
+
+    #4044 收口后这条判据有两重证据——摘要不参与准入，且能力被这一拍显式撤回。
+    """
     factory, run_id, _root, _queued, _settings = shadow_env
     desired = artifact_digest.compute_desired_artifact_digest()
     monkeypatch.setattr(shadow, "_expected_units", lambda *_: [{"host_id": sample_host.id, "platform": "mtk"}])
@@ -292,11 +318,20 @@ def test_old_agent_empty_heartbeat_cannot_dispatch_with_retained_new_digest(
     monkeypatch.setattr(shadow, "build_scan_now_payload", build)
     response = client.post("/api/v1/heartbeat", json={
         "host_id": sample_host.id, "status": "ONLINE", "agent_artifact_digest": desired,
+        "agent_instance_id": "new-agent", "capabilities": [SCAN_ROUND_V1],
     })
     assert response.status_code == 200
     shadow.sweep_shadow_scan_rounds()
     row = _rows(factory, run_id)[0]
-    # 新 Agent 留下摘要后，旧 Agent 用同一 host 上线，空报不能沿用旧证明。
+    # 先证明「当前心跳声明了能力」确实可下发，否则后半段的拒绝没有对照。
+    assert len(shadow.prepare_shadow_scan(run_id, row.id)) == 1
+    with factory() as db:
+        coverage = [dict(u) for u in facts.get_scan_round(db, round_id=row.id).expected_set]
+        coverage[0].pop("last_dispatched_at")
+        facts.record_scan_round_coverage(db, round_id=row.id, coverage=coverage)
+        db.commit()
+    build.reset_mock()
+    # 新 Agent 留下摘要后，旧 Agent 用同一 host 上线，空报不能沿用上一实例的证明。
     response = client.post("/api/v1/heartbeat", json={
         "host_id": sample_host.id, "status": "ONLINE", "agent_instance_id": "old-agent",
         "agent_artifact_digest": "",
@@ -313,7 +348,10 @@ async def test_current_scan_now_still_dispatches_without_capability_guard(monkey
     from backend.tests.tasks.test_saq_scan_pipeline import _scan_task_env
 
     no_shadow = Mock(side_effect=AssertionError("current scan entered shadow guard"))
-    monkeypatch.setattr(shadow, "_shadow_capability_verified", no_shadow)
+    # #4044 的守卫只属于影子轮次下发；现行 scan_now 沿既有路径，不读能力证据。
+    monkeypatch.setattr(shadow, "verify_shadow_scan_dispatch", no_shadow)
+    monkeypatch.setattr(shadow, "prepare_shadow_scan", no_shadow)
+    monkeypatch.setattr(shadow, "evaluate_host_capability", no_shadow)
     scan_sync = MagicMock(return_value="1")
     completeness = MagicMock()
     record_archive, queue = MagicMock(), MagicMock()
