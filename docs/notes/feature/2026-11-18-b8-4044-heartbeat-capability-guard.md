@@ -111,36 +111,40 @@ capability_never_reported → capability_not_current_heartbeat → capability_mi
 
 ## Verification
 
-已实跑（本机 cgroup 保护入口 `scripts/run_pytest.py`，testcontainers PG16）：
+已实跑（本机 cgroup 保护入口 `scripts/run_pytest.py`，testcontainers PG16；本机结果不替代 required CI）：
 
-| 命令范围 | 结果 |
+| 范围 | 结果 |
 |---|---|
-| 本单 4 个新探针文件（能力证据接口 / 心跳接收 / 发送守卫矩阵 / Agent 契约同源） | 45 passed |
-| 返修前基线红清单（判据未改时实跑 HEAD） | 15 处：1 collection error + 14 failures，全部落在 digest 过渡判据上 |
-| `scripts/run_gates.py check:quick` | 16 gates OK（含 import-linter C3：控制面对 `backend.agent` 只走 `contracts` 通配） |
-| 同一行为探针（只在基线写的 2 条：无能力列、摘要即可准入） | 基线 `e7325af03` 2 passed；本分支同文件 2 failed |
-| 交付探针放到基线 | 8 个文件全部 collection error（`ModuleNotFoundError: backend.agent.contracts.capabilities`）——判据在基线不存在 |
-| 受影响回归（services/api/realtime/tasks/agent 全量） | 见 PR 评论区实跑结论（本 Note 不预判） |
+| 受影响 13 个文件合跑（本单 4 个新探针文件 + 改挂接缝的 `test_shadow_scan_send_3875.py` / `test_shadow_scan_settled_3875.py` / `test_heartbeat_artifact_digest_1907.py` + `test_shadow_scan_rounds.py` / `test_saq_scan_pipeline.py` / `test_agent_rpc.py` / `test_socketio_client_transport.py` + 仓库级 `tests/test_agent_test_import_ratchet.py` / `tests/test_static_guard_pr_path_contract.py`） | **155 passed** |
+| 返修前（判据仍为 digest）同一批 | **15 处红**＝1 collection error + 14 failures，全部落在 digest 过渡判据上 |
+| 同一行为探针两侧对照 | 基线 `e7325af03`：「无能力证据列」+「摘要一致即可准入」2 passed；本 HEAD 同文件 2 failed。交付探针放到基线：collection error（`backend.agent.contracts.capabilities` 不存在） |
+| `scripts/run_gates.py check:quick` | 16 gates OK（含 import-linter C3：控制面对 `backend.agent` 仅经 `contracts` 通配导入） |
+| 迁移 | `tools/dev/check_pr_migrate.py` 通过（空库 upgrade head + schema 比对 + seed 身份）；一次性 postgres:16 上 `upgrade head → downgrade -1 → upgrade head` 通过 |
+| CI（head `4612699279c`） | 六项 required checks 全绿：`lint` / `CodeQL` / `pr-typecheck` / `pr-compileall` / `pr-agent-tests` / `pr-migrate-empty-db` |
+
+两处 CI 红灯是本 PR 自己引入的结构问题，按门禁原意修（不动门禁、不加豁免）：Agent 侧测试不得 import 控制面（跨侧常量一致性断言移到控制面套件）；`backend/tests/**/*guard*.py` 会被静态守卫接线契约当作离线守卫——本单那个文件是跑 PG 的行为矩阵，故改名 `test_shadow_scan_capability_4044.py` 而不是把它塞进离线步骤。
+
+`check:quick` 里 `tool-manifest` 报的「`spd_dump` 条目被删除」与本机 `origin/main` 前进到 `1e6be5502`（#4048）有关：本分支未触碰 `tool_manifest.json`（`git diff origin/main...HEAD -- tool_manifest.json` 为空），`check_tool_manifest.py --base e7325af03` 绿。分支更新主干由 `pr-update-branch.yml` 与 FIFO 队列负责，本单不 rebase/merge。
 
 新旧 Agent 兼容矩阵（每行都有对应测试；「实际发送」指 `sio.call` 调用点次数）：
 
 | 场景 | 心跳 capabilities | 握手 capabilities / 实例 | 预筛 | 实际新轮次发送 | 台账 |
 |---|---|---|---|---|---|
-| 新 Agent 正常 | 含 `scan_round_v1` | 含，实例一致 | 通过 | 1 次/轮/host | 无缺口 |
-| 旧 Agent（整机回退） | 缺键 | 缺 | 拒绝 | 0 | `capability_unverified`（capability_missing） |
-| 当前心跳漏字段 | 缺键 | 含 | 拒绝 | 0 | 同上 |
-| 显式空列表 | `[]` | 含 | 拒绝 | 0 | 同上 |
-| 从未上报（迁移前存量） | NULL 列 | — | 拒绝 | 0 | capability_never_reported |
-| 迟到心跳撤回能力 | 预筛后被撤回 | 含 | 预筛通过、复核拒绝 | 0 | `capability_unverified` |
-| 预筛后重连旧构建 | 仍含 | 缺 | 预筛通过 | 0（连接守卫拦住） | `..._at_send` |
-| 预筛后换实例 | 属实例 A | 连接属 B | 预筛通过 | 0；B 上报后同轮恢复 1 次 | 缺口后清除 |
-| 畸形握手形状 | — | 标量非数组 | — | 0 | fail closed |
-| 现行 scan_now（非影子） | 任意 | 任意 | 不经判据 | 照旧 | 不变 |
+| 新 Agent 正常 | 含 `scan_round_v1` | 含 / 一致 | 通过 | 1 次/轮/host | 无缺口 |
+| 旧 Agent（整机回退） | 缺键 | 缺 | 拒绝 | **0** | `capability_unverified`（capability_missing） |
+| 当前心跳漏字段 | 缺键 | 含 | 拒绝 | **0** | 同上 |
+| 显式空列表 | `[]` | 含 | 拒绝 | **0** | 同上 |
+| 从未上报（迁移前存量） | NULL 列 | — | 拒绝 | **0** | `capability_never_reported` |
+| 迟到心跳撤回能力 | 预筛后被撤回 | 含 | 预筛通过、复核拒绝 | **0** | `capability_unverified` |
+| 预筛后重连旧构建 | 仍含 | 缺 | 预筛通过 | **0**（连接守卫拦住） | `..._at_send` |
+| 预筛后换实例 | 属 A | 连接属 B | 预筛通过 | **0**；B 的当前心跳到位后同轮恢复 1 次 | 缺口后清除 |
+| 预筛被绕过（变异） | 撤回 | 含 | — | **0** | — |
+| 畸形握手形状 | — | 标量非数组 | — | **0** | fail closed |
+| 现行 `scan_now`（非影子） | 任意 | 任意 | 不经判据 | 照旧 | 不变 |
 
-未做（不得当作已通过）：生产控制面部署与重启、真实 fleet Agent 升级/回退实跑、
-真实 Socket.IO 端到端连接（断言止于 `sio.call` 调用点）、生产 Execution Registry
-与影子开关现网状态核对、容量与迁移在产库上的执行。迁移 `b8u2h1c2a3p4` 的
-upgrade/downgrade 与 `pr-migrate-empty-db` 门禁以 CI 结论为准。
+入场与运行中场景的探针名见 PR #4049 的「新旧 Agent 兼容矩阵与真实发送边界」一节。
+
+未做（不得当作已通过）：全量本地 backend 套件（本机即生产控制面宿主，跑测期间与生产 uvicorn `stp-releases/1e6be55-20261118` 争用 docker/PG，后台整批套件跑到约 44% 被中止以释放资源，**无完整结论**；`backend/tests` 全量按仓库既有设计由夜间 backstop 兜底）；生产控制面部署与重启；真实 fleet Agent 升级/回退实跑；真实 Socket.IO 端到端连接（断言止于 `sio.call` 调用点）；影子开关与 Execution Registry 现网状态核对；按试点 run 的实际能力取数。
 
 ## Revisit
 
