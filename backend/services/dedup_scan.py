@@ -1747,3 +1747,65 @@ def enqueue_dedup_terminal_sync(
         )
     except Exception as e:
         logger.error("enqueue_dedup_terminal_sync failed plan_run=%d: %s", plan_run_id, e)
+
+
+#: 现行 merge 报表（aeeexp）的表头顺序（15 列，对拍 origin 产物
+#: ``dedup/{run}/merge/{plat}/Result_MergeFiles.xls``）；兼容补跑产物必须保持
+#: 同一列头。注意第 6 列是带尾随空格的 ``"ExpType "``，第 14 列是 ``DeviceCount``
+#: （org 报表同一位置是 ``DeviceId``，merge 聚合后改名）。
+DEDUP_XLS_HEADERS: tuple[str, ...] = (
+    "Id",
+    "Path",
+    "Version",
+    "ExpTime",
+    "ExpClass",
+    "ExpType ",
+    "CurProcess",
+    "Package",
+    "Detail",
+    "CausedBy",
+    "extraTag",
+    "Count",
+    "Activity",
+    "DeviceCount",
+    "Rom_Ram",
+)
+_XLS_CELL_MAX_LEN = 32000
+
+
+def write_dedup_xls(
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    sheet_name: str = "aeeexp",
+) -> Path:
+    """原子写出与现行 merge 同格式的 ``aeeexp`` Excel（.xls）。
+
+    只用于受控兼容补跑等需要独立产物的路径；不改变现行工具输出。列值语义
+    （哪些列由平台事实填充、哪些列登记为空缺偏离）见 ``compat_rerun`` 与
+    Agent Note 的偏离说明；``Id`` 是 0 起行序，下游按行序建映射。
+    """
+    import xlwt
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    book = xlwt.Workbook(encoding="utf-8")
+    sheet = book.add_sheet(sheet_name)
+    for col_idx, header in enumerate(DEDUP_XLS_HEADERS):
+        sheet.write(0, col_idx, header)
+    for row_idx, row in enumerate(rows, start=1):
+        for col_idx, header in enumerate(DEDUP_XLS_HEADERS):
+            key = header.strip()
+            val = row.get(header) if header in row else row.get(key, "")
+            if val is None:
+                val = ""
+            elif isinstance(val, str) and len(val) > _XLS_CELL_MAX_LEN:
+                val = val[:_XLS_CELL_MAX_LEN]
+            sheet.write(row_idx, col_idx, val)
+    tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        book.save(str(tmp_path))
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+    return path

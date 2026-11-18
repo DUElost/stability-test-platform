@@ -30,6 +30,8 @@ from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user
 from backend.api.schemas.jira_run import JiraRunOut
 from backend.api.schemas.dedup import (
+    CompatRerunOut,
+    CompatRerunTriggerOut,
     DedupAgentConfigReloadOut,
     DedupArtifactOut,
     DedupExtractOut,
@@ -40,6 +42,11 @@ from backend.api.schemas.dedup import (
     JiraRunStartOut,
 )
 from backend.services.audit_writer import record_audit
+from backend.services.compat_rerun import (
+    CompatRerunError,
+    list_compat_reruns_for_partition,
+    trigger_compat_rerun,
+)
 from backend.core.database import SessionLocal, get_db
 from backend.models.host import Host
 from backend.models.jira_run import JiraRun
@@ -64,6 +71,10 @@ from backend.services.delivery_download import (
 )
 from backend.services.device_log_event_download import (
     build_device_log_event_download_response,
+)
+from backend.services.legacy_report_scope import (
+    LegacyReportScopeError,
+    resolve_legacy_report_artifact,
 )
 from backend.services.partition_scope import partition_rows, partition_views
 from backend.services.plan_run_artifact_download import (
@@ -222,10 +233,14 @@ async def start_jira_run(
     else:  # source == "plan_run"
         if artifact_id is None:
             raise HTTPException(status_code=400, detail="artifact_id is required for source=plan_run")
-        from backend.models.plan_run_artifact import PlanRunArtifact
-        artifact = db.get(PlanRunArtifact, artifact_id)
-        if artifact is None:
-            raise HTTPException(status_code=404, detail=f"plan_run_artifact {artifact_id} not found")
+        # D10：既有按 PlanRun 产物取报表的入口只接受可确认归属的 CURRENT 分区；
+        # 归属校验必须在准备输入与启动工具之前完成。
+        try:
+            artifact = resolve_legacy_report_artifact(
+                db, artifact_id=artifact_id, plan_run_id=plan_run_id,
+            )
+        except LegacyReportScopeError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         if not artifact.storage_uri:
             raise HTTPException(status_code=409, detail="artifact has empty storage_uri")
         input_xls = artifact.storage_uri
@@ -803,3 +818,71 @@ def trigger_extract(
         jira_dir=str(jira_dir),
         extracted_count=extracted,
     ))
+
+
+@scan_router.post(
+    "/{run_id}/dedup/compat-rerun",
+    response_model=ApiResponse[CompatRerunTriggerOut],
+)
+def trigger_partition_compat_rerun(
+    run_id: int,
+    request: Request,
+    platform: str = Query("mtk"),
+    delivery_version_no: Optional[int] = Query(None, ge=1),
+    request_key: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Owner 显式发起单个 ``DEDUP_FIRST`` 分区的受控兼容补跑（ADR-0062 D15）。"""
+    try:
+        outcome = trigger_compat_rerun(
+            db,
+            plan_run_id=run_id,
+            platform=platform,
+            requested_by=current_user.username,
+            requester_role=current_user.role,
+            request_key=request_key,
+            delivery_version_no=delivery_version_no,
+        )
+    except CompatRerunError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    record_audit(
+        db,
+        action="compat_rerun_trigger",
+        resource_type="plan_run",
+        resource_id=str(run_id),
+        username=current_user.username,
+        user_id=current_user.id,
+        details={
+            "platform": outcome.rerun.platform,
+            "compat_rerun_id": outcome.rerun.id,
+            "request_key": outcome.rerun.request_key,
+            "replayed": outcome.replayed,
+            "is_partial": outcome.rerun.is_partial,
+        },
+        request=request,
+    )
+    db.commit()
+    return ok(CompatRerunTriggerOut(
+        replayed=outcome.replayed,
+        rerun=CompatRerunOut.model_validate(outcome.rerun),
+    ))
+
+
+@scan_router.get(
+    "/{run_id}/dedup/compat-reruns",
+    response_model=ApiResponse[list[CompatRerunOut]],
+)
+def list_partition_compat_reruns(
+    run_id: int,
+    platform: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """查询指定 PlanRun 分区的受控兼容补跑台账列表。"""
+    rows = list_compat_reruns_for_partition(
+        db, plan_run_id=run_id, platform=platform,
+    )
+    return ok([CompatRerunOut.model_validate(row) for row in rows])
