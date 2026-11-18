@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 from backend.agent import heartbeat as hb
@@ -95,14 +94,6 @@ def test_socketio_handshake_uses_the_same_source(monkeypatch):
     assert auth["agent_instance_id"] == "inst-1"
 
 
-def test_server_guard_reads_the_shared_constant():
-    """发送守卫检查的能力名必须来自同一常量——否则客户端改名后守卫恒真/恒假。"""
-    from backend.realtime import socketio_server
-
-    assert socketio_server.SCAN_ROUND_V1 is SCAN_ROUND_V1
-    assert json.dumps(list(AGENT_CAPABILITIES)) == json.dumps([SCAN_ROUND_V1])
-
-
 def test_normalize_rejects_non_iterable_and_scalar_input():
     assert normalize_capabilities(None) == ()
     assert normalize_capabilities(SCAN_ROUND_V1) == ()
@@ -113,3 +104,8 @@ def test_normalize_rejects_non_iterable_and_scalar_input():
 def test_normalize_trims_so_both_channels_agree():
     """心跳与握手共用归一化：带空白的同一能力必须落在同一个词上。"""
     assert normalize_capabilities([f" {SCAN_ROUND_V1} ", SCAN_ROUND_V1]) == (SCAN_ROUND_V1,)
+
+
+def test_capability_source_is_a_build_level_constant():
+    """Agent 侧只有一份能力名单：改名即两条通道同时改变，不会只改一边。"""
+    assert AGENT_CAPABILITIES == (SCAN_ROUND_V1,)

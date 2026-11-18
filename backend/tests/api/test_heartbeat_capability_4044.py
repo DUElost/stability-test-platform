@@ -4,7 +4,7 @@
 当前心跳**，接收侧必须每拍权威覆盖（缺失即撤回），并留下可与 Socket.IO 连接核对的
 实例绑定。本文件只覆盖「上报 → 接收 → 落列」；准入结论见
 ``backend/tests/services/test_agent_capability_evidence_4044.py``，实际发送见
-``backend/tests/services/test_shadow_scan_capability_guard_4044.py``。
+``backend/tests/services/test_shadow_scan_capability_4044.py``。
 """
 
 from __future__ import annotations

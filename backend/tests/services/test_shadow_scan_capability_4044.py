@@ -351,6 +351,18 @@ def _dedup_mode(factory, run_id):
         db.commit()
 
 
+def test_server_and_client_read_the_same_capability_constant():
+    """发送守卫检查的能力名必须来自 Agent 侧同一常量——否则客户端改名后守卫恒真/恒假。
+
+    放在控制面侧而不是 `backend/agent/tests/`：Agent 测试不得新增对控制面的 import
+    （`tests/test_agent_test_import_ratchet.py`）。
+    """
+    from backend.agent.contracts.capabilities import AGENT_CAPABILITIES
+
+    assert socketio_server.SCAN_ROUND_V1 is SCAN_ROUND_V1
+    assert list(AGENT_CAPABILITIES) == [SCAN_ROUND_V1]
+
+
 def _dedup_final_round_with_gap(factory, run_id, host_id, *, now):
     """构造「已固定 DEDUP_FIRST + 终态最后一轮已关闭且带能力缺口」的既有事实。"""
     with factory() as db:
@@ -461,6 +473,54 @@ def test_dedup_first_capability_recovery_uses_a_supplement_round(
     clock.now.return_value = settled_at
     shadow.sweep_shadow_scan_rounds(now=settled_at)
     assert _partition(factory, run_id).shadow_settled_at == settled_at
+
+
+def test_current_mode_partition_does_not_get_a_capability_supplement_round(
+    shadow_env, monkeypatch,
+):
+    """模式作用域边界：补充轮恢复只属于 DEDUP_FIRST。CURRENT 分区沿用既有轮次推进，
+    不得因为能力恢复而多开一轮（否则影子对拍的轮次口径会被本单改变）。"""
+    factory, run_id, _root, _queued, settings = shadow_env
+    now = datetime.now(timezone.utc)
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = now
+    monkeypatch.setattr(shadow, "datetime", clock)
+    _scope(monkeypatch, "host-a")
+    _stub_payload(monkeypatch)
+    with factory() as db:
+        db.add(Host(id="host-a", hostname="current-no-supplement", status="ONLINE",
+                    last_heartbeat=now, agent_capabilities=[],
+                    agent_capabilities_reported_at=now,
+                    agent_capabilities_instance_id="agent-old"))
+        db.commit()
+        facts.record_partition_mode(db, plan_run_id=run_id, platform="mtk",
+                                    mode=facts.PARTITION_MODE_CURRENT)
+        row = facts.record_scan_round(
+            db, plan_run_id=run_id, platform="mtk", round_no=1,
+            kind=facts.SCAN_ROUND_KIND_FINAL,
+            expected_set=[{"host_id": "host-a", "platform": "mtk",
+                           "coverage": shadow.COVERAGE_MISSING,
+                           "reason": "capability_unverified"}],
+            input_cutoff_at=now - timedelta(seconds=1),
+        )
+        facts.set_scan_round_status(db, round_id=row.id,
+                                    status=facts.SCAN_ROUND_STATUS_CLOSED, closed_at=now)
+        db.get(shadow.PlanRun, run_id).status = "SUCCESS"
+        db.commit()
+
+    # 能力恢复，但分区是 CURRENT：不建立补充轮，安静期过后直接 settled。
+    with factory() as db:
+        host = db.get(Host, "host-a")
+        host.agent_capabilities = [SCAN_ROUND_V1]
+        host.agent_capabilities_reported_at = host.last_heartbeat = now + timedelta(seconds=1)
+        db.commit()
+    shadow.sweep_shadow_scan_rounds(now=now + timedelta(seconds=1))
+    assert [r.kind for r in _rows(factory, run_id)] == [facts.SCAN_ROUND_KIND_FINAL]
+
+    settled_at = now + timedelta(seconds=settings.stp_scan_round_report_wait_seconds + 1)
+    shadow.sweep_shadow_scan_rounds(now=settled_at)
+    assert _partition(factory, run_id).shadow_settled_at == settled_at
+    assert [r.kind for r in _rows(factory, run_id)] == [facts.SCAN_ROUND_KIND_FINAL]
 
 
 def test_settling_a_dedup_partition_with_an_open_gap_is_auditable(
