@@ -238,23 +238,20 @@ def run_extract_sync(plan_run_id: int) -> int:
         )
 
         # ADR-0062 D3 第 1 条 / D14 第 1 条（#4043）：下面的平台范围就是 extract 的分流点
-        # （先去重分区不提取，只由 D9 交付物出口交付），所以模式必须先于它独立提交。
-        # 自动 extract_task 与手动 extract 路由共用本函数。
+        # （先去重分区不提取，只由 D9 交付物出口交付），所以模式必须先于它独立提交，
+        # 并且本函数必须**消费**那个结论。自动 extract_task 与手动 extract 路由共用本函数。
         extract_action = partition_mode_admission.partition_action_at_entry(
             plan_run_id, entrypoint=partition_mode_admission.ENTRY_EXTRACT,
         )
-
-        # B8 G7 / D13 第 4 条：extract 是 run 级接口，但只作用于「现行」分区。
-        # 只有先去重分区的运行返回 -3（路由映射 409）；混合运行仍提取现行侧。
         recorded_modes = facts.list_partition_modes(db, plan_run_id=plan_run_id)
-        if extract_action.held and not recorded_modes:
-            # #4043 规划裁决第 2 项：Owner 点名的候选在等能力证据，模式还没定——此刻
-            # 也不能按「无记录=现行」把 MTK 事件提取进 jira/（那是旧链交付出口）。
-            # 同一运行的展锐现行分区不受影响，照常提取；只剩候选自己时返回 -4。
-            held_platforms = {DEDUP_PLATFORM_MTK}
+        if extract_action.held:
+            # 规划裁决第 2 项：Owner 点名的候选在等能力证据、模式还没定时，不能按
+            # 「无记录=现行」把 MTK 事件提取进 jira/（那是旧链交付出口）。这里**不看**
+            # recorded_modes 是否为空：只要本分区处于等待态就把它排除，其余现行分区照常提取；
+            # 只剩候选自己时返回 -4（路由映射 409）。
             others = [
                 row["platform"] for row in partition_rows(db, plan_run_id)
-                if row["platform"] not in held_platforms
+                if row["platform"] != DEDUP_PLATFORM_MTK
             ]
             if not others:
                 logger.info(
