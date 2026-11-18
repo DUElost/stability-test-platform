@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 
-import pytest
 
 from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 from backend.services.agent_capabilities import (
