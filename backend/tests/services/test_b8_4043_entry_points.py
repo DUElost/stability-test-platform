@@ -137,17 +137,8 @@ def _mode_rows(db, run_id):
     )
 
 
-@pytest.mark.asyncio
-async def test_route_then_real_scan_task_commits_mode_before_first_dispatch(
-    client, auth_headers, db_session, phase_two,
-):
-    """真实路由入队 → 真实 ``scan_task``：第一个 scan_now 下发时模式必须已提交。"""
-    digest = capability.desired_scan_round_digest()
-    run = _run(db_session, status="RUNNING")
-    host_id = _host(db_session, digest)
-    _device_job(db_session, run, host_id)
-    phase_two(whitelist=[run.id])
-
+def _enqueue_from_manual_scan_route(client, auth_headers, db_session, run_id):
+    """跑真实手动 scan 路由，返回它入队的 SAQ 作业（路由本身只入队，不固化模式）。"""
     captured = []
     queue = MagicMock()
 
@@ -158,27 +149,78 @@ async def test_route_then_real_scan_task_commits_mode_before_first_dispatch(
     queue.enqueue = _enqueue
     with patch("backend.core.task_queue.get_queue", return_value=queue):
         resp = client.post(
-            f"/api/v1/plan-runs/{run.id}/dedup/scan", headers=auth_headers,
+            f"/api/v1/plan-runs/{run_id}/dedup/scan", headers=auth_headers,
         )
     assert resp.status_code == 200, resp.text
     assert captured and captured[0].function == "scan_task"
-    # 路由只入队，不固化模式：决定必须由真正执行的那个入口提交。
-    assert _mode_rows(db_session, run.id) == []
+    assert _mode_rows(db_session, run_id) == []
+    return captured[0]
+
+
+@pytest.mark.asyncio
+async def test_pure_dedup_partition_never_gets_legacy_scan_dispatch(
+    client, auth_headers, db_session, phase_two,
+):
+    """纯 MTK 且已 DEDUP_FIRST：旧 scan_now 一律不下发，扫描只由已登记的事实轮次承担。"""
+    digest = capability.desired_scan_round_digest()
+    run = _run(db_session, status="RUNNING")
+    _device_job(db_session, run, _host(db_session, digest))
+    phase_two(whitelist=[run.id])
+    job = _enqueue_from_manual_scan_route(client, auth_headers, db_session, run.id)
+
+    dispatch = MagicMock()
+    hosts = MagicMock(side_effect=AssertionError("_query_hosts_for_scan 不该被调用"))
+    with patch("backend.realtime.socketio_server.call_agent_control", dispatch), \
+         patch.object(saq_tasks, "_query_hosts_for_scan", hosts):
+        await saq_tasks.scan_task({}, **job.kwargs)
+
+    dispatch.assert_not_called()
+    hosts.assert_not_called()
+    assert _mode_rows(db_session, run.id) == [("mtk", "DEDUP_FIRST")]
+
+
+@pytest.mark.asyncio
+async def test_mixed_run_legacy_dispatch_reads_committed_mode_before_emit(
+    client, auth_headers, db_session, phase_two,
+):
+    """混合运行：展锐现行扫描照发，但下发前模式必须已提交（跨连接可见）。"""
+    digest = capability.desired_scan_round_digest()
+    run = _run(db_session, status="RUNNING")
+    host_id = _host(db_session, digest)
+    _device_job(db_session, run, host_id, platform="MTK")
+    unisoc_serial = _device_job(db_session, run, host_id, platform="UNISOC").serial
+    phase_two(whitelist=[run.id])
+    job = _enqueue_from_manual_scan_route(client, auth_headers, db_session, run.id)
 
     seen = {}
 
     async def _dispatch_probe(host_id_arg, action, payload=None):
         seen["action"] = action
         seen["mode_at_dispatch"] = _committed_mode_elsewhere(run.id)
+        seen["payload_serials"] = payload.get("device_serials") if payload else None
         raise RuntimeError("probe-stops-before-poll")
 
-    with patch("backend.realtime.socketio_server.call_agent_control", _dispatch_probe):
+    def _hosts(plan_run_id, is_final=False, allow_retired=False):
+        return (
+            [(host_id, {
+                "plan_run_id": plan_run_id, "is_final": is_final,
+                "device_serials": [unisoc_serial], "run_date_stamps": [],
+            })],
+            [], [], {host_id: {"mtk", "unisoc"}},
+        )
+
+    with patch("backend.realtime.socketio_server.call_agent_control", _dispatch_probe), \
+         patch.object(saq_tasks, "_query_hosts_for_scan", _hosts):
         with pytest.raises(RuntimeError, match="probe-stops-before-poll"):
-            await saq_tasks.scan_task({}, **captured[0].kwargs)
+            await saq_tasks.scan_task({}, **job.kwargs)
 
     assert seen["action"] == "scan_now"
     assert seen["mode_at_dispatch"] == "DEDUP_FIRST"
     assert _mode_rows(db_session, run.id) == [("mtk", "DEDUP_FIRST")]
+    # 已固化分区的混合下发不需要候选留痕（模式不可再翻转）。
+    with SessionLocal() as db:
+        context = db.get(PlanRun, run.id).run_context or {}
+    assert admission.LEGACY_SCAN_DISPATCH_SECTION not in context
 
 
 @pytest.mark.asyncio
@@ -248,7 +290,10 @@ def test_shadow_sweep_uses_admission_instead_of_blanket_current(
     shadow.sweep_shadow_scan_rounds()
 
     assert _mode_rows(db_session, run.id) == [("mtk", "DEDUP_FIRST")]
-    rounds = facts.list_scan_rounds(db_session, plan_run_id=run.id, platform="mtk")
+    # 测试侧读轮次一律用无锁版本：list_scan_rounds 带 FOR UPDATE，夹具会话读它会把行锁留在
+    # idle-in-transaction 事务里，被测代码在另一连接锁同一行就会永久等待。
+    rounds = facts.list_scan_rounds_for_read(db_session, plan_run_id=run.id, platform="mtk")
+    db_session.commit()
     assert [row.kind for row in rounds] == [facts.SCAN_ROUND_KIND_PERIODIC]
     assert queued.call_args.kwargs["fact_round_id"] == rounds[0].id
 

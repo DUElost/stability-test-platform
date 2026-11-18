@@ -404,12 +404,10 @@ async def test_scan_task_no_hosts_triggered_skips_poll(monkeypatch):
              patch("saq.Job", MagicMock()):
             await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
-    # B8 #4043：下发前先有一次「首次分区模式写入」的独立提交，它经同一个 asyncio_to_thread
-    # 别名走同步 DB；轮询与产物登记也用该别名。因此「没有 host 被触发 ⇒ 不进轮询」的原判据
-    # 换成线程调用次数：只剩固化那一次，轮询/登记一次都没有。
-    assert to_thread.await_count == 1, (
-        "scan_task 只应执行模式固化这一次线程调用，其余必须来自轮询路径"
-    )
+    # B8 #4043：下发前的模式判定与固化走 asyncio.to_thread 直调（与本函数里
+    # _query_hosts_for_scan 同一写法），不占用本测试用来拦截轮询路径的 asyncio_to_thread 别名，
+    # 因此原判据保持不变：没有 host 被触发 ⇒ 轮询路径一次线程调用都没有。
+    to_thread.assert_not_awaited()
 
 
 @pytest.mark.asyncio

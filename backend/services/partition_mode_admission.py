@@ -20,11 +20,13 @@
    旧链上，因此阻断本身**不写记录**；期间消费方按 D13 第 2 条走现行，旧链若真的发生副作用，
    下一次入场会按第 6 条固化为 CURRENT。
 6. 写 ``DEDUP_FIRST`` 前必须确认旧链还没在本分区留下事实（在途旧 run 沿用 D13）。判定信号是
-   旧链**专有**的库内痕迹：本分区（MTK 或归属不可确认）的 scan/merge 报表产物，以及旧链写的
-   ``run_context`` 段 ``archive`` / ``upload_mark`` / ``merge_platforms`` / ``extract``。发现
-   任一信号 → 固化为 CURRENT 并记原因，绝不两套链混跑。「归属不可确认」按 MTK 计
-   （fail-closed）：路径段缺失时宁可拒绝入场，也不把可能的旧链 MTK 产物当作与本分区无关；
-   展锐产物（路径含 ``/unisoc/``）不算本分区副作用。
+   旧链**专有且可归因到本分区**的库内痕迹：本分区（MTK，或归属无法确认）的 scan/merge 报表
+   产物、含 MTK 的 ``run_context.merge_platforms``，以及候选旧链扫描下发之前由
+   :func:`mark_legacy_scan_dispatched` 写下的 ``legacy_scan_dispatch`` 痕迹段。发现任一信号 →
+   固化为 CURRENT 并记原因，绝不两套链混跑。「归属不可确认」按 MTK 计（fail-closed）：路径段
+   缺失时宁可拒绝入场，也不把可能的旧链 MTK 产物当作与本分区无关；展锐产物（路径含
+   ``/unisoc/``）与纯展锐的 merge 记录都不算本分区副作用——否则混合试点会被展锐侧的正常动作
+   打回旧链，违反裁决第 2 项「同一 Run 的现行展锐分区继续处理」。
 
 **落库范围**（D13 第 2 条：不得因开关当前值的回读改写没有记录的存量分区）：
 
@@ -46,24 +48,31 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
+from typing import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core.database import SessionLocal
-from backend.core.dedup_platform import DEDUP_PLATFORM_MTK, DEDUP_PLATFORM_UNISOC
+from backend.core.dedup_platform import (
+    DEDUP_PLATFORMS,
+    DEDUP_PLATFORM_MTK,
+    DEDUP_PLATFORM_UNISOC,
+)
 from backend.core.settings.scheduler import SchedulerSettings, get_scheduler_settings
 from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services import issue_fact_store as facts
+from backend.services.plan_run_context import write_run_context_section
 from backend.services.partition_capability import (
     CAPABILITY_UNVERIFIED,
     expected_mtk_host_ids,
     unverified_hosts,
     verify_expected_mtk_hosts,
 )
-from backend.services.partition_scope import normalize_platform
+from backend.services.partition_scope import current_platforms, normalize_platform
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +97,20 @@ REASON_CAPABILITY_UNVERIFIED = CAPABILITY_UNVERIFIED
 REASON_OLD_CHAIN_EFFECTS = "old_chain_side_effects"
 REASON_OWNER_ADMITTED = "owner_admitted"
 
-#: 旧链（先上传后去重）独有的 run_context 段：新链只写事实表与证据区，不写这四段。
-_OLD_CHAIN_CONTEXT_SECTIONS = ("archive", "upload_mark", "merge_platforms", "extract")
+#: 白名单候选在「旧链扫描已下发或正在执行」时留下的库内痕迹段（#4043 规划裁决第 1 项）。
+#: 只给**未固化且在白名单里**的候选写：非候选分区永远不可能被准入，写它只是无谓的 churn；
+#: 而候选一旦有了这条痕迹，后续入场必须按「已进入现行链」处理，即使报表还没登记。
+LEGACY_SCAN_DISPATCH_SECTION = "legacy_scan_dispatch"
+
+#: 旧链在 run_context 里留下的段。**只有能归因到本分区的段才算失格证据**（规划裁决第 1、2 项
+#: 的合取）：混合运行的展锐现行侧本来就会写 run 级段，把它们一律当作「MTK 已进入现行链」会把
+#: 每个混合试点在第一次上传后就打回旧链，与「同一 Run 的现行展锐分区继续处理」直接冲突。
+#: 因此这里只保留能按平台归因的 ``merge_platforms``；``upload_mark`` / ``archive`` / ``extract``
+#: 不需要单独判定——它们成立的前提就是已有报表登记（extract 无 merge 产物直接返回 -1，
+#: marked>0 的前提是本轮有可上传的事件目录），那条证据已经在报表产物里覆盖。
+_OLD_CHAIN_PLATFORM_AWARE_SECTIONS = ("merge_platforms",)
+#: 候选旧链扫描已下发/在途的专用痕迹段（本单新增，见 :func:`mark_legacy_scan_dispatched`）。
+_OLD_CHAIN_RUN_LEVEL_SECTIONS = (LEGACY_SCAN_DISPATCH_SECTION,)
 #: 旧链按 PlanRun 产物登记的报表类型（与 D10 的既有报表入口同源）。
 _OLD_CHAIN_REPORT_ARTIFACT_TYPES = ("scan_result_xls", "merge_result_xls")
 
@@ -105,6 +126,32 @@ class PartitionModeDecision:
     @property
     def defers(self) -> bool:
         return self.mode is None
+
+
+@dataclass(frozen=True)
+class PartitionAction:
+    """入口在分流前要拿到的完整结论：模式 + 该分区是否处于「候选等待能力证据」。
+
+    ``mode`` 是已提交（或本次刚提交）的模式；``None`` 表示库里仍没有记录。
+    ``held=True`` 只在**白名单候选**等待能力证据时成立：该分区此刻既不能走新链，也不能被旧链
+    消费（规划裁决第 2 项），入口必须跳过本分区的动作，而不是按「无记录=现行」继续。
+    ``held=False`` 且 ``mode=None`` 就是裁决要求区分的第二种形态：存量 / 未获批 / 开关关闭，
+    消费方继续按 D13 第 2 条读作现行，行为与改动前一致。
+    """
+
+    mode: Optional[str]
+    held: bool
+    reason: str
+    detail: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def dedup_first(self) -> bool:
+        return self.mode == facts.PARTITION_MODE_DEDUP_FIRST
+
+    @property
+    def legacy_allowed(self) -> bool:
+        """旧链（现行）动作是否可以作用于本分区。"""
+        return not self.held and self.mode != facts.PARTITION_MODE_DEDUP_FIRST
 
 
 def _mtk_report_artifact_count(db: Session, plan_run_id: int) -> int:
@@ -125,11 +172,27 @@ def _mtk_report_artifact_count(db: Session, plan_run_id: int) -> int:
 
 
 def _old_chain_context_sections(db: Session, plan_run_id: int) -> list[str]:
+    """返回能**归因到本分区（MTK）**的旧链 run_context 痕迹段名。
+
+    归因规则：``merge_platforms`` 按其中的平台键判断，只有出现过 MTK（或平台名无法确认）才算；
+    纯展锐的 merge 记录不构成 MTK 分区失格——否则每个混合试点都会在第一次展锐上传后被打回旧链，
+    与裁决第 2 项「同一 Run 的现行展锐分区继续处理」直接冲突。专用痕迹段一旦出现即算，
+    它就是为本分区写的。
+    """
     run = db.get(PlanRun, plan_run_id)
     context = getattr(run, "run_context", None) if run is not None else None
     if not isinstance(context, dict):
         return []
-    return [section for section in _OLD_CHAIN_CONTEXT_SECTIONS if section in context]
+    sections = [section for section in _OLD_CHAIN_RUN_LEVEL_SECTIONS if section in context]
+    for section in _OLD_CHAIN_PLATFORM_AWARE_SECTIONS:
+        value = context.get(section)
+        platforms = value.get("platforms") if isinstance(value, dict) else None
+        if not isinstance(platforms, dict):
+            continue
+        names = {normalize_platform(key) for key in platforms}
+        if DEDUP_PLATFORM_MTK in names or not (names & set(DEDUP_PLATFORMS)):
+            sections.append(section)
+    return sections
 
 
 def old_chain_effects(db: Session, plan_run_id: int) -> dict[str, Any]:
@@ -141,7 +204,72 @@ def old_chain_effects(db: Session, plan_run_id: int) -> dict[str, Any]:
         effects["mtk_report_artifacts"] = artifacts
     if sections:
         effects["run_context_sections"] = sections
+    if LEGACY_SCAN_DISPATCH_SECTION in sections:
+        # 单独报出来：这是「已下发 / 正在执行但报表还没登记」的痕迹（规划裁决第 1 项），
+        # 与既有报表产物不同，它不需要等 scan 结果落库就能否定准入。
+        effects["legacy_scan_dispatched"] = True
     return effects
+
+
+def is_dedup_candidate(db: Session, plan_run_id: int, *, platform: str,
+                       settings: Optional[SchedulerSettings] = None) -> bool:
+    """该分区是不是 Owner 点名的准入候选（MTK + 阶段二开 + 实际 run 在白名单里）。
+
+    候选与非候选的区别决定「无模式记录」怎么解释：候选 = 等待能力证据，必须停住本分区动作；
+    非候选 = 存量/未获批/开关关闭，继续按 D13 第 2 条读作现行。
+    """
+    if normalize_platform(platform) != DEDUP_PLATFORM_MTK:
+        return False
+    conf = settings or get_scheduler_settings()
+    if not conf.stp_dedup_first_enabled or not conf.stp_scan_round_shadow_enabled:
+        return False
+    return int(plan_run_id) in conf.dedup_first_plan_run_whitelist
+
+
+def mark_legacy_scan_dispatched(
+    plan_run_id: int,
+    *,
+    entrypoint: str,
+    host_ids: Sequence[str] = (),
+    settings: Optional[SchedulerSettings] = None,
+) -> bool:
+    """在下发旧链扫描**之前**把「本候选分区的旧扫描已下发/在途」写成库内事实。
+
+    只在候选且尚未固化时写：非候选分区不可能被翻转成 ``DEDUP_FIRST``，写它毫无意义；候选一旦
+    有这条痕迹，任何后续入场都必须按「已进入现行链」固化为 ``CURRENT``，即使报表还没登记
+    （规划裁决第 1 项）。单独事务 + 立即提交，避免「先发扫描、后记痕迹」的窗口。
+    """
+    scope = normalize_platform(DEDUP_PLATFORM_MTK)
+    db = SessionLocal()
+    try:
+        if not is_dedup_candidate(db, plan_run_id, platform=scope, settings=settings):
+            return False
+        if _recorded_mode(db, plan_run_id, scope) is not None:
+            return False
+        written = write_run_context_section(db, int(plan_run_id), LEGACY_SCAN_DISPATCH_SECTION, {
+            "platform": scope,
+            "dispatched_at": datetime.now(timezone.utc).isoformat(),
+            "entrypoint": entrypoint,
+            "hosts": sorted({str(host) for host in host_ids if host}),
+        })
+        return bool(written)
+    finally:
+        db.close()
+
+
+def other_current_partitions(plan_run_id: int) -> set[str]:
+    """除 MTK 之外、仍需旧链（现行）服务的平台集合。
+
+    入口用它区分「纯候选分区」与「混合运行」：空集说明没有别的现行分区依赖这次旧
+    ``scan_now`` / 标记，候选就整段跳过（裁决第 2、3 项）；非空则展锐现行侧必须照做，
+    候选分区随之按裁决第 1 项失格。与 ``partition_rows`` 同一派生口径（设备平台 ∪
+    DLE 平台 ∪ 模式记录，缺记录按现行解释），不另造一套平台推断。
+    """
+    db = SessionLocal()
+    try:
+        return set(current_platforms(db, int(plan_run_id))) - {DEDUP_PLATFORM_MTK}
+    finally:
+        db.close()
 
 
 def _recorded_mode(db: Session, plan_run_id: int, platform: str):
@@ -191,6 +319,17 @@ def decide_partition_mode(
             facts.PARTITION_MODE_CURRENT, REASON_PHASE_ONE_DISABLED, {"platform": scope},
         )
 
+    # 顺序有意义：**先判旧链是否已经动手，再判能力**。规划裁决第 1 项把「已进入现行链」定为
+    # 失格条件，而失格是持久事实（旧扫描已下发/在途，痕迹已落库），不随这一刻心跳状态变化；
+    # 反过来若先判能力，候选在「已发旧扫描 + 能力仍未证实」的窗口里会被读成「等待」，于是既不
+    # 固化也不设防，下一个入口就可能在没有报表的情况下写进 DEDUP_FIRST——正是要封死的那条交错。
+    effects = old_chain_effects(db, plan_run_id)
+    if effects:
+        return PartitionModeDecision(
+            facts.PARTITION_MODE_CURRENT, REASON_OLD_CHAIN_EFFECTS,
+            {"platform": scope, **effects},
+        )
+
     hosts = expected_mtk_host_ids(db, plan_run_id)
     if not hosts:
         return PartitionModeDecision(None, REASON_NO_EXPECTED_HOSTS, {"platform": scope})
@@ -206,13 +345,6 @@ def decide_partition_mode(
                 "reasons": {item.host_id: item.reason for item in verdicts if not item.verified},
                 "expected_hosts": hosts,
             },
-        )
-
-    effects = old_chain_effects(db, plan_run_id)
-    if effects:
-        return PartitionModeDecision(
-            facts.PARTITION_MODE_CURRENT, REASON_OLD_CHAIN_EFFECTS,
-            {"platform": scope, **effects},
         )
     return PartitionModeDecision(
         facts.PARTITION_MODE_DEDUP_FIRST, REASON_OWNER_ADMITTED,
@@ -261,6 +393,47 @@ def fixate_partition_mode(
     return row.mode
 
 
+def partition_action(
+    db: Session,
+    plan_run_id: int,
+    *,
+    entrypoint: str,
+    platform: str = DEDUP_PLATFORM_MTK,
+    settings: Optional[SchedulerSettings] = None,
+    record_current_fallback: bool = False,
+) -> PartitionAction:
+    """入口在分流前必须消费的结论：模式（可能刚提交）+ 该分区是否被候选等待挡住。
+
+    :func:`fixate_partition_mode` 只返回模式，调用方拿到 ``None`` 时分不清「存量按现行」与
+    「候选等待能力证据」——规划裁决第 2 项要求二者行为不同，故入口改用本函数。
+    """
+    scope = normalize_platform(platform)
+    locked = db.execute(
+        select(PlanRun).where(PlanRun.id == plan_run_id).with_for_update()
+    ).scalar_one_or_none()
+    if locked is None:
+        return PartitionAction(None, False, REASON_PLAN_RUN_MISSING, {"platform": scope})
+
+    decision = decide_partition_mode(
+        db, plan_run_id, platform=scope, settings=settings,
+        record_current_fallback=record_current_fallback,
+    )
+    if decision.mode is None:
+        candidate = is_dedup_candidate(db, plan_run_id, platform=scope, settings=settings)
+        held = candidate and decision.reason in (
+            REASON_CAPABILITY_UNVERIFIED, REASON_NO_EXPECTED_HOSTS,
+        )
+        _log_action(plan_run_id, scope, None, held, decision, entrypoint)
+        return PartitionAction(None, held, decision.reason, decision.detail)
+
+    row, created = facts.insert_partition_mode_if_absent(
+        db, plan_run_id=plan_run_id, platform=scope, mode=decision.mode,
+    )
+    reason = decision.reason if created else REASON_ALREADY_RECORDED
+    _log_action(plan_run_id, scope, row.mode, False, decision, entrypoint, created=created)
+    return PartitionAction(row.mode, False, reason, decision.detail)
+
+
 def fixate_partition_mode_at_entry(
     plan_run_id: int,
     *,
@@ -274,14 +447,29 @@ def fixate_partition_mode_at_entry(
     单独一个短事务并立即 commit，保证「模式已提交」先于分流；不把决定绑在调用方的事务里，
     调用方后续失败也不会让已提交的模式回滚成未固化状态。
     """
+    return partition_action_at_entry(
+        plan_run_id, entrypoint=entrypoint, platform=platform, settings=settings,
+        record_current_fallback=record_current_fallback,
+    ).mode
+
+
+def partition_action_at_entry(
+    plan_run_id: int,
+    *,
+    entrypoint: str,
+    platform: str = DEDUP_PLATFORM_MTK,
+    settings: Optional[SchedulerSettings] = None,
+    record_current_fallback: bool = False,
+) -> PartitionAction:
+    """:func:`partition_action` 的自开会话版本（短事务 + 立即提交）。"""
     db = SessionLocal()
     try:
-        mode = fixate_partition_mode(
+        action = partition_action(
             db, plan_run_id, platform=platform, entrypoint=entrypoint, settings=settings,
             record_current_fallback=record_current_fallback,
         )
         db.commit()
-        return mode
+        return action
     except Exception:
         db.rollback()
         logger.exception(
@@ -325,7 +513,44 @@ def _log_decision(
     )
 
 
+def _log_action(
+    plan_run_id: int,
+    platform: str,
+    mode: Optional[str],
+    held: bool,
+    decision: PartitionModeDecision,
+    entrypoint: str,
+    *,
+    created: bool = True,
+) -> None:
+    """把「本分区这次能做什么」写成可核对的日志：固化、等待能力、还是按现行读取。
+
+    候选等待（held）与存量按现行（mode=None、held=False）必须在日志里可区分——二者在库里
+    都是「没有模式记录」，但入口行为不同（规划裁决第 2 项）。
+    """
+    if held:
+        logger.warning(
+            "partition_action_held plan_run=%s platform=%s reason=%s entrypoint=%s "
+            "unverified_hosts=%s",
+            plan_run_id, platform, decision.reason, entrypoint,
+            ",".join(decision.detail.get("unverified_hosts", []) or []),
+        )
+        return
+    if mode is None:
+        logger.info(
+            "partition_action_legacy plan_run=%s platform=%s mode=- held=false reason=%s "
+            "entrypoint=%s",
+            plan_run_id, platform, decision.reason, entrypoint,
+        )
+        return
+    _log_decision(
+        plan_run_id, platform, mode,
+        decision.reason if created else REASON_ALREADY_RECORDED, entrypoint, decision.detail,
+    )
+
+
 __all__ = [
+    "LEGACY_SCAN_DISPATCH_SECTION",
     "ENTRY_EXTRACT",
     "ENTRY_MERGE",
     "ENTRY_SCAN_TASK",
@@ -333,6 +558,7 @@ __all__ = [
     "ENTRY_SHADOW_SWEEP",
     "ENTRY_UPLOAD_TASK",
     "PartitionModeDecision",
+    "PartitionAction",
     "REASON_ALREADY_RECORDED",
     "REASON_CAPABILITY_UNVERIFIED",
     "REASON_NOT_WHITELISTED",
@@ -342,7 +568,12 @@ __all__ = [
     "REASON_PLAN_RUN_MISSING",
     "REASON_SWITCH_DISABLED",
     "decide_partition_mode",
+    "is_dedup_candidate",
+    "mark_legacy_scan_dispatched",
+    "partition_action",
+    "partition_action_at_entry",
     "fixate_partition_mode",
     "fixate_partition_mode_at_entry",
     "old_chain_effects",
+    "other_current_partitions",
 ]

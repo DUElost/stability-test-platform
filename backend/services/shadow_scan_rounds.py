@@ -187,7 +187,7 @@ def _advance_run(db, run_id, root, now, settings):
         # 主干此前无条件写 CURRENT；现在由 #4043 的准入决定（白名单 + 能力证据 + 旧链副作用），
         # 已固化分区原样读回、不改写。影子入口保留「观察到的分区必有一行」的既有记账——
         # #3875 的 settled 出口把终态写在模式行上，取消它会让已观察分区每轮重复处理。
-        admission.fixate_partition_mode(
+        sweep_action = admission.partition_action(
             db,
             run_id,
             platform=_PLATFORM,
@@ -195,6 +195,16 @@ def _advance_run(db, run_id, root, now, settings):
             settings=settings,
             record_current_fallback=True,
         )
+        if sweep_action.held:
+            # 规划裁决第 2 项：Owner 点名的候选在等能力证据期间，**登记轮次本身**也是受模式
+            # 影响的扫描动作（下一跳就是 prepare_shadow_scan 的真实下发）。这里既不能建轮次、
+            # 也不能入队，等能力证据到位后由下一次 sweep 正常固化并建轮。
+            logger.info(
+                "shadow_scan_round_hold plan_run=%d platform=%s reason=%s unverified_hosts=%s",
+                run_id, _PLATFORM, sweep_action.reason,
+                ",".join(sweep_action.detail.get("unverified_hosts", []) or []),
+            )
+            return []
     for row in rounds:
         _refresh_round(db, row, root, now)
     new = None
@@ -381,13 +391,23 @@ def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
             return []
         if partition is None:
             # 同上：本函数提交后立刻返回下发载荷，模式必须在同一事务、同一次提交里固化。
-            admission.fixate_partition_mode(
+            prepare_action = admission.partition_action(
                 db,
                 plan_run_id,
                 platform=_PLATFORM,
                 entrypoint=admission.ENTRY_SHADOW_PREPARE,
                 record_current_fallback=True,
             )
+            if prepare_action.held:
+                # 候选在等能力证据：轮次已存在也不能下发扫描（裁决第 2 项）。轮次保持未执行，
+                # 由下一次 sweep 在模式固化后继续；此处不覆盖记账，避免把「等待」写成「缺失」。
+                logger.info(
+                    "shadow_scan_dispatch_hold plan_run=%d fact_round_id=%d platform=%s "
+                    "reason=%s",
+                    plan_run_id, fact_round_id, _PLATFORM, prepare_action.reason,
+                )
+                db.commit()
+                return []
         now = datetime.now(timezone.utc)
         _refresh_round(db, row, root, now)
         if row.status == facts.SCAN_ROUND_STATUS_CLOSED:

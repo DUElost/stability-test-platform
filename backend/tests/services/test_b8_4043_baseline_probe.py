@@ -109,6 +109,22 @@ def _admitted_run(db, *, status="RUNNING", capable=True):
     return run, host_id, device.serial
 
 
+def _unisoc_job_on_same_host(db, run, host_id):
+    """在同一台 host 上再挂一台展锐设备：混合运行的现行分区必须与候选同机（裁决第 3 项反例面）。"""
+    device = Device(
+        serial=f"SN-U-{uuid4().hex[:8]}", host_id=host_id, platform="UNISOC",
+        status="ONLINE", model="test", tags=[],
+    )
+    db.add(device)
+    db.flush()
+    db.add(JobInstance(
+        plan_run_id=run.id, plan_id=run.plan_id, device_id=device.id, host_id=host_id,
+        status="COMPLETED", pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+    ))
+    db.commit()
+    return device
+
+
 def _mode_rows(db, run_id):
     return sorted(
         (row.platform, row.mode)
@@ -170,16 +186,54 @@ async def test_probe_upload_marking_reads_committed_mode(db_session, owner_white
 
 
 @pytest.mark.asyncio
-async def test_probe_scan_dispatch_happens_only_after_mode_committed(
+async def test_probe_pure_dedup_partition_is_not_legacy_scanned(
     db_session, owner_whitelist, monkeypatch,
 ):
-    """旧链 scan_task 下发 scan_now 时，模式必须已提交（基线：None）。"""
+    """纯 MTK 获批分区不得再被旧 scan_now 扫（裁决第 3 项）。基线：照发并进轮询 → 红。
+
+    基线侧必须也能在几秒内跑完，所以这里把轮询预算压到 0、并桩掉 SAQ 队列（基线会走到
+    「enqueue upload/merge」那一步）。判据只有一个：旧 ``scan_now`` 的下发次数必须为 0。
+    """
     run, host_id, _serial = _admitted_run(db_session)
+    owner_whitelist(whitelist=[run.id])
+    monkeypatch.setenv("STP_SCAN_POLL_MAX_WAIT", "0")
+    dispatches = []
+
+    async def _dispatch(host_id_arg, action, payload=None):
+        dispatches.append((host_id_arg, action))
+        return True
+
+    queue = MagicMock()
+
+    async def _enqueue(job):
+        return job
+
+    queue.enqueue = _enqueue
+    monkeypatch.setattr(
+        saq_tasks, "_query_hosts_for_scan",
+        lambda *_a: ([(host_id, {"device_serials": ["SN"]})], [], [], {host_id: {"mtk"}}),
+    )
+    with patch("backend.realtime.socketio_server.call_agent_control", _dispatch), \
+         patch("backend.core.task_queue.get_queue", return_value=queue):
+        await saq_tasks.scan_task({}, plan_run_id=run.id, is_final=False)
+
+    assert dispatches == []
+    assert _mode_rows(db_session, run.id) == [("mtk", "DEDUP_FIRST")]
+
+
+@pytest.mark.asyncio
+async def test_probe_mixed_legacy_dispatch_happens_only_after_mode_committed(
+    db_session, owner_whitelist, monkeypatch,
+):
+    """混合运行的旧 scan_now 必须照发（展锐现行），且发之前模式已提交（基线：None）。"""
+    run, host_id, _serial = _admitted_run(db_session)
+    _unisoc_job_on_same_host(db_session, run, host_id)
     owner_whitelist(whitelist=[run.id])
     seen = {}
 
     async def _dispatch(host_id_arg, action, payload=None):
         seen["mode"] = _committed_mode_elsewhere(run.id)
+        seen["action"] = action
         raise RuntimeError("probe-stop-after-first-dispatch")
 
     monkeypatch.setattr(
@@ -190,6 +244,7 @@ async def test_probe_scan_dispatch_happens_only_after_mode_committed(
         with pytest.raises(RuntimeError, match="probe-stop-after-first-dispatch"):
             await saq_tasks.scan_task({}, plan_run_id=run.id, is_final=False)
 
+    assert seen["action"] == "scan_now"
     assert seen["mode"] == "DEDUP_FIRST"
 
 

@@ -724,13 +724,17 @@ async def trigger_merge(
     # ADR-0062 D3 第 1 条（#4043）：下面这次 partition_rows 读取本身就是本请求的第一个
     # 分流点（决定要不要「先跑 scan」），所以模式必须在此之前提交；自动 merge_task 的分流点
     # 在 ``dedup_scan._partition_targets``，两处共用同一份准入决定，落库只有一条记录。
-    partition_mode_admission.fixate_partition_mode_at_entry(
+    merge_action = partition_mode_admission.partition_action_at_entry(
         run_id, entrypoint=partition_mode_admission.ENTRY_MERGE_ROUTE,
     )
     partitions = partition_rows(db, run_id)
+    # #4043 规划裁决第 2 项：候选在等能力证据时，MTK 既不是「现行可合并」也没有轮次可合，
+    # 不能拿旧链的「先跑 scan」前置去要求它——那会把等待状态读成一次可操作的合并请求。
+    held = [partition_mode_admission.DEDUP_PLATFORM_MTK] if merge_action.held else []
     current = [row["platform"] for row in partitions
-               if row["mode"] == facts.PARTITION_MODE_CURRENT]
-    if current or not partitions:
+               if row["mode"] == facts.PARTITION_MODE_CURRENT
+               and row["platform"] not in held]
+    if current or (not partitions and not held):
         scan_rows = db.execute(
             select(PlanRunArtifact).where(
                 PlanRunArtifact.plan_run_id == run_id,
@@ -744,7 +748,7 @@ async def trigger_merge(
 
     scan_round_id = None
     round_started_at = None
-    if current or not partitions:
+    if current or (not partitions and not held):
         tool = resolve_scan_tool()
         if tool is None:
             raise HTTPException(status_code=503, detail="scan tool not configured")
@@ -767,6 +771,14 @@ async def trigger_merge(
         raise HTTPException(
             status_code=409,
             detail="no closed FINAL/SUPPLEMENT round for a deduplicating partition yet",
+        )
+    if result == "awaiting_capability_evidence":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "mtk partition is an admitted candidate awaiting verified agent capability; "
+                "no partition was merged (see #4043 admission)"
+            ),
         )
     if result != "ok":
         raise HTTPException(status_code=500, detail="merge failed (no _org.xls?)")
@@ -808,6 +820,15 @@ def trigger_extract(
                 "run has no CURRENT partition; dedup-first partitions use "
                 "GET /api/v1/plan-runs/{run_id}/delivery/{platform}/versions/"
                 "{version_no}/download"
+            ),
+        )
+    if extracted == -4:
+        # #4043 规划裁决第 2 项：候选分区在等能力证据，模式还没定，本轮既不提取也不交付。
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "mtk partition is an admitted candidate awaiting verified agent capability; "
+                "extract is held until its run mode is fixed (see #4043 admission)"
             ),
         )
     if extracted == -1:

@@ -14,9 +14,11 @@ import time
 from datetime import datetime, timezone
 
 from backend.core.dedup_platform import DEDUP_PLATFORMS
+from backend.core.dedup_platform import DEDUP_PLATFORM_MTK
 from backend.core.task_queue import get_queue
 from backend.services import shadow_scan_rounds
 from backend.services import partition_mode_admission
+from backend.services import issue_fact_store as facts
 from saq import Job as SaqJob
 
 logger = logging.getLogger(__name__)
@@ -469,11 +471,47 @@ async def scan_task(
     # ADR-0062 D3 第 1 条（#4043）：旧链的第一个受模式影响的动作就是向 Agent 下发 scan_now
     # （随后才有报表、登记与分流）。模式决定必须在下发之前独立提交，不能等 merge/extract
     # 或影子轮再补写——否则旧链已经按「无记录=现行」分流过一次。
-    await asyncio_to_thread(
-        partition_mode_admission.fixate_partition_mode_at_entry,
+    #
+    # 返回值必须被消费（规划裁决第 2、3 项）：只「写过一次模式」不构成放行，本入口接下来做
+    # 什么由这次结论决定——
+    #   · DEDUP_FIRST：MTK 分区的扫描由已登记的事实轮次下发（D3/D4），旧 scan_now 不得再扫
+    #     本分区；纯 MTK 运行没有现行分区要照顾，直接不下发。
+    #   · 候选等待能力证据：既不能进新链也不能进旧链，纯 MTK 运行同样不下发。
+    #   · 混合运行还有现行分区要扫：旧 scan_now 必须照发（展锐现行扫描不能被停），因此这次
+    #     下发在发之前先落「旧链扫描已下发/在途」的库内痕迹——报表还没登记也要落，之后任何
+    #     入场都只能固化 CURRENT（裁决第 1 项：一旦进入现行链就失去本次准入资格）。
+    action = await asyncio.to_thread(
+        partition_mode_admission.partition_action_at_entry,
         plan_run_id,
         entrypoint=partition_mode_admission.ENTRY_SCAN_TASK,
     )
+    if action.mode == facts.PARTITION_MODE_DEDUP_FIRST or action.held:
+        # 本分区不能被旧链扫描：看这个运行还有没有**别的**现行分区必须靠这次 scan_now 交付。
+        others = await asyncio.to_thread(
+            partition_mode_admission.other_current_partitions, plan_run_id,
+        )
+        if not others:
+            logger.info(
+                "saq_scan_skip_legacy_for_partition plan_run=%d mode=%s held=%s reason=%s "
+                "mtk_partition=%s",
+                plan_run_id, action.mode or "-", action.held, action.reason,
+                DEDUP_PLATFORM_MTK,
+            )
+            return
+        if action.held:
+            # 混合运行：展锐现行扫描不能停，而这台 Agent 的旧 scan_now 会顺带扫 MTK
+            # （Agent 侧只看 runner 是否配置，见 scan_runner._execute_job）。因此在**下发之前**
+            # 先落库内痕迹：此后任何入场都只能固化 CURRENT，不等报表登记。
+            await asyncio.to_thread(
+                partition_mode_admission.mark_legacy_scan_dispatched,
+                plan_run_id,
+                entrypoint=partition_mode_admission.ENTRY_SCAN_TASK,
+            )
+            logger.warning(
+                "saq_scan_candidate_eligibility_forfeited plan_run=%d reason=%s "
+                "current_partitions=%s",
+                plan_run_id, action.reason, ",".join(sorted(others)),
+            )
 
     # Watermark for this round's completeness check, taken before scan_now goes
     # out: artifacts registered earlier belong to a previous incremental round.
@@ -687,12 +725,25 @@ async def upload_task(ctx: dict, *, plan_run_id: int, scan_round_id: str | None 
     logger.info("saq_upload_start plan_run=%d", plan_run_id)
 
     # 同上：标记 UPLOAD_PENDING 就是旧链上传的分流点（D8 第 6 条），先去重分区不得被标记。
-    # upload_task 也会被单独重试/重放，所以这里再固化一次，不等 scan_task 的结果。
-    await asyncio_to_thread(
-        partition_mode_admission.fixate_partition_mode_at_entry,
+    # upload_task 也会被单独重试/重放，所以这里再判一次，不等 scan_task 的结果；结论同样要
+    # 被消费：候选等待能力证据期间，MTK 分区也不能被标记（规划裁决第 2 项），展锐现行分区照旧。
+    upload_action = await asyncio.to_thread(
+        partition_mode_admission.partition_action_at_entry,
         plan_run_id,
         entrypoint=partition_mode_admission.ENTRY_UPLOAD_TASK,
     )
+    if upload_action.held:
+        others = await asyncio.to_thread(
+            partition_mode_admission.other_current_partitions, plan_run_id,
+        )
+        if not others:
+            # 候选等待且没有别的现行分区：整段跳过，连「本轮标记了 0 个」的水位线都不写——
+            # 写它就等于把还在等待的候选登记成已经走过旧链（裁决第 1 项的反向要求）。
+            logger.info(
+                "saq_upload_skip_candidate_partition plan_run=%d reason=%s",
+                plan_run_id, upload_action.reason,
+            )
+            return
 
     try:
         def _mark() -> int:
@@ -714,13 +765,21 @@ async def upload_task(ctx: dict, *, plan_run_id: int, scan_round_id: str | None 
 
                 # B8 G6（ADR-0062 D8 第 6 条）：DEDUP_FIRST 分区只上送 S7 选中的
                 # 代表，旧入口不得把未选事件标成 UPLOAD_PENDING。展锐与无模式
-                # 记录的分区继续走现行标记；HddSpill 走 EventUploader force 通道，
-                # 不经过本标记。
+                # 记录的分区继续走现行标记；HddSpill 走 EventUploader force 通道，不经过本标记。
+                #
+                # #4043 规划裁决第 2 项：**白名单候选等待能力证据**期间，MTK 分区也不能被标记
+                # （库里还没有模式记录，但它的模式既未定也还不能按现行消费）。这一段只在该分区
+                # 处于候选等待态时出现；非候选/存量/开关关闭的 run 的 SQL 与改动前逐字一致。
+                hold_clause = (
+                    "AND lower(device_log_event.platform) <> 'mtk' "
+                    if upload_action.held else ""
+                )
                 result = db.execute(
                     sa_text(
                         f"UPDATE device_log_event SET state = 'UPLOAD_PENDING', "
                         f"updated_at = now() "
-                        f"WHERE state IN ({state_list}) AND plan_run_id = :pid AND ({clauses}) "
+                        f"WHERE state IN ({state_list}) AND plan_run_id = :pid "
+                        f"{hold_clause}AND ({clauses}) "
                         f"AND NOT EXISTS ("
                         f"SELECT 1 FROM partition_mode pm "
                         f"WHERE pm.plan_run_id = device_log_event.plan_run_id "
@@ -732,8 +791,8 @@ async def upload_task(ctx: dict, *, plan_run_id: int, scan_round_id: str | None 
                 db.commit()
                 marked = result.rowcount
                 logger.info(
-                    "saq_upload_marked plan_run=%d marked=%d dirs=%d",
-                    plan_run_id, marked, len(event_dir_names),
+                    "saq_upload_marked plan_run=%d marked=%d dirs=%d mtk_held=%s",
+                    plan_run_id, marked, len(event_dir_names), upload_action.held,
                 )
                 return marked
             finally:

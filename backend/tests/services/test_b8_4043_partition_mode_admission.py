@@ -231,17 +231,47 @@ def test_unisoc_artifacts_are_not_this_partition_side_effects(db_session):
     assert _decide(db_session, run.id, settings=settings).mode == "DEDUP_FIRST"
 
 
-def test_run_context_old_chain_section_blocks_entry(db_session):
+def test_merge_platforms_record_with_mtk_blocks_entry(db_session):
+    """可归因到 MTK 的旧 merge 记录 = 已进入现行链 → 固化 CURRENT。"""
     digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session, status="SUCCESS")
     _device_job(db_session, run, _host(db_session, digest=digest))
-    run.run_context = {"upload_mark": {"marked": 3}}
+    run.run_context = {"merge_platforms": {"platforms": {"mtk": "ok", "unisoc": "ok"}}}
     db_session.commit()
     settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(run.id))
 
     decision = _decide(db_session, run.id, settings=settings)
     assert decision.reason == admission.REASON_OLD_CHAIN_EFFECTS
-    assert decision.detail["run_context_sections"] == ["upload_mark"]
+    assert decision.detail["run_context_sections"] == ["merge_platforms"]
+
+
+def test_unisoc_only_current_work_does_not_forfeit_mtk_candidate(db_session):
+    """展锐现行侧的正常旧链动作不得把 MTK 候选打回旧链（裁决第 2 项）。
+
+    混合运行里 upload/merge/extract 会为展锐写 run 级段；只有能归因到 MTK 的痕迹才算失格证据，
+    否则每个混合试点都会在第一次展锐上传后被永久排除在新链之外。
+    """
+    digest = capability.desired_scan_round_digest()
+    run = _plan_run(db_session, status="SUCCESS")
+    host_id = _host(db_session, digest=digest)
+    _device_job(db_session, run, host_id)
+    _device_job(db_session, run, host_id, platform="UNISOC")
+    run.run_context = {
+        "upload_mark": {"marked": 12},
+        "archive": {"artifacts": 1},
+        "merge_platforms": {"platforms": {"unisoc": "ok"}},
+        "extract": {"extracted": 3},
+    }
+    db_session.add(PlanRunArtifact(
+        plan_run_id=run.id, artifact_type="merge_result_xls", host_id=host_id,
+        storage_uri=f"/mnt/stp-log/dedup/{run.id}/unisoc/Result_Merge.xls",
+    ))
+    db_session.commit()
+    settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(run.id))
+
+    decision = _decide(db_session, run.id, settings=settings)
+    assert decision.mode == facts.PARTITION_MODE_DEDUP_FIRST
+    assert decision.reason == admission.REASON_OWNER_ADMITTED
 
 
 def test_sibling_run_of_same_plan_is_not_admitted(db_session):
