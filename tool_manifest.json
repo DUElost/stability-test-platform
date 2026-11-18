@@ -2400,6 +2400,19 @@
         }
       ]
     },
+    "spd_dump": {
+      "kind": "tool",
+      "versions": [
+        {
+          "artifact": "packages/spd_dump/20261113.tar.gz",
+          "package_sha256": "53cf3bbde997f4b9e183a854a2117535ba84faa65f7a5a36979f69719e35179e",
+          "python": null,
+          "retired": false,
+          "script": "spd_dump",
+          "version": "20261113"
+        }
+      ]
+    },
     "stop_aimonkey": {
       "kind": "script",
       "versions": [
