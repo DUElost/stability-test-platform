@@ -927,6 +927,12 @@ _MODEL_UNREGISTERED: dict[str, str] = {
     # 跨文件基类限制）。新豁免须写具体失效条件，勿留泛化占位。
     "PlanRunArchiveTriggerOut": "前端无消费者（admin/运维触发面）；形状由后端测试钉，"
     "接入前端时在 types.ts 建 interface 并转登记 _MODEL_PAIRS",
+    "CompatRerunOut": "前端无消费者（Owner/admin 运维触发面，B8 G8）；形状由"
+    " backend/tests/services/test_b8_g8_compat_rerun.py 钉，接入前端时在 types.ts "
+    "建 interface 并转登记 _MODEL_PAIRS",
+    "CompatRerunTriggerOut": "前端无消费者（Owner/admin 运维触发面，B8 G8）；"
+    "形状由 backend/tests/services/test_b8_g8_compat_rerun.py 钉，接入前端时在 "
+    "types.ts 建 interface 并转登记 _MODEL_PAIRS",
     "ScriptPresenceFullSweepOut": "前端无消费者（#3333 全量按需重采，admin/运维触发面；"
     "日常消费走 summary/hosts 两个读端点）；形状由 backend/tests/api/test_script_presence_api.py 钉，"
     "接入前端时在 types.ts 建 interface 并转登记 _MODEL_PAIRS",

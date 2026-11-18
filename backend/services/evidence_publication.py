@@ -783,6 +783,9 @@ def sweep_evidence_publications(*, now: Optional[datetime] = None) -> None:
             delivery_runs = facts.list_evidence_publication_delivery_due_run_ids(
                 db, platform=PLATFORM_MTK,
             )
+            dedup_first_delivery_runs = facts.list_dedup_first_delivery_due_run_ids(
+                db, platform=PLATFORM_MTK,
+            )
             archive_runs = facts.list_evidence_publication_archive_due_run_ids(
                 db, platform=PLATFORM_MTK,
             )
@@ -803,7 +806,9 @@ def sweep_evidence_publications(*, now: Optional[datetime] = None) -> None:
         except Exception:
             logger.exception("evidence_copy_enqueue_failed publication=%d", publication_id)
 
-    candidates = sorted(set(delivery_runs) | set(archive_runs))[:_SWEEP_LIMIT]
+    candidates = sorted(
+        set(delivery_runs) | set(dedup_first_delivery_runs) | set(archive_runs)
+    )[:_SWEEP_LIMIT]
     for run_id in candidates:
         try:
             with SessionLocal() as db:

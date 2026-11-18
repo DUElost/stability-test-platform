@@ -22,6 +22,7 @@ from sqlalchemy import String, and_, cast, distinct, func, or_, select, text
 from sqlalchemy.orm import Session, aliased
 
 from backend.models.issue_fact import (
+    CompatRerun,
     DeliveryVersion,
     EvidencePublication,
     IssueOccurrence,
@@ -383,11 +384,18 @@ def list_scan_rounds(
 def list_shadow_scan_run_ids(db: Session, *, platform: str) -> list[int]:
     """6619768806：发现 RUNNING 与已观察分区的终态 run，不追溯历史。
 
+    DEDUP_FIRST 分区即使在首个周期轮之前进入终态（含 FAILED，ADR-0062 D15），
+    也必须进入最终轮；历史无记录或 CURRENT 分区仍要求 observed 才回溯。
     EXISTS 只作候选发现；推进前仍按 PlanRun → scan_round 加锁复核。
     """
     observed = select(ScanRound.id).where(
         ScanRound.plan_run_id == PlanRun.id,
         ScanRound.platform == platform,
+    ).exists()
+    dedup_first = select(PartitionMode.id).where(
+        PartitionMode.plan_run_id == PlanRun.id,
+        func.lower(PartitionMode.platform) == platform.lower(),
+        PartitionMode.mode == PARTITION_MODE_DEDUP_FIRST,
     ).exists()
     settled = select(PartitionMode.id).where(
         PartitionMode.plan_run_id == PlanRun.id,
@@ -397,7 +405,10 @@ def list_shadow_scan_run_ids(db: Session, *, platform: str) -> list[int]:
     return list(db.execute(
         select(PlanRun.id).where(~settled, or_(
             PlanRun.status == "RUNNING",
-            (PlanRun.status.in_(["SUCCESS", "PARTIAL_SUCCESS", "FAILED"]) & observed),
+            (
+                PlanRun.status.in_(["SUCCESS", "PARTIAL_SUCCESS", "FAILED"])
+                & or_(observed, dedup_first)
+            ),
         )).order_by(PlanRun.id),
     ).scalars())
 
@@ -982,6 +993,62 @@ def list_shadow_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]
     ).scalars())
 
 
+def list_dedup_first_delivery_due_run_ids(db: Session, *, platform: str) -> list[int]:
+    """终态轮次尚未反映到最新交付版本的 DEDUP_FIRST 分区（含零发布记录）。
+
+    与 `list_shadow_delivery_due_run_ids` 的差异只在分区模式：后者是 CURRENT
+    分区的补偿发现（旧的 merge/extract 交付），本函数覆盖 DEDUP_FIRST 的 D9
+    交付。无输入轮（NO_INPUT）或没有代表发布记录时也必须登记交付版本，否则
+    D15 的 FAILED 证据交付只能停在轮次上。
+    """
+    latest = select(
+        DeliveryVersion.plan_run_id.label("run_id"),
+        DeliveryVersion.basis_rounds.label("basis_rounds"),
+    ).where(
+        func.lower(DeliveryVersion.platform) == platform.lower(),
+    ).distinct(DeliveryVersion.plan_run_id).order_by(
+        DeliveryVersion.plan_run_id,
+        DeliveryVersion.version_no.desc(),
+    ).subquery()
+    final_round = aliased(ScanRound)
+    final_terminal = select(final_round.id).where(
+        final_round.plan_run_id == ScanRound.plan_run_id,
+        func.lower(final_round.platform) == platform.lower(),
+        final_round.kind == SCAN_ROUND_KIND_FINAL,
+        final_round.status == SCAN_ROUND_STATUS_CLOSED,
+        final_round.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
+    ).exists()
+    is_dedup_first = select(PartitionMode.id).where(
+        PartitionMode.plan_run_id == ScanRound.plan_run_id,
+        func.lower(PartitionMode.platform) == platform.lower(),
+        PartitionMode.mode == PARTITION_MODE_DEDUP_FIRST,
+    ).exists()
+    plan_run_exists = select(PlanRun.id).where(
+        PlanRun.id == ScanRound.plan_run_id,
+    ).exists()
+    basis = func.jsonb_build_array(func.jsonb_build_object(
+        "round_id", ScanRound.id,
+        "merge_generation", ScanRound.merge_generation,
+    ))
+    return list(db.execute(
+        select(ScanRound.plan_run_id).select_from(ScanRound).outerjoin(
+            latest, latest.c.run_id == ScanRound.plan_run_id,
+        ).where(
+            func.lower(ScanRound.platform) == platform.lower(),
+            ScanRound.kind.in_([SCAN_ROUND_KIND_FINAL, SCAN_ROUND_KIND_SUPPLEMENT]),
+            ScanRound.status == SCAN_ROUND_STATUS_CLOSED,
+            ScanRound.merge_status.in_(["OK", "NO_INPUT", "FAILED_FINAL"]),
+            final_terminal,
+            is_dedup_first,
+            plan_run_exists,
+            or_(
+                latest.c.run_id.is_(None),
+                ~latest.c.basis_rounds.contains(basis),
+            ),
+        ).distinct().order_by(ScanRound.plan_run_id)
+    ).scalars())
+
+
 # ---------------------------------------------------------------------------
 # B8 G6：S8 代表证据发布台账（ADR-0062 D8/D9）
 # ---------------------------------------------------------------------------
@@ -1315,3 +1382,233 @@ def update_evidence_publication_state(
         row.verified_at = stamp
     db.flush()
     return row
+
+# ---------------------------------------------------------------------------
+# B8 G8：受控兼容补跑（ADR-0062 D15）
+# ---------------------------------------------------------------------------
+
+COMPAT_RERUN_STATUS_PENDING = "PENDING"
+COMPAT_RERUN_STATUS_RUNNING = "RUNNING"
+COMPAT_RERUN_STATUS_COMPLETED = "COMPLETED"
+COMPAT_RERUN_STATUS_FAILED = "FAILED"
+_COMPAT_RERUN_STATUSES = frozenset({
+    COMPAT_RERUN_STATUS_PENDING,
+    COMPAT_RERUN_STATUS_RUNNING,
+    COMPAT_RERUN_STATUS_COMPLETED,
+    COMPAT_RERUN_STATUS_FAILED,
+})
+
+
+def get_delivery_version(
+    db: Session, *, plan_run_id: int, platform: str, version_no: int,
+) -> Optional[DeliveryVersion]:
+    """按 (actual PlanRun, 平台, 版本号) 精确读取交付版本。"""
+    return db.execute(
+        select(DeliveryVersion).where(
+            DeliveryVersion.plan_run_id == plan_run_id,
+            func.lower(DeliveryVersion.platform) == platform.lower(),
+            DeliveryVersion.version_no == version_no,
+        )
+    ).scalar_one_or_none()
+
+
+def list_delivery_versions(
+    db: Session, *, plan_run_id: int, platform: str,
+) -> list[DeliveryVersion]:
+    return list(db.execute(
+        select(DeliveryVersion).where(
+            DeliveryVersion.plan_run_id == plan_run_id,
+            func.lower(DeliveryVersion.platform) == platform.lower(),
+        ).order_by(DeliveryVersion.version_no)
+    ).scalars())
+
+
+def get_spill_ledger(db: Session, *, dle_id: Any) -> Optional[SpillLedger]:
+    """按 DLE 主键查询溢出台账记录。"""
+    return db.execute(
+        select(SpillLedger).where(SpillLedger.dle_id == dle_id)
+    ).scalar_one_or_none()
+
+
+def get_compat_rerun(db: Session, *, rerun_id: int) -> Optional[CompatRerun]:
+    return db.get(CompatRerun, rerun_id)
+
+
+def get_compat_rerun_by_request(
+    db: Session, *, plan_run_id: int, platform: str, request_key: str,
+) -> Optional[CompatRerun]:
+    return db.execute(
+        select(CompatRerun).where(
+            CompatRerun.plan_run_id == plan_run_id,
+            func.lower(CompatRerun.platform) == platform.lower(),
+            CompatRerun.request_key == request_key,
+        )
+    ).scalar_one_or_none()
+
+
+def get_compat_rerun_for_update(
+    db: Session, *, plan_run_id: int, platform: str, request_key: str,
+) -> Optional[CompatRerun]:
+    """行锁领取：并发同 key 重试在此串行化，锁内重读最新已提交状态（B1）。"""
+    return db.execute(
+        select(CompatRerun).where(
+            CompatRerun.plan_run_id == plan_run_id,
+            func.lower(CompatRerun.platform) == platform.lower(),
+            CompatRerun.request_key == request_key,
+        ).with_for_update().execution_options(populate_existing=True),
+    ).scalar_one_or_none()
+
+
+def guarded_compat_rerun_failure(
+    db: Session, *, rerun_id: int, attempts: Optional[int], error: str,
+) -> Optional[CompatRerun]:
+    """守卫式失败登记：绝不改写已完成的登记，也不把次数写回退（B1 迟到写回）。
+
+    行锁内重读最新已提交状态；COMPLETED 直接原样返回，attempts 低于现值的
+    迟到写回跳过。只推进 status/attempts/error，不触碰产物路径与完成时间。
+    """
+    row = db.execute(
+        select(CompatRerun).where(CompatRerun.id == rerun_id)
+        .with_for_update().execution_options(populate_existing=True),
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    if row.status == COMPAT_RERUN_STATUS_COMPLETED:
+        return row
+    if (
+        attempts is not None
+        and row.attempts is not None
+        and int(attempts) < int(row.attempts)
+    ):
+        return row
+    row.status = COMPAT_RERUN_STATUS_FAILED
+    if attempts is not None:
+        row.attempts = max(int(attempts), int(row.attempts or 0))
+    row.error = str(error)[:1024]
+    row.updated_at = _utcnow()
+    db.flush()
+    return row
+
+
+def list_compat_reruns(
+    db: Session, *, plan_run_id: int, platform: Optional[str] = None,
+) -> list[CompatRerun]:
+    stmt = select(CompatRerun).where(CompatRerun.plan_run_id == plan_run_id)
+    if platform is not None:
+        stmt = stmt.where(func.lower(CompatRerun.platform) == platform.lower())
+    return list(db.execute(stmt.order_by(CompatRerun.id.desc())).scalars())
+
+
+def record_compat_rerun(
+    db: Session,
+    *,
+    plan_run_id: int,
+    platform: str,
+    request_key: str,
+    requested_by: str,
+    source_delivery_version_id: Optional[int] = None,
+    source_delivery_version_no: Optional[int] = None,
+) -> CompatRerun:
+    existing = get_compat_rerun_by_request(
+        db, plan_run_id=plan_run_id, platform=platform, request_key=request_key,
+    )
+    if existing is not None:
+        return existing
+    row = CompatRerun(
+        plan_run_id=plan_run_id,
+        platform=platform.lower(),
+        request_key=request_key,
+        requested_by=requested_by,
+        status=COMPAT_RERUN_STATUS_PENDING,
+        attempts=0,
+        source_delivery_version_id=source_delivery_version_id,
+        source_delivery_version_no=source_delivery_version_no,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def update_compat_rerun(
+    db: Session,
+    *,
+    row: CompatRerun,
+    status: str,
+    attempts: Optional[int] = None,
+    coverage_scope: Optional[dict] = None,
+    source_records: Optional[list] = None,
+    missing_items: Optional[list] = None,
+    is_partial: Optional[bool] = None,
+    artifact_dir: Optional[str] = None,
+    merge_xls_path: Optional[str] = None,
+    manifest_path: Optional[str] = None,
+    error: Optional[str] = None,
+    completed_at: Optional[datetime] = None,
+    source_delivery_version_id: Optional[int] = None,
+    source_delivery_version_no: Optional[int] = None,
+) -> CompatRerun:
+    """推进登记行；交付版本绑定只在行内尚未绑定时补写，已绑定值不可改（B3）。"""
+    _require_one_of(status, _COMPAT_RERUN_STATUSES, "status")
+    row.status = status
+    if source_delivery_version_id is not None and row.source_delivery_version_id is None:
+        row.source_delivery_version_id = int(source_delivery_version_id)
+    if source_delivery_version_no is not None and row.source_delivery_version_no is None:
+        row.source_delivery_version_no = int(source_delivery_version_no)
+    if attempts is not None:
+        row.attempts = int(attempts)
+    if coverage_scope is not None:
+        row.coverage_scope = dict(coverage_scope)
+    if source_records is not None:
+        row.source_records = list(source_records)
+    if missing_items is not None:
+        row.missing_items = list(missing_items)
+    if is_partial is not None:
+        row.is_partial = bool(is_partial)
+    if artifact_dir is not None:
+        row.artifact_dir = artifact_dir
+    if merge_xls_path is not None:
+        row.merge_xls_path = merge_xls_path
+    if manifest_path is not None:
+        row.manifest_path = manifest_path
+    row.error = error
+    if completed_at is not None:
+        row.completed_at = completed_at
+    row.updated_at = _utcnow()
+    db.flush()
+    return row
+
+def list_partition_occurrences_for_scope(
+    db: Session,
+    *,
+    plan_run_id: int,
+    platform: str,
+    signature_ids: Optional[Sequence[int]] = None,
+    event_ids: Optional[Sequence[str]] = None,
+) -> list[tuple[IssueOccurrence, DeviceLogEvent]]:
+    """返回指定分区范围内（可选按 signature_ids 与 event_ids 收窄）的发生 ↔ DLE。
+
+    ``event_ids`` 是交付版本登记的事件集合；空列表表示该版本没有事件，必须
+    返回空集，不能解释为「不过滤」。
+    """
+    stmt = (
+        select(IssueOccurrence, DeviceLogEvent)
+        .join(IssueOccurrenceEvent, IssueOccurrenceEvent.occurrence_id == IssueOccurrence.id)
+        .join(DeviceLogEvent, DeviceLogEvent.id == IssueOccurrenceEvent.dle_id)
+        .where(
+            DeviceLogEvent.plan_run_id == plan_run_id,
+            func.lower(DeviceLogEvent.platform) == platform.lower(),
+        )
+    )
+    if signature_ids is not None:
+        ids = [int(value) for value in signature_ids]
+        if not ids:
+            return []
+        stmt = stmt.where(IssueOccurrence.signature_id.in_(ids))
+    if event_ids is not None:
+        ids = [str(value) for value in event_ids if value]
+        if not ids:
+            return []
+        stmt = stmt.where(cast(DeviceLogEvent.id, String).in_(ids))
+    return list(db.execute(
+        stmt.order_by(IssueOccurrence.id, DeviceLogEvent.id)
+    ).all())

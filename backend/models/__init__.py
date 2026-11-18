@@ -6,6 +6,7 @@ from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.host import Device, Host
 from backend.models.issue_fact import (
+    CompatRerun,
     DeliveryVersion,
     EvidencePublication,
     IssueOccurrence,
@@ -55,6 +56,7 @@ __all__ = [
     "DeviceLease",
     "DeviceReturnDebt",
     "DeviceLogEvent",
+    "CompatRerun",
     "DeliveryVersion",
     "EvidencePublication",
     "EventState",
