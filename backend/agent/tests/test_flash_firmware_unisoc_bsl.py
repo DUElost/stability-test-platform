@@ -223,14 +223,22 @@ def _make_executable(path: Path, body: str) -> Path:
     return path
 
 
-def _make_fake_sysfs(tmp_path: Path, devices: Optional[List[tuple[str, str, str]]] = None) -> Path:
+def _make_fake_sysfs(
+    tmp_path: Path,
+    devices: Optional[List[tuple]] = None,
+) -> Path:
     base = tmp_path / "sys_usb"
     base.mkdir(parents=True, exist_ok=True)
-    for port, vid, pid in (devices or []):
+    entries = [("1-5.2.3", "18d1", "4ee8", "SN1")] if devices is None else devices
+    for item in entries:
+        port, vid, pid = item[0], item[1], item[2]
+        serial = item[3] if len(item) > 3 else None
         d = base / port
         d.mkdir(parents=True, exist_ok=True)
         (d / "idVendor").write_text(vid + "\n", encoding="utf-8")
         (d / "idProduct").write_text(pid + "\n", encoding="utf-8")
+        if serial is not None:
+            (d / "serial").write_text(serial + "\n", encoding="utf-8")
     return base
 
 
@@ -945,7 +953,10 @@ def test_u2_14_rejects_when_spd_dump_exits_0_but_device_did_not_reboot(
 ) -> None:
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
 
@@ -1000,7 +1011,10 @@ def test_u2_15_rejects_when_post_flash_version_mismatch_manifest_version(
     ver_dir = _create_firmware_dir(
         tmp_path / "fw", family="P525AA", version="v36", manifest_version="TARGET_V36", models=["MLY-LX2"]
     )
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
 
@@ -1253,7 +1267,10 @@ def test_u2_j9_version_readback_cannot_be_disabled(tmp_path: Path, monkeypatch: 
     ver_dir = _create_firmware_dir(
         tmp_path / "fw", family="P525AA", version="v36", manifest_version="TARGET_V36", models=["MLY-LX2"]
     )
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
     clock = _patch_advancing_clock(monkeypatch, mod)
@@ -1285,7 +1302,10 @@ def test_u2_j11_main_emits_route_on_rejection_and_success(
     ver_dir = _create_firmware_dir(
         tmp_path / "fw", family="P525AA", version="v36", manifest_version="TARGET_V36", models=["MLY-LX2"]
     )
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
 
@@ -1688,7 +1708,10 @@ def test_u2_31a_rejects_when_boot_id_unreadable_and_uptime_window_straddles_rebo
     not — uptime provides no evidence and no positive evidence exists -> failure."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
     clock = _patch_advancing_clock(monkeypatch, mod)
@@ -1721,7 +1744,10 @@ def test_u2_31b_passes_when_boot_id_unreadable_and_uptime_window_starts_after_re
     heuristic would fail — the window rule passes. Green on 1.0.2 (regression)."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
     clock = _patch_advancing_clock(monkeypatch, mod)
@@ -1752,7 +1778,10 @@ def test_u2_31c_rejects_when_boot_id_and_uptime_all_reads_fail(
     """#4006 §4 #31 (c) v1.2: boot_id and uptime reads all fail -> no evidence -> failure."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
     clock = _patch_advancing_clock(monkeypatch, mod)
@@ -1781,7 +1810,10 @@ def test_u2_31d_passes_when_boot_id_changes_and_uptime_read_fails(
     read fails -> pass. Green on 1.0.2 (regression)."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
     clock = _patch_advancing_clock(monkeypatch, mod)
@@ -1812,7 +1844,10 @@ def test_u2_31e_rejects_when_boot_id_same_even_if_uptime_window_starts_after_reb
     positive evidence — a veto must win over positive evidence -> failure."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
     clock = _patch_advancing_clock(monkeypatch, mod)
@@ -1844,7 +1879,10 @@ def test_u2_31f_rejects_when_boot_id_changes_but_uptime_window_not_after_reboot(
     the uptime veto must win over the boot_id positive evidence -> failure."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
     clock = _patch_advancing_clock(monkeypatch, mod)
@@ -1877,7 +1915,10 @@ def test_u2_31g_rejects_when_only_post_boot_id_readable_and_uptime_read_fails(
     uptime read fails — one-sided boot_id is not evidence -> failure."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    dummy_spd = _make_executable(tmp_path / "ok_spd.py", "import sys, time; time.sleep(1.7); sys.exit(0)")
+    dummy_spd = _make_executable(
+        tmp_path / "ok_spd.py",
+        "import sys, time; print('Opened 1782:4d00 on usb-port 1-5.2.3', file=sys.stderr, flush=True); time.sleep(1.7); sys.exit(0)",
+    )
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
     clock = _patch_advancing_clock(monkeypatch, mod)
@@ -2387,3 +2428,216 @@ def test_u4_7_rejects_all_legacy_sources_via_main_when_tool_dir_unavailable(
         "version": "v36",
         "manifest": str(ver_dir / "manifest.json"),
     }
+
+
+# ── 1.0.5: spd_dump --usb-port 口级绑定与回显校验（#3995 §5 第 3 项）──
+
+
+def test_v105_build_spd_dump_args_places_usb_port_and_rejects_invalid(tmp_path: Path) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    fw_dir = str(ver_dir / "images")
+    cmd = mod.build_spd_dump_args(
+        "/tmp/spd_dump",
+        fw_dir,
+        str(tmp_path / "super.img"),
+        usb_port="1-5.2.3",
+    )
+    assert cmd[:3] == ["/tmp/spd_dump", "--usb-port", "1-5.2.3"]
+
+    for bad in ("", "1", "01-5.1", "1-5.0", "../1-5.1", "1-5.2.3:1.0"):
+        with pytest.raises(ValueError, match="invalid usb_port"):
+            mod.build_spd_dump_args(
+                "/tmp/spd_dump",
+                fw_dir,
+                str(tmp_path / "super.img"),
+                usb_port=bad,
+            )
+
+
+def test_v105_resolve_device_usb_port_cases(tmp_path: Path) -> None:
+    mod = _load_module()
+    route = {"family": "P525AA"}
+
+    sysfs_ok = _make_fake_sysfs(tmp_path / "ok", [("1-5.2.3", "18d1", "4ee8", "SN1"), ("1-5.2.3:1.0", "", "")])
+    assert mod.resolve_device_usb_port("SN1", base=str(sysfs_ok), route=route) == "1-5.2.3"
+
+    sysfs_empty = _make_fake_sysfs(tmp_path / "empty", [])
+    with pytest.raises(mod.FlashRejectedError, match="cannot resolve target USB port") as exc_missing:
+        mod.resolve_device_usb_port("SN1", base=str(sysfs_empty), route=route)
+    assert exc_missing.value.route == route
+    assert mod.resolve_device_usb_port("SN1", require_port_binding=False, base=str(sysfs_empty), route=route) is None
+
+    sysfs_dup = _make_fake_sysfs(
+        tmp_path / "dup",
+        [("1-5.1.1", "18d1", "4ee8", "SN1"), ("1-5.2.3", "18d1", "4ee8", "SN1")],
+    )
+    with pytest.raises(mod.FlashRejectedError, match="ambiguous"):
+        mod.resolve_device_usb_port("SN1", base=str(sysfs_dup), route=route)
+
+    sysfs_bad_name = _make_fake_sysfs(tmp_path / "bad", [("01-5.2", "18d1", "4ee8", "SN1")])
+    with pytest.raises(mod.FlashRejectedError, match="invalid sysfs USB port"):
+        mod.resolve_device_usb_port("SN1", base=str(sysfs_bad_name), route=route)
+
+
+def test_v105_run_rejects_missing_sysfs_port_before_lock_and_reboot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_empty = _make_fake_sysfs(tmp_path, [])
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        adb_calls=adb_calls,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_empty))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump"))
+
+    lock_called = {"n": 0}
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda *_a, **_kw: lock_called.__setitem__("n", lock_called["n"] + 1),
+    )
+
+    with pytest.raises(mod.FlashRejectedError, match="cannot resolve target USB port") as exc_info:
+        mod.run({"firmware_dir": str(ver_dir), "dry_run": False}, "SN1", mod.Progress(), [])
+    assert exc_info.value.route and exc_info.value.route["version"] == "v36"
+    assert lock_called["n"] == 0
+    assert ["reboot", "autodloader"] not in adb_calls
+
+
+def test_v105_run_rejects_when_usb_port_changes_while_waiting_for_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [("1-5.2.3", "18d1", "4ee8", "SN1")])
+    lock_file = tmp_path / "host.lock"
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        adb_calls=adb_calls,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump"))
+
+    def fake_acquire(progress, timeout_seconds=7200):
+        # Simulate device re-plugging onto a different physical port during lock wait.
+        old_dir = sysfs_base / "1-5.2.3"
+        for child in old_dir.iterdir():
+            child.unlink()
+        old_dir.rmdir()
+        new_dir = sysfs_base / "1-5.2.4"
+        new_dir.mkdir()
+        (new_dir / "idVendor").write_text("18d1\n", encoding="utf-8")
+        (new_dir / "idProduct").write_text("4ee8\n", encoding="utf-8")
+        (new_dir / "serial").write_text("SN1\n", encoding="utf-8")
+        return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+
+    monkeypatch.setattr(mod, "acquire_host_lock", fake_acquire)
+
+    with pytest.raises(mod.FlashRejectedError, match="changed while waiting for host lock"):
+        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache")}, "SN1", mod.Progress(), [])
+    assert ["reboot", "autodloader"] not in adb_calls
+
+
+@pytest.mark.parametrize(
+    ("echo_line", "expect_msg"),
+    [
+        ("", "without USB port binding echo"),
+        ("Opened 1782:4d00 on usb-port 1-5.2.4", "unexpected USB port"),
+    ],
+)
+def test_v105_run_spd_dump_rejects_missing_or_wrong_port_echo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    echo_line: str,
+    expect_msg: str,
+) -> None:
+    mod = _load_module()
+    dummy_spd = _make_executable(
+        tmp_path / "spd_echo.py",
+        f"""
+        import sys, time
+        if {echo_line!r}:
+            print({echo_line!r}, file=sys.stderr, flush=True)
+        time.sleep(1.7)
+        sys.exit(0)
+        """,
+    )
+    _install_fake_adb(monkeypatch, mod)
+    with pytest.raises(RuntimeError, match=expect_msg):
+        mod.run_spd_dump(
+            [sys.executable, str(dummy_spd)],
+            "adb",
+            "SN1",
+            mod.Progress(),
+            [],
+            timeout_seconds=10,
+            expected_usb_port="1-5.2.3",
+        )
+
+
+def test_v105_run_passes_usb_port_and_supports_opt_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [])
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    seen_cmds: List[List[str]] = []
+
+    def fake_run_spd_dump(cmd, *_a, **kwargs):
+        seen_cmds.append(list(cmd))
+        assert kwargs.get("expected_usb_port") is None
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+
+    res = mod.run(
+        {
+            "firmware_dir": str(ver_dir),
+            "cache_dir": str(tmp_path / "cache"),
+            "verify_root": False,
+            "require_port_binding": False,
+        },
+        "SN1",
+        mod.Progress(),
+        [],
+    )
+    assert res["metrics"]["require_port_binding"] is False
+    assert res["metrics"]["usb_port"] is None
+    assert "--usb-port" not in seen_cmds[0]
