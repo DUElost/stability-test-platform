@@ -6,6 +6,7 @@ Class: feature
 日期：2026-11-16　基线：origin/main@73144bf9　批次：#3800
 R2 返修：2026-11-17（判据见 #4031「第 2 轮复核后的返修判据」）
 R3 返修：2026-11-18（判据见 #4034 评论 6948566219 / #4031 返修判据 2、3）
+R4 返修：2026-11-18（判据见 #4034 评论 6968546746 / #4031 返修判据 3）
 
 ## Decision
 
@@ -149,6 +150,26 @@ R3 结论「需修改」两项（[评论 6948566219]），按 #4031 返修判据
    时在任何复制与重放之前 409；同 key 同版本与省略版本的合法重放不受影响；
    拒绝路径走守卫式写回，COMPLETED 行原样（状态、次数、版本、产物、
    `completed_at`）。
+
+### 第 4 轮定向独立复核返修（R4，复核 HEAD `fd22dc931`）
+
+R4 唯一阻塞为 B2 缺源行自身原生缺失阻断其他行（[评论 6968546746]，判据 3）：
+R3 把「字段缺口」从 `is_partial` 解耦后，缺源行没有可复制副本（不在
+`copied_by_dle`）但回落 `row_dle` 到代表发生时，只要该行自身 org 或映射缺失，
+也被无条件写入 `field_gaps` 并打成 FAILED，阻断了其他已复制且字段齐全的行交付。
+
+返修（按实际写入 XLS 的发生绑定判断字段完整性）：
+
+- 仅当 `row_dle in copied_by_dle`（实际已复制并绑定到 XLS `Path` 的发生）且
+  `native_row is None` 时才登记 `field_gaps` 并阻断完成（`FAILED`、`completed_at`
+  为空）；
+- 缺源行（不在 `copied_by_dle`）继续列入 `missing_items` 并通过 `is_partial`
+  表达源覆盖，其自身 org 缺失、映射缺失或两者都缺均不进入阻塞集合，其他已复制
+  且字段齐全的行仍正常交付（`COMPLETED + partial`）；
+- 保留 R3 独立判定：A 已复制但原生字段缺失 + B 缺源，以及全源齐备但 A 缺字段，
+  仍登记 `FAILED`，不被 `is_partial` 掩盖；
+- `row_occurrence` 同步在 `row_dle` 回落代表后取值，保证 `binding.rows` 的
+  `dle_id` 与 `occurrence_id` 一致。
 
 ### 与已退回 #4026 的关系
 
@@ -327,6 +348,33 @@ env -u DATABASE_URL -u TEST_DATABASE_URL \
   回归）。
 - `check:quick` 结果见下节实跑记录；六项 required CI 以 PR #4034 推送后
   的 GitHub checks 为准。
+
+### R4 同探针基线 RED / 返修 HEAD GREEN 与回归
+
+固定反例基线 `fd22dc9318cbf000cbc7222b28747b101b8a15fd`（第 4 轮复核 HEAD）与
+R4 返修 HEAD 使用同一探针文件
+`backend/tests/services/test_b8_g8_compat_rerun_route_probes.py`（两端 SHA-256
+`08516dc1bc7fbc4e440d6f48b0372502f38a8293ddd167a84a3564efa80cdd3d` 逐字节相同）；
+真实 HTTP 路由、每请求独立 PG16 会话、独立 PG16 观测会话与临时文件系统。
+
+```bash
+# 固定基线 fd22dc931（仅放同一探针文件）与 R4 返修 HEAD 同命令
+env -u DATABASE_URL -u TEST_DATABASE_URL XDG_RUNTIME_DIR=/run/user/$(id -u) \
+  ./scripts/project_python.sh scripts/run_pytest.py \
+  backend/tests/services/test_b8_g8_compat_rerun_route_probes.py -v --tb=line
+```
+
+- 固定基线 `fd22dc931`：**3 failed, 4 passed**——`missing_org`、`missing_mapping`、
+  `missing_both` 三种缺源变体均在 line 475 失败：`AssertionError: assert 'FAILED' == 'COMPLETED'`；
+- R4 返修 HEAD：**7 passed**——三种缺源变体均登记 `COMPLETED + partial`（`error=None`、
+  `completed_at` 非空、`field_gaps=[]`、`missing_items=[B]`，XLS 中 A 15 列原生字段与
+  副本字节完整、B `Path` 为空，台账与 manifest 逐项一致）；B2 组合缺口与全源字段缺口
+  仍 `FAILED`；替补发生同行一致性与 B3 并发交错 409 / 零复制 / 合法重放继续通过。
+- 定向回归 12 文件：**223 passed**（含新增服务级替补缺 org 失败校验 1 项、路由级
+  三种缺源变体 3 项与替补同行一致性 1 项）。
+- `STP_GATE_BASE_REF=d954b44c64ab36b13c58d845c1bf8be51348f445 scripts/run_gates.py check:quick`
+  → **16 gates 通过**（`schema-at-head` 因未配置 `DATABASE_URL` 跳过）。
+- 六项 required CI 以本 HEAD 的 GitHub checks 为准。
 
 ## Revisit
 

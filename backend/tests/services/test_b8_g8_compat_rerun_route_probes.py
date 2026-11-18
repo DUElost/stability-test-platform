@@ -1,12 +1,16 @@
-"""B8 G8 第 3 轮复核返修的路由级探针（#4034 评论 6948566219；#4031 返修判据 2/3）。
+"""B8 G8 第 3/4 轮复核返修的路由级探针（#4034 评论 6948566219 / 6968546746；#4031 返修判据 2/3）。
 
-同一组探针在反例基线 ``03adb0bc2`` 上 RED、在返修 HEAD 上 GREEN（探针源码
-两端逐字节相同）：
+同一组探针在固定反例基线（``03adb0bc2`` / ``fd22dc931``）与返修 HEAD 上逐字节相同：
 
 - B2 组合缺口（判据 3）：A 已复制但原生 org 缺失（Detail/ExpTime 等无法
   复原）、B 缺源 → 台账与 manifest 必须登记 FAILED，缺源清单仍列 B；仅缺源
   且已复制行字段齐全 → 保留部分成果（COMPLETED + partial）；只改变 B 的证据
   可用性后，同一字段缺口在全源时仍 FAILED。
+- B2 缺源行自身原生缺失（R4，判据 3）：A 已复制且字段齐全，B 缺源且分别缺
+  org、缺映射、两者都缺 → 三种变体均登记 COMPLETED + partial，A 的 XLS 原生
+  字段与副本字节完整，B 在缺源清单中、不被误判为致命字段缺口。
+- B2 替补发生同行一致性：代表缺源（且缺 org）时由同问题已复制替补接管，
+  Path/ExpTime/Detail 等来自同一替补发生，XLS/台账/manifest 一致。
 - B3 并发交错（判据 2）：A 以 v1 复制未提交、B 以 v2 预读无登记；A 提交后
   B 锁内读到 COMPLETED/v1 → 必须先校验显式版本再决定重放，返回 409、实际
   复制为零、v1 登记原样；同 key 同版本与省略版本的合法重放继续通过。
@@ -29,10 +33,15 @@ from backend.main import fastapi_app as app
 from backend.models.device_log_event import DeviceLogEvent
 from backend.services import issue_fact_store as facts
 from backend.tests.services.test_b8_g8_compat_rerun import (
+    COLLECTION_FOLDER,
+    HOST,
+    MERGE_HEADERS_15,
     PLATFORM,
     _dle,
     _event_dir,
     _event_name,
+    _extra_occurrence,
+    _read_raw_headers,
     _read_report,
     _run,
     _seed_native_round,
@@ -401,3 +410,193 @@ def test_r3_b3_cross_version_in_lock_rejected_with_zero_copy(
         assert row.completed_at == stale_completed_at
         assert row.manifest_path == stale_manifest_path
         assert row.merge_xls_path == stale_xls_path
+
+
+@pytest.mark.parametrize("b_native_gap", ["missing_org", "missing_mapping", "missing_both"])
+def test_r4_b2_missing_source_row_native_gap_allows_copied_delivery(
+    route_env, compat_env, admin_headers, b_native_gap,
+):
+    """R4 B2（判据 3）：A 已复制且字段齐全，B 缺源且自身 org/映射缺失。
+
+    分别覆盖 B 缺 org、缺映射、两者都缺；三种情况均应登记 COMPLETED + partial，
+    A 的 XLS 字段与副本完整，B 列入 missing_items 且不阻断交付。
+    """
+    client = route_env
+    factory, root = compat_env
+    serial_a = f"SN-R4A-{b_native_gap}"
+    serial_b = f"SN-R4B-{b_native_gap}"
+    with factory() as db:
+        run = _run(db)
+        name_a = _event_name()
+        src_a = _event_dir(root, "devices", str(run.id), name_a)
+        dle_a, sig_a, _occ_a = _dle(
+            db, run, serial=serial_a, event=name_a, state="ARCHIVED",
+            remote_path=str(src_a),
+        )
+        dle_b, sig_b, _occ_b = _dle(
+            db, run, serial=serial_b, event=_event_name(), state="PRUNED",
+        )
+        round_one = _seed_native_round(db, root, run, [dle_a], round_no=1)
+        round_two = _seed_native_round(db, root, run, [dle_b], round_no=2)
+        org_b = (
+            root / "dedup" / str(run.id) / "_rounds" / "2" / PLATFORM
+            / "host_Result_2_org.xls"
+        )
+        mapping_b = Path(str(org_b) + ".mapping.json")
+        if b_native_gap in {"missing_org", "missing_both"}:
+            org_b.unlink()
+        if b_native_gap in {"missing_mapping", "missing_both"}:
+            mapping_b.unlink()
+        facts.record_delivery_version(
+            db, plan_run_id=run.id, platform=PLATFORM, version_no=1,
+            software_versions=["V1"], round_ids=[round_one, round_two],
+            basis_rounds=[
+                {"round_id": round_one, "merge_generation": 1},
+                {"round_id": round_two, "merge_generation": 1},
+            ],
+            effective_coverage=[], issue_ids=[sig_a.id, sig_b.id],
+            event_ids=[str(dle_a.id), str(dle_b.id)],
+            stats_snapshot_version="a" * 64,
+        )
+        db.commit()
+        run_id, copied_id, missing_id = run.id, dle_a.id, dle_b.id
+
+    request_key = f"r4-b2-{b_native_gap}"
+    resp = client.post(
+        ROUTE.format(run_id=run_id),
+        params={
+            "platform": PLATFORM, "request_key": request_key,
+            "delivery_version_no": 1,
+        },
+        headers=admin_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    rerun = resp.json()["data"]["rerun"]
+    assert rerun["status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
+    assert rerun["error"] is None
+    assert rerun["completed_at"] is not None
+    assert rerun["is_partial"] is True
+    assert [item["dle_id"] for item in rerun["missing_items"]] == [str(missing_id)]
+    assert rerun["coverage_scope"]["total_events"] == 2
+    assert rerun["coverage_scope"]["covered_events"] == 1
+    assert rerun["coverage_scope"]["missing_events"] == 1
+    assert rerun["coverage_scope"]["covered_dle_ids"] == [str(copied_id)]
+    assert rerun["coverage_scope"]["missing_dle_ids"] == [str(missing_id)]
+    assert rerun["coverage_scope"]["field_gaps"] == []
+
+    # 独立 PG16 观测会话核对台账与 manifest 一致。
+    with factory() as db:
+        row = facts.get_compat_rerun_by_request(
+            db, plan_run_id=run_id, platform=PLATFORM, request_key=request_key,
+        )
+        assert row.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+        assert row.error is None
+        assert row.completed_at is not None
+        assert row.is_partial is True
+        assert [item["dle_id"] for item in row.missing_items] == [str(missing_id)]
+        assert row.coverage_scope == rerun["coverage_scope"]
+
+    manifest = json.loads(Path(rerun["manifest_path"]).read_text("utf-8"))
+    assert manifest["registered_status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
+    assert manifest["is_partial"] is True
+    assert manifest["field_gaps"] == []
+    assert [item["dle_id"] for item in manifest["missing_items"]] == [str(missing_id)]
+    assert manifest["coverage_scope"] == rerun["coverage_scope"]
+
+    assert _read_raw_headers(rerun["merge_xls_path"]) == MERGE_HEADERS_15
+    rows = _read_report(rerun["merge_xls_path"])
+    assert len(rows) == 2
+    by_caused = {row["CausedBy"]: row for row in rows}
+    row_a = by_caused[f"org-caused-{serial_a}"]
+    row_b = by_caused[f"caused-{serial_b}"]
+    assert "/compat_reruns/" in row_a["Path"]
+    assert (
+        Path(row_a["Path"], "main.dbg").read_bytes()
+        == (src_a / "main.dbg").read_bytes()
+    )
+    assert row_a["ExpTime"] == "Sun Nov 16 10:40:46 CST 2026"
+    assert row_a["ExpClass"] == "Java (JE)"
+    assert row_a["ExpType"] == f"exp_type_{serial_a}"
+    assert row_a["CurProcess"] == f"proc.{serial_a}"
+    assert row_a["Package"] == f"orgpkg.{serial_a}"
+    assert row_a["Detail"].startswith(f"Device_id: {serial_a}")
+    assert row_a["extraTag"] == ""
+    assert row_a["Activity"] == "None"
+    assert row_a["Rom_Ram"] == "128GB+6GB"
+    assert row_a["Version"] == f"ORGV-{serial_a}"
+    assert row_a["Count"] == 1
+    assert row_a["DeviceCount"] == 1
+    assert row_b["Path"] == ""
+    assert row_b["ExpTime"] == ""
+    assert row_b["Detail"] == ""
+    assert row_b["Count"] == 1
+    assert row_b["DeviceCount"] == 1
+
+
+def test_r4_b2_substitute_row_consistency_via_route(
+    route_env, compat_env, admin_headers,
+):
+    """R4 B2 路由回归：代表缺源（且缺 org）时由替补发生接管，同行字段一致。"""
+    client = route_env
+    factory, root = compat_env
+    with factory() as db:
+        run = _run(db)
+        rep, sig, _occ = _dle(
+            db, run, serial="SN-R4REP2", event=_event_name(), state="PRUNED",
+        )
+        sub_name = _event_name()
+        sub_src = _event_dir(root, "devices", str(run.id), sub_name)
+        sub = DeviceLogEvent(
+            serial="SN-R4SUB2", platform="MTK", event_type="JE", state="ARCHIVED",
+            local_path=f"/data/aee/{COLLECTION_FOLDER}/SN-R4SUB2/aee_exp/{sub_name}",
+            remote_path=str(sub_src),
+            host_id=HOST, plan_run_id=run.id,
+            occurrence_key="r4-sub-occ-2", detected_at=rep.detected_at,
+        )
+        db.add(sub)
+        db.flush()
+        _extra_occurrence(db, run, sig, sub, occurrence_key="r4-sub-occ-2")
+        # 轮次只记录替补的原生行，代表无原生记录且缺源。
+        round_sub = _seed_native_round(db, root, run, [sub], round_no=1)
+        _version(
+            db, run, no=1, issue_ids=[sig.id], event_ids=[rep.id, sub.id],
+            round_id=round_sub,
+        )
+        db.commit()
+        run_id, rep_id, sub_id = run.id, rep.id, sub.id
+
+    resp = client.post(
+        ROUTE.format(run_id=run_id),
+        params={
+            "platform": PLATFORM, "request_key": "r4-sub",
+            "delivery_version_no": 1,
+        },
+        headers=admin_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    rerun = resp.json()["data"]["rerun"]
+    assert rerun["status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
+    assert rerun["is_partial"] is True
+    assert [item["dle_id"] for item in rerun["missing_items"]] == [str(rep_id)]
+    assert rerun["coverage_scope"]["field_gaps"] == []
+
+    with factory() as db:
+        row = facts.get_compat_rerun_by_request(
+            db, plan_run_id=run_id, platform=PLATFORM, request_key="r4-sub",
+        )
+        assert row.status == facts.COMPAT_RERUN_STATUS_COMPLETED
+        assert row.completed_at is not None
+
+    manifest = json.loads(Path(rerun["manifest_path"]).read_text("utf-8"))
+    assert manifest["registered_status"] == facts.COMPAT_RERUN_STATUS_COMPLETED
+    assert manifest["binding"]["rows"][0]["dle_id"] == str(sub_id)
+    assert manifest["binding"]["rows"][0]["is_substitute"] is True
+
+    rows = _read_report(rerun["merge_xls_path"])
+    assert len(rows) == 1
+    assert rows[0]["Path"].endswith(f"aee_exp/{sub_name}")
+    assert rows[0]["ExpTime"] == "Sun Nov 16 10:40:46 CST 2026"
+    assert rows[0]["Detail"].startswith("Device_id: SN-R4SUB2")
+    assert rows[0]["CausedBy"] == "org-caused-SN-R4SUB2"
+    assert rows[0]["Count"] == 2
+    assert rows[0]["DeviceCount"] == 2

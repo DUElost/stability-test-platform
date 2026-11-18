@@ -10,10 +10,11 @@
 4. 同 key 绑定第一次接受的交付版本：重试省略版本沿用绑定版本，显式另一版本
    在复制前 409；实际复制、计数、台账与 manifest 使用同一版本；
 5. 现行 15 列报表的列值取自已登记轮次的工具原生 org 报表（经伴随映射绑定到
-   本版本的发生），原生为空的字段保留为空；原生值无法复原时登记可定位到
-   发生与字段的缺口，存在缺口即禁止登记为完成（FAILED），不因其他发生的
-   缺源而放宽；D15 允许的源缺失仍按部分成果登记（is_partial 只反映源覆盖）
-   并列出缺源范围。
+   本版本的发生），原生为空的字段保留为空；原生值无法复原时，按实际写入
+   XLS 的发生绑定判断字段完整性——只有已复制发生的原生字段缺口才登记为
+   阻塞缺口并禁止登记为完成（FAILED），不因其他发生的缺源而放宽；D15 允许的
+   源缺失（含缺源行自身 org 或映射缺失）仍按部分成果登记（is_partial 只反映
+   源覆盖）并列出缺源范围。
 
 源选择顺序（同为已校验/仍可用的材料）：中心证据区已校验代表 → DLE
 ``remote_path`` 指向的中心事件目录 → 中心溢出副本 → I4 保护期内的 Agent 本地
@@ -695,7 +696,6 @@ def _execute_compat_rerun(
                 if sig_id in signature_ids and dle_id_str in copied_by_dle:
                     row_dle = dle_id_str
                     break
-        row_occurrence = occ_by_dle.get(row_dle) if row_dle else None
         native = native_index.get(row_dle) if row_dle else None
         native_row = (
             _read_org_row(native["org"], native["xls_row"], org_row_cache)
@@ -710,7 +710,11 @@ def _execute_compat_rerun(
             )
         if row_dle is None:
             row_dle = representative_dle or None
-        if row_dle and native_row is None:
+        row_occurrence = occ_by_dle.get(row_dle) if row_dle else None
+        # 只对「实际写入 XLS 的已复制发生」判定原生字段缺口：缺源行没有可交付
+        # 副本，其缺失已由 missing_items / is_partial 表达，自身 org 或映射
+        # 缺失不得阻断其他已复制且字段齐全的行交付。
+        if row_dle and row_dle in copied_by_dle and native_row is None:
             field_gaps.append({
                 "signature_id": sig_id,
                 "dle_id": row_dle,

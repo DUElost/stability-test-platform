@@ -1630,3 +1630,57 @@ def test_scope_requires_admin_and_dedup_first(compat_env):
                 requested_by="owner", requester_role="admin",
             )
         assert not_dedup.value.status_code == 409
+
+
+def test_copied_substitute_missing_native_org_fails_even_when_rep_readable(
+    compat_env,
+):
+    """B2 绑定一致性：代表缺源且 org 可读、替补已复制但缺 org → 仍登记 FAILED。"""
+    _CompatRerunError, trigger_compat_rerun = _api()
+    factory, root = compat_env
+    with factory() as db:
+        run = _run(db)
+        rep, sig, _occ = _dle(
+            db, run, serial="SN-REP-OK", event=_event_name(), state="PRUNED",
+        )
+        sub_name = _event_name()
+        sub = DeviceLogEvent(
+            serial="SN-SUB-GAP", platform="MTK", event_type="JE", state="ARCHIVED",
+            local_path=f"/data/aee/{COLLECTION_FOLDER}/SN-SUB-GAP/aee_exp/{sub_name}",
+            remote_path=str(_event_dir(root, "devices", str(run.id), sub_name)),
+            host_id=HOST, plan_run_id=run.id,
+            occurrence_key="sub-gap-occ", detected_at=rep.detected_at,
+        )
+        db.add(sub)
+        db.flush()
+        _extra_occurrence(db, run, sig, sub, occurrence_key="sub-gap-occ")
+        round_rep = _seed_native_round(db, root, run, [rep], round_no=1)
+        round_sub = _seed_native_round(
+            db, root, run, [sub], round_no=2, drop_org=True,
+        )
+        facts.record_delivery_version(
+            db, plan_run_id=run.id, platform=PLATFORM, version_no=1,
+            software_versions=["V1"], round_ids=[round_rep, round_sub],
+            basis_rounds=[
+                {"round_id": round_rep, "merge_generation": 1},
+                {"round_id": round_sub, "merge_generation": 1},
+            ],
+            effective_coverage=[], issue_ids=[sig.id],
+            event_ids=[str(rep.id), str(sub.id)],
+            stats_snapshot_version="a" * 64,
+        )
+        db.commit()
+        run_id, sub_id = run.id, sub.id
+
+    with factory() as db:
+        outcome = trigger_compat_rerun(
+            db, plan_run_id=run_id, platform=PLATFORM,
+            requested_by="owner", requester_role="admin", delivery_version_no=1,
+        )
+        db.commit()
+        assert outcome.rerun.status == facts.COMPAT_RERUN_STATUS_FAILED
+        assert outcome.rerun.completed_at is None
+        assert outcome.rerun.is_partial is True
+        gaps = outcome.rerun.coverage_scope["field_gaps"]
+        assert [gap["dle_id"] for gap in gaps] == [str(sub_id)]
+        assert gaps[0]["reason"] == "org_row_unreadable"
