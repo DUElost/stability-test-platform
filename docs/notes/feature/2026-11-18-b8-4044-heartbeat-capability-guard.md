@@ -1,7 +1,9 @@
 # B8 阶段二 Agent 心跳能力守卫（#4044）
 
-Status: implemented（Draft，待独立复核）
+Status: implemented
 Class: feature
+
+交付形态：Draft PR（待独立复核，ready 由 Owner 裁定）
 
 日期：2026-11-18　基线：origin/main@e7325af0372a9b202a283b0893c040e4415b877c　批次：#3800 §0.1 / §2.1
 判据来源：#4044 正文、#3800 §2.1（Owner 裁定 6975368043）、#3875 遗留的 digest 过渡判据（v1.23 / 6704562784）
