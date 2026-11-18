@@ -30,6 +30,7 @@ from backend.core.database import AsyncSessionLocal
 from backend.core.metrics import record_agent_rpc, record_socketio_connection
 from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
 from backend.agent.contracts.capabilities import SCAN_ROUND_V1
+from backend.agent.contracts.capabilities import normalize_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -220,8 +221,10 @@ class AgentNamespace(socketio.AsyncNamespace):
             session["host_id"] = host_id
 
         capabilities = auth.get("capabilities")
+        # 形状要求与基线一致（字符串数组，否则视为无能力）；归一化与心跳共用同一函数，
+        # 否则「心跳写成 A、握手留着 ' A '」会让证据与连接永远对不上。
         declared = (
-            frozenset(capabilities)
+            frozenset(normalize_capabilities(capabilities))
             if isinstance(capabilities, list) and all(isinstance(cap, str) for cap in capabilities)
             else frozenset()
         )

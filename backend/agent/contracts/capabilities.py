@@ -16,7 +16,14 @@ AGENT_CAPABILITIES: tuple[str, ...] = (SCAN_ROUND_V1,)
 
 
 def normalize_capabilities(raw: object) -> tuple[str, ...]:
-    """Return a stable, duplicate-free tuple of non-empty string capabilities."""
+    """Return a stable, duplicate-free tuple of non-empty capability names.
+
+    去除首尾空白并丢弃空串：心跳与 Socket.IO 握手都走这一个函数，两侧词表必须
+    一致，否则「心跳写成了 A、握手留着 ' A '」会让证据与连接永远对不上。
+    非字符串、标量与映射一律视为无能力（fail closed）。
+    """
     if not isinstance(raw, Iterable) or isinstance(raw, (str, bytes, dict)):
         return ()
-    return tuple(sorted({item for item in raw if isinstance(item, str) and item}))
+    return tuple(sorted({
+        item.strip() for item in raw if isinstance(item, str) and item.strip()
+    }))
