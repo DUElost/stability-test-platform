@@ -22,8 +22,10 @@ from backend.models.plan_run import PlanRun
 from backend.models.host import Host
 from backend.services import issue_fact_store as facts
 from backend.services import shadow_delivery
-from backend.services.artifact_digest import ARTIFACT_KIND_CODE, compute_desired_artifact_digest
-from backend.services.agent_version_info import resolve_agent_code_sync_status
+from backend.services.agent_capabilities import (
+    evaluate_host_capability,
+    load_host_capability_evidence,
+)
 from backend.services.dedup_scan import _SCAN_TASK_SAQ_TIMEOUT
 from backend.services.plan_run_scan_scope import (
     build_scan_now_payload,
@@ -163,6 +165,25 @@ def _new_round(db, run_id, rounds, units, kind, now, wait, *, carried=()):
     )
 
 
+def _capability_recovered_units(db, latest_round, now):
+    """Hosts whose latest closed round lost capability and whose current heartbeat proves it again."""
+    recovered = []
+    for unit in latest_round.expected_set:
+        if not unit.get("expected", True) or unit.get("reason") != "capability_unverified":
+            continue
+        evidence = load_host_capability_evidence(db, unit["host_id"], now=now)
+        if evidence.verified:
+            recovered.append({
+                "host_id": unit["host_id"],
+                "platform": unit["platform"],
+            })
+            logger.info(
+                "shadow_scan_capability_recovered plan_run=%d fact_round_id=%d host=%s platform=%s",
+                latest_round.plan_run_id, latest_round.id, unit["host_id"], _PLATFORM,
+            )
+    return recovered
+
+
 def _advance_run(db, run_id, root, now, settings):
     run = _locked_run(db, run_id)
     if run is None:
@@ -219,6 +240,14 @@ def _advance_run(db, run_id, root, now, settings):
             r.status == facts.SCAN_ROUND_STATUS_CLOSED for r in rounds
         ):
             late = _late_inputs(rounds, root)
+            latest_delivery = next(
+                r for r in reversed(rounds)
+                if r.kind != facts.SCAN_ROUND_KIND_PERIODIC
+            )
+            recovered = (
+                _capability_recovered_units(db, latest_delivery, now)
+                if is_dedup_first else []
+            )
             if late:
                 covered = {
                     u["host_id"]
@@ -242,6 +271,18 @@ def _advance_run(db, run_id, root, now, settings):
                     settings.stp_scan_round_report_wait_seconds,
                     carried=late,
                 )
+            elif recovered:
+                # DEDUP_FIRST 的终态最后一轮已关闭后能力才恢复：只补该轮
+                # 因 capability_unverified 缺失的 host，模式保持不回溯。
+                new = _new_round(
+                    db,
+                    run_id,
+                    rounds,
+                    recovered,
+                    facts.SCAN_ROUND_KIND_SUPPLEMENT,
+                    now,
+                    settings.stp_scan_round_report_wait_seconds,
+                )
             elif all(r.closed_at is not None for r in rounds) and now > max(
                 r.closed_at for r in rounds
             ) + timedelta(seconds=settings.stp_scan_round_report_wait_seconds):
@@ -257,6 +298,20 @@ def _advance_run(db, run_id, root, now, settings):
                     )
                 else:
                     if quiet:
+                        gaps = sorted(
+                            unit["host_id"] for unit in latest_delivery.expected_set
+                            if unit.get("reason") == "capability_unverified"
+                            and unit["coverage"] not in _COVERED
+                        )
+                        if is_dedup_first and gaps:
+                            # Owner 裁定 6975368043：能力失效不回退模式，只登记缺口。
+                            # settled 后不再建立补充轮，因此缺口必须在终态留下可核验证据，
+                            # 由生产验收/补跑工作面按 host 追认，不能被静默吞掉。
+                            logger.warning(
+                                "shadow_scan_settled_with_capability_gap plan_run=%d "
+                                "fact_round_id=%d platform=%s hosts=%s",
+                                run_id, latest_delivery.id, _PLATFORM, ",".join(gaps),
+                            )
                         facts.settle_shadow_partition(
                             db, plan_run_id=run_id, platform=_PLATFORM, settled_at=now,
                             report_wait_seconds=settings.stp_scan_round_report_wait_seconds,
@@ -335,23 +390,6 @@ def sweep_shadow_scan_rounds(*, now=None):
             logger.exception("shadow_scan_sweep_failed plan_run=%d", run_id)
 
 
-def _shadow_capability_verified(host, desired_digest):
-    # 过渡预筛（#3875 / v1.23）：仅给当前摘要一致的 host 预约。
-    # 实际下发由 Socket.IO 握手能力按目标 SID 判定。
-    # 6704562784：旧摘要不是当前心跳的证明，必须同时核对上报时间与在线状态。
-    return bool(
-        host is not None
-        and host.status == "ONLINE"
-        and host.agent_artifact_digest_reported_at is not None
-        and host.last_heartbeat is not None
-        and host.agent_artifact_digest_reported_at >= host.last_heartbeat
-        and resolve_agent_code_sync_status(
-            agent_artifact_digest=host.agent_artifact_digest,
-            desired_artifact_digest=desired_digest,
-        ) == "matched"
-    )
-
-
 def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
     """工作线程短事务：先锁 run 与 round，再生成仅影子调用的载荷。"""
     if not get_scheduler_settings().stp_scan_round_shadow_enabled:
@@ -390,27 +428,26 @@ def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
             if _dispatch_due(u, now)
         }
         coverage = [dict(unit) for unit in row.expected_set]
-        host_states = {host.id: host for host in db.execute(select(
-            Host.id, Host.status, Host.agent_artifact_digest,
-            Host.agent_artifact_digest_reported_at, Host.last_heartbeat,
-        ).where(
-            Host.id.in_(targets),
-        )).all()}
-        try:
-            desired_digest = compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
-        except OSError:
-            logger.exception("shadow_scan_desired_digest_unavailable plan_run=%d fact_round_id=%d platform=%s",
-                plan_run_id, row.id, _PLATFORM)
-            desired_digest = ""
+        host_states = {host.id: host for host in db.execute(
+            select(Host).where(Host.id.in_(targets)),
+        ).scalars()}
         dispatches = []
         for host, status, retired in iter_plan_run_scan_hosts(db, plan_run_id):
             if host not in targets:
                 continue
             unit = next(u for u in coverage if u["host_id"] == host)
-            if not _shadow_capability_verified(host_states.get(host), desired_digest):
+            host_row = host_states.get(host)
+            evidence = evaluate_host_capability(
+                host_row, now=now,
+                retired=retired or bool(host_row is not None and host_row.retired_at is not None),
+            )
+            if not evidence.verified:
                 unit.update(coverage=COVERAGE_MISSING, reason="capability_unverified")
-                logger.warning("shadow_scan_capability_unverified plan_run=%d fact_round_id=%d host=%s platform=%s",
-                    plan_run_id, row.id, host, _PLATFORM)
+                logger.warning(
+                    "shadow_scan_capability_unverified plan_run=%d fact_round_id=%d "
+                    "host=%s platform=%s reason=%s",
+                    plan_run_id, row.id, host, _PLATFORM, evidence.reason,
+                )
                 continue
             unit.pop("reason", None)
             if status == "ONLINE" and not retired:
@@ -438,6 +475,49 @@ def prepare_shadow_scan(plan_run_id, fact_round_id) -> list[ShadowScanDispatch]:
         facts.set_scan_round_status(db, round_id=row.id, status=facts.SCAN_ROUND_STATUS_RUNNING)
         db.commit()
         return dispatches
+
+
+def verify_shadow_scan_dispatch(plan_run_id, fact_round_id, dispatch: ShadowScanDispatch) -> str | None:
+    """Re-check heartbeat evidence immediately before the actual send.
+
+    Returns the capability-bearing Agent instance id only while the same
+    reservation is still open and the current heartbeat still proves the
+    capability. A late heartbeat that withdrew capability, or a reconnect to a
+    different instance, makes this return ``None``.
+    """
+    with SessionLocal() as db:
+        if _locked_run(db, plan_run_id) is None:
+            return None
+        row = facts.get_scan_round(db, round_id=fact_round_id)
+        if (
+            row is None
+            or row.plan_run_id != plan_run_id
+            or row.platform != _PLATFORM
+            or row.status == facts.SCAN_ROUND_STATUS_CLOSED
+        ):
+            return None
+        unit = next(
+            (u for u in row.expected_set if u["host_id"] == dispatch.host_id),
+            None,
+        )
+        if (
+            unit is None
+            or unit.get("last_dispatched_at") != dispatch.reserved_at
+            or unit["coverage"] in _COVERED
+        ):
+            return None
+        evidence = load_host_capability_evidence(
+            db, dispatch.host_id, now=datetime.now(timezone.utc),
+        )
+        if not evidence.verified:
+            logger.warning(
+                "shadow_scan_capability_unverified_before_send plan_run=%d "
+                "fact_round_id=%d host=%s platform=%s reason=%s",
+                plan_run_id, fact_round_id, dispatch.host_id, _PLATFORM,
+                evidence.reason,
+            )
+            return None
+        return evidence.instance_id
 
 
 def reject_shadow_scan_dispatch(plan_run_id, fact_round_id, dispatch: ShadowScanDispatch) -> None:

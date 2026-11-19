@@ -29,6 +29,7 @@ except ImportError:
     _HAS_SOCKETIO = False
     logger.warning("python-socketio not installed, SocketIO log streaming disabled")
 
+from .contracts.capabilities import AGENT_CAPABILITIES
 from .script_verifier import verify_scripts_payload
 
 
@@ -62,10 +63,14 @@ class AgentSocketIOClient:
     LOG_BATCH_MAX_LINES = _env_int("STP_LOG_BATCH_MAX_LINES", 50)
     LOG_BATCH_FLUSH_MS = _env_int("STP_LOG_BATCH_FLUSH_MS", 200)
 
-    def __init__(self, api_url: str, host_id: int | str, agent_secret: str = ""):
+    def __init__(
+        self, api_url: str, host_id: int | str, agent_secret: str = "",
+        agent_instance_id: str = "",
+    ):
         self._api_url = api_url
         self._host_id = host_id
         self._agent_secret = agent_secret
+        self._agent_instance_id = agent_instance_id
         self._connected = False
         self._buffer: Deque[dict] = deque(maxlen=self.MAX_BUFFER)
         self._lock = threading.Lock()
@@ -185,7 +190,8 @@ class AgentSocketIOClient:
                 auth={
                     "agent_secret": self._agent_secret,
                     "host_id": str(self._host_id),
-                    "capabilities": ["scan_round_v1"],
+                    "agent_instance_id": self._agent_instance_id,
+                    "capabilities": list(AGENT_CAPABILITIES),
                 },
                 # #1121：websocket-only——见 _build_url；WS 不可用时立即失败
                 # （可观测），不再静默降级为依赖 sticky 的 polling。

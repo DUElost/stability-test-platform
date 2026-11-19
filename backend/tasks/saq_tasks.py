@@ -454,7 +454,20 @@ async def scan_task(
     if fact_round_id is not None:
         dispatches = await asyncio_to_thread(shadow_scan_rounds.prepare_shadow_scan, plan_run_id, fact_round_id)
         for dispatch in dispatches:
-            acked = await call_shadow_scan_control(dispatch.host_id, payload=dispatch.payload)
+            required_instance_id = await asyncio_to_thread(
+                shadow_scan_rounds.verify_shadow_scan_dispatch,
+                plan_run_id, fact_round_id, dispatch,
+            )
+            if required_instance_id is None:
+                await asyncio_to_thread(
+                    shadow_scan_rounds.reject_shadow_scan_dispatch, plan_run_id, fact_round_id, dispatch,
+                )
+                continue
+            acked = await call_shadow_scan_control(
+                dispatch.host_id,
+                payload=dispatch.payload,
+                required_instance_id=required_instance_id,
+            )
             if acked is None:
                 await asyncio_to_thread(
                     shadow_scan_rounds.reject_shadow_scan_dispatch, plan_run_id, fact_round_id, dispatch,

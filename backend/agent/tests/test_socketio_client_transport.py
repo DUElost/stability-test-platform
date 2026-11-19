@@ -66,11 +66,14 @@ def test_agent_socketio_handshake_declares_shadow_scan_capability(monkeypatch):
     monkeypatch.setattr("backend.agent.socketio_client._HAS_SOCKETIO", True)
 
     client = AgentSocketIOClient(
-        api_url="http://127.0.0.1:8000", host_id="host-1", agent_secret="s"
+        api_url="http://127.0.0.1:8000", host_id="host-1", agent_secret="s",
+        agent_instance_id="inst-1",
     )
     assert client.connect() is True
     assert _RecordingClient.last.connect_kwargs["auth"] == {
         "agent_secret": "s",
         "host_id": "host-1",
+        # #4044：握手能力与心跳能力同源；实例 id 让发送守卫把证据绑到当前连接。
+        "agent_instance_id": "inst-1",
         "capabilities": ["scan_round_v1"],
     }

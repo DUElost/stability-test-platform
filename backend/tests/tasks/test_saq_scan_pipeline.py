@@ -23,11 +23,16 @@ async def test_shadow_scan_task_only_dispatches_scan_now(monkeypatch):
     monkeypatch.setattr("backend.services.shadow_scan_rounds.prepare_shadow_scan", lambda *_args: [
         ShadowScanDispatch("host", payload, "reservation"),
     ])
+    # #4044：发送前的能力复核属于守卫单元，本测试只锁「影子任务只发 scan_now、
+    # 不进现行链路」；给出可下发的实例 id，由下面的调用点断言守卫确实被走过。
+    verify = MagicMock(return_value="agent-instance-1")
+    monkeypatch.setattr("backend.services.shadow_scan_rounds.verify_shadow_scan_dispatch", verify)
     monkeypatch.setattr(saq_tasks, "_query_hosts_for_scan", MagicMock(side_effect=AssertionError("current path entered")))
     queue = MagicMock(side_effect=AssertionError("shadow chained current task"))
     monkeypatch.setattr("backend.core.task_queue.get_queue", queue)
     await saq_tasks.scan_task({}, plan_run_id=42, fact_round_id=7)
-    control.assert_awaited_once_with("host", payload=payload)
+    verify.assert_called_once()
+    control.assert_awaited_once_with("host", payload=payload, required_instance_id="agent-instance-1")
     queue.assert_not_called()
 
 

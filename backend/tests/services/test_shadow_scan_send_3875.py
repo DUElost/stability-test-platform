@@ -1,5 +1,10 @@
-"""#3875 v1.23: shadow scan authorization follows the connection used to send."""
+"""#3875 v1.23：影子轮下发授权跟随实际使用的连接。
 
+#4044 收口了本文件的过渡判据：预筛不再看 artifact digest，改看当前心跳显式上报的
+能力；「连接必须真的支持新轮次载荷」这一半保持不变，并按实例 id 与心跳证据绑定。
+"""
+
+import functools
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -11,6 +16,8 @@ from sqlalchemy import event
 from backend.models.host import Host
 from backend.realtime import agent_sid_registry, socketio_redis, socketio_server
 from backend.services import artifact_digest, shadow_scan_rounds as shadow
+from backend.services.agent_capabilities import load_host_capability_evidence
+from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 from backend.tasks import saq_tasks
 from backend.tests.realtime.test_agent_rpc import patched_namespace as patched_namespace
 from backend.tests.services.test_shadow_scan_rounds import _rows, shadow_env as shadow_env
@@ -27,20 +34,27 @@ def shadow_socket(client, monkeypatch, patched_namespace):
     return patched_namespace, send
 
 
-async def _connect(namespace, host_id, sid, *, capable=False):
+async def _connect(namespace, host_id, sid, *, capable=False, instance=None):
     auth = {"host_id": host_id, "agent_secret": "test-socket-secret"}
     if capable:
-        auth["capabilities"] = ["scan_round_v1"]
+        auth["capabilities"] = [SCAN_ROUND_V1]
+    if instance is not None:
+        # 能力握手与实例 id 总是一起到达：发送守卫据此把心跳证据绑到当前连接。
+        auth["agent_instance_id"] = instance
     await namespace.on_connect(sid, {}, auth)
 
 
-def _heartbeat(client, host_id, digest, instance):
-    response = client.post("/api/v1/heartbeat", json={
+def _heartbeat(client, host_id, digest, instance, *, capable=True):
+    payload = {
         "host_id": host_id,
         "status": "ONLINE",
         "agent_artifact_digest": digest,
         "agent_instance_id": instance,
-    })
+    }
+    if capable:
+        payload["capabilities"] = [SCAN_ROUND_V1]
+    # capable=False 即旧构建：连 capabilities 键都不带，正是兼容矩阵的第一行。
+    response = client.post("/api/v1/heartbeat", json=payload)
     assert response.status_code == 200
 
 
@@ -76,21 +90,26 @@ async def test_empty_heartbeat_after_host_snapshot_must_stop_scan_now(
     _scan_scope(monkeypatch, host_id)
     desired = artifact_digest.compute_desired_artifact_digest()
     _heartbeat(client, host_id, desired, "new-agent")
-    await _connect(namespace, host_id, "sid-new", capable=True)
+    await _connect(namespace, host_id, "sid-new", capable=True, instance="new-agent")
     shadow.sweep_shadow_scan_rounds()
     row, = _rows(factory, run_id)
     loop = asyncio.get_running_loop()
 
-    def desired_after_host_snapshot(*, kind):
-        assert kind == artifact_digest.ARTIFACT_KIND_CODE
-        asyncio.run_coroutine_threadsafe(_connect(namespace, host_id, "sid-old"), loop).result(timeout=5)
-        _heartbeat(client, host_id, "", "old-agent")
-        with factory() as db:
-            host = db.get(Host, host_id)
-            assert host.agent_artifact_digest_reported_at < host.last_heartbeat
-        return desired
+    real_evaluate = shadow.evaluate_host_capability
+    fired = []
 
-    monkeypatch.setattr(shadow, "compute_desired_artifact_digest", desired_after_host_snapshot)
+    def evaluate_after_host_snapshot(host, **kwargs):
+        # 预筛已经读完 host 快照；就在此刻旧构建重连并上报心跳。
+        # 快照里的能力证明仍然成立，所以必须靠发送前复核与连接守卫拦住这一发。
+        if not fired:
+            fired.append(True)
+            asyncio.run_coroutine_threadsafe(_connect(namespace, host_id, "sid-old"), loop).result(timeout=5)
+            _heartbeat(client, host_id, "", "old-agent", capable=False)
+            with factory() as db:
+                assert not load_host_capability_evidence(db, host_id).verified
+        return real_evaluate(host, **kwargs)
+
+    monkeypatch.setattr(shadow, "evaluate_host_capability", evaluate_after_host_snapshot)
     await saq_tasks.scan_task({}, plan_run_id=run_id, fact_round_id=row.id)
     send.assert_not_awaited()
     _assert_unverified(factory, run_id, host_id)
@@ -110,14 +129,16 @@ async def test_empty_heartbeat_while_waiting_for_other_host_ack_must_stop_next_s
     desired = artifact_digest.compute_desired_artifact_digest()
     for host_id in (first, second):
         _heartbeat(client, host_id, desired, "new-agent")
-        await _connect(namespace, host_id, f"sid-{host_id}", capable=True)
+        await _connect(namespace, host_id, f"sid-{host_id}", capable=True, instance="new-agent")
     shadow.sweep_shadow_scan_rounds()
     row, = _rows(factory, run_id)
 
     async def ack(event, data, *, to, **kwargs):
         if to == f"sid-{first}":
             await _connect(namespace, second, "sid-second-old")
-            await asyncio.to_thread(_heartbeat, client, second, "", "old-agent")
+            await asyncio.to_thread(
+                functools.partial(_heartbeat, client, second, "", "old-agent", capable=False),
+            )
         return {"ok": True}
 
     send.side_effect = ack
@@ -136,10 +157,10 @@ async def test_old_agent_connects_before_heartbeat_and_cannot_receive_shadow_sca
     _scan_scope(monkeypatch, host_id)
     desired = artifact_digest.compute_desired_artifact_digest()
     _heartbeat(client, host_id, desired, "new-agent")
-    await _connect(namespace, host_id, "sid-new", capable=True)
+    await _connect(namespace, host_id, "sid-new", capable=True, instance="new-agent")
     await _connect(namespace, host_id, "sid-old")
     with factory() as db:
-        assert shadow._shadow_capability_verified(db.get(Host, host_id), desired)
+        assert load_host_capability_evidence(db, host_id).verified
 
     shadow.sweep_shadow_scan_rounds()
     row, = _rows(factory, run_id)
@@ -175,7 +196,7 @@ async def test_capable_reconnect_dispatches_again_within_same_round(
     _assert_unverified(factory, run_id, host_id)
 
     await namespace.on_disconnect("sid-old")
-    await _connect(namespace, host_id, "sid-new", capable=True)
+    await _connect(namespace, host_id, "sid-new", capable=True, instance="new-agent")
     clock.now.return_value = now + timedelta(seconds=shadow._SCAN_TASK_SAQ_TIMEOUT)
     queued.reset_mock()
     shadow.sweep_shadow_scan_rounds(now=clock.now.return_value)
@@ -266,7 +287,7 @@ async def test_missing_local_sid_backs_off_writes_and_retries_after_capable_reco
         assert blocked.expected_set[0]["reason"] == "capability_unverified"
         assert blocked.expected_set[0]["last_dispatched_at"] == now.isoformat()
 
-        await _connect(namespace, host_id, "sid-local", capable=True)
+        await _connect(namespace, host_id, "sid-local", capable=True, instance="remote-agent")
         clock.now.return_value = now + timedelta(seconds=timeout - 1)
         queued.reset_mock()
         shadow.sweep_shadow_scan_rounds(now=clock.now.return_value)
