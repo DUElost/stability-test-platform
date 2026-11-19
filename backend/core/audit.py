@@ -16,6 +16,7 @@ AUDIT_RESOURCE_TYPES: frozenset[str] = frozenset({
     "ai_assistant_config",
     "ai_chat_session",
     "audit_log",
+    "compat_rerun",
     "device",
     "host",
     "jira_run",

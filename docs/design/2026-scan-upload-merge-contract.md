@@ -222,9 +222,16 @@ unlinked_fixable、not_yet_archived。链接故障只看
 与它逐族对拍（曾经三处各写一份、`_meta` 在两份里缺席，导致「有清理、无观测」）。
 
 `evidence/` 是链主键族、`compat_reruns/` 是派生族（`run × 平台 × 一笔登记`），两者都
-**不得**被按 run 的清理器消费。派生族的回收必须逐笔判定（终态、无未结重试、两侧都超期、
-无 I4 保护、无链引用）；该判据属 #4045 第 2 刀，到期锚点待 Owner 裁决前不得接入自动窗口，
-现阶段本族只计量、只允许人工逐次确认后的回收。
+**不得**被按 run 的清理器消费。派生族的回收必须逐笔判定（登记终态 `COMPLETED` 且完成时间
+已知、所属 run 与补跑完成两侧都超期、无 I4 保护、无链引用、目录解析后仍在族根下），判据
+在 `backend/services/compat_rerun_retention.py`；到期锚点是本族自己的
+`COMPAT_RERUNS_RETENTION_DAYS`，**不得**继承 `PLAN_RUN_RETENTION_DAYS` 的生产覆盖。
+回收只能通过 `python -m backend.scripts.compat_rerun_retention --purge-rerun-id <id>
+--operator <name>` 逐笔点名发生，删除前用当前库状态重判定；只删 `r{id}/` 叶子与腾空后的
+父目录，**不得**触碰 `evidence/`、`devices/`、`dedup/` 与 `source_records[].source_path`
+指向的共享源。登记行本身不删，回收动作写 `compat_rerun_purge` 审计并把
+`compat_rerun.artifact_purged_at` 记下（审计事实与累计发生数的可追溯入口）。自动回收窗口
+未开，顺延见过渡台账 `compat-reruns-auto-window`（出口 #3230）。
 
 `merge/{platform}/` 是**平台分区**形态：下游 `dedup_extract._merge_uri_is_platform_partitioned`
 按 `PlanRunArtifact.storage_uri` 的**路径形状**判定平台，并据此决定 jira bundle 的落点

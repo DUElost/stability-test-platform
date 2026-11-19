@@ -76,6 +76,13 @@
       "exit": "adr:ADR-0040#D8",
       "due": "2026-12-31",
       "status": "active"
+    },
+    {
+      "id": "compat-reruns-auto-window",
+      "what": "B8 U5（#4045 裁决 1 = (a)+(c)）：compat_reruns/ 派生族的回收只交付「计量 + Dry-run + 人工逐笔确认」，不接任何调度任务、不开自动窗口。两个原因缺一不可——引用保护闭环尚未在生产验证；而生产 PLAN_RUN_RETENTION_DAYS=36500 若被本族沿用，判定永不产出候选，空清单会被读成「没有要回收的产物」（现由 COMPAT_RERUNS_RETENTION_DAYS 独立旋钮消除，anchor_note 负责把它显式报出来）。窗口放开的前提：#4045 验收第 2 条的四路对拍与逐条保留判据在生产各跑通一次",
+      "exit": "issue:#3230",
+      "due": "2026-12-31",
+      "status": "active"
     }
   ]
 }

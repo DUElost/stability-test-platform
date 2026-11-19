@@ -373,6 +373,10 @@ class CompatRerun(Base):
         DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow,
     )
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    # B8 U5（#4045 裁决 3 = 3a）：产物目录被**人工确认后**回收的时间。登记行本身不删
+    # ——它是审计事实与 I1 累计发生数的可追溯入口；只把「目录还在不在」显式记下来，
+    # 否则每次 Dry-run 都会把已回收项报成「目录不存在/不安全」，噪音会掩盖真实缺口。
+    artifact_purged_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint(

@@ -56,10 +56,11 @@ CHAIN_FAMILIES: tuple[str, ...] = (EVIDENCE_FAMILY,)
 #: 一笔在跑或仍被引用的补跑产物随 run 消失。判别守卫见
 #: ``backend/tests/scheduler/test_b8_4045_derived_family_survives_run_purge.py``。
 #:
-#: **当前只计量、不回收**：回收判据的到期锚点在 #4045 复核中判为待裁决（生产
-#: ``PLAN_RUN_RETENTION_DAYS=36500`` 会让「以 run 级保留期为锚」的候选恒空；
-#: ``compat_rerun.plan_run_id`` 无外键，run 行被清理后按 run 侧取证又会永不回收）。
-#: 在 Owner 就 #4045 评论 6978340866 的 (a)/(b)/(c) 表态前，本族不得接入任何自动窗口。
+#: 回收判据与人工确认回收在 :mod:`backend.services.compat_rerun_retention`，CLI 是
+#: ``python -m backend.scripts.compat_rerun_retention``。到期锚点是**本族自己的**
+#: ``COMPAT_RERUNS_RETENTION_DAYS``（裁决 1 = (a)：不继承 ``PLAN_RUN_RETENTION_DAYS``
+#: 的生产覆盖 36500，否则候选恒空、读数假干净）。**自动窗口未开**：回收只能逐笔点名
+#: 并人工确认，窗口顺延见过渡台账 ``compat-reruns-auto-window``（裁决 1 = (c)，出口 #3230）。
 COMPAT_RERUNS_FAMILY: str = "compat_reruns"
 
 #: 全部派生族。与 run/job/链族并列，仅用于登记与测量口径；回收另按逐笔判据。
