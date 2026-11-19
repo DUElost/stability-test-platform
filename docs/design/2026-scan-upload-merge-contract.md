@@ -214,12 +214,17 @@ unlinked_fixable、not_yet_archived。链接故障只看
 | 证据区（B8 G6） | `{root}/evidence/{主PlanRun编号}_{采集时目录名}/{SN}/{事件目录名}/`（ADR-0062 D9 第 6 条；按链留存，不进 `RUN_FAMILIES`） |
 | 交付统计导出（B8 G7） | `{root}/_meta/{run_id}/_delivery/{platform}/v{n}.json`（D9 第 8 条；下载按 `delivery_version` 登记定位） |
 | 代表证据下载（B8 G7） | 按 `evidence_publication.destination_rel_path`，仅 `VERIFIED`；`DLE.remote_path` 只留作溢出补扫 |
+| 补跑派生族（B8 U5） | `{root}/compat_reruns/{plan_run_id}/{platform}/r{compat_rerun_id}/`（#4045：一次受控兼容补跑的独立产物与独占副本） |
 
 本表的族清单正本是 `backend/storage_families.py`（`RUN_FAMILIES` / `JOBS_FAMILY` /
-`CHAIN_FAMILIES`）——retention purge 桶与 `measure_center_storage.py` 的 E-1/E-2 测量族
-都从它取，本表由 `tests/test_center_storage_families_single_source.py` 与它逐族对拍
-（曾经三处各写一份、`_meta` 在两份里缺席，导致「有清理、无观测」）。`evidence/` 是
-链主键族，按 run 清理器不得消费它。
+`CHAIN_FAMILIES` / `DERIVED_FAMILIES`）——retention purge 桶与 `measure_center_storage.py`
+的 E-1/E-2 测量族都从它取，本表由 `tests/test_center_storage_families_single_source.py`
+与它逐族对拍（曾经三处各写一份、`_meta` 在两份里缺席，导致「有清理、无观测」）。
+
+`evidence/` 是链主键族、`compat_reruns/` 是派生族（`run × 平台 × 一笔登记`），两者都
+**不得**被按 run 的清理器消费。派生族的回收必须逐笔判定（终态、无未结重试、两侧都超期、
+无 I4 保护、无链引用）；该判据属 #4045 第 2 刀，到期锚点待 Owner 裁决前不得接入自动窗口，
+现阶段本族只计量、只允许人工逐次确认后的回收。
 
 `merge/{platform}/` 是**平台分区**形态：下游 `dedup_extract._merge_uri_is_platform_partitioned`
 按 `PlanRunArtifact.storage_uri` 的**路径形状**判定平台，并据此决定 jira bundle 的落点
