@@ -219,6 +219,9 @@ class HeartbeatIn(BaseModel):
     agent_artifact_digest: str = ""  # ADR-0040 D2: deployed artifact digest from agent ARTIFACT_DIGEST file
     # ADR-0040 D8 R4：旧 Agent 仍会带这个键——照收（不 422）但控制面忽略，新 Agent 不再发送。
     agent_resources_digest: str = ""
+    # #4044：当前 Agent 构建显式声明的能力。缺键/空列表都是权威的「无能力」，
+    # 控制面每拍覆盖旧值——旧 Agent 回退不能沿用上一实例的能力证明。
+    capabilities: Optional[List[str]] = None
 
     @field_validator('host_id', mode='before')
     @classmethod

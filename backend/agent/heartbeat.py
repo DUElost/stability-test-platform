@@ -4,6 +4,8 @@ import os
 
 import requests
 
+from .contracts.capabilities import AGENT_CAPABILITIES, normalize_capabilities
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +43,8 @@ def send_heartbeat(
     # Phase 3c: 预收集统计信息（避免 HeartbeatThread 双采）
     system_stats: Optional[Dict[str, Any]] = None,
     mount_status: Optional[Dict[str, Any]] = None,
+    # #4044: 当前 Agent 构建显式声明的能力；缺省即本构建的完整能力集。
+    capabilities: Optional[Iterable[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """发送心跳到服务器，包含系统统计信息和设备数据
 
@@ -78,6 +82,12 @@ def send_heartbeat(
         "agent_code_revision": agent_code_revision,
         # ADR-0040 D2
         "agent_artifact_digest": agent_artifact_digest,
+        # #4044：能力是当前构建的显式正向断言；省略即无能力。
+        "capabilities": list(
+            AGENT_CAPABILITIES
+            if capabilities is None
+            else normalize_capabilities(capabilities)
+        ),
     }
 
     agent_secret = os.getenv("AGENT_SECRET", "")
