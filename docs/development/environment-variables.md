@@ -101,6 +101,8 @@
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | RunConsole 终态运行记录保留秒数（默认 `3600`；#1124） |
 | `STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS` | 跨实例 cancel 等待 owner ack 的上界秒数（默认 `3`；超时 fail-closed；#1737 P3） |
 | `PLAN_RUN_RETENTION_DAYS` | 已终态 PlanRun 及其明细的保留天数（默认 `3`）。明细随 run 一并删除：job、step_trace、产物登记、日志信号由 `run_retention_cleanup` 显式删除，逐用例结果经外键 `CASCADE` 删除。**生产覆盖为 `36500`**，即实际停用清理、保留全部历史（owner 2026-09-25 确认有意；过渡台账 `plan-run-retention-disabled`，出口是 #3230 G4 的长期事实层）。**新站点**若沿用默认值，3 天后会删掉全部运行明细——首跑前须显式决定 |
+| `COMPAT_RERUNS_RETENTION_DAYS` | `compat_reruns/` 派生族（一次受控兼容补跑的独立产物，#4045）自己的保留天数（默认 `3`）。**不得**继承 `PLAN_RUN_RETENTION_DAYS`：生产把它覆盖为 `36500`，沿用同一旋钮会让 Dry-run 候选恒空，而读数看起来像「没有要回收的产物」（裁决 1 = (a)）。站点若要让补跑产物活过厂商回单周期，**必须**显式放宽本值。`0` 沿用 PlanRun/audit 家族语义：cutoff=now，该层全部到期。本值**不**开启自动回收窗口——回收只能人工逐笔确认，自动窗口见过渡台账 `compat-reruns-auto-window` |
+| `COMPAT_RERUN_PURGE_BATCH_LIMIT` | 一次人工确认最多回收多少笔补跑产物（默认 `20`，下界 `1`）。上限必须为正：把 `0` 解释成「无上限」会把「想少删」变成最危险的动作（同 #2278 对 `PLAN_RUN_RETENTION_BATCH_SIZE` 的判定）。超过上限**整笔拒绝**，不做部分执行 |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |
 
 ### Agent 协议门禁
@@ -239,7 +241,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **279** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**247** 个已在 `.env*.example` 登记，**32** 个声明为内部（理由见下节）。
+共 **281** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**249** 个已在 `.env*.example` 登记，**32** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -261,11 +263,11 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `AIMONKEY_RESOURCE_DIR` | `` | ✅ | 运行时 | `backend/agent/aimonkey_paths.py:23` |
 | `API_URL` | `http://127.0.0.1:8000` | ✅ | 运行时 | `backend/agent/aee/scan_scope.py:187` |
 | `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:97` |
-| `AUDIT_LOG_BUSINESS_RETENTION_DAYS` | `90` | ✅ | 运行时 | `backend/core/settings/scheduler.py:135` |
-| `AUDIT_LOG_RETENTION_BATCH_SIZE` | `5000` | ✅ | 运行时 | `backend/core/settings/scheduler.py:138` |
-| `AUDIT_LOG_RETENTION_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:140` |
-| `AUDIT_LOG_SECURITY_RETENTION_DAYS` | `180` | ✅ | 运行时 | `backend/core/settings/scheduler.py:136` |
-| `AUDIT_LOG_SESSION_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:134` |
+| `AUDIT_LOG_BUSINESS_RETENTION_DAYS` | `90` | ✅ | 运行时 | `backend/core/settings/scheduler.py:148` |
+| `AUDIT_LOG_RETENTION_BATCH_SIZE` | `5000` | ✅ | 运行时 | `backend/core/settings/scheduler.py:151` |
+| `AUDIT_LOG_RETENTION_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:153` |
+| `AUDIT_LOG_SECURITY_RETENTION_DAYS` | `180` | ✅ | 运行时 | `backend/core/settings/scheduler.py:149` |
+| `AUDIT_LOG_SESSION_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:147` |
 | `AUTH_ACCESS_COOKIE_NAME` | `stp_access_token` | ✅ | 运行时 | `backend/core/settings/security.py:44` |
 | `AUTH_COOKIE_PATH` | `/` | ✅ | 运行时 | `backend/core/settings/security.py:46` |
 | `AUTH_COOKIE_SAMESITE` | `lax` | ✅ | 运行时 | `backend/core/settings/security.py:48` |
@@ -281,6 +283,8 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `CHAIN_RECONCILE_BATCH_SIZE` | `100` | ✅ | 运行时 | `backend/core/settings/scheduler.py:109` |
 | `CHAIN_TRIGGER_SETTLE_READY_GATE_ENABLED` | `True` | ✅ | 运行时 | `backend/core/settings/scheduler.py:69` |
 | `CHAIN_TRIGGER_SETTLE_SECONDS` | `180` | ✅ | 运行时 | `backend/core/settings/scheduler.py:64` |
+| `COMPAT_RERUNS_RETENTION_DAYS` | `3` | ✅ | 运行时 | `backend/core/settings/scheduler.py:136` |
+| `COMPAT_RERUN_PURGE_BATCH_LIMIT` | `20` | ✅ | 运行时 | `backend/core/settings/scheduler.py:139` |
 | `COORDINATOR_HEARTBEAT_INTERVAL` | `30` | ✅ | 运行时 | `backend/agent/settings.py:205` |
 | `COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:101` |
 | `COORDINATOR_MAX_PLAN_RUN_HOSTS` | `200` | ✅ | 运行时 | `backend/agent/settings.py:206` |
@@ -347,7 +351,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `SAQ_CONCURRENCY` | `10` | ✅ | 运行时 | `backend/tasks/saq_worker.py:50` |
 | `SAQ_ENQUEUE_WAIT_TIMEOUT` | `5.0` | ✅ | 运行时 | `backend/core/task_queue.py:36` |
 | `SAQ_QUEUE_NAME` | `stp` | ✅ | 运行时 | `backend/core/task_queue.py:35` |
-| `SCHEDULE_DEDUP_WINDOW_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:128` |
+| `SCHEDULE_DEDUP_WINDOW_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:141` |
 | `SCRIPT_PRESENCE_HISTORY_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:88` |
 | `SCRIPT_PRESENCE_SWEEP_CRON` | `30 9 * * *` | ✅ | 运行时 | `backend/core/settings/scheduler.py:86` |
 | `SESSION_WATCHDOG_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:32` |
@@ -389,12 +393,12 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_AGGREGATION_DRAIN_MAX_ROUNDS` | `50` | ✅ | 运行时 | `backend/services/plan_run_finalization.py:373` |
 | `STP_ALLOW_REGISTER` | `` | ✅ | 运行时 | `backend/core/settings/security.py:51` |
 | `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | `` | — | 运行时 | `backend/core/db_url_guard.py:44` |
-| `STP_API_DOCS_ENABLED` | `-` | ✅ | 运行时 | `backend/main.py:359` |
+| `STP_API_DOCS_ENABLED` | `-` | ✅ | 运行时 | `backend/main.py:360` |
 | `STP_ARTIFACT_DIGEST_CACHE` | `` | — | 运行时 | `backend/services/artifact_digest.py:49` |
 | `STP_AUDIT_BACKEND` | `` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:10` |
 | `STP_AUDIT_ENV_FILE` | `-` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:11` |
-| `STP_BACKEND_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:56` |
-| `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:57` |
+| `STP_BACKEND_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:58` |
+| `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:59` |
 | `STP_BACKEND_URL` | `http://127.0.0.1:8000` | — | 运行时 | `backend/scripts/batch_hot_update.py:286` |
 | `STP_BARRIER_MAX_WAIT_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:262` |
 | `STP_BARRIER_PROGRESS_STALE_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:226` |
@@ -410,18 +414,18 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_COUNTER_RECONCILE_LOOKBACK_HOURS` | `48` | ✅ | 运行时 | `backend/core/settings/scheduler.py:106` |
 | `STP_CSRF_ENABLED` | `1` | ✅ | 运行时 | `backend/api/middleware/csrf.py:37` |
 | `STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/services/dashboard_summary_publisher.py:65` |
-| `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:211` |
-| `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:74` |
+| `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:212` |
+| `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:76` |
 | `STP_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:552` |
 | `STP_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:553` |
 | `STP_DEDUP_SCAN_TAG` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:567` |
-| `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:75` |
+| `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:100` |
 | `STP_DEVICE_DISK_SAMPLE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/settings.py:228` |
 | `STP_DEVICE_INFO_SAMPLE_INTERVAL_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/settings.py:236` |
-| `STP_DEVICE_LOG_EVENT_ENABLED` | `-` | ✅ | 运行时 | `backend/agent/event_uploader.py:136` |
+| `STP_DEVICE_LOG_EVENT_ENABLED` | `-` | ✅ | 运行时 | `backend/agent/event_uploader.py:215` |
 | `STP_DEVICE_SERIAL` | `-` | — | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:96` |
 | `STP_ENABLE_INPROCESS_SAQ` | `1` | ✅ | 运行时 | `backend/core/task_queue.py:92` |
-| `STP_EVENT_UPLOADER_PRUNE_LOCAL` | `0` | ✅ | 运行时 | `backend/agent/event_uploader.py:627` |
+| `STP_EVENT_UPLOADER_PRUNE_LOCAL` | `0` | ✅ | 运行时 | `backend/agent/event_uploader.py:712` |
 | `STP_EXTRACT_BACKEND` | `` | — | 运行时 | `backend/scripts/jira_extract_run52.py:10` |
 | `STP_FILE_SERVER_ADDRESS` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:253` |
 | `STP_FILE_SERVER_AGENT_FRESH_SECONDS` | `180` | ✅ | 运行时 | `backend/api/routes/stats.py:245` |
@@ -461,7 +465,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_PROMETHEUS_URL` | `-` | ✅ | 运行时 | `backend/services/file_server_monitor.py:120` |
 | `STP_RECOVERY_SYNC_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/agent/recovery_runtime.py:150` |
 | `STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:283` |
-| `STP_RUN_CONSOLE_LOG_ROOT` | `logs/console` | ✅ | 运行时 | `backend/main.py:210` |
+| `STP_RUN_CONSOLE_LOG_ROOT` | `logs/console` | ✅ | 运行时 | `backend/main.py:211` |
 | `STP_RUN_CONSOLE_REPLAY_MAX_LINES` | `-` | ✅ | 运行时 | `backend/services/run_console.py:270` |
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:274` |
 | `STP_SCAN_ROUND_INTERVAL_SECONDS` | `21600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:75` |
@@ -474,7 +478,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_SCRIPT_SOURCE` | `-` | — | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:385` |
 | `STP_SIGNAL_LINK_RECONCILE_BATCH` | `200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:108` |
 | `STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:80` |
-| `STP_SKIP_INFRA_CHECK` | `0` | ✅ | 运行时 | `backend/main.py:219` |
+| `STP_SKIP_INFRA_CHECK` | `0` | ✅ | 运行时 | `backend/main.py:220` |
 | `STP_SMOKE_HOST_ID` | `` | — | 运行时 | `backend/scripts/sprint4_real_device_verify.py:48` |
 | `STP_SMOKE_ORIGIN` | `http://localhost:5173` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:88` |
 | `STP_SMTP_TIMEOUT_SECONDS` | `15` | ✅ | 运行时 | `backend/services/notification_service.py:55` |
@@ -499,11 +503,11 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_UNISOC_SCAN_RESULT_PYTHON` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:72` |
 | `STP_UNISOC_SCAN_RESULT_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:73` |
 | `STP_VERIFY_BACKEND` | `` | — | 运行时 | `backend/scripts/smoke_jira_api.py:11` |
-| `STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:151` |
-| `STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS` | `5` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:152` |
-| `STP_WATCHER_AEE_RECONCILE_ENABLED` | `true` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:149` |
+| `STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:161` |
+| `STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS` | `5` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:162` |
+| `STP_WATCHER_AEE_RECONCILE_ENABLED` | `true` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:159` |
 | `STP_WATCHER_AEE_RECONCILE_HOSTS` | `` | — | 运行时 | `backend/agent/aee/reconciler.py:196` |
-| `STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS` | `180` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:150` |
+| `STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS` | `180` | ✅ | 运行时 | `backend/agent/bootstrap_subsystems.py:160` |
 | `STP_WATCHER_AEE_SUBDIR_LAYOUT` | `stp` | ✅ | 运行时 | `backend/agent/aee/paths.py:199` |
 | `STP_WATCHER_ENABLED` | `true` | ✅ | 运行时 | `backend/agent/agent_application.py:46` |
 | `STP_WATCHER_PLAN_DEFAULT` | `true` | ✅ | 运行时 | `backend/agent/agent_application.py:47` |

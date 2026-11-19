@@ -125,6 +125,19 @@ class SchedulerSettings(DomainSettings):
     # 越界 env 在取值时即 ValidationError（作业显式失败并计入 apscheduler 错误
     # 指标），不把「配错」伪装成「没事干」。
     plan_run_retention_batch_size: int = Field(default=100, ge=1)
+
+    # ── B8 U5（#4045）：compat_reruns/ 派生族的留存与回收旋钮 ──
+    # 裁决 1 = (a)：本族**自己的**保留天数，不继承 plan_run_retention_days。原因不是
+    # 美观：生产把 PLAN_RUN_RETENTION_DAYS 覆盖成 36500（`plan-run-retention-disabled`），
+    # 若本族沿用同一旋钮，cutoff 落在 100 年后 → 候选恒空，而报表读起来像「没有要回收
+    # 的东西」。缺省 3 与 run 级的**代码默认值**同义（不是生产覆盖值）；站点若要让补跑
+    # 产物活过厂商回单周期，必须显式放宽它——回收只在人工逐次确认下发生，不会被遗忘。
+    # `0` 沿用 PlanRun/audit 家族既有语义：cutoff=now，该层全部到期（不是「关闭」）。
+    compat_reruns_retention_days: int = Field(default=3, ge=0)
+    # 一次人工确认最多回收多少笔。下界 1：把上限设成 0 若按「无上限」解释，正好把
+    # 「想少删」变成最危险的动作（同 #2278 对 plan_run_retention_batch_size 的判定）。
+    compat_rerun_purge_batch_limit: int = Field(default=20, ge=1)
+
     schedule_dedup_window_seconds: float = 60
 
     # ── audit_log_cleanup：分层保留期（#2741 / ADR-0049，owner 裁决 2026-09-19）──

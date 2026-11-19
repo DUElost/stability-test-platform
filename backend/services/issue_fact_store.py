@@ -1577,6 +1577,22 @@ def update_compat_rerun(
     db.flush()
     return row
 
+
+def mark_compat_rerun_artifact_purged(
+    db: Session, *, row: CompatRerun, now: Optional[datetime] = None,
+) -> CompatRerun:
+    """记下「产物目录已回收」；**不改状态、不删登记行**（#4045 裁决 3 = 3a）。
+
+    重复标记不覆盖第一次时间：回收是一次性事实，第二次写入会把「什么时候没了」
+    漂成「什么时候又被点过一次」，事后无法与 audit 对齐。
+    """
+    if row.artifact_purged_at is None:
+        row.artifact_purged_at = now or _utcnow()
+        row.updated_at = _utcnow()
+        db.flush()
+    return row
+
+
 def list_partition_occurrences_for_scope(
     db: Session,
     *,
