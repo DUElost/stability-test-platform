@@ -3,7 +3,8 @@
 Status: implemented
 Class: feature
 
-日期：2026-11-18　交付：Draft PR，待按 ADR-0058 D8 独立复核　基线：`origin/main@e7325af03`
+日期：2026-11-18，接口收敛返修 2026-11-19　交付：Draft PR，待按 ADR-0058 D8 独立复核
+基线：`origin/main@e7325af03`；返修已接合 `origin/main@a902a3183`（含 #4044 的 PR #4049）
 批次：[#3800](https://github.com/DUElost/stability-test-platform/issues/3800) §2.1 第 1 项 / [ADR-0062 v1.2](../../adr/ADR-0062-device-log-dedup-before-upload.md) D3 第 1 条、D13
 
 ## Decision
@@ -19,10 +20,10 @@ Class: feature
 
    | 入口 | 该入口的第一个分流动作 | 固化点 |
    |---|---|---|
-   | `shadow_scan_rounds._advance_run` | 登记轮次（D3 第 2 条） | `shadow_scan_rounds.py:190` |
-   | `shadow_scan_rounds.prepare_shadow_scan` | 提交后返回下发载荷（同事务）；候选等待时不返回下发 | `shadow_scan_rounds.py:394` |
-   | SAQ `scan_task`（自动与手动 scan 共用） | 向 Agent 下发 `scan_now` | `saq_tasks.py:502` |
-   | SAQ `upload_task` | `UPLOAD_PENDING` 标记 UPDATE | `saq_tasks.py:692` |
+   | `shadow_scan_rounds._advance_run` | 登记轮次（D3 第 2 条） | `shadow_scan_rounds.py:211` |
+   | `shadow_scan_rounds.prepare_shadow_scan` | 提交后返回下发载荷（同事务）；候选等待时不返回下发 | `shadow_scan_rounds.py:438` |
+   | SAQ `scan_task`（自动与手动 scan 共用） | 向 Agent 下发 `scan_now` | `saq_tasks.py:497` |
+   | SAQ `upload_task` | `UPLOAD_PENDING` 标记 UPDATE | `saq_tasks.py:744` |
    | 手动 merge 路由 | `partition_rows` 决定要不要「先跑 scan」 | `api/routes/dedup.py:727` |
    | merge 服务（自动 merge_task 与手动合并共用） | `_partition_targets` 的平台分流 | `dedup_scan.py:812` |
    | extract（自动 extract_task 与手动路由共用） | 按 CURRENT 平台过滤 | `dedup_extract.py:243` |
@@ -36,13 +37,26 @@ Class: feature
    run」静默当成「没批准」。阶段二开关必须与阶段一 `STP_SCAN_ROUND_SHADOW_ENABLED` 同开，
    由 `SchedulerSettings` 的 model_validator 拒绝半开配置——轮次调度、交付登记与回收都在影子
    开关之下，只开阶段二会让我方刚拒绝旧链标记的事件无人处理。
-4. **能力证据单一来源**：新增 `backend/services/partition_capability.py`。准入用
-   `verify_expected_mtk_hosts` 核验该分区**全部**预期 MTK host（期望集与 D5 的
-   `scan_completeness` 同源），影子下发守卫 `_shadow_capability_verified` 改为委托同一函数
-   （Owner 裁定 6975368043「模式准入和发送守卫共用可核验能力证据」）。现行判据仍是 #3875
-   v1.23 的过渡预筛；#4044 换成当前心跳显式上报时只改这一个模块。
-   任一 host 未证实 → 硬阻断：**既不写 `DEDUP_FIRST`，也不写 `CURRENT`**。能力是瞬时事实，
-   而模式一旦写下不可改写，一次心跳抖动不得把获批 run 永久锁在旧链上。
+4. **能力证据单一来源（接口收敛后）**：入场判定直接消费 #4044 的
+   `backend/services/agent_capabilities.partition_capability_evidence(db, plan_run_id=…, platform=…)`。
+   本单原先自建的 `backend/services/partition_capability.py` 已删除，`shadow_scan_rounds` 里委托
+   它的 `_shadow_capability_verified` 一并撤除，#3875 v1.23 的制品摘要（digest）过渡判据在本单
+   **不留残留**——Owner 裁定 6975368043 要的是「模式准入和发送守卫共用可核验能力证据」，两份
+   判据并存本身就是分叉。
+   - 期望 host 口径不再自行派生：该函数与 `shadow_scan_rounds._expected_units` 同源（实际
+     `JobInstance` + prepare 快照，再按该 host 预期产出的分区过滤），作用域是**实际 PlanRun ×
+     平台**——同 run 的纯展锐 host 不进入 MTK 期望集（不误阻断），同 Plan 的兄弟 run 各自独立。
+   - 逐台原因码沿用 #4044 的稳定字符串（`host_missing` / `host_offline` / `host_retired` /
+     `heartbeat_missing` / `capability_never_reported` / `capability_not_current_heartbeat` /
+     `capability_missing` / `instance_unbound`），本单不新增别名；被挡时把 `as_dict()` 的逐台
+     证据（含 `evaluated_at`＝何时核验过全量预期 host）放进决定 `detail`，供入场台账留痕。
+   - 任一 host 未证实 → 硬阻断：**既不写 `DEDUP_FIRST`，也不写 `CURRENT`**。能力是瞬时事实，
+     而模式一旦写下不可改写，一次心跳抖动不得把获批 run 永久锁在旧链上。
+   - **空期望集显式裁定为 fail-closed**：#4044 的谓词对「一台预期 host 都没有」返回
+     `admitted=True`（它明确不替调用方判断这是否异常）。本单不接受该默认值——没有可核验的
+     能力证据就不得写入 `DEDUP_FIRST`：判定记 `no_expected_mtk_hosts`，入口按 `held=True`
+     停住本分区动作（Decision 7a），影子入口也不得借 `record_current_fallback` 顺手写
+     `CURRENT`（那会把一次还没做出来的决定固化成不可改写的事实）。
 5. **在途旧 run 的可判定信号（返修后）**：只认**能归因到本分区（MTK）**的旧链痕迹——
    (a) MTK 或归属无法确认（fail-closed）的 `scan_result_xls` / `merge_result_xls` 产物；
    (b) 含 MTK 的 `run_context.merge_platforms`；
@@ -109,14 +123,36 @@ Class: feature
   env 与既有阶段一开关同族、随发布可核对；若复核认为需要 UI 化管理再另立单点。
 - **在 `agent_device_log_events` 的列表读取处固化**：否决。标记（`upload_task`）先于任何旧链
   上传发生，列表读取不产生新模式下的副作用；在那里写模式只会把固化点推迟到真正分流之后。
+- **本单自建的 `partition_capability` 与 #4044 的心跳能力并存**：否决（接口收敛轮的根据）。
+  「制品摘要 + 上报时间」与「当前心跳显式上报 `scan_round_v1`」是两份真相源，同一台机器可以
+  一边被准入放行、一边被下发拒绝——Owner 裁定 6975368043 要排除的正是这种分叉。第二套判据
+  即使暂时结果一致也不可保留：它让期望 host 集合与原因码各自漂移，而两者都是入场台账的内容。
+  收敛后唯一入口是 `agent_capabilities.partition_capability_evidence`，摘要残留由静态守卫禁止。
 
 ## Verification
 
-- 判定矩阵：`backend/tests/services/test_b8_4043_partition_mode_admission.py`（15 例）——
-  准入放行、两个获批条件不满足（同一 Plan 兄弟 run、白名单为空）、能力硬阻断（离线 host 与
-  摘要上报早于心跳两种原因码）、在途旧 run（MTK 报表产物 / 含 MTK 的 merge_platforms）、
-  展锐产物与纯展锐 merge 记录不算本分区副作用、历史无模式不写记录、关开关后已固定分区不变、
-  只有 MTK 可固化、混合平台、8 路并发首写只留 1 行、重试/新会话读到同一决定且改写被拒。
+- 判定矩阵：`backend/tests/services/test_b8_4043_partition_mode_admission.py`（23 例）——
+  准入放行、两个获批条件不满足（同一 Plan 兄弟 run、白名单为空）、在途旧 run（MTK 报表产物 /
+  含 MTK 的 merge_platforms）、展锐产物与纯展锐 merge 记录不算本分区副作用、历史无模式不写记录、
+  关开关后已固定分区不变、只有 MTK 可固化、混合平台、8 路并发首写只留 1 行、重试/新会话读到
+  同一决定且改写被拒。
+  能力硬阻断改为**按 #4044 的原因码逐条**参数化（7 例：`capability_never_reported` /
+  `capability_missing` / `host_offline` / `host_retired` / `heartbeat_missing` /
+  `capability_not_current_heartbeat` / `instance_unbound`），每一例都同时断言三件事：入场被挡
+  时既不写 `DEDUP_FIRST` 也不写 `CURRENT`、台账里只有那一台进 `unverified_hosts` 且原因码就是
+  #4044 的那一个、证据恢复后由下一次入场**首次**固化。
+  接缝与残留（接口收敛新增）：`test_admission_and_send_guard_share_one_capability_source`
+  逐台比对入场证据与发送侧 `load_host_capability_evidence` 的结论与原因码，并断言
+  `admission.partition_capability_evidence is caps.partition_capability_evidence`（同一函数对象，
+  不是同形实现）；`test_no_digest_transitional_capability_judge_remains` 用 `SourceGuard`
+  先锚定能力消费点仍在位、再判 `artifact_digest` 不得回潮，并断言
+  `backend/services/partition_capability.py` 已不存在；
+  `test_empty_expected_host_set_never_fixates_dedup_first` 锁死空期望集 fail-closed
+  （谓词 `admitted=True` 也不写模式、入口 `held=True`、影子入口不借兜底写 `CURRENT`）；
+  `test_fixated_dedup_first_keeps_mode_and_records_capability_gap` 证明已固定分区失能时模式
+  不回退、缺口由 #4044 守卫在轮次 coverage 里记成 `capability_unverified`。
+  本文件的 host 一律按 #4044 心跳能力构造（在线 + 显式上报 `scan_round_v1` + 绑定实例 id），
+  不再出现摘要字段。
 - 真实入口：`backend/tests/services/test_b8_4043_entry_points.py`（10 例）——手动 scan 路由
   入队的 SAQ 作业跑真实 `scan_task`；纯 MTK 已固化时**旧 scan_now 一次都不发**，混合运行时
   探针在**下发那一刻**用另一个数据库连接读模式（跨连接可见＝已提交，排除「只在任务体内补写」），
@@ -135,9 +171,18 @@ Class: feature
   「等待」（判据顺序回归位）；已固化 DEDUP_FIRST 的纯 MTK 运行在自动 / 手动 / `is_final` 三个
   入口旧 scan 下发均为 0，且首次轮次下发前独立会话读到唯一 `DEDUP_FIRST` 记录、载荷
   `fact_round_id` 等于登记轮次 id；终态入口改由 FINAL 轮承担；同主机 Agent 反例（真实
-  `ScanRunner._execute_job`）证明只传展锐串号时 MTK runner 仍被调用。
+  `ScanRunner._execute_job`）证明只传展锐串号时 MTK runner 仍被调用。接口收敛轮再补两点：
+  候选等待不限于离线机（`test_candidate_wait_also_covers_capability_never_reported`：在线但心跳
+  没报能力，同样 `held=True`、旧 `scan_now` 零下发、原因码取 #4044 的
+  `capability_never_reported`）；首次轮次下发的探针现在断言
+  `call_shadow_scan_control(required_instance_id="agent-hold")`，即 #4044 第三道「实例绑定」守卫
+  在本单接合后仍然生效（不是只靠预筛）。
 - 基线/HEAD 同探针：`backend/tests/services/test_b8_4043_baseline_probe.py` 只 import 主干既有
   模块与既有 env 名，可在基线 checkout 原样运行（`git worktree` 于 `e7325af03`）。
+  接口收敛轮：host 的能力证据改由 `_stamp_capability()` 按**当前 checkout 实际存在的列**写入
+  ——HEAD 侧写 #4044 的心跳能力三列，基线侧（还没有那三列）才落 #3875 的摘要字段。这是探针
+  为了「同一份文件两边都能跑」做的适配，不是 HEAD 里的第二套判据：主干已不读摘要
+  （由 `test_no_digest_transitional_capability_judge_remains` 锁死）。
   - 基线 `e7325af03`：**6 failed / 1 passed**，全部是断言失败而非基础设施报错——
     1) `assert [('mtk','CURRENT')] == [('mtk','DEDUP_FIRST')]`（影子轮只会写 CURRENT）；
     2) `upload_task` 标记时跨连接 `assert None == 'DEDUP_FIRST'`；
@@ -147,17 +192,30 @@ Class: feature
     6) 手动 merge 走旧链前置：`no scan result available, run scan first`。
     第 7 项是反向护栏（能力未证实不得写 `DEDUP_FIRST`），基线同样绿，**不作为判别证据**。
   - HEAD：**7 passed**（2.2s，基线侧 12s，两侧都不依赖轮询等待）。
-- 受影响回归：`backend/tests/tasks`（74）、`backend/tests/api/test_dedup_scan_endpoints.py`、
-  `test_b8_g8_legacy_report_scope.py`、`backend/tests/test_issue_fact_store.py`、
-  `backend/tests/services/test_shadow_*`、`test_shadow_scan_send_3875`、`test_b8_g6_upload_mark`、
-  `test_b8_g6_evidence_publication`、`test_b8_g7_partition_consumers`、`test_b8_g8_*`、
-  `tests/test_settings_scheduler.py` 全绿；`backend/tests` 关键词选择集（shadow / dedup /
-  partition / upload_task / extract / evidence / merge / ingest）**574 passed**。
+- 接合 `origin/main@a902a3183`（含 #4049）之后本轮实跑，全部用
+  `JWT_SECRET_KEY=test-secret ./scripts/project_python.sh scripts/run_pytest.py …`：
+  - 本单四份 + #4044 两份能力守卫：`test_b8_4043_partition_mode_admission.py`（23）、
+    `test_b8_4043_entry_points.py`（10）、`test_b8_4043_partition_hold.py`（12）、
+    `test_b8_4043_baseline_probe.py`（7）、`test_agent_capability_evidence_4044.py`（19）、
+    `test_shadow_scan_capability_4044.py`（15）→ **86 passed**。
+  - 共享判定面（三道发送守卫 + 轮次 + 旧链入口）：`test_shadow_scan_rounds.py`、
+    `test_shadow_scan_send_3875.py`、`test_shadow_scan_settled_3875.py`、
+    `backend/tests/api/test_heartbeat_capability_4044.py`、
+    `backend/tests/api/test_heartbeat_artifact_digest_1907.py`、
+    `backend/tests/tasks/test_saq_scan_pipeline.py`、`test_saq_tasks.py`、
+    `test_b8_g6_upload_mark.py`、`backend/tests/services/test_dedup_extract.py`、
+    `test_dedup_scan_merge.py`、`test_b8_g7_partition_consumers.py` → **256 passed**。
+  - `tests/test_settings_scheduler.py` → **29 passed**。
+  - `tests/`（顶层静态守卫全量）首轮 **1 failed / 2566 passed / 18 skipped**：红的那条是本单
+    新写的静态守卫用了裸 `assert "artifact_digest" not in source`，被
+    `test_source_scan_anchor_ratchet.py` 判为新增 offender（源扫描型否定断言必须走 `SourceGuard`
+    锚点）。改写成 `SourceGuard.of_module(...).anchored(...).assert_absent(...)` 后，
+    `test_b8_4043_partition_mode_admission.py` + `tests/test_source_scan_anchor_ratchet.py`
+    → **33 passed**。
   `test_saq_scan_pipeline.py::test_scan_task_no_hosts_triggered_skips_poll` 的原判据保持不变：
   本单的模式门控走 `asyncio.to_thread` 直调（与同函数里 `_query_hosts_for_scan` 同一写法），
   不占用该测试用于拦截轮询路径的 `asyncio_to_thread` 别名。
-- 待补：`check:quick` 与六项 required CI 在本 Draft PR 上跑；生产启用属 #3800 §5，不在本单；
-  与 #4044 的共享判定在两边接合后需复跑（见 Revisit 第 3 条）。
+- 待补：`check:quick` 与六项 required CI 在本 Draft PR 上跑；生产启用属 #3800 §5，不在本单。
 
 ## Revisit
 
@@ -180,14 +238,20 @@ Class: feature
      重做；
      (丙) 试点只选纯 MTK run（Owner §2.1 的首批偏好），混合 run 在阶段二一律不点名——本单
      当前实现即按 (丙) 的假设运作：混合 run 的 MTK 一旦必须与展锐共用旧 scan，就落痕迹失格。
-2. **#4044 收口后替换能力证据来源**：`partition_capability` 从 digest 过渡预筛换成 Agent 当前
-   心跳显式上报的能力；届时补「先上报能力后换旧 Agent」「当前心跳省略能力字段」「迟到心跳」
-   「预筛后连接变更」四类反例。过渡判据本身建议在 #4044 侧登记进
-   `docs/governance/transitions.json`（该文件与 `docs/notes/feature` 都在 #4044 在窗 scope 内，
-   本单不触碰以免撞车）。
-3. **接合后需复跑的共享判定**：#4043 与 #4044 共用 `partition_capability`。两边合并后必须重跑
-   `test_admission_and_send_guard_share_one_capability_rule`、`test_shadow_scan_send_3875` 与
-   `test_shadow_scan_rounds` 全套，确认「准入放行而下发拒绝」（或反之）不再可能出现。
+2. **#4044 收口后替换能力证据来源**：**本轮已办结**——自建模块删除，入场改消费
+   `agent_capabilities.partition_capability_evidence`。原列四类反例的落点：「当前心跳省略能力
+   字段」= `capability_never_reported` / `capability_missing` 两例（判定矩阵 +
+   `test_candidate_wait_also_covers_capability_never_reported`）；「迟到心跳」=
+   `capability_not_current_heartbeat` 一例；「预筛后连接变更」= #4049 的实例绑定守卫，本单在
+   `test_admitted_partition_scans_only_through_registered_rounds` 里断言下发入参
+   `required_instance_id` 仍是心跳里的实例 id。仍**未覆盖**的是「先上报能力后换旧 Agent」这类
+   fleet 现场形态（需要真实主机与发布顺序），属 #3800 §5 阶段二激活验收，不在本单。
+   过渡判据在 `docs/governance/transitions.json` 的登记属 #4044 侧（其 scope 内），本单不触碰。
+3. **接合后需复跑的共享判定**：**本轮已复跑**（见 Verification 的 86 / 256 passed 两条），
+   接缝本身另由 `test_admission_and_send_guard_share_one_capability_source` 与
+   `test_fixated_dedup_first_keeps_mode_and_records_capability_gap` 常驻。任何一侧再改能力
+   判据都必须重跑这一组，并把两条接缝一起看：结论一致还不够，**原因码**也要一致，否则台账
+   里会出现两套「能力未证实」的写法。
 4. **未获批分区是否也要在每个入口落 `CURRENT`**：本单按 D13 第 2 条取保守侧（不写），把「无
    记录」留给消费方解释；规划裁决第 1 项已确认该口径，无需再改。
 5. **实际 PlanRun ID 与旧链副作用的可判定性**：本单枚举的入口在动作前都拿得到 `plan_run_id`，
@@ -196,3 +260,9 @@ Class: feature
    须交规划者裁定而不是就地猜。
 6. 白名单若需要按链根（`root_plan_run_id`）批量放行，属模型级变化（D13 第 1 条明确链根只用于
    物理分组），须 ADR 复议而非实施者自行扩展。
+
+7. **能力缺口过安静期后的恢复通路待规划者裁定**（#4044 评论 6979207483 §3 提出的边界）：
+   已固定 `DEDUP_FIRST` 的分区若在安静期内没等到能力恢复，影子侧会 settled 并只留
+   `shadow_scan_settled_with_capability_gap` 的 WARNING，**没有自动恢复通路**。允许「受控重开
+   影子轮」还是「一律走 #4045 补跑代表证据」需要规划者写进验收判据——它决定 Decision 6 里
+   「关闭开关后既有分区继续消费」这一行的解释边界（本单不改 #4044 的语义，只登记边界）。

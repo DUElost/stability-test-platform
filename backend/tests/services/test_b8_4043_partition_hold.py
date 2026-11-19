@@ -26,6 +26,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
+from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import reset_scheduler_settings_cache
 from backend.models.device_log_event import DeviceLogEvent
@@ -37,7 +38,7 @@ from backend.models.plan_run import PlanRun
 from backend.services import dedup_extract
 from backend.services import dedup_scan
 from backend.services import issue_fact_store as facts
-from backend.services import partition_capability as capability
+from backend.services import agent_capabilities as caps
 from backend.services import partition_mode_admission as admission
 from backend.services import shadow_scan_rounds as shadow
 from backend.tasks import saq_tasks
@@ -78,17 +79,25 @@ def _run(db, *, status="RUNNING"):
     return run
 
 
-def _host(db, digest, *, capable=True):
+def _host(db, *, capable=True):
+    """心跳能力口径（#4044 单源）：``capable=False`` 就是「当前心跳证明不了 scan_round_v1」。
+
+    这里刻意用**离线**表达失能（与 ``_recover`` 成对），原因码由 #4044 的谓词给出，本文件
+    不自行判断，也不再写制品摘要——过渡判据已随 #4049 收口。
+    """
     host_id = f"hd-{uuid4().hex[:8]}"
     now = _now()
     octet = int(host_id.split("-")[1][:3], 16)
     address = f"192.0.2.{octet % 250}"
-    db.add(Host(
+    host = Host(
         id=host_id, hostname=host_id, name=host_id, ip=address, ip_address=address,
         status="ONLINE" if capable else "OFFLINE", last_heartbeat=now,
-        agent_artifact_digest=digest,
-        agent_artifact_digest_reported_at=now if capable else None,
-    ))
+    )
+    if capable:
+        host.agent_capabilities = [SCAN_ROUND_V1]
+        host.agent_capabilities_reported_at = now
+        host.agent_capabilities_instance_id = "agent-hold"
+    db.add(host)
     db.commit()
     return host_id
 
@@ -150,23 +159,25 @@ def _rounds(db, run_id):
 
 def _candidate(db_session, phase_two, *, mixed_host=False):
     """Owner 已点名、但预期 MTK host 能力未证实的候选分区。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session)
-    host_id = _host(db_session, digest, capable=False)
+    host_id = _host(db_session, capable=False)
     _device_job(db_session, run, host_id, platform="MTK")
     if mixed_host:
         _device_job(db_session, run, host_id, platform="UNISOC")
     phase_two(whitelist=[run.id])
-    return run, host_id, digest
+    return run, host_id
 
 
 def _recover(host_id):
+    """能力证据回来：在线 + 当前心跳显式上报 ``scan_round_v1`` 并绑定实例。"""
     with SessionLocal() as session:
         host = session.get(Host, host_id)
         host.status = "ONLINE"
         recovered = _now()
         host.last_heartbeat = recovered
-        host.agent_artifact_digest_reported_at = recovered
+        host.agent_capabilities = [SCAN_ROUND_V1]
+        host.agent_capabilities_reported_at = recovered
+        host.agent_capabilities_instance_id = "agent-hold"
         session.commit()
 
 
@@ -188,8 +199,7 @@ def test_candidate_wait_is_distinguishable_from_unrecorded_partition(
     db_session, phase_two,
 ):
     """裁决第 2 项要求区分：候选等待 ≠ 存量按现行。"""
-    digest = capability.desired_scan_round_digest()
-    candidate, _host_id, _ = _candidate(db_session, phase_two)
+    candidate, _host_id = _candidate(db_session, phase_two)
 
     action = admission.partition_action_at_entry(
         candidate.id, entrypoint=admission.ENTRY_SCAN_TASK,
@@ -199,7 +209,7 @@ def test_candidate_wait_is_distinguishable_from_unrecorded_partition(
     assert not action.legacy_allowed and not action.dedup_first
 
     historical = _run(db_session)
-    _device_job(db_session, historical, _host(db_session, digest))
+    _device_job(db_session, historical, _host(db_session))
     phase_two(whitelist=[])  # 同样的开关状态，但这个 run 没被点名
     legacy = admission.partition_action_at_entry(
         historical.id, entrypoint=admission.ENTRY_SCAN_TASK,
@@ -212,7 +222,7 @@ def test_candidate_wait_is_distinguishable_from_unrecorded_partition(
 @pytest.mark.asyncio
 async def test_candidate_wait_produces_no_legacy_side_effects(db_session, phase_two):
     """纯 MTK 候选等待：scan 不下发、upload 不标记、merge 不跑旧工具、extract 不提取。"""
-    run, host_id, _digest = _candidate(db_session, phase_two)
+    run, host_id = _candidate(db_session, phase_two)
     mtk = _dle(db_session, run.id, host_id, platform="MTK", serial="SN-HOLD")
 
     legacy_dispatch = AsyncMock()
@@ -244,7 +254,7 @@ async def test_candidate_wait_produces_no_legacy_side_effects(db_session, phase_
 @pytest.mark.asyncio
 async def test_candidate_wait_keeps_current_partition_of_same_run(db_session, phase_two):
     """候选等待只挡住它自己：同运行的展锐现行事件照常标记。"""
-    run, host_id, _digest = _candidate(db_session, phase_two, mixed_host=True)
+    run, host_id = _candidate(db_session, phase_two, mixed_host=True)
     unisoc = _dle(db_session, run.id, host_id, platform="UNISOC", serial="SN-U-HOLD")
     mtk = _dle(db_session, run.id, host_id, platform="MTK", serial="SN-M-HOLD")
 
@@ -262,7 +272,7 @@ def test_candidate_wait_defers_round_registration_until_evidence_returns(
     db_session, phase_two, tmp_path, monkeypatch,
 ):
     """候选等待期间不登记轮次也不入队；能力恢复后 sweep 固化模式并建轮。"""
-    run, host_id, _digest = _candidate(db_session, phase_two)
+    run, host_id = _candidate(db_session, phase_two)
     monkeypatch.setattr(shadow, "resolve_shared_storage_root", lambda: str(tmp_path))
     queued = MagicMock()
     monkeypatch.setattr(shadow, "enqueue_sync", queued)
@@ -284,7 +294,7 @@ def test_legacy_dispatch_marker_forfeits_admission_without_reports(
     db_session, phase_two,
 ):
     """裁决第 1 项：痕迹先于报表——已下发的旧扫描本身就否定 DEDUP_FIRST。"""
-    run, host_id, _digest = _candidate(db_session, phase_two, mixed_host=True)
+    run, host_id = _candidate(db_session, phase_two, mixed_host=True)
     assert admission.mark_legacy_scan_dispatched(
         run.id, entrypoint=admission.ENTRY_SCAN_TASK, host_ids=[host_id],
     ) is True
@@ -307,7 +317,7 @@ def test_forfeit_survives_still_unverified_capability(db_session, phase_two):
     于是「已发旧扫描 + 心跳还没恢复」的窗口里没有任何入口会固化模式，下一个入场可以凭空写进
     ``DEDUP_FIRST``（裁决第 1、2 项的合取正是用来排除它）。
     """
-    run, host_id, _digest = _candidate(db_session, phase_two, mixed_host=True)
+    run, host_id = _candidate(db_session, phase_two, mixed_host=True)
     assert admission.mark_legacy_scan_dispatched(
         run.id, entrypoint=admission.ENTRY_SCAN_TASK, host_ids=[host_id],
     ) is True
@@ -315,6 +325,11 @@ def test_forfeit_survives_still_unverified_capability(db_session, phase_two):
     with SessionLocal() as db:
         host = db.get(Host, host_id)
         assert host.status == "OFFLINE", "本用例的前提就是能力仍未证实"
+        # 失能必须由 #4044 的谓词说话（与影子发送守卫同一个函数、同一个原因码），
+        # 本单不另立判据：这里读到的 reason 就是入场当时用来挡住 DEDUP_FIRST 的那一个。
+        assert caps.load_host_capability_evidence(db, host_id).reason == (
+            caps.REASON_HOST_OFFLINE
+        )
     # 用自开会话的入口版：它自己提交，测试读到的才是别的连接也能看到的已固化结果。
     action = admission.partition_action_at_entry(
         run.id, entrypoint=admission.ENTRY_UPLOAD_TASK,
@@ -326,9 +341,8 @@ def test_forfeit_survives_still_unverified_capability(db_session, phase_two):
 
 def test_marker_is_not_written_for_non_candidates(db_session, phase_two):
     """非候选不写痕迹：未点名的 run 行为与改动前逐字一致，也不新增 run_context 段。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session)
-    _device_job(db_session, run, _host(db_session, digest))
+    _device_job(db_session, run, _host(db_session))
     phase_two(whitelist=[])
 
     assert admission.mark_legacy_scan_dispatched(
@@ -343,7 +357,7 @@ async def test_controlled_interleaving_cannot_fixate_dedup_after_legacy_scan(
     db_session, phase_two,
 ):
     """被点名的交错不可达：旧扫描在途 → 能力恢复 → 另一入场只能固化 CURRENT。"""
-    run, host_id, _digest = _candidate(db_session, phase_two, mixed_host=True)
+    run, host_id = _candidate(db_session, phase_two, mixed_host=True)
 
     # 1)
     # 为展锐现行侧照发旧 scan，并在下发之前落库内痕迹：探针就在下发那一刻跨会话读痕迹，
@@ -384,9 +398,8 @@ async def test_admitted_partition_scans_only_through_registered_rounds(
     db_session, phase_two, tmp_path, monkeypatch,
 ):
     """裁决第 3 项：DEDUP_FIRST 的 MTK 只经已登记轮次下发，首次下发前模式已提交且唯一。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="RUNNING")
-    host_id = _host(db_session, digest)
+    host_id = _host(db_session)
     _device_job(db_session, run, host_id)
     phase_two(whitelist=[run.id])
 
@@ -407,7 +420,10 @@ async def test_admitted_partition_scans_only_through_registered_rounds(
 
     seen = {}
 
-    async def _round_dispatch(host_id_arg, *, payload=None):
+    async def _round_dispatch(host_id_arg, *, payload=None, required_instance_id=None):
+        # 第三道发送守卫（#4044）：连接必须绑定「证明过能力的那个 Agent 实例」。本单接入
+        # 单源能力证据后，这道守卫的入参必须仍然是心跳里的实例 id，不能退化成 None。
+        seen["required_instance_id"] = required_instance_id
         seen["mode"] = _committed_mode_elsewhere(run.id)
         seen["fact_round_id"] = (payload or {}).get("fact_round_id")
         seen["rows"] = _modes_from_other_session(run.id)
@@ -427,6 +443,7 @@ async def test_admitted_partition_scans_only_through_registered_rounds(
         "mode": "DEDUP_FIRST",
         "fact_round_id": round_id,
         "rows": [("mtk", "DEDUP_FIRST")],
+        "required_instance_id": "agent-hold",
     }
 
 
@@ -440,9 +457,8 @@ async def test_terminal_entry_also_routes_dedup_partition_to_final_round(
     db_session, phase_two, tmp_path, monkeypatch,
 ):
     """终态入口（is_final）同样不发旧 scan，改由 FINAL 轮承担扫描。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="SUCCESS")
-    host_id = _host(db_session, digest)
+    host_id = _host(db_session)
     _device_job(db_session, run, host_id)
     phase_two(whitelist=[run.id])
 
@@ -497,3 +513,40 @@ def test_same_host_legacy_scan_still_runs_mtk_runner(monkeypatch):
 
     assert mtk_calls, "MTK runner 仍被调用：过滤串号不足以抑制旧 MTK 扫描"
     assert unisoc_calls and unisoc_calls[0]["device_serials"] == ("SN-UNISOC-ONLY",)
+
+
+@pytest.mark.asyncio
+async def test_candidate_wait_also_covers_capability_never_reported(db_session, phase_two):
+    """候选等待不只发生在离线机：在线但心跳没报能力，同样必须停住本分区动作。
+
+    入场判定消费的就是 #4044 那一个谓词，因此「在线但 ``capability_never_reported``」与
+    「离线」在准入上是同一件事：不写 ``DEDUP_FIRST``，也不被旧链消费；原因码由 #4044 给出，
+    本单不再自己解释成「制品摘要不一致」之类的第二套说法。
+    """
+    run = _run(db_session)
+    host_id = _host(db_session, capable=True)
+    _device_job(db_session, run, host_id, platform="MTK")
+    with SessionLocal() as db:
+        host = db.get(Host, host_id)
+        host.agent_capabilities = None
+        host.agent_capabilities_reported_at = None
+        host.agent_capabilities_instance_id = None
+        db.commit()
+    phase_two(whitelist=[run.id])
+
+    action = admission.partition_action_at_entry(
+        run.id, entrypoint=admission.ENTRY_SCAN_TASK,
+    )
+    assert (action.mode, action.held) == (None, True)
+    assert action.reason == admission.REASON_CAPABILITY_UNVERIFIED
+    assert action.detail["reasons"][host_id] == caps.REASON_CAPABILITY_NEVER_REPORTED
+    assert action.detail["expected_hosts"] == [host_id]
+    assert _modes(db_session, run.id) == []
+
+    legacy = AsyncMock()
+    hosts = MagicMock()
+    with patch("backend.realtime.socketio_server.call_agent_control", legacy), \
+         patch.object(saq_tasks, "_query_hosts_for_scan", hosts):
+        await saq_tasks.scan_task({}, plan_run_id=run.id, is_final=False)
+    legacy.assert_not_called()
+    hosts.assert_not_called()

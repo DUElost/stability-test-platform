@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import reset_scheduler_settings_cache
@@ -70,6 +70,30 @@ def _digest():
     return compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
 
 
+def _stamp_capability(host, now, *, capable):
+    """把「这台机器的 Agent 能跑绑定轮次扫描」写成**当前 checkout 里可证明**的事实。
+
+    探针必须原样跑在基线 ``e7325af0``（#3875 的 digest 过渡判据，还没有心跳能力列）与 HEAD
+    （#4044 的心跳能力单源）两边，所以这里按**现有列**写证据：用 ``setattr`` 而不是构造参数
+    （基线的 ``Host`` 不认识能力列），能力常量也只在 HEAD 一侧才 import。
+
+    基线那一支只服务于「同一份探针在基线为红」这个目的，不是 HEAD 里的第二套判据：主干代码
+    已经不再读取任何摘要字段（由 ``test_no_digest_transitional_capability_judge_remains`` 锁死）。
+    """
+    columns = {attr.key for attr in inspect(Host).mapper.column_attrs}
+    if "agent_capabilities" in columns:
+        from backend.agent.contracts.capabilities import SCAN_ROUND_V1
+
+        host.agent_capabilities = [SCAN_ROUND_V1] if capable else []
+        host.agent_capabilities_reported_at = now
+        host.agent_capabilities_instance_id = "probe-agent" if capable else None
+        return
+    host.agent_artifact_digest = _digest() if capable else "sha256:legacy"
+    host.agent_artifact_digest_reported_at = (
+        now if capable else now - timedelta(hours=1)
+    )
+
+
 def _admitted_run(db, *, status="RUNNING", capable=True):
     """纯 MTK、中等规模、Agent 能力可证明的新 run —— 试点白名单的目标形态。"""
     plan = Plan(name=f"probe4043-{uuid4()}", created_by="pytest")
@@ -86,14 +110,12 @@ def _admitted_run(db, *, status="RUNNING", capable=True):
     octet = int(host_id.split("-")[1][:3], 16)
     address = f"203.0.113.{octet % 250}"
     now = _now()
-    db.add(Host(
+    host = Host(
         id=host_id, hostname=host_id, name=host_id, ip=address, ip_address=address,
         status="ONLINE", last_heartbeat=now,
-        agent_artifact_digest=_digest() if capable else "sha256:legacy",
-        agent_artifact_digest_reported_at=(
-            now if capable else now - timedelta(hours=1)
-        ),
-    ))
+    )
+    _stamp_capability(host, now, capable=capable)
+    db.add(host)
     db.commit()
     device = Device(
         serial=f"SN-{uuid4().hex[:8]}", host_id=host_id, platform="MTK",

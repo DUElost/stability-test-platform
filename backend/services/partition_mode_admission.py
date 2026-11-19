@@ -14,11 +14,17 @@
 3. 阶段二开关默认关闭；关闭开关只阻止**之后**的入场（D13 第 5 条），不影响已固定分区的回执、
    读取、下载与回收。
 4. Owner 白名单按**实际 PlanRun id** 指定，**不按 Plan 扩展**：同一 Plan 的兄弟 run 各自判定。
-5. 白名单命中后仍要核验该分区**全部**预期 MTK host 的能力证据（与影子下发守卫同源，见
-   :mod:`backend.services.partition_capability`）。任一未证实 → **硬阻断**：不写
-   ``DEDUP_FIRST``。能力是瞬时事实（一次心跳抖动、一次 Agent 回退），不能据此把 run 永久锁死在
-   旧链上，因此阻断本身**不写记录**；期间消费方按 D13 第 2 条走现行，旧链若真的发生副作用，
-   下一次入场会按第 6 条固化为 CURRENT。
+5. 白名单命中后仍要核验该分区**全部**预期 MTK host 的能力证据。证据只有**一个**来源：
+   #4044 的 :func:`backend.services.agent_capabilities.partition_capability_evidence`
+   （当前心跳显式上报的 ``scan_round_v1``，期望 host 集合与影子下发守卫的 ``_expected_units``
+   同源，逐台原因码同一套）——本模块**不**再自行派生 host 集合，也不保留任何制品摘要
+   （digest）过渡判据。任一未证实 → **硬阻断**：不写 ``DEDUP_FIRST``。能力是瞬时事实（一次
+   心跳抖动、一次 Agent 回退），不能据此把 run 永久锁死在旧链上，因此阻断本身**不写记录**；
+   期间消费方按 D13 第 2 条走现行，旧链若真的发生副作用，下一次入场会按第 6 条固化为 CURRENT。
+   **空期望集按 fail-closed 处理**：``partition_capability_evidence`` 对空期望集给出
+   ``admitted=True``（它不替调用方判断「无 host 可扫」是否异常），而本单要的恰是那个判断——
+   没有任何可核验的 host 就等于能力不可证明，因此**不得**写入 ``DEDUP_FIRST``，本次入场以
+   :data:`REASON_NO_EXPECTED_HOSTS` 不固化，并由入口按「候选等待」停住本分区动作。
 6. 写 ``DEDUP_FIRST`` 前必须确认旧链还没在本分区留下事实（在途旧 run 沿用 D13）。判定信号是
    旧链**专有且可归因到本分区**的库内痕迹：本分区（MTK，或归属无法确认）的 scan/merge 报表
    产物、含 MTK 的 ``run_context.merge_platforms``，以及候选旧链扫描下发之前由
@@ -65,13 +71,8 @@ from backend.core.settings.scheduler import SchedulerSettings, get_scheduler_set
 from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services import issue_fact_store as facts
+from backend.services.agent_capabilities import partition_capability_evidence
 from backend.services.plan_run_context import write_run_context_section
-from backend.services.partition_capability import (
-    CAPABILITY_UNVERIFIED,
-    expected_mtk_host_ids,
-    unverified_hosts,
-    verify_expected_mtk_hosts,
-)
 from backend.services.partition_scope import current_platforms, normalize_platform
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,9 @@ REASON_SWITCH_DISABLED = "dedup_first_switch_disabled"
 REASON_NOT_WHITELISTED = "not_in_owner_whitelist"
 REASON_PHASE_ONE_DISABLED = "shadow_phase_disabled"
 REASON_NO_EXPECTED_HOSTS = "no_expected_mtk_hosts"
-REASON_CAPABILITY_UNVERIFIED = CAPABILITY_UNVERIFIED
+#: 与 #4044 影子侧（``shadow_scan_rounds`` 的 coverage ``reason``）逐字同值：入场被挡与
+#: 发送被拒必须是同一个原因码，否则台账里会出现两套「能力未证实」的写法。
+REASON_CAPABILITY_UNVERIFIED = "capability_unverified"
 REASON_OLD_CHAIN_EFFECTS = "old_chain_side_effects"
 REASON_OWNER_ADMITTED = "owner_admitted"
 
@@ -330,25 +333,43 @@ def decide_partition_mode(
             {"platform": scope, **effects},
         )
 
-    hosts = expected_mtk_host_ids(db, plan_run_id)
+    # 能力证据只有一个来源：#4044 的 partition_capability_evidence。它与影子发送守卫共用
+    # evaluate_host_capability（同一谓词、同一原因码），期望 host 集合与
+    # shadow_scan_rounds._expected_units 同源（实际 JobInstance + prepare 快照，再按该 host
+    # 预期产出的分区过滤）。这里不重算、不派生，也不留任何 digest 过渡判据。
+    evidence = partition_capability_evidence(db, plan_run_id=int(plan_run_id), platform=scope)
+    hosts = sorted(item.host_id for item in evidence.hosts)
     if not hosts:
-        return PartitionModeDecision(None, REASON_NO_EXPECTED_HOSTS, {"platform": scope})
-    verdicts = verify_expected_mtk_hosts(db, plan_run_id, host_ids=hosts)
-    rejected = unverified_hosts(verdicts)
+        # fail-closed：该谓词对空期望集返回 admitted=True，但「没有一台可核验的 host」不等于
+        # 「能力已证实」——首次写入 DEDUP_FIRST 必须等到真实的能力证据出现（判据 5）。
+        return PartitionModeDecision(
+            None, REASON_NO_EXPECTED_HOSTS,
+            {"platform": scope, "expected_hosts": [], "capability_evidence": evidence.as_dict()},
+        )
+    rejected = sorted(item.host_id for item in evidence.unverified)
     if rejected:
+        logger.info(
+            "partition_capability_unverified plan_run=%d platform=%s reasons=%s",
+            plan_run_id, scope,
+            ",".join(f"{item.host_id}:{item.reason}" for item in evidence.unverified),
+        )
         return PartitionModeDecision(
             None,
             REASON_CAPABILITY_UNVERIFIED,
             {
                 "platform": scope,
                 "unverified_hosts": rejected,
-                "reasons": {item.host_id: item.reason for item in verdicts if not item.verified},
+                "reasons": {item.host_id: item.reason for item in evidence.unverified},
                 "expected_hosts": hosts,
+                "capability_evidence": evidence.as_dict(),
             },
         )
     return PartitionModeDecision(
         facts.PARTITION_MODE_DEDUP_FIRST, REASON_OWNER_ADMITTED,
-        {"platform": scope, "expected_hosts": hosts},
+        {
+            "platform": scope, "expected_hosts": hosts,
+            "capability_evidence": evidence.as_dict(),
+        },
     )
 
 
