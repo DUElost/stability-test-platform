@@ -30,6 +30,7 @@
 | [`agent-version-and-hot-update.md`](./agent-version-and-hot-update.md) | 协议版本门禁、code revision、滚动升级顺序 |
 | [`device-log-event-recovery.md`](./device-log-event-recovery.md) | 无 DLE 行的存量事件目录补录与重提取 |
 | [`host-device-visibility-triage.md`](./host-device-visibility-triage.md) | 设备从 adb 消失 / 页面上「在线 vs USB」差值的四层判别（内核 · adb server · adbd · USB 功能集），含只读命令与 2026-09-14 实证 |
+| [`memleak-monitor-fleet-ops.md`](./memleak-monitor-fleet-ops.md) | 内存泄漏监测工具（automation-toolkit）在 Agent 主机上的批量下发、窗口收口与只读巡检 SOP；含 2026-11-16 至 11-19 机队实证与远程取数的 16 条坑（判据仍以模块 readme 为权威） |
 | [`honor-flash-runbook.md`](./honor-flash-runbook.md) | Honor 刷机：固件上架（manifest/latest.json）、MLD 刷机 Plan、单台验证与放量 |
 | [`powercycle-chain-disarm-runbook.md`](./powercycle-chain-disarm-runbook.md) | 开关机专项设备归还排障：按 §1 读取归还证据、排查清偿与组合核验，执行人工放行及后续 init 检查 |
 | [`zte-v537a-powercycle-apk-debugging.md`](./zte-v537a-powercycle-apk-debugging.md) | 中兴 V537A 项目自动化测试专项排障与适配手册（ROM 平台签名对齐、ZTE MyOS 自启动拦截、NFC Empty tag 焦点抢占排障及自愈 SOP） |
