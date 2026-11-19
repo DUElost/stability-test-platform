@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Sequence
 
 from sqlalchemy import String, and_, cast, distinct, func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, aliased
 
 from backend.models.issue_fact import (
@@ -255,6 +256,43 @@ def record_partition_mode(
     db.add(row)
     db.flush()
     return row
+
+
+def insert_partition_mode_if_absent(
+    db: Session,
+    *,
+    plan_run_id: int,
+    platform: str,
+    mode: str,
+    written_at: Optional[datetime] = None,
+) -> tuple[PartitionMode, bool]:
+    """首次分区模式写入的并发安全版本（ADR-0062 D3 第 1 条，#4043）。
+
+    在 ``uq_partition_mode_run_platform`` 上 ON CONFLICT DO NOTHING，再回读：同一分区并发
+    入场只留**一条**记录，后到的写入者拿到先提交的那条并据此分流（D13 第 2 条：模式以写入时
+    为准，之后不可改）。返回 ``(行, 是否本次新写)``；``False`` 时 ``行.mode`` 可能与入参不同，
+    调用方必须以返回值为准。
+
+    与 :func:`record_partition_mode` 的分工：本函数只服务「首次固化」，改写既有模式仍由
+    :func:`record_partition_mode` 显式拒绝。
+    """
+    _require_one_of(mode, _PARTITION_MODES, "mode")
+    result = db.execute(
+        pg_insert(PartitionMode).values(
+            plan_run_id=int(plan_run_id),
+            platform=platform,
+            mode=mode,
+            written_at=written_at or _utcnow(),
+        ).on_conflict_do_nothing(index_elements=["plan_run_id", "platform"])
+    )
+    db.flush()
+    created = bool(result.rowcount)
+    row = get_partition_mode(db, plan_run_id=plan_run_id, platform=platform)
+    if row is None:  # pragma: no cover - ON CONFLICT 后回读必然命中
+        raise IssueFactError(
+            f"partition_mode readback missing: plan_run_id={plan_run_id} platform={platform}",
+        )
+    return row, created
 
 
 def get_partition_mode(

@@ -214,3 +214,60 @@ def test_shadow_merge_attempt_limit_is_configurable_and_positive(monkeypatch, li
             SchedulerSettings()
     else:
         assert SchedulerSettings().stp_scan_round_merge_max_attempts == limit
+
+
+def test_dedup_first_entry_defaults_closed_and_whitelist_empty(monkeypatch):
+    """#4043：阶段二入场默认关闭、白名单默认空——新链不会因为「忘了配」而自动生效。"""
+    for key in ("STP_DEDUP_FIRST_ENABLED", "STP_DEDUP_FIRST_PLAN_RUN_IDS"):
+        monkeypatch.delenv(key, raising=False)
+    settings = SchedulerSettings()
+    assert settings.stp_dedup_first_enabled is False
+    assert settings.stp_dedup_first_plan_run_ids == ""
+    assert settings.dedup_first_plan_run_whitelist == frozenset()
+
+
+def test_dedup_first_whitelist_is_actual_plan_run_ids(monkeypatch):
+    """白名单只列实际 PlanRun id，逗号/空白皆可；不做 Plan → run 的展开。"""
+    monkeypatch.setenv("STP_SCAN_ROUND_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("STP_DEDUP_FIRST_ENABLED", "1")
+    monkeypatch.setenv("STP_DEDUP_FIRST_PLAN_RUN_IDS", "1257, 1261 1262")
+    settings = SchedulerSettings()
+    assert settings.dedup_first_plan_run_whitelist == frozenset({1257, 1261, 1262})
+
+
+@pytest.mark.parametrize("raw", ["1257,abc", "1257, ,-3", "-3", "0", "1257;1261", "1257.5"])
+def test_dedup_first_whitelist_rejects_unparsable_tokens(monkeypatch, raw):
+    """配错的试点 run 必须响亮失败：静默丢弃一个 id 等于让它走旧链而无人察觉。
+
+    只有「空 token」被容忍（`1257,,` 与尾随空格是复制粘贴的正常形态），任何非正整数都报错。
+    """
+    monkeypatch.setenv("STP_SCAN_ROUND_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("STP_DEDUP_FIRST_ENABLED", "1")
+    monkeypatch.setenv("STP_DEDUP_FIRST_PLAN_RUN_IDS", raw)
+    with pytest.raises(ValidationError):
+        SchedulerSettings()
+
+
+def test_dedup_first_whitelist_tolerates_empty_tokens(monkeypatch):
+    monkeypatch.setenv("STP_SCAN_ROUND_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("STP_DEDUP_FIRST_ENABLED", "1")
+    monkeypatch.setenv("STP_DEDUP_FIRST_PLAN_RUN_IDS", "1257,, 1261 ")
+    assert SchedulerSettings().dedup_first_plan_run_whitelist == frozenset({1257, 1261})
+
+
+def test_dedup_first_requires_phase_one_shadow_switch(monkeypatch):
+    """只开阶段二 = 事件既不被旧链标记、也没有轮次处理，Settings 直接拒绝半开配置。"""
+    monkeypatch.delenv("STP_SCAN_ROUND_SHADOW_ENABLED", raising=False)
+    monkeypatch.setenv("STP_DEDUP_FIRST_ENABLED", "1")
+    with pytest.raises(ValidationError, match="STP_SCAN_ROUND_SHADOW_ENABLED"):
+        SchedulerSettings()
+
+
+def test_dedup_first_enabled_without_whitelist_is_allowed(monkeypatch):
+    """开关先开、白名单仍空 = 没有任何 run 获批；这是分批放行的正常形态，不报错。"""
+    monkeypatch.setenv("STP_SCAN_ROUND_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("STP_DEDUP_FIRST_ENABLED", "1")
+    monkeypatch.delenv("STP_DEDUP_FIRST_PLAN_RUN_IDS", raising=False)
+    settings = SchedulerSettings()
+    assert settings.stp_dedup_first_enabled is True
+    assert settings.dedup_first_plan_run_whitelist == frozenset()

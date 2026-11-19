@@ -409,6 +409,9 @@ async def test_scan_task_no_hosts_triggered_skips_poll(monkeypatch):
              patch("saq.Job", MagicMock()):
             await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
+    # B8 #4043：下发前的模式判定与固化走 asyncio.to_thread 直调（与本函数里
+    # _query_hosts_for_scan 同一写法），不占用本测试用来拦截轮询路径的 asyncio_to_thread 别名，
+    # 因此原判据保持不变：没有 host 被触发 ⇒ 轮询路径一次线程调用都没有。
     to_thread.assert_not_awaited()
 
 
