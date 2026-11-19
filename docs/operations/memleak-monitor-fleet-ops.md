@@ -26,7 +26,7 @@
 
 | 本文用词 | 指什么 | 现网取值（2026-11-19 实测） |
 |---|---|---|
-| 中心存储 | 存储角色 4（别名 CIFS / NFS / sonic_tinno），见 [`2026-storage-roles-and-aliases.md`](../design/2026-storage-roles-and-aliases.md) §4.4 | UNC `//172.21.15.4/jxtinno/sonic_tinno`，Agent 主机挂载点 `/home/android/sonic_agent/logs/ftp_log/sonic_tinno` |
+| 中心存储 | 存储角色 4（别名 CIFS / NFS / sonic_tinno），见 [`2026-storage-roles-and-aliases.md`](../design/2026-storage-roles-and-aliases.md) §4.4 | UNC `//172.21.x.x/jxtinno/sonic_tinno`，Agent 主机挂载点 `/home/android/sonic_agent/logs/ftp_log/sonic_tinno` |
 | 「15.4」 | 中心存储的**外号**，不得当成「现网 UNC 已在 15.4」的事实陈述 | 同上，写文档时以实际 `mount` 输出为准 |
 | 主机脚本目录 | 监测工具的落盘位置，一机一份 | `/home/android/memleak/`（`memleak_monitor_2d.py`、`run_2d.sh`、`stop_2d.sh`、`watchdog.sh`、`hot_devices.txt`、`deadline_epoch`、`started_at`、`logs/`） |
 | 本地暂存 | hprof 先落主机盘再镜像中心存储的那份副本 | `/home/android/memleak_local/<战役目录>/<串号>/leak_*.hprof` |
