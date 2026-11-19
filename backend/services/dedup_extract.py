@@ -12,8 +12,10 @@ from sqlalchemy.orm import Session
 
 from backend.agent.contracts.aee_event_dirs import event_dir_basename_from_path
 from backend.core.dedup_platform import scan_artifact_uri_platform
+from backend.core.dedup_platform import DEDUP_PLATFORM_MTK
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services import issue_fact_store as facts
+from backend.services import partition_mode_admission
 from backend.services.partition_scope import partition_rows
 
 logger = logging.getLogger(__name__)
@@ -210,6 +212,8 @@ def run_extract_sync(plan_run_id: int) -> int:
       -1    no merge artifact
       -2    NFS root not configured
       -3    no CURRENT partition (dedup-first only) -- ADR-0062 D13 第 4 条
+      -4    MTK 分区是 Owner 点名候选、正在等能力证据，模式尚未固化 —— 本次不提取
+            （#4043 规划裁决第 2 项）。混合运行的展锐现行分区仍照常提取。
     """
     # CodeQL py/path-injection (#70): all callers pass an int (FastAPI path
     # param / SAQ task), but normalize defensively before any DB query or path
@@ -233,10 +237,35 @@ def run_extract_sync(plan_run_id: int) -> int:
             mark_events_archived,
         )
 
-        # B8 G7 / D13 第 4 条：extract 是 run 级接口，但只作用于「现行」分区。
-        # 只有先去重分区的运行返回 -3（路由映射 409）；混合运行仍提取现行侧。
+        # ADR-0062 D3 第 1 条 / D14 第 1 条（#4043）：下面的平台范围就是 extract 的分流点
+        # （先去重分区不提取，只由 D9 交付物出口交付），所以模式必须先于它独立提交，
+        # 并且本函数必须**消费**那个结论。自动 extract_task 与手动 extract 路由共用本函数。
+        extract_action = partition_mode_admission.partition_action_at_entry(
+            plan_run_id, entrypoint=partition_mode_admission.ENTRY_EXTRACT,
+        )
         recorded_modes = facts.list_partition_modes(db, plan_run_id=plan_run_id)
-        if not recorded_modes:
+        if extract_action.held:
+            # 规划裁决第 2 项：Owner 点名的候选在等能力证据、模式还没定时，不能按
+            # 「无记录=现行」把 MTK 事件提取进 jira/（那是旧链交付出口）。这里**不看**
+            # recorded_modes 是否为空：只要本分区处于等待态就把它排除，其余现行分区照常提取；
+            # 只剩候选自己时返回 -4（路由映射 409）。
+            others = [
+                row["platform"] for row in partition_rows(db, plan_run_id)
+                if row["platform"] != DEDUP_PLATFORM_MTK
+            ]
+            if not others:
+                logger.info(
+                    "dedup_extract_hold_candidate plan_run=%d reason=%s",
+                    plan_run_id, extract_action.reason,
+                )
+                return -4
+            extract_platforms = others
+            logger.warning(
+                "dedup_extract_skip_candidate_partition plan_run=%d platform=%s reason=%s "
+                "extract_platforms=%s",
+                plan_run_id, DEDUP_PLATFORM_MTK, extract_action.reason, ",".join(others),
+            )
+        elif not recorded_modes:
             # 没有模式记录的存量运行：不加平台过滤，行为与改动前逐字一致
             # （设备平台的推断只用于展示，不能反过来收窄历史 extract）。
             extract_platforms = None

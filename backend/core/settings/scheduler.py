@@ -17,6 +17,7 @@ plan_chain/precheck 四个 reconciler，留在 P2 迁移）。
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 
 from pydantic import Field, model_validator
@@ -75,6 +76,14 @@ class SchedulerSettings(DomainSettings):
     stp_scan_round_interval_seconds: int = Field(default=21600, gt=0)
     stp_scan_round_report_wait_seconds: int = Field(default=7200, gt=0)
     stp_scan_round_merge_max_attempts: int = Field(default=3, ge=1)
+    # B8 阶段二（ADR-0062 D3 第 1 条 / D13 第 5 条，#3800 §2.1 第 1 项）：先去重入场开关。
+    # 默认关闭。关闭只阻止**之后**的分区进入「先去重」，已固化 DEDUP_FIRST 的分区继续按
+    # 既有模式处理回执、读取、下载与回收（D13 第 5 条）。
+    stp_dedup_first_enabled: bool = False
+    # Owner 显式批准的**实际 PlanRun id** 白名单，逗号/空白分隔（例：`1257,1261`）。
+    # 作用域不按 Plan 扩展：同一 Plan 的兄弟 run 各自判定；不在表内的 run 一律固化 CURRENT。
+    # 越界/非数字取值在校验时即报错，不把「配错的试点 run」静默当成「没批准」。
+    stp_dedup_first_plan_run_ids: str = ""
     stp_admission_pump_interval_seconds: int = 5
     stp_counter_reconcile_interval_seconds: int = 300
     stp_signal_link_reconcile_interval_seconds: int = 300
@@ -159,7 +168,44 @@ class SchedulerSettings(DomainSettings):
                 "STP_SCAN_ROUND_REPORT_WAIT_SECONDS must be shorter than "
                 "STP_SCAN_ROUND_INTERVAL_SECONDS",
             )
+        # 解析一次即校验白名单写法（属性复用同一函数，不重复 split）。
+        parse_dedup_first_plan_run_ids(self.stp_dedup_first_plan_run_ids)
+        if self.stp_dedup_first_enabled and not self.stp_scan_round_shadow_enabled:
+            raise ValueError(
+                "STP_DEDUP_FIRST_ENABLED requires STP_SCAN_ROUND_SHADOW_ENABLED: 轮次调度、"
+                "交付登记与回收都在阶段一影子开关之下，只开阶段二会让先去重分区的事件"
+                "既不被旧链标记、也没有轮次处理",
+            )
         return self
+
+    @property
+    def dedup_first_plan_run_whitelist(self) -> frozenset[int]:
+        """Owner 批准的**实际 PlanRun id** 集合（不做 Plan → run 的展开）。"""
+        return parse_dedup_first_plan_run_ids(self.stp_dedup_first_plan_run_ids)
+
+
+def parse_dedup_first_plan_run_ids(raw: str) -> frozenset[int]:
+    """解析 ``STP_DEDUP_FIRST_PLAN_RUN_IDS``：逗号/空白分隔的正整数 run id。
+
+    空值 = 空白名单（没有任何 run 获批）。非法 token 直接报错：白名单是入场判据的一部分，
+    静默丢弃一个 run id 会让试点 run 走旧链而无人察觉。
+    """
+    ids: set[int] = set()
+    for token in re.split(r"[,\s]+", (raw or "").strip()):
+        if not token:
+            continue
+        if not token.isdigit():
+            raise ValueError(
+                "STP_DEDUP_FIRST_PLAN_RUN_IDS must list actual plan_run ids "
+                f"(positive integers); got {token!r}",
+            )
+        run_id = int(token)
+        if run_id <= 0:
+            raise ValueError(
+                f"STP_DEDUP_FIRST_PLAN_RUN_IDS got non-positive plan_run id {token!r}",
+            )
+        ids.add(run_id)
+    return frozenset(ids)
 
 
 @lru_cache(maxsize=1)

@@ -26,12 +26,14 @@ from sqlalchemy.orm import Session
 from backend.core import metrics
 from backend.core.dedup_platform import (
     DEDUP_PLATFORMS,
+    DEDUP_PLATFORM_MTK,
     artifact_uri_matches_platform,
     scan_artifact_uri_platform,
 )
 from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services import issue_fact_store as facts
+from backend.services import partition_mode_admission
 from backend.services.partition_scope import partition_rows
 from backend.services.dedup import (
     get_control_plane_merge_engine,
@@ -793,19 +795,37 @@ def run_merge_all_platforms_sync(
     return ""
 
 
-def _partition_targets(plan_run_id: int) -> tuple[list[str], list[str]]:
-    """本 run 的 (现行平台, 先去重平台)；无分区记录时按纯现行处理。"""
+def _partition_targets(plan_run_id: int) -> tuple[list[str], list[str], list[str]]:
+    """本 run 的 (现行平台, 先去重平台, 候选等待平台)；无分区记录时按纯现行处理。
+
+    merge 的输入范围**就是**一次按模式的分流（现行平台跑旧 merge，先去重平台走影子轮），
+    所以这里先固化模式再读（ADR-0062 D3 第 1 条 / #4043）。自动 merge_task、手动 merge 路由与
+    兼容补跑共用本函数，分流只可能发生在决定落库之后。落库范围由准入决定：未获批的存量分区
+    不会被这里补写记录（D13 第 2 条），继续按「无记录=现行」解释。
+
+    第三个返回值是 #4043 规划裁决第 2 项要的**候选等待能力证据**集合：库里还没有模式记录，
+    但该分区已被 Owner 点名且能力未证实——它既不属于新链也不能被旧链合并，必须从「现行平台」
+    里剔出去，否则 merge 会把它按「无记录=现行」消费掉。
+    """
     from backend.core.database import SessionLocal
 
+    action = partition_mode_admission.partition_action_at_entry(
+        plan_run_id, entrypoint=partition_mode_admission.ENTRY_MERGE,
+    )
     with SessionLocal() as db:
         rows = partition_rows(db, plan_run_id=plan_run_id)
     if not rows:
-        return list(DEDUP_PLATFORMS), []
+        return list(DEDUP_PLATFORMS), [], []
+    # 只有 MTK 可以是被点名的候选（D13 第 3 条），且必须确实出现在本 run 的平台清单里。
+    held = [DEDUP_PLATFORM_MTK] if (
+        action.held and any(row["platform"] == DEDUP_PLATFORM_MTK for row in rows)
+    ) else []
     current = [row["platform"] for row in rows
-               if row["mode"] == facts.PARTITION_MODE_CURRENT]
+               if row["mode"] == facts.PARTITION_MODE_CURRENT
+               and row["platform"] not in held]
     dedup = [row["platform"] for row in rows
              if row["mode"] == facts.PARTITION_MODE_DEDUP_FIRST]
-    return current, dedup
+    return current, dedup, held
 
 
 def run_merge_for_partitions_sync(
@@ -821,11 +841,11 @@ def run_merge_for_partitions_sync(
     纯先去重分区没有现行交付路径，返回 ok（不产生现行产物，也不算失败）；
     缺模式存量仍按两个平台跑，与改动前逐字一致。
     """
-    current, dedup = _partition_targets(plan_run_id)
+    current, dedup, held = _partition_targets(plan_run_id)
     if not current:
         logger.info(
-            "merge_skip_no_current_partition plan_run=%d dedup_platforms=%s",
-            plan_run_id, dedup,
+            "merge_skip_no_current_partition plan_run=%d dedup_platforms=%s held_platforms=%s",
+            plan_run_id, dedup, held,
         )
         return "ok"
     return run_merge_all_platforms_sync(
@@ -858,8 +878,12 @@ def run_manual_merge_sync(
     from backend.core.database import SessionLocal
     from backend.services.shadow_merge import run_shadow_merge
 
-    current, dedup = _partition_targets(plan_run_id)
+    current, dedup, held = _partition_targets(plan_run_id)
     outcomes: dict[str, str] = {}
+    for platform in held:
+        # 候选等待能力证据：模式还没定，本轮既不能跑旧 merge，也没有新链轮次可合。
+        # 如实标出来，别让调用方读成「合并成功」或「无输入」。
+        outcomes[platform] = "awaiting_capability_evidence"
     shadow_round_id = None
     shadow_round_started_at = None
 
@@ -912,6 +936,10 @@ def run_manual_merge_sync(
         value == "no_round" for value in outcomes.values()
     ):
         result = "no_round"
+    if held and not current and not dedup:
+        # 纯候选等待：本轮没有任何一侧被合并。既有断言（all(... == "no_round")）会因为这个
+        # 特殊 outcome 而不等号成立，这里显式给出真实结果，避免把「什么都没做」报成 ok。
+        result = "awaiting_capability_evidence"
     return {
         "result": result,
         "scan_round_id": str(shadow_round_id) if shadow_round_id is not None else None,

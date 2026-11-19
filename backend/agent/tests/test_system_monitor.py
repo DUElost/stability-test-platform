@@ -132,6 +132,8 @@ def test_get_disk_usage_success(disk_usage_type):
         "used_gb": 25.0,
         "free_gb": 75.0,
         "usage_percent": 25.0,
+        "avail_gb": 75.0,
+        "writable_percent": 25.0,
     }
     mock_disk.assert_called_once_with("/data")
 
@@ -146,6 +148,8 @@ def test_get_disk_usage_handles_zero_total(disk_usage_type):
         "used_gb": 0.0,
         "free_gb": 0.0,
         "usage_percent": 0.0,
+        "avail_gb": 0.0,
+        "writable_percent": 0.0,
     }
 
 
@@ -158,6 +162,8 @@ def test_get_disk_usage_returns_none_percent_on_exception():
         "used_gb": None,
         "free_gb": None,
         "usage_percent": None,
+        "avail_gb": None,
+        "writable_percent": None,
     }
 
 
@@ -176,6 +182,8 @@ def test_get_aee_disk_usage_reports_local_root_and_usage(disk_usage_type):
         "used_gb": 90.0,
         "free_gb": 810.0,
         "usage_percent": 10.0,
+        "avail_gb": 810.0,
+        "writable_percent": 10.0,
         "path": "/mnt/hdd/aee_events",
     }
     mock_disk.assert_called_once_with("/mnt/hdd/aee_events")
@@ -302,3 +310,21 @@ def test_cpu_parse_fills_all_fields():
     short = monitor_module._parse_cpu_line("cpu  1 2 3 4")
     assert len(short) == len(monitor_module._CPU_FIELDS)
     assert short["iowait"] == 0
+
+
+def test_get_disk_usage_reports_writable_percent_when_reserved_blocks_exist(disk_usage_type):
+    """#4057：带 ext4 保留块的盘写满时，usage_percent 停在天花板，writable_percent 才是 100。
+
+    数字取自现网 `.75` / `.62` 的 AEE 盘：total 915.82 GiB、used 869.22 GiB、
+    avail 0（保留块 46.60 GiB ≈ 5.09%）。
+    """
+    gib = 1024 ** 3
+    usage = disk_usage_type(total=int(915.82 * gib), used=int(869.22 * gib), free=0)
+
+    with patch.object(monitor_module.shutil, "disk_usage", return_value=usage):
+        result = monitor_module.get_disk_usage("/mnt/hdd")
+
+    assert result["usage_percent"] == 94.91      # 旧口径：看着「还有 5%」
+    assert result["avail_gb"] == 0.0             # 实际已不可写
+    assert result["writable_percent"] == 100.0   # 阈值判据必须用这个
+    assert result["writable_percent"] > 95.0

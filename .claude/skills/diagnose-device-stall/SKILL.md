@@ -1,6 +1,6 @@
 ---
 name: diagnose-device-stall
-description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）的标准排障 SOP（查租约 → 查 adb server 端口 → 查心跳 → 按类处置，按序不跳步）。触发时机：设备离线或长期被占用、PlanRun 卡住、Agent 心跳正常但设备数为 0、lsusb 不识别、Hosts 页「在线 vs USB」差值异常。
+description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）的标准排障 SOP（查租约 → 查 adb server 端口 → 查心跳 → 按类处置，按序不跳步）。触发时机：设备离线或长期被占用、PlanRun 卡住、Agent 心跳正常但设备数为 0、lsusb 不识别、Hosts 页「在线 vs USB」差值异常、主机持续 `usb_link_degraded`、`uhubctl` 卡住或耗时数十秒、需要摘除 Hub 残留上行分支。
 ---
 
 # 设备离线 / PlanRun 卡死排障 SOP
@@ -32,6 +32,10 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
 7. 如果 L0 成立，停止本流程，不执行第 8–13 步，也不按 L1–L4 定成因。
 8. 按 triage 文档 §1 判别表与 §2 只读采集命令，定位 L1 内核、L2 adb server、L3 设备 adbd 或
    L4 设备 USB 功能集。定位前不得执行第 9–13 步。
+   如果 L1 主控判据不成立、但该主机持续上报 `usb_link_degraded`，或 `uhubctl` 卡住、耗时数十秒，
+   执行者必须转 triage 文档 §5.1 判 Hub 分支失效（含**半枚举形态**：`Driver=[none]/0p` 加
+   `hub_ext_port_status failed`，可以没有重枚举风暴）；处置走 §5.2（现场）或 §5.4（软件摘除），
+   不得在本流程里直接 rebind xHCI。
 9. 如果 L1 或 L2 判据成立，确认主机空闲：主机详情接口 `GET /api/v1/hosts/{id}` 返回的
    `active_jobs` 为空列表。如果不为空，等主机空闲后再执行第 10–11 步。
 
@@ -79,3 +83,12 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
 - 「在线 n」远小于「USB n」时，多数是刷机后的 **L4 MIDI 存量**（`0e8d:2046`、无 ADB 接口，
   2026-09-14 台账在案）。此时主机侧 rebind 和 kill-server 都无效，执行者不得操作主机；
   出路是在设备侧首次开启 USB 调试。
+- 内核的 `usb <X>: Failed to suspend device` 这行 **Hub 也会打印**。执行者不得据此行认定是
+  设备侧问题；必须先判对象类型（`cat /sys/bus/usb/devices/<X>/bDeviceClass`，`09` 即 Hub）。
+  2026-11-19 三台同形主机（`.75`/`.60`/`.42`）的 `-110` 全部来自 Hub，不是手机。
+- 主机**未安装 `uhubctl`** 时，执行者不得把「`uhubctl` 不慢」当成「没有 Hub 分支失效」的反证
+  （实测 `.42` 无该命令）。此时判据与验收改用零权限观测面：sysfs 驱动链接、`lsusb -t` 的
+  `Driver=[none]/0p`、`lsusb` 设备总数、`adb devices` 串号集合。
+- `stp-agent-priv read-kernel-log` 的输出**不含时间戳**（`journalctl -k -o cat`）。执行者要定位
+  「噪声何时停止」只能用 `--since-epoch` 做窗口夹逼（3/5/10/15/20 分钟逐级取首次归零的窗口），
+  不得凭「现在没有新行」推断停止时刻。另注意该面 `--lines` 上限为 5000，超限直接 rc=2。

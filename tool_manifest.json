@@ -681,6 +681,14 @@
           "retired": false,
           "script": "flash_firmware_unisoc_bsl.py",
           "version": "1.0.5"
+        },
+        {
+          "artifact": "packages/flash_firmware_unisoc_bsl/1.0.6.tar.gz",
+          "package_sha256": "0d25edcce699ba452c86dba559994fb7750bf3d08e115871a54e3b23aa877ce6",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc_bsl.py",
+          "version": "1.0.6"
         }
       ]
     },
@@ -2434,6 +2442,14 @@
           "retired": false,
           "script": "spd_dump",
           "version": "20261118"
+        },
+        {
+          "artifact": "packages/spd_dump/20261119.tar.gz",
+          "package_sha256": "4ad163094d69432a7a00ae9ea8a8e548207fe641b116305cdbb751bc04a2cef1",
+          "python": null,
+          "retired": false,
+          "script": "spd_dump",
+          "version": "20261119"
         }
       ]
     },
