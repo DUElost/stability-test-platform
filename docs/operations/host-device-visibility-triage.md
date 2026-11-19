@@ -197,8 +197,10 @@ Hub 同样会打印，执行者不得据此认定是手机侧。对象判定的�
    失败或 `-71`。
 5. 执行者核对平台信号：下一次心跳 `capacity.usb_device_count` 恢复；`usb_link_degraded`
    在 1 小时统计窗滑过后回落。
-6. 执行者排期更换该 Hub。USB2 旁路是过渡处置，不是修复；这类 Hub 是单一整机，内部级联
-   结构不可拆分或改造，执行者只能选「换上行口」或「整只更换」。
+6. 执行者按 §5.7 登记该 Hub 的更换触发条件。Owner 于 2026-11-19 裁决：功能正常的主机
+   不再为这类 Hub 单独排期更换，改按 §5.7 的条件触发重新评估。USB2 旁路仍是过渡处置、
+   不是修复；这类 Hub 是单一整机，内部级联结构不可拆分或改造，处置手段仍只有
+   「换上行口」或「整只更换」两种。
 
 ### 5.3 2026-11-12 `.102` 实例
 
@@ -279,8 +281,9 @@ Hub 同样会打印，执行者不得据此认定是手机侧。对象判定的�
 5. 核对平台信号：下一次心跳 `capacity.usb_device_count` 与在用设备数一致；
    `usb_link_degraded` 在 1 小时统计窗滑过后回落（`contracts/kernel_usb_faults.py` 的
    `LINK_WINDOW_SECONDS`）。
-6. 排期更换该 Hub。`remove` 只停止软件面污染，不修硬件；终态出口仍是 §5.2 第 6 条。
-   以后要重新启用这条分支时，执行者先换 Hub 或换上行线，再重插并复跑 §5.2 第 4 条与本节第 4 步。
+6. 执行者按 §5.7 登记该 Hub 的更换触发条件（Owner 2026-11-19 裁决，取代原「排期更换」出口）。
+   `remove` 只停止软件面污染，不修硬件。以后要重新启用这条 SuperSpeed 分支时，执行者只能
+   先换 Hub 或换上行线，再重插并复跑 §5.2 第 4 条与本节第 4 步。
 
 ### 5.5 2026-11-18 `.75` 实例（半枚举形态与 `uhubctl` 固定超时）
 
@@ -341,10 +344,48 @@ HONOR MLD-NX2 站，16 台设备，xHCI 为单一控制器（两条总线：480M
 - 结论：`uhubctl` 缺席不影响本节判定，也不影响摘除带来的收益（内核 `-110` 归零、
   健康面 reason 随滑窗回落）。
   平台侧 `usb_link_degraded` 的翻转按 `LINK_WINDOW_SECONDS=3600` 推算约为 18:29；
-  **本文撰写时（17:40）该机 reason 仍未翻转，故 `.42` 的平台验收记为未完成**，不得当已完成引用。
+  **2026-11-19 补记（原句撰写时该机尚未翻转，故当时记为未完成）**：实测翻转发生在
+  **18:25:58** 那次心跳，`health.status=HEALTHY`、`reasons=[]`、`usb_device_count=17 ==
+  adb_interface_count=17`。该时刻与 `LINK_WINDOW_SECONDS=3600` 吻合：夹逼显示末条 `-110`
+  在 17:25:58 之前，`17:25:58 + 3600s = 18:25:58`，比原推算的 18:29 早 3 分钟——推算用的是
+  拆除命令时刻 17:28:55，而窗口起算点是末条内核事件，两者相差即这 3 分钟。
 
-三例同形说明这不是个案，而是同一批 Hub 的 SuperSpeed 侧退化。`remove` 只停止软件面污染，
-执行者仍须按 §5.2 第 6 条排期更换这些 Hub；`remove` 前不得省略 §5.4 第 1、2 步前置。
+三例同形说明 Hub 的 SuperSpeed 侧退化不是个案；但三者的固件版本不同（`.75`/`.42` 的
+`bcdDevice=0126`、`.60` 为 `0001`），执行者不得把它当成「同一批故障件」作批量处置——更换是
+三次彼此独立的现场动作。`remove` 只停止软件面污染，不修硬件；更换出口由 §5.7 的触发条件接管，
+`remove` 前不得省略 §5.4 第 1、2 步前置。
+
+### 5.7 Hub 更换出口：由固定排期改为触发条件（Owner 裁决 2026-11-19）
+
+适用条件：某主机已按 §5.2（USB2 上行旁路）或 §5.4（软件摘除残留上行）处置完毕，
+失效的 SuperSpeed 侧不再承载任何在用设备。
+
+> 警告：本节是**用原有的确定终态出口换来的弹性**。接受方必须同时接受两件事——这些 Hub 的
+> SuperSpeed 侧长期不可用；以及在用侧一旦随之失效，将不再有软件侧兜底手段，只能现场处置。
+> 执行者不得把本节引用成「Hub 坏了也可以不管」：它只豁免「当前无在用设备的失效侧」。
+
+Owner 裁决：功能正常的主机不为这类 Hub 单独排期更换；执行者改按本节触发条件维持或恢复更换。
+本节五条判据**全部**成立时，执行者可以维持「不更换」；任一不成立，执行者必须恢复更换出口，
+并按 §5.2 第 1–6 步或 §5.4 重新处置。执行者不得凭主观「看着正常」判定，必须给出下表查法的结果。
+
+| # | 判据 | 查法 | 2026-11-19 三台实测 |
+|---|---|---|---|
+| 1 | 在用侧设备数与 ADB 接口数相等 | 平台 `GET /api/v1/hosts/{id}` 的 `capacity.usb_device_count` 与 `capacity.adb_interface_count` | `.75` 16/16、`.60` 13/13、`.42` 17/17 |
+| 2 | 内核链路错误归零 | `sudo -n /usr/local/sbin/stp-agent-priv read-kernel-log --since-epoch <now-900> --lines 5000` 后 `grep -cE 'error -71|error -110'` | 三台均 **0**（处置前 67~74 次/15 分钟） |
+| 3 | 取证工具不再被残留上行拖慢 | `time /usr/sbin/uhubctl` 全量列举 < 2 秒。**未装 `uhubctl` 的主机不得用本条**（`rc=127` 的「0 秒」不是证据），只凭第 2 条判定 | `.75` 1.3s、`.60` 0.6~0.9s、`.42` 无该命令（跳过本条） |
+| 4 | 健康面不再点亮 USB 类 reason | 平台 `health.reasons` 不含 `usb_link_degraded` | 三台均 `HEALTHY`、`reasons=[]` |
+| 5 | VBUS 槽位与实际树一致 | 平台 `capacity.usb_power_slots` 中第二项为 `null` 的条目数为 0；未启用切电的主机本条不适用 | `.75` 16/16 命中；`.60`/`.42` `usb_power_slots=0`（不适用） |
+
+出现下列任一情况，执行者必须把更换重新提上日程，不得继续按「功能正常」维持：
+
+1. 该机 `-71` / `-110` 回到日级三位数及以上。§5.3 记录的 `.102` 前兆正是「死亡前两周每日
+   400~3700 行」——这是本案唯一有历史事故支撑的先行指标，也是本节愿意放弃固定排期的前提。
+2. 在用侧新出现 `usb_tree_empty` 或 `usb_host_controller_dead`。
+3. `usb_device_count` 与 `adb_interface_count` 出现无法用 §1 L0 意图或 L4 设备功能集解释的缺口。
+4. 任何专项需要恢复 SuperSpeed 带宽。`remove` 是 write-once，恢复只有现场重插上行线或
+   rebind xHCI，而后者会连带重新枚举另一条总线上的在用设备；执行者不得把这条当成可逆开关。
+5. 同一只 Hub 的另一侧（在用侧）也出现 §5.1 判据。此时旁路已不再是「绕过死掉的一侧」，
+   而是在给即将失效的一侧让路。
 
 ## 6. 相关
 
@@ -353,4 +394,5 @@ HONOR MLD-NX2 站，16 台设备，xHCI 为单一控制器（两条总线：480M
 - xHCI 死亡致 USB/ADB 全空：[`incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md`](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)
 - 半枚举形态与 `remove` 解法的决策记录：[`notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md`](../notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md)
 - 观测口径补强与 `.60`/`.42` 两例处置的决策记录：[`notes/process/2026-11-19-usb-hub-half-enum-second-hosts-skill-guard.md`](../notes/process/2026-11-19-usb-hub-half-enum-second-hosts-skill-guard.md)
+- 更换出口由排期改为触发条件的 Owner 裁决：[`notes/process/2026-11-19-hub-replacement-trigger-policy.md`](../notes/process/2026-11-19-hub-replacement-trigger-policy.md)
 - HONOR / MLD 刷机 runbook：[`honor-flash-runbook.md`](./honor-flash-runbook.md)
