@@ -6,7 +6,7 @@
 （尚未发生过回收），downgrade 完整撤销。
 
 Revision ID: b8u5a1c2d3e4
-Revises:    b8g8c1d2e3f4
+Revises:    b8u2h1c2a3p4
 Create Date: 2026-11-19
 """
 
@@ -14,7 +14,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "b8u5a1c2d3e4"
-down_revision = "b8g8c1d2e3f4"
+down_revision = "b8u2h1c2a3p4"
 branch_labels = None
 depends_on = None
 

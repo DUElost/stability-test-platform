@@ -26,7 +26,8 @@ Class: feature
 4. **`FAILED` 一律保留**（裁决 2）：理由串为 `terminal_failed_evidence`，纠正被误标的
    `completion_time_unknown`——失败是事故证据，不是「时间未知」的例外分支。
 5. **回收不留噪音 = 3a**：`compat_rerun.artifact_purged_at`（迁移 `b8u5a1c2d3e4`，
-   `down_revision=b8g8c1d2e3f4`）记录回收时间；登记行**不删**、状态**不改**；
+   `down_revision=b8u2h1c2a3p4`，基线衔接时从 `b8g8c1d2e3f4` 改挂到 #4044 链后）记录回收时间；
+   登记行**不删**、状态**不改**；
    已回收项从「保留」栏移到独立「已回收」栏，重复标记不覆盖第一次时间。
    该列**不建索引**：表体量是 Owner 逐次发起的补跑数，且判定本就是全表读；建索引只会在
    `check_schema_sync` 里多出基线外漂移项（实测过：加索引 → `remove_index|compat_rerun|...` 判红）。
@@ -71,6 +72,12 @@ Class: feature
   全量相关面此前 `124 passed`。
 - 门禁：`check:quick` 16 gates 通过；`tools/dev/check_pr_migrate.py` 本地真跑通过
   （postgres:16 空库 `alembic upgrade head` + schema 比对回到基线 5 项、无新增漂移 + seed 身份）。
+- 基线衔接（2026-11-19，合入 `origin/main=a902a3183` 后重跑）：`b8u5a1c2d3e4` 的
+  `down_revision` 由 `b8g8c1d2e3f4` 改挂 `b8u2h1c2a3p4`（#4044），`alembic heads` 全仓单 head；
+  一次性 postgres:16 空库上 `upgrade head → downgrade -1 → upgrade head` 往返通过，
+  `artifact_purged_at` 列随 downgrade 消失、随 upgrade 恢复（nullable）；迁移契约四件套
+  `20 passed`、本刀留存测试 `17 passed`、邻面（G8 补跑/路由探针/族清单单源/调度设置）
+  `58 passed`、`check:quick` 16 gates 复跑通过。
 - 清单：`env_inventory --write` 后 281 个读取名一致；`transitions` 11 条 / 5 在途。
 - **未执行**（不得当作已完成）：生产 15.4 的计量与 Dry-run 实跑；任何一次真实试点回收
   （需 Owner 逐次确认）；#4050/#本 PR 的独立复核；required CI（合并前以 CI 为准）。
