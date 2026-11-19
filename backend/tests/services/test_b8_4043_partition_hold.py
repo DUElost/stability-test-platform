@@ -38,7 +38,6 @@ from backend.models.plan_run import PlanRun
 from backend.services import dedup_extract
 from backend.services import dedup_scan
 from backend.services import issue_fact_store as facts
-from backend.services import partition_capability as capability
 from backend.services import partition_mode_admission as admission
 from backend.services import shadow_scan_rounds as shadow
 from backend.tasks import saq_tasks
