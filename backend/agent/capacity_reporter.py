@@ -29,6 +29,13 @@ def _disk_usage_percent(system_stats: dict) -> Optional[float]:
     blob = system_stats.get("disk_usage")
     if not isinstance(blob, dict):
         return None
+    # 阈值判据按可写占比（#4057）：``usage_percent`` 在带保留块的文件系统上存在
+    # ``(total-reserved)/total`` 的天花板，实测 5% 保留的 ext4 为 94.91%，因此
+    # ``> 95`` 这类判据在该类盘上永不可达，盘写满也不会变成 disk_high。
+    # 缺 ``writable_percent`` 时回退旧字段，兼容注入桩与未升级的上报面。
+    value = _coerce_usage_percent(blob.get("writable_percent"))
+    if value is not None:
+        return value
     return _coerce_usage_percent(blob.get("usage_percent"))
 
 
@@ -154,7 +161,9 @@ def _compute_health_limit(
 ) -> int:
     """二元 gate：主机健康时返回大值（不限制），不健康时返回 0。
 
-    与 _compute_health 共享阈值常量，变更阈值时需同步修改两处。
+    与 _compute_health 共享阈值常量，变更阈值时需同步修改两处。磁盘阈值作用在
+    ``_disk_usage_percent`` 的可写占比口径上（#4057）——该口径变可达后，
+    「盘接近写满」会真正把主机判为不可调度，而不是像过去那样被保留块挡住。
     """
     cpu = system_stats.get("cpu_load", 0)
     ram = system_stats.get("ram_usage", 0)

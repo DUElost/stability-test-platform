@@ -402,3 +402,30 @@ def test_next_wait_seconds_still_uses_catchup_interval(tmp_path):
     mon = _configure_monitor(tmp_path)
     mon._catchup_needed = True
     assert mon._next_wait_seconds() == mon._SPILL_CATCHUP_INTERVAL
+
+
+def test_current_usage_pct_prefers_writable_percent(tmp_path):
+    """#4057：HddSpill 的阈值比较必须读可写占比。
+
+    默认 98.0 的 ``stp_hdd_spill_critical_pct`` 用 ``usage_percent`` 在 5% 保留块
+    的 ext4 上永不可达（天花板 94.91%），紧急溢出通道形同死代码。
+    """
+    mon = _configure_monitor(tmp_path)
+    mon._disk_usage_fn = MagicMock(
+        return_value={"usage_percent": 94.91, "avail_gb": 0.0, "writable_percent": 100.0}
+    )
+    assert mon._current_usage_pct() == 100.0
+
+
+def test_current_usage_pct_falls_back_to_usage_percent(tmp_path):
+    """缺 writable_percent 时回退旧字段：注入桩与未升级上报面不得变成 None。"""
+    mon = _configure_monitor(tmp_path)
+    mon._disk_usage_fn = MagicMock(return_value={"usage_percent": 88.0})
+    assert mon._current_usage_pct() == 88.0
+
+
+def test_current_usage_pct_none_when_both_keys_absent(tmp_path):
+    """两个字段都缺 → 仍按现行语义返回 None（未知 ≠ 健康）。"""
+    mon = _configure_monitor(tmp_path)
+    mon._disk_usage_fn = MagicMock(return_value={"total_gb": 900.0})
+    assert mon._current_usage_pct() is None
