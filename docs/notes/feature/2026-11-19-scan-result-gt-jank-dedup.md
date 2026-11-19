@@ -1,5 +1,8 @@
 # Scan-Result-GT 2026.11.19：Jank/focus timeout 稳定指纹去重
 
+Status: implemented
+Class: feature
+
 ## Decision
 
 登记并发布外部工具包 `Scan-Result-GT@2026.11.19`（append-only），使展锐汇总去重对
