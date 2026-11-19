@@ -4,7 +4,8 @@ Status: implemented
 Class: feature
 
 日期：2026-11-18，接口收敛返修 2026-11-19　交付：Draft PR，待按 ADR-0058 D8 独立复核
-基线：`origin/main@e7325af03`；返修已接合 `origin/main@a902a3183`（含 #4044 的 PR #4049）
+基线：`origin/main@e7325af03`；本轮已接合 `origin/main@f2fae5679`（含 #4044 的 PR #4049 与
+PR #4050）
 批次：[#3800](https://github.com/DUElost/stability-test-platform/issues/3800) §2.1 第 1 项 / [ADR-0062 v1.2](../../adr/ADR-0062-device-log-dedup-before-upload.md) D3 第 1 条、D13
 
 ## Decision
@@ -128,6 +129,12 @@ Class: feature
   一边被准入放行、一边被下发拒绝——Owner 裁定 6975368043 要排除的正是这种分叉。第二套判据
   即使暂时结果一致也不可保留：它让期望 host 集合与原因码各自漂移，而两者都是入场台账的内容。
   收敛后唯一入口是 `agent_capabilities.partition_capability_evidence`，摘要残留由静态守卫禁止。
+- **保留 `partition_capability` 作为转封装（同一结论、换个入口名）**：同样否决。本分支上出现过
+  这一形态（把 digest 判据换成再导出 `caps.REASON_*` 后继续自行派生期望 host 集），它比 digest
+  版本进步，但仍然重复了 `iter_plan_run_scan_hosts` + `load_expected_scan_platforms` 这一段
+  期望集推导——#4044 的接口契约（评论 6979207483 第 1 条）明确要求别再另起一份 host 集合推导，
+  否则影子预筛与本单入场会在「谁算预期 MTK host」上分叉。与那份改动合流时按本条裁定取其测试
+  适配、弃其转封装层（模块删除，`shadow_scan_rounds` 保持主干 #4049 形态）。
 
 ## Verification
 
