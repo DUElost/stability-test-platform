@@ -245,6 +245,17 @@ Hub 同样会打印，执行者不得据此认定是手机侧。对象判定的�
 （`backend/agent/stp_agent_priv.py` 的 `USB_POWER_TIMEOUT_SECONDS`，ADR-0037 D8），
 而 `cycle` 的 `delay` 最多再加 30 秒（`USB_POWER_MAX_DELAY`），余量会被这段固定开销吃掉。
 
+主机未安装 `uhubctl` 时（实测：`.42` 的 `/usr/sbin/uhubctl` 不存在），执行者**不得**把
+「`uhubctl` 不慢」当成「本机没有本节形态」的反证——该结论没有观测基础。此时判据 1 的半枚举
+形态与处置验收一律改用零权限观测面：`ls /sys/bus/usb/devices/<Bus.Port>:1.0/driver`（无链接即未绑定）、
+`lsusb -t` 的 `Driver=[none]/0p`、`lsusb` 设备总数、`adb devices` 串号集合，以及
+`stp-agent-priv read-kernel-log` 的计数（见 §5.6 `.42` 实例）。
+
+定位「噪声何时停止」时，执行者必须用 `--since-epoch` **窗口夹逼**：`read-kernel-log` 走
+`journalctl -k -o cat`，输出**不含时间戳**，因此无法直接读出末条事件的时刻。查法：按递降窗口
+（如 3/5/10/15/20 分钟）分别统计 `grep -c 'error -110'`，取「计数首次归零的最小窗口」，
+再与本次拆除时刻对齐核验。
+
 > 警告：第 3 步是 root 写操作，且 sysfs 的 `remove` 是 **write-once、软件侧不可撤销**。
 > 写下去之后该子树只能靠现场重新插线、或 rebind xHCI 驱动恢复；后者会把同一控制器上
 > **另一条总线正在使用的设备一起重新枚举**。执行者必须先拿到 Owner 对本主机本次操作的授权，
@@ -294,10 +305,52 @@ HONOR MLD-NX2 站，16 台设备，xHCI 为单一控制器（两条总线：480M
   不变。重登记与 5 台无槽位设备的缺口见
   [`notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md`](../notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md)。
 
+### 5.6 2026-11-19 `.60` 与 `.42` 实例（同形复现，验收含 reason 翻转）
+
+§5.5 的形态在另外两台主机上复现并经软件摘除闭环。两台都是 `0bda:0411` 五只级联、
+**最深一只 Hub 始终未绑定 hub 驱动**（`Driver=[none]/0p`）、**该子树承载 0 台在用设备**，
+在用侧全部落在另一根总线的另一根上行线上。
+
+`.60`（13 台 HONOR MLD-NX2，`uhubctl` 已安装）：
+
+- 处置前（14:48:21）：`uhubctl` 全量 **21.8s**；**单口定向** `-l 1-4.4 -p 1 -a status -d 1`
+  **27.3s**（比全量列举还慢 ⇒ 「耗时与请求端口数无关」的直接证据）；15 分钟内核窗
+  `error -110`=73、`hub_ext_port_status failed`=72、`Failed to suspend device`=73，
+  对象均为 Hub；**在用侧 `usb 1-x` 0 条**、重枚举 0；`lsusb` 设备 25；bus 2 非 Hub 设备 0；
+  `2-3` 的 parent = `usb2`（root hub）；`usb_power_slots=0`（该机无 VBUS 切电映射）；
+  `active_jobs=0`、`held=0`。
+- 处置：`echo 1 > /sys/bus/usb/devices/2-3/remove` → `rc=0`，**写入阻塞 19.5 秒**。
+- 处置后（14:50–14:56）：全量 **0.9s → 0.6s**、定向 **0.3s**；bus 2 仅剩 `2-0:1.0`；
+  `lsusb` 25 → **20**（= 被摘掉的 5 只 Hub）；**13 台设备串号集合逐条 diff 一致**、
+  `adb` 在线 13 → 13；`/mnt/hdd` avail 未变；窗口夹逼 3/5/10/15/20 分钟 =
+  **0 / 0 / 19 / 44 / 68** ⇒ 噪声停止时刻即拆除时刻 14:50；日志末两行为拆除收尾
+  （`Disable of device-initiated U2 failed` 与 `usb 2-3: USB disconnect, device number 7`）。
+- 平台验收：`usb_link_degraded` 于 **15:47:02** 消失，主机转 **HEALTHY**（距拆除 57 分钟，
+  与 `contracts/kernel_usb_faults.py` 的 `LINK_WINDOW_SECONDS=3600` 一致）。
+
+`.42`（17 台设备，`adb` 全在线；**该机未安装 `uhubctl`**）：
+
+- 判据与验收全部改走零权限观测面（见 §5.4 新增口径）：处置前（17:27:44）`lsusb` 设备 29、
+  bus 2 顶级对象仅 `2-3`（5 只 Hub、非 Hub 设备 0）、`2-3.4` 无驱动链接、parent = `usb2`、
+  `usb_power_slots=0`、`active_jobs=0`、`held=0`；15 分钟内核窗 `error -110`=74、
+  `hub_ext_port_status failed`=73、对象唯一为 `usb 2-3.4`，**在用侧 0 条**、重枚举 0。
+- 处置：`echo 1 > /sys/bus/usb/devices/2-3/remove` → `rc=0`，阻塞 15.9 秒。
+- 处置后：bus 2 仅剩 `2-0:1.0`；`lsusb` 29 → **24**；**17 条 `adb` 串号逐条 diff 一致**；
+  `/mnt/hdd` avail 未变；窗口夹逼（17:33:32）2/5/10 分钟 = **0 / 1 / 26**
+  ⇒ 噪声停止时刻即拆除时刻 17:28:55。
+- 结论：`uhubctl` 缺席不影响本节判定，也不影响摘除带来的收益（内核 `-110` 归零、
+  健康面 reason 随滑窗回落）。
+  平台侧 `usb_link_degraded` 的翻转按 `LINK_WINDOW_SECONDS=3600` 推算约为 18:29；
+  **本文撰写时（17:40）该机 reason 仍未翻转，故 `.42` 的平台验收记为未完成**，不得当已完成引用。
+
+三例同形说明这不是个案，而是同一批 Hub 的 SuperSpeed 侧退化。`remove` 只停止软件面污染，
+执行者仍须按 §5.2 第 6 条排期更换这些 Hub；`remove` 前不得省略 §5.4 第 1、2 步前置。
+
 ## 6. 相关
 
 - 列的设计与口径：[`notes/feature/2026-09-11-hosts-usb-device-count.md`](../notes/feature/2026-09-11-hosts-usb-device-count.md)
 - 只读诊断边界与凭据来源：[`production-diagnostics.md`](./production-diagnostics.md)
 - xHCI 死亡致 USB/ADB 全空：[`incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md`](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)
 - 半枚举形态与 `remove` 解法的决策记录：[`notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md`](../notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md)
+- 观测口径补强与 `.60`/`.42` 两例处置的决策记录：[`notes/process/2026-11-19-usb-hub-half-enum-second-hosts-skill-guard.md`](../notes/process/2026-11-19-usb-hub-half-enum-second-hosts-skill-guard.md)
 - HONOR / MLD 刷机 runbook：[`honor-flash-runbook.md`](./honor-flash-runbook.md)
