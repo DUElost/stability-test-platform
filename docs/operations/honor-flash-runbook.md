@@ -481,3 +481,125 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
   `caught_brom` 代际判据、后续门控修正同理）。
 - 想拆掉这笔耦合：只让 `flash_firmware` 声明 `flashtool_v6`、`flash_preflight` 退回
   warning-only（代价是 V6 断链只能在刷机步暴露，而不是 preflight）。
+
+## 10. VBUS 切电触发模式（`trigger_mode="vbus_cycle"`）运维规程与排障
+
+适用条件：对已关机、无 ADB 的 `MLD_NX2` / `MLD_NX3` 等 MTK 设备（USB 枚举 `0e8d:2046`），
+经可控 USB Hub 走 `flash_firmware@1.4.3+` 的 `vbus_cycle` 触发刷机，以及现场换接 Hub
+上行口或调整端口线缆后恢复作业。
+
+### 10.1 前置核查与槽位同步
+
+> 警告：操作者不得在 Hub 上行口仍接入 USB 3.0 根集线器（`Bus 002` 下存在 `0bda:0411`
+> 伴生 Hub）时启动批量 `vbus_cycle` 刷机。USB 3.0 口上 `uhubctl` 无法切断物理 5V VBUS，
+> 设备不会冷重启进入 Preloader，导致 120s 扫口超时失败。
+
+> 警告：物理换插 Agent host 的 USB 主口或拔插设备线缆后，Hub 根路径（如 `1-9` 与 `1-10`）
+> 与端口映射会漂移。操作者必须先重新核对实时 sysfs 串号并下发
+> `/etc/stp-agent/usb-power-slots.json`；未同步槽位直接触发 PlanRun 会导致 wrapper 拒绝切电
+> 或切错端口。
+
+按顺序执行以下步骤：
+
+1. 检查 Agent host 上 USB Hub 是否仅挂载在 USB 2.0 总线：
+
+   ```bash
+   lsusb -t
+   ```
+
+   预期：`Bus 001` 下存在目标 `Hub` 树，`Bus 002` 下无 `0bda:0411`（`5000M` / `10000M`）
+   Hub 节点。
+2. 如果 `Bus 002` 下仍存在 `0bda:0411` Hub，停止本流程，联系现场将 Hub 上行线改插至主机
+   黑色 USB 2.0 口后再从第 1 步重查。
+3. 检查目标 Agent host 的 `uhubctl` 与提权 wrapper 能力：
+
+   ```bash
+   which uhubctl && sudo -n /usr/local/sbin/stp-agent-priv selftest && /usr/local/sbin/stp-agent-priv capabilities
+   ```
+
+   预期：输出包含 `STP_AGENT_PRIV_SELFTEST_OK`，且能力列表同时包含 `usb-power` 与
+   `usb-power/expect-slot`。
+4. 如果第 3 步缺少 `usb-power/expect-slot` 或未装 `uhubctl`，停止刷机触发，先通过
+   `tools/ansible/playbooks/update_agent.yml`（或安装 `uhubctl` 包）补齐 wrapper 环境。
+5. 读取当前接入各子 Hub 端口的设备 USB 串号并生成 `<vars.json>`：
+
+   ```bash
+   for d in /sys/bus/usb/devices/1-*.*.*; do
+     [ -e "$d/serial" ] && echo "$(basename "$d") $(cat "$d/idVendor"):$(cat "$d/idProduct") $(cat "$d/serial")"
+   done
+   ```
+
+   预期：所有待刷设备的 `serial` 均可读取，且与控制面设备表一致。
+6. 下发槽位映射表到 `/etc/stp-agent/usb-power-slots.json`：
+
+   ```bash
+   ansible-playbook -i tools/ansible/inventory.ini \
+     tools/ansible/playbooks/ensure_usb_power_slots.yml \
+     -e usb_power_hosts=<host> -e @<vars.json>
+   ```
+
+   预期：`uhubctl_rc=0`、`wrapper_has_usb_power_expect_slot=True`、`slots=<在位台数>`、
+   `failed=0`。
+7. 换接新黑色 USB 口或首次投产前，执行单口 12 秒切电取证并观察内核日志（先验证 1 个槽位）：
+
+   ```bash
+   sudo -n uhubctl -l <hub_location> -p <port> -a off && sleep 12 && sudo -n uhubctl -l <hub_location> -p <port> -a on
+   journalctl -k --since "1 minute ago" --no-pager | grep -E "<gate_port>|idProduct|Preloader|ttyACM"
+   ```
+
+   预期：`USB disconnect` 后约 `20–21s`（即上电后 `8–9s`）出现 `idVendor=0e8d, idProduct=2000`
+   （`MT65xx Preloader`）及 `ttyACM` 节点。
+8. 如果第 7 步在 `USB disconnect` 后 `17–18s` 直接重报 `0e8d:2046` 且设备充电图标未熄灭，
+   停止对该口直接放量，按 §10.3 排查主板黑色口差异或设备自身状态。
+
+### 10.2 批量调度节奏与控制面 I/O 护栏
+
+以下各条均为对操作者的要求：
+
+- 同一 Agent host 上每次下发的 `vbus_cycle` PlanRun 必须控制在每批不超过 2 台设备，
+  且必须在上一批 PlanRun 到达终态后再触发下一批；同一主机刷机锁串行执行、单台约需 5–6 分钟，
+  同 host 堆叠多批会触发 15 分钟 `pending_timeout`。
+- 启动批量 VBUS 刷机前，操作者必须先在控制面检查负载与磁盘 I/O（`uptime` 与 `iostat -xz 1 3`），
+  不得在控制面运行重型 I/O 扫描（如全量 `start_log_scan.py -m`）导致磁盘队列饱和期间放量；
+  控制面存储 I/O 饱和会经 NFS 阻塞远端 `SPFlashToolV6` 写包并拖垮 Agent 心跳（见 #4054）。
+
+### 10.3 实测故障分型、观测命令与止损规则
+
+因 `0e8d:2000` 仅闪现 2–3 秒，排查时操作者建议使用 `journalctl -k` 或 `dmesg -Tw` 查看瞬态枚举，
+不得仅凭单次 `lsusb` 下结论：
+
+```bash
+journalctl -k --since "10 minutes ago" --no-pager | grep -E "idProduct=2000|0e8d|Preloader|ttyACM"
+```
+
+依据 2026-11-18 至 2026-11-19 两批次现场实测，常见失败分型与对应处置如下：
+
+| 内核与现场特征 | 根因判定 | 处置规则 |
+|---|---|---|
+| `USB disconnect` 后 `17–18s` 直接重报 `0e8d:2046`，`off` 超 45 分钟或切上级父 Hub 口仍 0–1s 回 `2046`，且关机充电图标常亮 / 开机 `off` 仅 ADB 弹窗消失 | 物理 5V VBUS 未断开（主板局部 USB 口或 Hub 仅断 D+/D-）；若拔线按电源键也亮充电图标则为设备自身 PMIC 卡死（`.75` 实测） | 多口集中复现时，操作者必须将 Hub 上行口更换至主机另一个黑色 USB 2.0 口（`.69` 实测换口后 9/9 全过）并按 §10.1 重刷槽位；单台拔线仍亮图标时，操作者可以先重启设备本身后再试 |
+| `USB disconnect` 后 `30s`（`12s` settle + `18s` 冷启动）才进入 `0e8d:2046` 或 `201c`，且 `isolate` 后关机无充电图标 | 物理 5V 已真断电，但冷上电错过短暂 Preloader 握手窗口 | 操作者可以对失败设备单点重跑 1 次（`.75` 3 台重跑全过）；若仍直出 `2046`，实测将 `vbus_off_settle_seconds` 调至上限 `30s` 或预断电 `2–16` 分钟均无法稳定拉出 `0e8d:2000`（见 #4063），操作者不得继续盲试 `vbus_cycle`，建议改由现场手动开机连 ADB 后走 `adb_reboot` 刷机 |
+| `caught_brom=True`，但写入 `md1img_a` 或 `super` 阶段固定百分比报 `data_mux receive timeout or canceled` | 刷机大分区阶段 USB 传输中断或线缆/设备存储异常 | 连续两次在同一阶段失败时，操作者不得原位继续重跑，建议先更换数据线或倒插到已验证通过的空闲端口再试 |
+
+### 10.4 批次收尾恢复 `0000 off` 端口供电
+
+> 警告：当前 `vbus_cycle` 失败后 `isolate` 会将槽位设为 `0000 off`，且该断电状态对平台不可知、
+> 任务结束或取走设备后不会自动恢复（见 #4063）。若遗留 `0000 off` 空端口，后续接入正常设备将
+> 无供电且无任何 USB 枚举，极易被误判为端口硬件损坏。
+
+按顺序执行以下步骤：
+
+1. 在已无待刷设备的每台 Agent host 上检查是否存在残留 `0000 off` 端口：
+
+   ```bash
+   sudo -n uhubctl | awk '/Current status for hub/{h=$5} /0000 off/{print h ":" $2}'
+   ```
+
+   预期：记录所有输出的 `<hub_location>:<port>`；若无任何输出，直接结束本流程。
+2. 对第 1 步列出的每个非待排查 `0000 off` 端口恢复供电：
+
+   ```bash
+   sudo -n uhubctl -l <hub_location> -p <port> -a on
+   ```
+
+   预期：端口状态恢复为 `0100 power`（若接有开机设备则恢复为 `0503 power ...`），且再次执行第 1 步
+   检查命令输出为空。
