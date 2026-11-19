@@ -24,6 +24,14 @@
           "retired": false,
           "script": "scan_result.py",
           "version": "2026.09.23"
+        },
+        {
+          "artifact": "packages/Scan-Result-GT/2026.11.19.tar.gz",
+          "package_sha256": "3384e9e6d47f9e2d6a379014e298dbc0b1037e8a0361739bb9d5477c5cddbf19",
+          "python": null,
+          "retired": false,
+          "script": "scan_result.py",
+          "version": "2026.11.19"
         }
       ]
     },
