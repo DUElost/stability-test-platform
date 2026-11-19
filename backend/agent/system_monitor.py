@@ -100,6 +100,15 @@ def get_disk_usage(path: str = '/') -> Dict[str, Any]:
 
     读盘失败时 ``usage_percent`` 为 ``None``（不要填 ``0.0`` —— HddSpill 会
     把 0% 当成磁盘健康而跳过溢出）。
+
+    两种百分比口径同时上报，因为它们在带保留块的文件系统上不等价（#4057）：
+
+    - ``usage_percent = used / total``：``shutil`` 的 ``used`` 不含 ext4 保留块，
+      所以该值存在天花板 ``(total - reserved) / total``。实测默认 5% 保留的 ext4
+      上天花板为 94.91%，即**盘已写满（``avail_gb=0``）时该值仍显示 94.91%**，
+      任何 ``> 95`` 的阈值在这类盘上永不可达。
+    - ``writable_percent = used / (used + avail)``：等价于 ``df`` 的 ``Use%``，
+      不可写时为 100%，**阈值判据一律用它**。
     """
     try:
         usage = shutil.disk_usage(path)
@@ -107,12 +116,18 @@ def get_disk_usage(path: str = '/') -> Dict[str, Any]:
         used_gb = usage.used / (1024 ** 3)
         free_gb = usage.free / (1024 ** 3)
         usage_percent = 100.0 * usage.used / usage.total if usage.total > 0 else 0.0
+        writable_base = usage.used + usage.free
+        writable_percent = 100.0 * usage.used / writable_base if writable_base > 0 else 0.0
 
         return {
             "total_gb": round(total_gb, 2),
             "used_gb": round(used_gb, 2),
             "free_gb": round(free_gb, 2),
             "usage_percent": round(usage_percent, 2),
+            # ``avail_gb`` 与 ``free_gb`` 同值，存在的意义是让「还能写多少」在
+            # 消费面有一个不会被误读成「含保留块」的名字（#4057）。
+            "avail_gb": round(free_gb, 2),
+            "writable_percent": round(writable_percent, 2),
         }
     except Exception as e:
         logger.warning("get_disk_usage_failed path=%s error=%s", path, e)
@@ -121,6 +136,8 @@ def get_disk_usage(path: str = '/') -> Dict[str, Any]:
             "used_gb": None,
             "free_gb": None,
             "usage_percent": None,
+            "avail_gb": None,
+            "writable_percent": None,
         }
 
 
@@ -128,7 +145,9 @@ def get_aee_disk_usage() -> Dict[str, Any]:
     """设备日志盘（``STP_AEE_LOCAL_ROOT`` 所在文件系统）使用率。
 
     与系统盘 ``disk_usage`` 分开上报：``/storage`` 健康页按 host 展示这块盘
-    （#273），阈值口径与 HddSpill（95%）对齐。返回里带 ``path``，因为各 host
+    （#273），阈值口径与 HddSpill 一致，均按 ``writable_percent``（#4057；旧注释写的
+    「95%」既与 ``stp_hdd_spill_critical_pct`` 的实际默认 98.0 不符，又在带保留块的
+    盘上不可达）。返回里带 ``path``，因为各 host
     的本地根落点不同（``/data/hdd`` / ``/mnt/hdd`` / 系统盘），控制面需要知道
     每台上报的是哪个路径。
     """
