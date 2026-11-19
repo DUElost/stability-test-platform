@@ -78,6 +78,12 @@ Class: feature
   `artifact_purged_at` 列随 downgrade 消失、随 upgrade 恢复（nullable）；迁移契约四件套
   `20 passed`、本刀留存测试 `17 passed`、邻面（G8 补跑/路由探针/族清单单源/调度设置）
   `58 passed`、`check:quick` 16 gates 复跑通过。
+- 基线衔接暴露并补齐的登记缺口（CI `pr-migrate-empty-db` 第 10 步判红，非改链引入）：写侧
+  `record_audit(action="compat_rerun_purge", resource_type="compat_rerun")` 此前只落
+  调用点、未过治理面登记。按 ADR-0049 D2 补两处——`compat_rerun` 进
+  `core/audit.py::AUDIT_RESOURCE_TYPES`（#2778 写侧词表），`compat_rerun_purge` 进
+  `scheduler/audit_log_cleanup.py::BUSINESS_ACTIONS_ALLOWLIST`（故意留 business 90d，
+  与 G8 `compat_rerun_trigger` 同族先例）；CI 同款 9 文件守卫套件本地 `100 passed`。
 - 清单：`env_inventory --write` 后 281 个读取名一致；`transitions` 11 条 / 5 在途。
 - **未执行**（不得当作已完成）：生产 15.4 的计量与 Dry-run 实跑；任何一次真实试点回收
   （需 Owner 逐次确认）；#4050/#本 PR 的独立复核；required CI（合并前以 CI 为准）。
