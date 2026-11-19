@@ -23,6 +23,7 @@ NEEDS_HELPER = "create_engine(normalize_sync_database_url("
 
 # 用共享写法的取串点（在表里只为让「覆盖面」可核对——它们不享受证据豁免）
 HELPER_SITES = (
+    "backend/scripts/check_script_package_equivalence.py",
     "backend/scripts/check_seed_identity.py",
     "backend/scripts/check_unreferenced_script_versions.py",
     "backend/scripts/compute_host_script_targets.py",
