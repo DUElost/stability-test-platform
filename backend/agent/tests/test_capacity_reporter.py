@@ -535,3 +535,52 @@ def test_single_instance_guard_degraded_does_not_block_scheduling():
 def test_single_instance_guard_reason_absent_by_default():
     """未降级的主机不得带上这条 reason（否则全 fleet 刷成 DEGRADED）。"""
     assert "single_instance_guard_degraded" not in _cap()["health"]["reasons"]
+
+
+def test_disk_high_is_reachable_on_reserved_block_filesystem():
+    """#4057：5% 保留块的 ext4 写满时必须变成 disk_high / UNSCHEDULABLE。
+
+    修复前判据读 ``usage_percent``，该口径天花板是 94.91%（现网 `.75`/`.62` 的 AEE
+    盘实测值），于是 ``disk > 95`` 与 ``_compute_health_limit`` 的打闸条件在盘已
+    不可写时仍判定健康。修复后判据读 ``writable_percent``。
+    """
+    stats = {
+        "cpu_load": 20,
+        "ram_usage": 50,
+        "disk_usage": {
+            "usage_percent": 94.91,      # 旧口径：看着还有余量
+            "avail_gb": 0.0,             # 实际已写满
+            "writable_percent": 100.0,
+        },
+    }
+    result = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=5,
+        total_devices=5,
+        system_stats=stats,
+        mount_status=_healthy_mount_status(),
+    )
+    assert "disk_high" in result["health"]["reasons"]
+    assert result["health"]["status"] == "UNSCHEDULABLE"
+    assert result["capacity"]["effective_slots"] == 0
+
+
+def test_disk_writable_percent_preferred_and_usage_percent_falls_back():
+    """两个口径同时存在取 writable；只有旧字段时行为不变（兼容注入桩与未升级上报）。"""
+    both = {"cpu_load": 20, "ram_usage": 50,
+            "disk_usage": {"usage_percent": 90.0, "writable_percent": 99.5}}
+    legacy = {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": 99.5}}
+    quiet = {"cpu_load": 20, "ram_usage": 50,
+             "disk_usage": {"usage_percent": 99.5, "writable_percent": 40.0}}
+
+    def _reasons(stats):
+        return compute_capacity(
+            active_job_count=0, active_device_count=0,
+            online_healthy_devices=5, total_devices=5,
+            system_stats=stats, mount_status=_healthy_mount_status(),
+        )["health"]["reasons"]
+
+    assert "disk_high" in _reasons(both)        # writable 99.5 覆盖 usage 90
+    assert "disk_high" in _reasons(legacy)      # 回退旧口径仍生效
+    assert "disk_high" not in _reasons(quiet)   # writable 40 优先于 usage 99.5

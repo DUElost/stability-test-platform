@@ -303,7 +303,14 @@ class HddSpillMonitor:
                 self._hdd_root, type(info).__name__,
             )
             return None
-        raw = info.get("usage_percent")
+        # 阈值比较按可写占比（#4057）：``usage_percent`` 不含 ext4 保留块，在 5% 保留的
+        # ext4 上天花板是 94.91%，于是 ``spill_threshold_pct`` 之上的
+        # ``stp_hdd_spill_critical_pct``（默认 98.0）在真实写满时也永远达不到，
+        # 紧急溢出通道形同死代码。缺该字段时回退旧口径，兼容注入桩与未升级的上报面。
+        raw = info.get("writable_percent")
+        if raw is None:
+            raw = info.get("usage_percent")
+            logger.debug("hdd_usage_writable_percent_absent root=%s", self._hdd_root)
         if raw is None:
             logger.warning("hdd_usage_percent_missing root=%s", self._hdd_root)
             return None

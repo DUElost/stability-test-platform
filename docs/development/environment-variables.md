@@ -156,7 +156,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_WATCHER_ENABLED` | Watcher 子系统开关（默认 `true`） |
 | `STP_DEVICE_LOG_EVENT_ENABLED` | ADR-0028 DLE + EventUploader **单一开关**（#287 合并双 flag），未设时代码默认开，`=0` 显式关闭；控制面非空值经 hot-update fleet 同步（#218）。过滤模型是唯一路径（`STP_EVENT_UPLOADER_*` 双键已删除） |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | 上送成功后删本机目录→`PRUNED`（**默认 0**）。**勿**进 fleet（#217）；单机 `.env` + `reload_config` |
-| `STP_LOCAL_DISK_SPILL_THRESHOLD` / `_TARGET` | HddSpill 触发/回落水位（%）；改阈值须**重启** Agent（configure 后不可热改） |
+| `STP_LOCAL_DISK_SPILL_THRESHOLD` / `_TARGET` | HddSpill 触发/回落水位（%）；**百分比一律按可写占比 `used/(used+avail)`（等价 `df` 的 `Use%`）比较，不按 `usage_percent`**——后者不含文件系统保留块，在默认 5% 保留的 ext4 上天花板约 94.91%，导致 `STP_HDD_SPILL_CRITICAL_PCT=98.0` 这类阈值在盘写满时也永不可达（#4057）；改阈值须**重启** Agent（configure 后不可热改） |
 | `STP_STEP_LOG_STREAM` | `1`=pipeline 日志经 SocketIO 批推送；`0`=保持 no-op（ADR-0026 P2-2） |
 | `STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS` | step_log 批大小与定时 flush（默认 50 / 200） |
 | `STP_AEE_NFS_ROOT` | **日志根**：upload / spill / merge 使用此键 |
