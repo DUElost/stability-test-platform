@@ -1,37 +1,37 @@
 """MTK 扫描轮的能力证据（ADR-0062 v1.2 D3 第 1 条、D5 第 1 条；#3800 §2.1 第 1 项）。
 
 Owner 裁定 6975368043 要求「模式准入」与「轮次下发守卫」共用**同一份可核验的能力证据**。
-本模块是那份证据的唯一判定入口：
+本模块是 #4043 准入侧的唯一判定入口，证据来源已收口到 #4044/#4049 的
+:mod:`backend.services.agent_capabilities`：
 
-- 下发守卫：``backend/services/shadow_scan_rounds.py`` 的 ``_shadow_capability_verified``
-  委托到 :func:`host_scan_round_capability`，预筛与实际拒绝下发读同一条规则；
+- 下发守卫：``backend/services/shadow_scan_rounds.py`` 的预筛与
+  ``verify_shadow_scan_dispatch`` 直接调用同模块的 ``evaluate_host_capability`` /
+  ``load_host_capability_evidence``（便于探针 monkeypatch 该命名空间）；
 - 模式准入：``backend/services/partition_mode_admission.py`` 在首次写入 ``DEDUP_FIRST``
   之前用 :func:`verify_expected_mtk_hosts` 核验该实际分区**全部**预期 MTK host，
   任一未证实即硬阻断（不得写入 ``DEDUP_FIRST``）。
 
-现行判据是 #3875 v1.23 的过渡预筛（在线 + 心跳 + 制品摘要 matched）。#4044 把终态判据换成
-「Agent 当前心跳显式上报的能力」时，只需要改 :func:`host_scan_round_capability` 的证据来源
-（以及必要时的 :func:`expected_mtk_host_ids`），两个调用方都不必重复实现规则，也不会出现
-「准入放行而下发拒绝」或反之的口径分叉。
+两侧最终都落到 :func:`backend.services.agent_capabilities.evaluate_host_capability`，
+因此不会出现「准入放行而下发拒绝」或反之的口径分叉。
 
-能力属于**该 host 当前 Agent 实例**：离线、缺心跳、摘要上报早于当前心跳、或摘要与期望制品
-不一致，一律按未证实处理（fail-closed）。未证实的原因码随返回值给出，供调用方记审计线索。
+能力属于**该 host 当前 Agent 实例**：离线、退役、缺心跳、能力未由当前心跳上报、
+缺 ``scan_round_v1``、或实例未绑定，一律按未证实处理（fail-closed）。未证实的原因码
+随返回值给出，供调用方记审计线索。
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Iterable, Optional
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core.dedup_platform import DEDUP_PLATFORM_MTK
 from backend.models.host import Host
-from backend.services.agent_version_info import resolve_agent_code_sync_status
-from backend.services.artifact_digest import ARTIFACT_KIND_CODE, compute_desired_artifact_digest
+from backend.services import agent_capabilities as caps
 from backend.services.partition_scope import normalize_platform
 from backend.services.plan_run_scan_scope import (
     iter_plan_run_scan_hosts,
@@ -40,22 +40,26 @@ from backend.services.plan_run_scan_scope import (
 
 logger = logging.getLogger(__name__)
 
-#: 已核验（唯一表示「能力成立」的原因码）。
+#: 已核验（唯一表示「能力成立」的原因码；#4044 证据对象在 verified 时 reason=None，
+#: 这里归一成稳定字符串，方便准入台账与既有探针断言）。
 CAPABILITY_VERIFIED = "verified"
 #: 未证实的统称，与影子轮覆盖里既有的 ``reason`` 取值保持一致。
 CAPABILITY_UNVERIFIED = "capability_unverified"
 
-REASON_HOST_MISSING = "host_missing"
-REASON_HOST_OFFLINE = "host_offline"
-REASON_HEARTBEAT_MISSING = "heartbeat_missing"
-REASON_DIGEST_REPORT_MISSING = "digest_report_missing"
-REASON_DIGEST_REPORT_STALE = "digest_report_stale"
-REASON_DIGEST_MISMATCH = "digest_mismatch"
+# 与 agent_capabilities 对齐的原因码（再导出，供准入/探针按名引用）。
+REASON_HOST_MISSING = caps.REASON_HOST_MISSING
+REASON_HOST_OFFLINE = caps.REASON_HOST_OFFLINE
+REASON_HOST_RETIRED = caps.REASON_HOST_RETIRED
+REASON_HEARTBEAT_MISSING = caps.REASON_HEARTBEAT_MISSING
+REASON_CAPABILITY_NEVER_REPORTED = caps.REASON_CAPABILITY_NEVER_REPORTED
+REASON_CAPABILITY_NOT_CURRENT = caps.REASON_CAPABILITY_NOT_CURRENT
+REASON_CAPABILITY_MISSING = caps.REASON_CAPABILITY_MISSING
+REASON_INSTANCE_UNBOUND = caps.REASON_INSTANCE_UNBOUND
 
 
 @dataclass(frozen=True)
 class HostCapability:
-    """单个 host 当前 Agent 的能力证据结论。"""
+    """单个 host 当前 Agent 的能力证据结论（#4043 准入侧稳定形状）。"""
 
     host_id: str
     verified: bool
@@ -67,41 +71,54 @@ class HostCapability:
 
 
 def desired_scan_round_digest() -> str:
-    """当前期望的 Agent 制品摘要；取不到时返回空串（判据随即按未证实处理）。"""
-    try:
-        return compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
-    except OSError:
-        logger.exception("scan_round_desired_digest_unavailable")
-        return ""
+    """兼容保留：#4044 收口后摘要不再参与能力判定。
+
+    仍可能被旧探针取用；返回空串表示「摘要不是本接缝的证据」。新测试应通过
+    :func:`host_scan_round_capability` / :func:`verify_expected_mtk_hosts` 读心跳能力。
+    """
+    return ""
 
 
-def host_scan_round_capability(host: Any, desired_digest: str) -> HostCapability:
+def host_scan_round_capability(host: Any, desired_digest: str = "") -> HostCapability:
     """判定该 host 当前 Agent 是否能执行绑定轮次的扫描。
 
-    过渡判据（#3875 v1.23，#4044 收口前）：在线、有心跳、制品摘要**上报时间不早于当前
-    心跳**、且摘要与期望制品一致。旧摘要不是当前心跳的证明，故时间关系必须核对（6704562784）。
-    原因码只用于审计与告警文案，不改变结论方向：任何非 :data:`CAPABILITY_VERIFIED` 都是
-    「未证实」。
+    ``desired_digest`` 是 #3875 过渡期形参，#4044 后忽略。证据来自
+    :func:`agent_capabilities.evaluate_host_capability`。
     """
-    host_id = str(getattr(host, "id", "") or "")
+    del desired_digest  # 摘要列只服务 ADR-0040 展示，不再参与准入。
+    now = datetime.now(timezone.utc)
     if host is None:
-        return HostCapability(host_id, False, REASON_HOST_MISSING)
-    if getattr(host, "status", None) != "ONLINE":
-        return HostCapability(host_id, False, REASON_HOST_OFFLINE)
-    last_heartbeat = getattr(host, "last_heartbeat", None)
-    if last_heartbeat is None:
-        return HostCapability(host_id, False, REASON_HEARTBEAT_MISSING)
-    reported_at = getattr(host, "agent_artifact_digest_reported_at", None)
-    if reported_at is None:
-        return HostCapability(host_id, False, REASON_DIGEST_REPORT_MISSING)
-    if reported_at < last_heartbeat:
-        return HostCapability(host_id, False, REASON_DIGEST_REPORT_STALE)
-    if resolve_agent_code_sync_status(
-        agent_artifact_digest=getattr(host, "agent_artifact_digest", None),
-        desired_artifact_digest=desired_digest,
-    ) != "matched":
-        return HostCapability(host_id, False, REASON_DIGEST_MISMATCH)
-    return HostCapability(host_id, True, CAPABILITY_VERIFIED)
+        evidence = caps.evaluate_host_capability(None, now=now)
+        return HostCapability("", False, evidence.reason or REASON_HOST_MISSING)
+    host_id = str(getattr(host, "id", "") or "")
+    retired = bool(getattr(host, "retired_at", None) is not None)
+    # 行可能是 select 投影的 Row/SimpleNamespace；缺列时按「未上报」fail-closed。
+    evidence_host: Any = host if isinstance(host, Host) else _coerce_host_row(host)
+    evidence = caps.evaluate_host_capability(
+        evidence_host, now=now, retired=retired,
+    )
+    return HostCapability(
+        host_id or evidence.host_id,
+        evidence.verified,
+        CAPABILITY_VERIFIED if evidence.verified else (evidence.reason or CAPABILITY_UNVERIFIED),
+    )
+
+
+def _coerce_host_row(row: Any) -> SimpleNamespace:
+    """把测试/守卫传入的轻量 host 投影抬成可被 evaluate 读取的对象。"""
+    return SimpleNamespace(
+        id=str(getattr(row, "id", "") or ""),
+        status=getattr(row, "status", None),
+        last_heartbeat=getattr(row, "last_heartbeat", None),
+        agent_capabilities=getattr(row, "agent_capabilities", None),
+        agent_capabilities_reported_at=getattr(
+            row, "agent_capabilities_reported_at", None,
+        ),
+        agent_capabilities_instance_id=getattr(
+            row, "agent_capabilities_instance_id", None,
+        ),
+        retired_at=getattr(row, "retired_at", None),
+    )
 
 
 def expected_mtk_host_ids(db: Session, plan_run_id: int) -> list[str]:
@@ -132,11 +149,13 @@ def verify_expected_mtk_hosts(
     host_ids: Optional[Iterable[str]] = None,
     desired_digest: Optional[str] = None,
 ) -> list[HostCapability]:
-    """按当前证据核验给定（默认=全部预期 MTK 主机）host，逐台给出结论。
+    """按当前心跳能力证据核验给定（默认=全部预期 MTK 主机）host，逐台给出结论。
 
     ``host_ids=None`` 时取 :func:`expected_mtk_host_ids`；显式传入让影子下发守卫复用同一判定。
     host 表中不存在的 id 仍然产出一条 ``host_missing`` 结论，不静默跳过。
+    ``desired_digest`` 兼容保留，忽略。
     """
+    del desired_digest
     wanted = sorted(
         {
             str(host)
@@ -149,17 +168,26 @@ def verify_expected_mtk_hosts(
     )
     if not wanted:
         return []
-    digest = desired_scan_round_digest() if desired_digest is None else desired_digest
-    rows = {
-        str(row.id): row
-        for row in db.execute(
-            select(
-                Host.id, Host.status, Host.last_heartbeat,
-                Host.agent_artifact_digest, Host.agent_artifact_digest_reported_at,
-            ).where(Host.id.in_(wanted))
-        ).all()
-    }
-    verdicts = [_verdict(host_id, rows.get(host_id), digest) for host_id in wanted]
+    # 走 #4044 交给 #4043 的全量分区证据接口，再按 wanted 过滤——期望集推导与
+    # shadow_scan_rounds / partition_capability_evidence 同源。
+    partition = caps.partition_capability_evidence(
+        db, plan_run_id=plan_run_id, platform=DEDUP_PLATFORM_MTK,
+    )
+    by_id = {item.host_id: item for item in partition.hosts}
+    now = datetime.now(timezone.utc)
+    verdicts: list[HostCapability] = []
+    for host_id in wanted:
+        evidence = by_id.get(host_id)
+        if evidence is None:
+            # 调用方显式传入了期望集之外的 id：仍按单机证据 fail-closed。
+            evidence = caps.load_host_capability_evidence(db, host_id, now=now)
+        verdicts.append(HostCapability(
+            host_id,
+            evidence.verified,
+            CAPABILITY_VERIFIED if evidence.verified else (
+                evidence.reason or CAPABILITY_UNVERIFIED
+            ),
+        ))
     rejected = [item for item in verdicts if not item.verified]
     if rejected:
         logger.info(
@@ -168,21 +196,6 @@ def verify_expected_mtk_hosts(
             ",".join(f"{item.host_id}:{item.reason}" for item in rejected),
         )
     return verdicts
-
-
-def _verdict(host_id: str, row: Any, desired_digest: str) -> HostCapability:
-    if row is None:
-        return HostCapability(host_id, False, REASON_HOST_MISSING)
-    return host_scan_round_capability(
-        SimpleNamespace(
-            id=host_id,
-            status=row.status,
-            last_heartbeat=row.last_heartbeat,
-            agent_artifact_digest=row.agent_artifact_digest,
-            agent_artifact_digest_reported_at=row.agent_artifact_digest_reported_at,
-        ),
-        desired_digest,
-    )
 
 
 def unverified_hosts(verdicts: Iterable[HostCapability]) -> list[str]:
@@ -199,6 +212,14 @@ __all__ = [
     "CAPABILITY_UNVERIFIED",
     "CAPABILITY_VERIFIED",
     "HostCapability",
+    "REASON_CAPABILITY_MISSING",
+    "REASON_CAPABILITY_NEVER_REPORTED",
+    "REASON_CAPABILITY_NOT_CURRENT",
+    "REASON_HEARTBEAT_MISSING",
+    "REASON_HOST_MISSING",
+    "REASON_HOST_OFFLINE",
+    "REASON_HOST_RETIRED",
+    "REASON_INSTANCE_UNBOUND",
     "all_verified",
     "desired_scan_round_digest",
     "expected_mtk_host_ids",

@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
 from . import device_discovery
+from .contracts.capabilities import AGENT_CAPABILITIES
 from .heartbeat import send_heartbeat
 from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
@@ -785,6 +786,7 @@ class HeartbeatThread:
                 agent_artifact_digest=self._resolve_artifact_digest(),
                 system_stats=system_stats,
                 mount_status=mount_status,
+                capabilities=AGENT_CAPABILITIES,
             )
         if response and response.get("script_catalog_outdated") and self._on_scripts_outdated:
             try:

@@ -10,7 +10,7 @@
 6. 只有 MTK 可以先去重（D13 第 3 条）；关开关只影响后续入场（D13 第 5 条）；
 7. 并发首写只留一条记录，任务重试与进程重建读到同一决定。
 
-能力证据走 :mod:`partition_capability` 的真实判据（在线 + 心跳 + 制品摘要一致），期望集走
+能力证据走 :mod:`partition_capability` 的真实判据（#4044 心跳显式能力），期望集走
 ``plan_run_scan_scope`` 的真实派生（JobInstance × Device.platform）；判据本身不被 mock。
 """
 
@@ -23,6 +23,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
+from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import SchedulerSettings
 from backend.models.host import Device, Host
@@ -79,16 +80,30 @@ def _ip() -> str:
 _ip.counter = 0
 
 
-def _host(db, *, digest, status="ONLINE", reported_at=None, host_id=None):
-    """构造「能力可证明 / 不可证明」的 host 事实（不 mock 判据）。"""
+def _host(
+    db,
+    *,
+    status="ONLINE",
+    reported_at=None,
+    host_id=None,
+    capable=True,
+    capabilities=None,
+    instance="agent-a",
+):
+    """构造「能力可证明 / 不可证明」的 host 事实（不 mock 判据；#4044 心跳能力）。"""
     host_id = host_id or f"h-{uuid4().hex[:8]}"
     now = _now()
     address = _ip()
+    if capabilities is None and capable:
+        capabilities = [SCAN_ROUND_V1]
     db.add(Host(
         id=host_id, hostname=host_id, name=host_id,
         ip_address=address, ip=address, status=status, last_heartbeat=now,
-        agent_artifact_digest=digest,
-        agent_artifact_digest_reported_at=reported_at or now,
+        agent_capabilities=list(capabilities) if capabilities is not None else None,
+        agent_capabilities_reported_at=(
+            reported_at if reported_at is not None else (now if capable else None)
+        ),
+        agent_capabilities_instance_id=instance if capable else None,
     ))
     db.commit()
     return host_id
@@ -120,11 +135,9 @@ def _decide(db, run_id, *, settings, platform="mtk"):
 
 
 def test_admitted_run_fixates_dedup_first_before_any_action(db_session):
-    digest = capability.desired_scan_round_digest()
-    assert digest, "期望制品摘要取不到时本用例无法证明准入放行"
     run = _plan_run(db_session)
-    _device_job(db_session, run, _host(db_session, digest=digest))
-    _device_job(db_session, run, _host(db_session, digest=digest))
+    _device_job(db_session, run, _host(db_session))
+    _device_job(db_session, run, _host(db_session))
     settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(run.id))
 
     decision = _decide(db_session, run.id, settings=settings)
@@ -142,17 +155,19 @@ def test_admitted_run_fixates_dedup_first_before_any_action(db_session):
     ]
 
 
-@pytest.mark.parametrize("reason_case", ["offline_host", "stale_digest_report"])
+@pytest.mark.parametrize("reason_case", ["offline_host", "stale_capability_report"])
 def test_unverified_expected_host_hard_blocks_dedup_first(db_session, reason_case):
     """白名单命中，但有一个预期 MTK host 能力未证实 → 不写 DEDUP_FIRST，也不写 CURRENT。"""
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session)
-    good = _host(db_session, digest=digest)
+    good = _host(db_session)
     _device_job(db_session, run, good)
     bad = _host(
-        db_session, digest=digest,
+        db_session,
         status="OFFLINE" if reason_case == "offline_host" else "ONLINE",
-        reported_at=None if reason_case == "offline_host" else _now() - timedelta(hours=1),
+        capable=False if reason_case == "offline_host" else True,
+        reported_at=(
+            None if reason_case == "offline_host" else _now() - timedelta(hours=1)
+        ),
     )
     _device_job(db_session, run, bad)
     settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(run.id))
@@ -163,7 +178,8 @@ def test_unverified_expected_host_hard_blocks_dedup_first(db_session, reason_cas
     assert decision.reason == admission.REASON_CAPABILITY_UNVERIFIED
     assert decision.detail["unverified_hosts"] == [bad]
     assert decision.detail["reasons"][bad] == (
-        "host_offline" if reason_case == "offline_host" else "digest_report_stale"
+        "host_offline" if reason_case == "offline_host"
+        else capability.REASON_CAPABILITY_NOT_CURRENT
     )
 
     assert admission.fixate_partition_mode(
@@ -175,10 +191,9 @@ def test_unverified_expected_host_hard_blocks_dedup_first(db_session, reason_cas
 
 def test_admission_and_send_guard_share_one_capability_rule(db_session):
     """Owner 裁定 6975368043：模式准入与轮次下发守卫必须读同一份可核验能力证据。"""
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session)
-    good = _host(db_session, digest=digest)
-    stale = _host(db_session, digest=digest, reported_at=_now() - timedelta(hours=1))
+    good = _host(db_session)
+    stale = _host(db_session, reported_at=_now() - timedelta(hours=1))
     _device_job(db_session, run, good)
     _device_job(db_session, run, stale)
 
@@ -188,14 +203,13 @@ def test_admission_and_send_guard_share_one_capability_rule(db_session):
 
     rows = {row.id: row for row in db_session.query(Host).filter(
         Host.id.in_([good, stale])).all()}
-    assert shadow_scan_rounds._shadow_capability_verified(rows[good], digest) is True
-    assert shadow_scan_rounds._shadow_capability_verified(rows[stale], digest) is False
+    assert shadow_scan_rounds._shadow_capability_verified(rows[good]) is True
+    assert shadow_scan_rounds._shadow_capability_verified(rows[stale]) is False
 
 
 def test_in_flight_old_run_with_old_chain_report_fixates_current(db_session):
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session, status="SUCCESS")
-    host_id = _host(db_session, digest=digest)
+    host_id = _host(db_session)
     _device_job(db_session, run, host_id)
     db_session.add(PlanRunArtifact(
         plan_run_id=run.id, artifact_type="scan_result_xls", host_id=host_id,
@@ -217,9 +231,8 @@ def test_in_flight_old_run_with_old_chain_report_fixates_current(db_session):
 
 
 def test_unisoc_artifacts_are_not_this_partition_side_effects(db_session):
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session)
-    host_id = _host(db_session, digest=digest)
+    host_id = _host(db_session)
     _device_job(db_session, run, host_id)
     db_session.add(PlanRunArtifact(
         plan_run_id=run.id, artifact_type="merge_result_xls", host_id=host_id,
@@ -233,9 +246,8 @@ def test_unisoc_artifacts_are_not_this_partition_side_effects(db_session):
 
 def test_merge_platforms_record_with_mtk_blocks_entry(db_session):
     """可归因到 MTK 的旧 merge 记录 = 已进入现行链 → 固化 CURRENT。"""
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session, status="SUCCESS")
-    _device_job(db_session, run, _host(db_session, digest=digest))
+    _device_job(db_session, run, _host(db_session))
     run.run_context = {"merge_platforms": {"platforms": {"mtk": "ok", "unisoc": "ok"}}}
     db_session.commit()
     settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(run.id))
@@ -251,9 +263,8 @@ def test_unisoc_only_current_work_does_not_forfeit_mtk_candidate(db_session):
     混合运行里 upload/merge/extract 会为展锐写 run 级段；只有能归因到 MTK 的痕迹才算失格证据，
     否则每个混合试点都会在第一次展锐上传后被永久排除在新链之外。
     """
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session, status="SUCCESS")
-    host_id = _host(db_session, digest=digest)
+    host_id = _host(db_session)
     _device_job(db_session, run, host_id)
     _device_job(db_session, run, host_id, platform="UNISOC")
     run.run_context = {
@@ -276,14 +287,13 @@ def test_unisoc_only_current_work_does_not_forfeit_mtk_candidate(db_session):
 
 def test_sibling_run_of_same_plan_is_not_admitted(db_session):
     """白名单按实际 PlanRun，不按 Plan 扩展：同一 Plan 的兄弟 run 各判各的。"""
-    digest = capability.desired_scan_round_digest()
     plan = Plan(name=f"p4043-siblings-{uuid4()}", created_by="pytest")
     db_session.add(plan)
     db_session.commit()
     approved = _plan_run(db_session, plan)
     sibling = _plan_run(db_session, plan)
-    _device_job(db_session, approved, _host(db_session, digest=digest))
-    _device_job(db_session, sibling, _host(db_session, digest=digest))
+    _device_job(db_session, approved, _host(db_session))
+    _device_job(db_session, sibling, _host(db_session))
     settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(approved.id))
 
     assert _decide(db_session, approved.id, settings=settings).mode == "DEDUP_FIRST"
@@ -306,9 +316,8 @@ def test_sibling_run_of_same_plan_is_not_admitted(db_session):
 
 def test_historical_partition_without_mode_is_read_as_current(db_session):
     """历史无模式：准入不写记录，消费方按现行解释（D13 第 2 条）。"""
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session, status="SUCCESS")
-    _device_job(db_session, run, _host(db_session, digest=digest))
+    _device_job(db_session, run, _host(db_session))
     settings = _settings()  # 阶段二开、白名单为空
 
     assert admission.fixate_partition_mode(
@@ -323,9 +332,8 @@ def test_historical_partition_without_mode_is_read_as_current(db_session):
 
 def test_switch_disabled_after_admission_keeps_fixed_mode(db_session):
     """关开关只影响后续入场；已固定 DEDUP_FIRST 的分区仍按既有模式返回（D13 第 5 条）。"""
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session)
-    _device_job(db_session, run, _host(db_session, digest=digest))
+    _device_job(db_session, run, _host(db_session))
     admitted = _settings(stp_dedup_first_plan_run_ids=_whitelist(run.id))
     assert admission.fixate_partition_mode(
         db_session, run.id, entrypoint=admission.ENTRY_SHADOW_SWEEP, settings=admitted,
@@ -342,9 +350,8 @@ def test_switch_disabled_after_admission_keeps_fixed_mode(db_session):
 
 def test_only_mtk_partition_can_be_fixated(db_session):
     """D13 第 3 条：展锐分区不写模式记录，即使该 run 在白名单里。"""
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session)
-    _device_job(db_session, run, _host(db_session, digest=digest), platform="UNISOC")
+    _device_job(db_session, run, _host(db_session), platform="UNISOC")
     settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(run.id))
 
     decision = _decide(db_session, run.id, settings=settings, platform="unisoc")
@@ -359,10 +366,9 @@ def test_only_mtk_partition_can_be_fixated(db_session):
 
 def test_mixed_platform_run_admits_mtk_only(db_session):
     """混合平台：MTK 走去重链，展锐仍按现行分区处理（D13 第 3 条）。"""
-    digest = capability.desired_scan_round_digest()
     run = _plan_run(db_session)
-    mtk_host = _host(db_session, digest=digest)
-    unisoc_host = _host(db_session, digest=digest)
+    mtk_host = _host(db_session)
+    unisoc_host = _host(db_session)
     _device_job(db_session, run, mtk_host, platform="MTK")
     _device_job(db_session, run, unisoc_host, platform="UNISOC")
     settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(run.id))
@@ -380,11 +386,10 @@ def test_mixed_platform_run_admits_mtk_only(db_session):
 
 def test_concurrent_first_write_keeps_one_mode_and_one_decision(db_session):
     """并发首写：多入口同时入场，只留一条记录，所有调用方读到同一模式。"""
-    digest = capability.desired_scan_round_digest()
     run_id = _plan_run(db_session).id
     with SessionLocal() as setup:
         run = setup.get(PlanRun, run_id)
-        _device_job(setup, run, _host(setup, digest=digest))
+        _device_job(setup, run, _host(setup))
         setup.commit()
     settings = _settings(stp_dedup_first_plan_run_ids=_whitelist(run_id))
     entries = [
@@ -413,9 +418,8 @@ def test_concurrent_first_write_keeps_one_mode_and_one_decision(db_session):
 
 def test_retry_and_process_rebuild_read_the_same_mode(db_session):
     """任务重试 / 进程重建读到同一次提交的决定；运行中失去能力也不回退、不改写。"""
-    digest = capability.desired_scan_round_digest()
     run_id = _plan_run(db_session).id
-    host_id = _host(db_session, digest=digest)
+    host_id = _host(db_session)
     with SessionLocal() as setup:
         _device_job(setup, setup.get(PlanRun, run_id), host_id)
         setup.commit()

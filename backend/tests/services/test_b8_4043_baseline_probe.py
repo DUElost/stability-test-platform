@@ -25,6 +25,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
+from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import reset_scheduler_settings_cache
 from backend.models.device_log_event import DeviceLogEvent
@@ -61,15 +62,6 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _digest():
-    from backend.services.artifact_digest import (
-        ARTIFACT_KIND_CODE,
-        compute_desired_artifact_digest,
-    )
-
-    return compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
-
-
 def _admitted_run(db, *, status="RUNNING", capable=True):
     """纯 MTK、中等规模、Agent 能力可证明的新 run —— 试点白名单的目标形态。"""
     plan = Plan(name=f"probe4043-{uuid4()}", created_by="pytest")
@@ -89,10 +81,9 @@ def _admitted_run(db, *, status="RUNNING", capable=True):
     db.add(Host(
         id=host_id, hostname=host_id, name=host_id, ip=address, ip_address=address,
         status="ONLINE", last_heartbeat=now,
-        agent_artifact_digest=_digest() if capable else "sha256:legacy",
-        agent_artifact_digest_reported_at=(
-            now if capable else now - timedelta(hours=1)
-        ),
+        agent_capabilities=[SCAN_ROUND_V1] if capable else None,
+        agent_capabilities_reported_at=now if capable else now - timedelta(hours=1),
+        agent_capabilities_instance_id="agent-a" if capable else None,
     ))
     db.commit()
     device = Device(

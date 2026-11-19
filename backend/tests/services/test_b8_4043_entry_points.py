@@ -21,6 +21,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
+from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 from backend.core.database import SessionLocal
 from backend.core.settings.scheduler import reset_scheduler_settings_cache
 from backend.models.device_log_event import DeviceLogEvent
@@ -76,15 +77,21 @@ def _run(db, *, status="RUNNING"):
     return run
 
 
-def _host(db, digest, *, status="ONLINE", reported_at=None):
+def _host(db, *, status="ONLINE", reported_at="__default__", capable=True):
     host_id = f"ep-{uuid4().hex[:8]}"
     now = _now()
     octet = int(host_id.split("-")[1][:3], 16)
     address = f"198.51.{octet % 250}.{(octet // 10) % 250}"
+    if reported_at == "__default__":
+        report_at = now if capable else None
+    else:
+        report_at = reported_at
     db.add(Host(
         id=host_id, hostname=host_id, name=host_id, ip=address, ip_address=address,
-        status=status, last_heartbeat=now, agent_artifact_digest=digest,
-        agent_artifact_digest_reported_at=reported_at or now,
+        status=status, last_heartbeat=now,
+        agent_capabilities=[SCAN_ROUND_V1] if capable else None,
+        agent_capabilities_reported_at=report_at if capable else None,
+        agent_capabilities_instance_id="agent-a" if capable else None,
     ))
     db.commit()
     return host_id
@@ -162,9 +169,8 @@ async def test_pure_dedup_partition_never_gets_legacy_scan_dispatch(
     client, auth_headers, db_session, phase_two,
 ):
     """纯 MTK 且已 DEDUP_FIRST：旧 scan_now 一律不下发，扫描只由已登记的事实轮次承担。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="RUNNING")
-    _device_job(db_session, run, _host(db_session, digest))
+    _device_job(db_session, run, _host(db_session))
     phase_two(whitelist=[run.id])
     job = _enqueue_from_manual_scan_route(client, auth_headers, db_session, run.id)
 
@@ -184,9 +190,8 @@ async def test_mixed_run_legacy_dispatch_reads_committed_mode_before_emit(
     client, auth_headers, db_session, phase_two,
 ):
     """混合运行：展锐现行扫描照发，但下发前模式必须已提交（跨连接可见）。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="RUNNING")
-    host_id = _host(db_session, digest)
+    host_id = _host(db_session)
     _device_job(db_session, run, host_id, platform="MTK")
     unisoc_serial = _device_job(db_session, run, host_id, platform="UNISOC").serial
     phase_two(whitelist=[run.id])
@@ -226,9 +231,8 @@ async def test_mixed_run_legacy_dispatch_reads_committed_mode_before_emit(
 @pytest.mark.asyncio
 async def test_upload_task_commits_mode_before_marking(db_session, phase_two):
     """``upload_task``：标记 UPLOAD_PENDING 就是旧链上传的分流点，模式须在其之前提交。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="SUCCESS")
-    host_id = _host(db_session, digest)
+    host_id = _host(db_session)
     mtk_serial = _device_job(db_session, run, host_id, platform="MTK").serial
     unisoc_serial = _device_job(db_session, run, host_id, platform="UNISOC").serial
     mtk = _dle(db_session, run.id, host_id, platform="MTK", serial=mtk_serial)
@@ -253,9 +257,8 @@ async def test_upload_task_commits_mode_before_marking(db_session, phase_two):
 @pytest.mark.asyncio
 async def test_in_flight_old_run_stays_on_current_chain(db_session, phase_two):
     """在途旧 run：已有旧链痕迹 ⇒ 固化 CURRENT，标记照常，绝不两套链混跑。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="SUCCESS")
-    host_id = _host(db_session, digest)
+    host_id = _host(db_session)
     serial = _device_job(db_session, run, host_id).serial
     db_session.add(PlanRunArtifact(
         plan_run_id=run.id, artifact_type="merge_result_xls", host_id=host_id,
@@ -277,9 +280,8 @@ def test_shadow_sweep_uses_admission_instead_of_blanket_current(
     db_session, phase_two, tmp_path, monkeypatch,
 ):
     """影子轮：获批且能力证实的 run 在登记轮次前写入 DEDUP_FIRST（主干只会写 CURRENT）。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="RUNNING")
-    host_id = _host(db_session, digest)
+    host_id = _host(db_session)
     _device_job(db_session, run, host_id)
     phase_two(whitelist=[run.id])
 
@@ -302,9 +304,8 @@ def test_shadow_sweep_without_admission_still_records_current(
     db_session, phase_two, tmp_path, monkeypatch,
 ):
     """未获批分区仍按主干既有记账落 CURRENT（#3875 settled 出口需要这一行）。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="RUNNING")
-    _device_job(db_session, run, _host(db_session, digest))
+    _device_job(db_session, run, _host(db_session))
     phase_two(whitelist=[])
 
     monkeypatch.setattr(shadow, "resolve_shared_storage_root", lambda: str(tmp_path))
@@ -319,9 +320,8 @@ def test_manual_extract_route_fixates_mode_before_its_partition_split(
     client, auth_headers, db_session, phase_two,
 ):
     """手动 extract：分流（只提取现行分区）之前模式已提交；纯先去重分区返回 409。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="SUCCESS")
-    _device_job(db_session, run, _host(db_session, digest))
+    _device_job(db_session, run, _host(db_session))
     phase_two(whitelist=[run.id])
 
     resp = client.post(
@@ -337,9 +337,8 @@ def test_manual_merge_route_fixates_mode_and_skips_old_merge(
     client, auth_headers, db_session, phase_two,
 ):
     """手动 merge：先去重分区不再被旧链的「先跑 scan」前置拦住，改按轮次合并。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="SUCCESS")
-    _device_job(db_session, run, _host(db_session, digest))
+    _device_job(db_session, run, _host(db_session))
     phase_two(whitelist=[run.id])
 
     resp = client.post(
@@ -356,9 +355,8 @@ async def test_switch_off_blocks_new_entry_but_keeps_fixed_partition_consumers(
     db_session, phase_two,
 ):
     """D13 第 5 条：关开关只影响后续入场；已固定分区继续按 DEDUP_FIRST 处理。"""
-    digest = capability.desired_scan_round_digest()
     admitted = _run(db_session, status="SUCCESS")
-    host_id = _host(db_session, digest)
+    host_id = _host(db_session)
     serial = _device_job(db_session, admitted, host_id).serial
     kept = _dle(db_session, admitted.id, host_id, platform="MTK", serial=serial)
     phase_two(whitelist=[admitted.id])
@@ -374,7 +372,7 @@ async def test_switch_off_blocks_new_entry_but_keeps_fixed_partition_consumers(
     assert partition_scope.dedup_first_platforms(db_session, admitted.id) == ["mtk"]
 
     later = _run(db_session, status="SUCCESS")
-    _device_job(db_session, later, _host(db_session, digest))
+    _device_job(db_session, later, _host(db_session))
     phase_two(enabled=False, whitelist=[later.id])
     assert admission.fixate_partition_mode_at_entry(
         later.id, entrypoint=admission.ENTRY_SCAN_TASK,
@@ -389,9 +387,8 @@ async def test_unverified_host_at_task_retry_blocks_entry_until_evidence_returns
     db_session, phase_two,
 ):
     """重试期间能力仍未证实：每次入场都不写 DEDUP_FIRST；证据恢复后由下一次入场固化。"""
-    digest = capability.desired_scan_round_digest()
     run = _run(db_session, status="RUNNING")
-    host_id = _host(db_session, digest, reported_at=None)
+    host_id = _host(db_session, reported_at=None)
     _device_job(db_session, run, host_id)
     phase_two(whitelist=[run.id])
 
@@ -410,7 +407,9 @@ async def test_unverified_host_at_task_retry_blocks_entry_until_evidence_returns
         host.status = "ONLINE"
         recovered_at = _now()
         host.last_heartbeat = recovered_at
-        host.agent_artifact_digest_reported_at = recovered_at
+        host.agent_capabilities = [SCAN_ROUND_V1]
+        host.agent_capabilities_reported_at = recovered_at
+        host.agent_capabilities_instance_id = "agent-a"
         db.commit()
 
     assert admission.fixate_partition_mode_at_entry(

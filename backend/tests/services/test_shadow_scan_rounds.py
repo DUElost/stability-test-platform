@@ -15,6 +15,8 @@ from backend.agent.contracts.round_report_layout import round_manifest_path, rou
 from backend.services import dedup_scan
 from backend.services.shadow_scan_rounds import classify_round_coverage, read_round_reports
 from backend.models.plan_run_artifact import PlanRunArtifact
+from backend.models.host import Host
+from backend.agent.contracts.capabilities import SCAN_ROUND_V1
 from backend.services.dedup_extract import collect_upload_event_dir_names
 from backend.services import issue_fact_store as facts, shadow_scan_rounds as shadow
 from backend.core.settings.scheduler import SchedulerSettings
@@ -309,11 +311,32 @@ def test_another_platforms_round_does_not_admit_unobserved_mtk_terminal(shadow_e
     queued.assert_not_called()
 
 
+def _capable_host(factory, host_id, *, capabilities=(SCAN_ROUND_V1,), instance="agent-a",
+                  status="ONLINE", now=None):
+    """建立「当前心跳已显式声明能力」的真实列——#4044 判据的事实源。
+
+    不方便走 HTTP 心跳路径的测试用这个助手，而不是把判据本身 patch 掉：
+    patch 判据只会让探针测不到「证据到底从哪一拍来」。
+    """
+    now = now or datetime.now(timezone.utc)
+    with factory() as db:
+        host = db.get(Host, host_id) or Host(id=host_id, hostname=host_id)
+        host.status = status
+        host.last_heartbeat = now
+        # capabilities=None 表示「这一拍根本没有能力证据」（迁移前的存量行）。
+        host.agent_capabilities = None if capabilities is None else list(capabilities)
+        host.agent_capabilities_reported_at = None if capabilities is None else now
+        host.agent_capabilities_instance_id = None if capabilities is None else instance
+        db.add(host)
+        db.commit()
+    return now
+
+
 def _single_host_round(shadow_env, monkeypatch):
     factory, run_id, _root, _queued, _settings = shadow_env
     monkeypatch.setattr(shadow, "_expected_units", lambda *_args: [{"host_id": "host-a", "platform": "mtk"}])
     monkeypatch.setattr(shadow, "iter_plan_run_scan_hosts", lambda *_args: [("host-a", "ONLINE", False)])
-    monkeypatch.setattr(shadow, "_shadow_capability_verified", lambda *_args: True)
+    _capable_host(factory, "host-a")
     monkeypatch.setattr(shadow, "build_scan_now_payload", lambda _db, run_id, _host, **kwargs: {
         "plan_run_id": run_id, "device_serials": ["mtk-serial"], **kwargs,
     })
