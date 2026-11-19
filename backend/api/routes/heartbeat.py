@@ -27,6 +27,7 @@ from backend.services.dashboard_summary import (
 from backend.services.dashboard_summary_publisher import schedule_dashboard_summary_push
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
+from backend.agent.contracts.capabilities import normalize_capabilities
 from backend.services.script_catalog_version import compute_script_catalog_version
 
 from backend.services.device_retirement import (
@@ -316,6 +317,12 @@ def _process_heartbeat_with_db(
     if payload.agent_artifact_digest:
         host.agent_artifact_digest = payload.agent_artifact_digest
         host.agent_artifact_digest_reported_at = now
+    # #4044：能力是每拍权威覆盖，不是「缺失保留」。旧 Agent/跳拍缺字段、
+    # 显式空列表和回退到旧实例都必须让上一拍的证明立即失效；实例与上报
+    # 时间同事务绑定，发送侧据此核对当前连接。
+    host.agent_capabilities = list(normalize_capabilities(payload.capabilities))
+    host.agent_capabilities_reported_at = now
+    host.agent_capabilities_instance_id = payload.agent_instance_id or None
     # ADR-0040 D8 R4：host-resources 层退役——旧 Agent 仍可能上报 agent_resources_digest
     # （载荷照收以免 422），但控制面**不再写** host.agent_resources_digest（列保留一个版本窗口）。
 

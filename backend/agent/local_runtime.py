@@ -40,13 +40,16 @@ def connect_socketio_with_early_control(
     api_url: str,
     host_id: str,
     agent_secret: str,
+    agent_instance_id: str = "",
 ) -> tuple[AgentSocketIOClient, "queue.Queue[dict]"]:
     """Connect SocketIO with a buffering control handler (P2-2a).
 
     Commands arriving before the real handler is registered are queued and
     replayed later via :func:`replay_early_control_commands`.
     """
-    sio_client = AgentSocketIOClient(api_url, host_id, agent_secret)
+    sio_client = AgentSocketIOClient(
+        api_url, host_id, agent_secret, agent_instance_id=agent_instance_id,
+    )
     early_control_queue: "queue.Queue[dict]" = queue.Queue()
 
     def _early_control_handler(data: dict) -> None:
