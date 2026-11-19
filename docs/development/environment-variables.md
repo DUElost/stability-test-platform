@@ -103,6 +103,8 @@
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | RunConsole 终态运行记录保留秒数（默认 `3600`；#1124） |
 | `STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS` | 跨实例 cancel 等待 owner ack 的上界秒数（默认 `3`；超时 fail-closed；#1737 P3） |
 | `PLAN_RUN_RETENTION_DAYS` | 已终态 PlanRun 及其明细的保留天数（默认 `3`）。明细随 run 一并删除：job、step_trace、产物登记、日志信号由 `run_retention_cleanup` 显式删除，逐用例结果经外键 `CASCADE` 删除。**生产覆盖为 `36500`**，即实际停用清理、保留全部历史（owner 2026-09-25 确认有意；过渡台账 `plan-run-retention-disabled`，出口是 #3230 G4 的长期事实层）。**新站点**若沿用默认值，3 天后会删掉全部运行明细——首跑前须显式决定 |
+| `COMPAT_RERUNS_RETENTION_DAYS` | `compat_reruns/` 派生族（一次受控兼容补跑的独立产物，#4045）自己的保留天数（默认 `3`）。**不得**继承 `PLAN_RUN_RETENTION_DAYS`：生产把它覆盖为 `36500`，沿用同一旋钮会让 Dry-run 候选恒空，而读数看起来像「没有要回收的产物」（裁决 1 = (a)）。站点若要让补跑产物活过厂商回单周期，**必须**显式放宽本值。`0` 沿用 PlanRun/audit 家族语义：cutoff=now，该层全部到期。本值**不**开启自动回收窗口——回收只能人工逐笔确认，自动窗口见过渡台账 `compat-reruns-auto-window` |
+| `COMPAT_RERUN_PURGE_BATCH_LIMIT` | 一次人工确认最多回收多少笔补跑产物（默认 `20`，下界 `1`）。上限必须为正：把 `0` 解释成「无上限」会把「想少删」变成最危险的动作（同 #2278 对 `PLAN_RUN_RETENTION_BATCH_SIZE` 的判定）。超过上限**整笔拒绝**，不做部分执行 |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |
 
 ### Agent 协议门禁
@@ -241,7 +243,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **281** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**249** 个已在 `.env*.example` 登记，**32** 个声明为内部（理由见下节）。
+共 **283** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**251** 个已在 `.env*.example` 登记，**32** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -263,11 +265,11 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `AIMONKEY_RESOURCE_DIR` | `` | ✅ | 运行时 | `backend/agent/aimonkey_paths.py:23` |
 | `API_URL` | `http://127.0.0.1:8000` | ✅ | 运行时 | `backend/agent/aee/scan_scope.py:187` |
 | `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:106` |
-| `AUDIT_LOG_BUSINESS_RETENTION_DAYS` | `90` | ✅ | 运行时 | `backend/core/settings/scheduler.py:144` |
-| `AUDIT_LOG_RETENTION_BATCH_SIZE` | `5000` | ✅ | 运行时 | `backend/core/settings/scheduler.py:147` |
-| `AUDIT_LOG_RETENTION_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:149` |
-| `AUDIT_LOG_SECURITY_RETENTION_DAYS` | `180` | ✅ | 运行时 | `backend/core/settings/scheduler.py:145` |
-| `AUDIT_LOG_SESSION_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:143` |
+| `AUDIT_LOG_BUSINESS_RETENTION_DAYS` | `90` | ✅ | 运行时 | `backend/core/settings/scheduler.py:157` |
+| `AUDIT_LOG_RETENTION_BATCH_SIZE` | `5000` | ✅ | 运行时 | `backend/core/settings/scheduler.py:160` |
+| `AUDIT_LOG_RETENTION_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:162` |
+| `AUDIT_LOG_SECURITY_RETENTION_DAYS` | `180` | ✅ | 运行时 | `backend/core/settings/scheduler.py:158` |
+| `AUDIT_LOG_SESSION_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:156` |
 | `AUTH_ACCESS_COOKIE_NAME` | `stp_access_token` | ✅ | 运行时 | `backend/core/settings/security.py:44` |
 | `AUTH_COOKIE_PATH` | `/` | ✅ | 运行时 | `backend/core/settings/security.py:46` |
 | `AUTH_COOKIE_SAMESITE` | `lax` | ✅ | 运行时 | `backend/core/settings/security.py:48` |
@@ -283,6 +285,8 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `CHAIN_RECONCILE_BATCH_SIZE` | `100` | ✅ | 运行时 | `backend/core/settings/scheduler.py:118` |
 | `CHAIN_TRIGGER_SETTLE_READY_GATE_ENABLED` | `True` | ✅ | 运行时 | `backend/core/settings/scheduler.py:70` |
 | `CHAIN_TRIGGER_SETTLE_SECONDS` | `180` | ✅ | 运行时 | `backend/core/settings/scheduler.py:65` |
+| `COMPAT_RERUNS_RETENTION_DAYS` | `3` | ✅ | 运行时 | `backend/core/settings/scheduler.py:145` |
+| `COMPAT_RERUN_PURGE_BATCH_LIMIT` | `20` | ✅ | 运行时 | `backend/core/settings/scheduler.py:148` |
 | `COORDINATOR_HEARTBEAT_INTERVAL` | `30` | ✅ | 运行时 | `backend/agent/settings.py:205` |
 | `COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:110` |
 | `COORDINATOR_MAX_PLAN_RUN_HOSTS` | `200` | ✅ | 运行时 | `backend/agent/settings.py:206` |
@@ -292,8 +296,8 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `CRON_POLL_INTERVAL` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:56` |
 | `DATABASE_URL` | `` | ✅ | 运行时 | `backend/agent/tests/test_env_isolation.py:34` |
 | `DEVICE_LOCK_LEASE_SECONDS` | `600` | ✅ | 运行时 | `backend/services/agent_job_heartbeat.py:27` |
-| `DEVICE_OFFLINE_TIMEOUT` | `60` | ✅ | 运行时 | `backend/api/routes/heartbeat.py:142` |
-| `DEVICE_SNAPSHOT_INTERVAL` | `30` | ✅ | 运行时 | `backend/api/routes/heartbeat.py:41` |
+| `DEVICE_OFFLINE_TIMEOUT` | `60` | ✅ | 运行时 | `backend/api/routes/heartbeat.py:143` |
+| `DEVICE_SNAPSHOT_INTERVAL` | `30` | ✅ | 运行时 | `backend/api/routes/heartbeat.py:42` |
 | `DISPATCHED_TIMEOUT_SECONDS` | `120` | ✅ | 运行时 | `backend/core/job_timeout_config.py:46` |
 | `DISPATCH_SYNC_MAX_ATTEMPTS` | `1` | ✅ | 运行时 | `backend/services/precheck/__init__.py:18` |
 | `ENV` | `` | ✅ | 运行时 | `backend/core/job_timeout_config.py:26` |
@@ -349,7 +353,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `SAQ_CONCURRENCY` | `10` | ✅ | 运行时 | `backend/tasks/saq_worker.py:50` |
 | `SAQ_ENQUEUE_WAIT_TIMEOUT` | `5.0` | ✅ | 运行时 | `backend/core/task_queue.py:36` |
 | `SAQ_QUEUE_NAME` | `stp` | ✅ | 运行时 | `backend/core/task_queue.py:35` |
-| `SCHEDULE_DEDUP_WINDOW_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:137` |
+| `SCHEDULE_DEDUP_WINDOW_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:150` |
 | `SCRIPT_PRESENCE_HISTORY_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:97` |
 | `SCRIPT_PRESENCE_SWEEP_CRON` | `30 9 * * *` | ✅ | 运行时 | `backend/core/settings/scheduler.py:95` |
 | `SESSION_WATCHDOG_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:33` |
@@ -395,8 +399,8 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_ARTIFACT_DIGEST_CACHE` | `` | — | 运行时 | `backend/services/artifact_digest.py:49` |
 | `STP_AUDIT_BACKEND` | `` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:10` |
 | `STP_AUDIT_ENV_FILE` | `-` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:11` |
-| `STP_BACKEND_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:59` |
-| `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:60` |
+| `STP_BACKEND_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:60` |
+| `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:61` |
 | `STP_BACKEND_URL` | `http://127.0.0.1:8000` | — | 运行时 | `backend/scripts/batch_hot_update.py:286` |
 | `STP_BARRIER_MAX_WAIT_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:262` |
 | `STP_BARRIER_PROGRESS_STALE_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:226` |
@@ -415,7 +419,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_DEDUP_FIRST_ENABLED` | `False` | ✅ | 运行时 | `backend/core/settings/scheduler.py:82` |
 | `STP_DEDUP_FIRST_PLAN_RUN_IDS` | `` | ✅ | 运行时 | `backend/core/settings/scheduler.py:86` |
 | `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:212` |
-| `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:77` |
+| `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:78` |
 | `STP_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:552` |
 | `STP_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:553` |
 | `STP_DEDUP_SCAN_TAG` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:567` |
@@ -452,7 +456,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_LOG_LEVEL` | `-` | ✅ | 运行时 | `backend/core/logging_setup.py:131` |
 | `STP_LOG_RATE_LIMIT_BASE` | `200` | ✅ | 运行时 | `backend/services/agent_host_heartbeat.py:35` |
 | `STP_LOG_RATE_LIMIT_MIN` | `20` | ✅ | 运行时 | `backend/services/agent_host_heartbeat.py:36` |
-| `STP_MAX_CLAIM_SLOTS` | `-` | ✅ | 运行时 | `backend/agent/capacity_reporter.py:139` |
+| `STP_MAX_CLAIM_SLOTS` | `-` | ✅ | 运行时 | `backend/agent/capacity_reporter.py:146` |
 | `STP_MAX_CONCURRENT_OPERATIONS` | `-` | ✅ | 运行时 | `backend/agent/operation_scheduler.py:38` |
 | `STP_METRICS_AUTH_REQUIRED` | `1` | ✅ | 运行时 | `backend/api/routes/metrics.py:546` |
 | `STP_NFS_ROOT` | `-` | ✅ | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:69` |
@@ -527,7 +531,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `WATCHER_NFS_QUOTA_MB` | `-` | ✅ | 运行时 | `backend/agent/watcher/policy.py:150` |
 | `WATCHER_ON_UNAVAILABLE` | `-` | ✅ | 运行时 | `backend/agent/watcher/policy.py:138` |
 | `WATCHER_PULL_TIMEOUT_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/watcher/policy.py:156` |
-| `WS_TOKEN` | `` | ✅ | 运行时 | `backend/realtime/socketio_server.py:95` |
+| `WS_TOKEN` | `` | ✅ | 运行时 | `backend/realtime/socketio_server.py:97` |
 
 ### 内部声明（未进运维模板，含理由）
 
