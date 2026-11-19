@@ -98,6 +98,8 @@ _SKIP_PLAN_IDS = frozenset({"FDL", "FDL2"})
 _SKIP_PLAN_TYPES = frozenset({"FDL", "NAND_FDL", "EraseFlash2"})
 
 _LOAD_PART_RE = re.compile(r"load_partition:\s*([^,\s]+)")
+_USB_PORT_RE = re.compile(r"^[1-9][0-9]*-[1-9][0-9]*(?:\.[1-9][0-9]*){0,6}\Z")
+_SPD_OPENED_PORT_RE = re.compile(r"Opened\s+1782:4d00\s+on\s+usb-port\s+([^\s]+)")
 
 
 class FlashRejectedError(RuntimeError):
@@ -638,6 +640,69 @@ def check_no_unisoc_download_port(base: Optional[str] = None, route: Optional[di
         )
 
 
+def find_usb_ports_for_serial(serial: str, base: Optional[str] = None) -> List[str]:
+    """Find sysfs USB port names whose serial attribute matches ``serial``."""
+    if not serial:
+        return []
+    usb_base = _SYSFS_USB_BASE if base is None else base
+    names = sorted(os.listdir(usb_base))
+    hits: List[str] = []
+    for name in names:
+        if ":" in name or "-" not in name:
+            continue
+        dev_serial = _sysfs_read(os.path.join(usb_base, name, "serial"))
+        if dev_serial == serial:
+            hits.append(name)
+    return hits
+
+
+def resolve_device_usb_port(
+    serial: str,
+    *,
+    require_port_binding: bool = True,
+    base: Optional[str] = None,
+    route: Optional[dict] = None,
+) -> Optional[str]:
+    """Resolve and validate the target physical USB port path for ``serial``."""
+    usb_base = _SYSFS_USB_BASE if base is None else base
+    if require_port_binding and not sys.platform.startswith("linux"):
+        raise FlashRejectedError(
+            f"require_port_binding=true requires Linux sysfs USB topology (got {sys.platform!r})",
+            route=route,
+        )
+    try:
+        hits = find_usb_ports_for_serial(serial, base=usb_base)
+    except OSError as exc:
+        if not require_port_binding:
+            return None
+        raise FlashRejectedError(
+            f"USB bus directory unreadable at {usb_base}: {exc} "
+            f"(cannot resolve target USB port for serial={serial!r})",
+            route=route,
+        ) from exc
+
+    if len(hits) > 1:
+        raise FlashRejectedError(
+            f"ambiguous sysfs USB ports {hits} matched serial={serial!r}",
+            route=route,
+        )
+    if not hits:
+        if require_port_binding:
+            raise FlashRejectedError(
+                f"cannot resolve target USB port from sysfs for serial={serial!r}; "
+                "refusing unbound spd_dump",
+                route=route,
+            )
+        return None
+    port = hits[0]
+    if not _USB_PORT_RE.match(port):
+        raise FlashRejectedError(
+            f"invalid sysfs USB port {port!r} matched serial={serial!r}",
+            route=route,
+        )
+    return port
+
+
 def get_sparse_trimmed_size(sparse_path: str) -> Optional[int]:
     """Return byte offset where non-CHUNK_DONT_CARE data ends, aligned up to 16 MB."""
     if not os.path.isfile(sparse_path):
@@ -822,6 +887,8 @@ def build_spd_dump_args(
     fw_dir: str,
     super_path: str,
     spec: Optional[Dict[str, object]] = None,
+    *,
+    usb_port: Optional[str] = None,
 ) -> List[str]:
     """Build Scheme 2 spd_dump command line from plan.json, asserting no protected NV partitions are touched."""
     if spec is None:
@@ -847,8 +914,13 @@ def build_spd_dump_args(
         if is_protected_partition(part):
             raise RuntimeError(f"refusing to write protected NV partition: {part}")
 
-    cmd: List[str] = [
-        spd_dump_bin,
+    cmd: List[str] = [spd_dump_bin]
+    if usb_port is not None:
+        clean_port = str(usb_port).strip()
+        if not _USB_PORT_RE.match(clean_port):
+            raise ValueError(f"invalid usb_port {usb_port!r}")
+        cmd.extend(["--usb-port", clean_port])
+    cmd.extend([
         "--verbose", "1",
         "--wait", "60",
         "keep_charge", "1",
@@ -858,7 +930,7 @@ def build_spd_dump_args(
         "timeout", "15000",
         "blk_size", "0x8000",
         "keep_charge", "1",
-    ]
+    ])
     for part in erases:
         cmd.extend(["erase_part", part])
     cmd.extend(["write_part", "userdata", userdata])
@@ -894,6 +966,7 @@ def run_spd_dump(
     progress: Progress,
     log: list,
     timeout_seconds: float = _DEFAULT_SPD_DUMP_TIMEOUT_SECONDS,
+    expected_usb_port: Optional[str] = None,
 ) -> float:
     """Launch spd_dump, reboot device to autodloader, stream PROGRESS stamps, and enforce total timeout."""
     if (
@@ -915,6 +988,7 @@ def run_spd_dump(
         bufsize=1,
     )
     tail: List[str] = []
+    opened_ports: List[str] = []
     reader: Optional[threading.Thread] = None
 
     def _read_stdout() -> None:
@@ -928,6 +1002,11 @@ def run_spd_dump(
                 tail.append(line)
                 if len(tail) > 40:
                     tail.pop(0)
+                pm = _SPD_OPENED_PORT_RE.search(line)
+                if pm:
+                    opened_ports.append(pm.group(1))
+                    progress.stamp(stage="bsl-flash", detail=line[:120], elapsed_s=round(time.monotonic() - t0, 1))
+                    continue
                 m = _LOAD_PART_RE.search(line)
                 if m:
                     progress.stamp(stage="bsl-flash", partition=m.group(1), elapsed_s=round(time.monotonic() - t0, 1))
@@ -1000,6 +1079,15 @@ def run_spd_dump(
         log.extend(tail[-15:])
         if rc != 0:
             raise RuntimeError(f"spd_dump exited with rc={rc} after {elapsed}s: {' | '.join(tail[-5:])}")
+        if expected_usb_port is not None:
+            if not opened_ports:
+                raise RuntimeError(
+                    f"spd_dump exited 0 without USB port binding echo (expected usb-port {expected_usb_port!r})"
+                )
+            if any(p != expected_usb_port for p in opened_ports):
+                raise RuntimeError(
+                    f"spd_dump bound unexpected USB port {opened_ports!r} != expected {expected_usb_port!r}"
+                )
         return elapsed
     finally:
         _terminate_and_reap(proc)
@@ -1160,6 +1248,16 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
 
         check_no_unisoc_download_port(route=route)
 
+        raw_require_port = args.get("require_port_binding")
+        if raw_require_port is None or str(raw_require_port).strip() == "":
+            raw_require_port = _env("STP_FLASH_REQUIRE_PORT_BINDING", "")
+        require_port_binding = _bool(raw_require_port, True)
+        usb_port = resolve_device_usb_port(
+            serial,
+            require_port_binding=require_port_binding,
+            route=route,
+        )
+
         spd_dump_timeout = _parse_positive_finite_float(
             args.get("spd_dump_timeout_seconds"),
             "spd_dump_timeout_seconds",
@@ -1192,7 +1290,7 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
 
         if _bool(args.get("dry_run"), False):
             dry_super = os.path.join(fw_dir, str(spec["super_rel"])) if spec["has_super"] else ""
-            cmd = build_spd_dump_args(spd_dump_bin, fw_dir, dry_super, spec=spec)
+            cmd = build_spd_dump_args(spd_dump_bin, fw_dir, dry_super, spec=spec, usb_port=usb_port)
             return {
                 "metrics": {
                     "dry_run": True,
@@ -1205,6 +1303,8 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                     "skipped_erases": list(spec["skipped_erases"]),  # type: ignore[arg-type]
                     "partitions": partitions,
                     "route": route,
+                    "usb_port": usb_port,
+                    "require_port_binding": require_port_binding,
                     "version_prop": version_prop,
                     "expected_version": expected_version,
                     "battery_level": battery_level,
@@ -1236,15 +1336,42 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
         try:
             # Single parsed spec is reused for both cache preparation and command assembly (J10).
             local_fw, cached_super = prepare_local_cache(fw_dir, cache_dir, progress, spec=spec)
-            cmd = build_spd_dump_args(spd_dump_bin, local_fw, cached_super, spec=spec)
+            live_usb_port = resolve_device_usb_port(
+                serial,
+                require_port_binding=require_port_binding,
+                route=route,
+            )
+            if live_usb_port != usb_port:
+                raise FlashRejectedError(
+                    f"target USB port changed while waiting for host lock: {usb_port!r} -> {live_usb_port!r}",
+                    route=route,
+                )
+            cmd = build_spd_dump_args(spd_dump_bin, local_fw, cached_super, spec=spec, usb_port=usb_port)
             pre_reboot = _capture_pre_reboot_evidence(adb_bin, serial)
             # Final download-port gate after cache preparation and immediately before spd_dump (J7).
             check_no_unisoc_download_port(route=route)
             # J9 (#4006 v1.2): R and the fallback anchor use the host monotonic clock.
             reboot_anchor = time.monotonic()
             _LAST_REBOOT_SENT_AT["value"] = None
-            flash_seconds = run_spd_dump(
-                cmd, adb_bin, serial, progress, log, timeout_seconds=spd_dump_timeout
+            flash_seconds = (
+                run_spd_dump(
+                    cmd,
+                    adb_bin,
+                    serial,
+                    progress,
+                    log,
+                    timeout_seconds=spd_dump_timeout,
+                    expected_usb_port=usb_port,
+                )
+                if usb_port is not None
+                else run_spd_dump(
+                    cmd,
+                    adb_bin,
+                    serial,
+                    progress,
+                    log,
+                    timeout_seconds=spd_dump_timeout,
+                )
             )
             last_reboot_ts = _LAST_REBOOT_SENT_AT["value"]
             reboot_sent_at = last_reboot_ts if last_reboot_ts is not None else reboot_anchor
@@ -1303,6 +1430,8 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                 "skipped_erases": list(spec["skipped_erases"]),  # type: ignore[arg-type]
                 "partitions": partitions,
                 "route": route,
+                "usb_port": usb_port,
+                "require_port_binding": require_port_binding,
                 "battery_level": battery_level,
                 "pre_build_type": pre_build_type,
                 "pre_incremental": pre_incremental,

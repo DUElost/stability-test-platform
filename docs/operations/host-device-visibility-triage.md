@@ -16,7 +16,7 @@
 | 层 | 典型观察 | 只读判据 | 处置 |
 |---|---|---|---|
 | **L0 意图 / 作业层（先问这层）** | `USB n` 与在线数一起归零、`lsusb` 只剩 root hub，**但该 host 近一段时间没有 job** | **平台侧读不到判据**——`device` 只有 `ONLINE/OFFLINE/BUSY/ERROR`，没有 retired/archived/空置位 ⇒ 只能问人、看作业与搬迁记录 | 先确认是不是**有意**清空/关机/搬迁（#3065 现网实例）；确认后**不要**继续按 L1–L4 定成因。解除只能来自账侧或规则豁免（#2962 设备意图位、#3068 paging 取舍） |
-| **L1 内核 / USB 子系统** | `lsusb`/sysfs 里手机整体变少或为空，`USB n` 同时掉 | `sudo dmesg -T` 出现 `xHCI host not responding` / `HC died; cleaning up` / `error -71(-110)` | xHCI driver unbind/rebind 或 reboot；完整判据见 [8.87 事故复盘](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)。bind 后 probe 报 `-110`、`enable` 为 0 且驱动目录无 BDF 链接时主控未初始化，rebind 无效，直接 reboot（§6.1）。主控救回后单个 Hub 的 SuperSpeed 分支仍反复枚举失败时按 §5 处置 |
+| **L1 内核 / USB 子系统** | `lsusb`/sysfs 里手机整体变少或为空，`USB n` 同时掉 | `sudo dmesg -T` 出现 `xHCI host not responding` / `HC died; cleaning up` / `error -71(-110)` | xHCI driver unbind/rebind 或 reboot；完整判据见 [8.87 事故复盘](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)。bind 后 probe 报 `-110`、`enable` 为 0 且驱动目录无 BDF 链接时主控未初始化，rebind 无效，直接 reboot（§6.1）。主控救回后单个 Hub 的 SuperSpeed 分支仍反复枚举失败、或只按 §5.1 的半枚举形态成立时，同样按 §5 处置 |
 | **L2 主机 adb server** | 设备在 USB 上**有 ADB 接口**，`adb devices` 却少或为空 | 「ADB 接口设备集合 ⊋ adb 列表集合」（§2 probe）；`pgrep -af 'fork-server server'` 出现多实例 / 非 5037 端口 / 非 Agent 属主 | 多 server（#160）由 Agent 自检并可选自愈；**单 server 卡死**才用 `adb kill-server && adb start-server`（打断在途 adb 会话，须先确认无在跑任务） |
 | **L3 设备 adbd / 授权** | `adb devices` 能列出该设备，但 state 是 `offline` / `unauthorized` | 两侧集合相等（无 L2 漏项），且存在非 `device` 行 | `adb reconnect offline`、重插、设备侧确认授权或重启；属**设备侧**，server 重启无效 |
 | **L4 设备 USB 功能集** | `USB n > 0` 而在线为 0 或明显偏低 | sysfs 接口里**没有** `ff:42`；`.../1.0/interface` 返回 `MIDI function`（`0e8d:2046`） | 只能设备侧人工：屏幕上把 USB 配置切回 MTP/文件传输并开启 USB 调试；adb 侧一切操作无效（平台侧自 #3046 起给 reason `adb_interfaces_missing`，见 §3） |
@@ -147,6 +147,9 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 主控 rebind 救回整树后，仍可能有单个 Hub 的 USB3 分支没有恢复。两者是不同故障面：
 主控死亡时整棵树消失；分支失效时 USB2 伴生树（`1-x`）与下游设备正常，只有 SuperSpeed
 树（`2-x`）反复枚举失败。
+失效也会以另外两种形态出现，两者都不带重枚举风暴，见判据 1 与 §5.5：SuperSpeed 树停在
+半枚举状态（某一级 Hub 无驱动绑定），以及方向相反——USB2 伴生树整棵消失、SuperSpeed 树
+留在原地不动。
 
 ### 5.1 只读判据
 
@@ -156,6 +159,12 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
    `new SuperSpeed USB device number=...`，随后 `USB disconnect`、
    `Cannot enable. Maybe the USB cable is bad?`、`device descriptor read/64, error -32`
    或 `config failed, error -22`；
+   执行者也可以按**半枚举形态**成立本条：该分支没有任何重枚举记录，但 `lsusb -t` 里某一级
+   Hub 显示 `Driver=[none]/0p`（设备号已分配、hub 驱动始终没绑上），且内核持续打印
+   `hub <Bus.Port>:1.0: hub_ext_port_status failed (err = -110)`。查法：`lsusb -t`，以及
+   只读的 `sudo -n /usr/local/sbin/stp-agent-priv read-kernel-log --since-epoch <now-900>
+   --lines 5000`（ADR-0037 D7；`kernel.dmesg_restrict=1` 下非特权 `dmesg` 读不到）。
+   执行者不得因为缺 `new SuperSpeed USB device` 而排除本条。
 2. `uhubctl` 里该 SuperSpeed Hub 的端口状态含 `oc`（过流），或该 Hub 从 `uhubctl`
    列表中消失而内核仍在重试；其 USB2 伴生 Hub（如 `1-5`）与下游设备持续枚举；
 3. `lsusb -t` 的 Bus 002（SuperSpeed root hub）下没有其他可用 hub 子树。
@@ -163,10 +172,14 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 平台侧 `usb_link_degraded`（§3）只说明窗口内有 `-71/-110` 或 cable-suspect 计数超阈，
 不区分「主控级」与「单分支级」；分支级判据必须靠上面三条人工取证。
 
-`-110` 计数本身也不能当判据：多数主机的 `-71/-110` 来自单个设备的
-`Failed to suspend device`（autosuspend 失败），设备仍在树上、`lsusb` 不丢。执行者看到
-`usb_link_degraded` 时先确认是否伴随**同一个 `2-x` 端口反复 `new SuperSpeed USB device`**；
-没有这个形状的主机不得按本节处置。
+`-110` 计数本身也不是判据：多数主机的 `-71/-110` 来自 `Failed to suspend device`
+（autosuspend 失败），对象仍在树上、`lsusb` 不丢。执行者看到 `usb_link_degraded` 时，必须
+先判定发噪声的**对象是 Hub 还是终端设备**：内核的 `usb <X>: Failed to suspend device` 这行
+Hub 同样会打印，执行者不得据此认定是手机侧。对象判定的查法：
+`cat /sys/bus/usb/devices/<X>/bDeviceClass`，输出 `09` 即 Hub。
+故障对象是 Hub 时，判据 1 的两种形态任一成立即按本节处置。执行者只有在确认对象是终端设备、
+且判据 1 与判据 2 都不成立时，才不得按本节处置（2026-11-18 一台主机正是被这条误判放过，
+复盘见 §5.5）。
 
 ### 5.2 处置步骤
 
@@ -177,6 +190,8 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 3. 执行者把 Hub 上行线从 USB3 口（蓝色 / SS）改插**纯 USB2 口**（黑色），或改用
    USB2-only 上行线。执行者不得改插同一主机的另一个 USB3 口——过流 / 链路错误随 Hub
    侧 SS PHY 走，换口不改变故障面。
+   旁路只搬走了在用的那根上行；失效分支的上行线继续插着时，它会留在设备列表里继续污染
+   `uhubctl`。执行者必须在旁路后按 §5.4 把残留上行摘掉（现场拔线，或软件 `remove`）。
 4. 执行者验证切换结果：`lsusb -t` 中 Bus 002 下无 hub 子树；`1-5` 及其下游 `1-5.x`
    全部重新枚举；`lsusb` 设备总数与切换前一致；60 秒内 `dmesg -T` 无新的 `2-5` 枚举
    失败或 `-71`。
@@ -205,15 +220,84 @@ cat /sys/bus/usb/devices/<dev>:1.0/interface      # "MIDI function" = MIDI-only
 `device descriptor read/8, error -110`（24 小时 12,313 次重新枚举），USB2 侧
 `1-5` 与其内部五个 `0bda:5411` 分级正常，Bus 002 只有 root hub。
 
+**2026-11-18 勘误**：上述核对对 `.75` 的结论是误判。发 `-110` 的对象不是终端设备，而是该
+主机 SuperSpeed 分支最深一级的 Hub（`usb 2-5.4: Failed to suspend device` 与
+`hub 2-5:1.0: hub_ext_port_status failed` 同时出现，且 `2-5.4` 自 2026-10-21 起就处于
+`Driver=[none]/0p`）。误判的成因是把 `Failed to suspend device` 当成了「设备侧」签名——
+见 §5.1 的对象判定；取证与处置见 §5.5。`.42`、`.60` 本次未复核，结论保持不变。
+
 2026-11-12 11:41 `.54` 按本节处置完成：上行改插纯 USB2 口（Bus 001 端口 9）后，
 `2-5` 事件归零，`1-9` 及内部 `1-9.1..4` 与 13 台设备恢复，连续 3 分钟零重枚举，
 平台 `usb_device_count` 从切换瞬态的 0 回到 13。该机设备为 TECNO
 （`0e8d:2008` / `0e8d:20ff`），只暴露 MTP 接口、无 `ff:42`，`adb devices` 为空属
 §1 L4 设备侧，与本次旁路无关。
 
+### 5.4 摘掉残留上行：`uhubctl` 固定超时的解法
+
+适用条件：一条已失效的 Hub 上行分支仍插在主机上（§5.1 判据 1 的半枚举形态，或 §5.2 旁路后的
+残留上行），而现场需要用 `uhubctl` 做端口级取证。
+
+`uhubctl` 无论 `-l` / `-p` 把范围收得多小，都会打开并查询系统里**所有** Hub 才能解析位置；
+查到失效分支时每次都吃满内核控制超时。实测形态：单口定向调用与全量列举同样慢，耗时与请求的
+端口数无关。执行者不得把这段耗时当成「整机 USB 有问题」或「在用 Hub 也坏了」——纯 sysfs 读取
+（`lsusb`、`lsusb -t`、`/sys/bus/usb/devices/*`）不受它影响，实测差三个数量级。
+该开销同样落在 `stp-agent-priv usb-power` 的调用路径上：其超时上限 60 秒
+（`backend/agent/stp_agent_priv.py` 的 `USB_POWER_TIMEOUT_SECONDS`，ADR-0037 D8），
+而 `cycle` 的 `delay` 最多再加 30 秒（`USB_POWER_MAX_DELAY`），余量会被这段固定开销吃掉。
+
+> 警告：第 3 步是 root 写操作，且 sysfs 的 `remove` 是 **write-once、软件侧不可撤销**。
+> 写下去之后该子树只能靠现场重新插线、或 rebind xHCI 驱动恢复；后者会把同一控制器上
+> **另一条总线正在使用的设备一起重新枚举**。执行者必须先拿到 Owner 对本主机本次操作的授权，
+> 并按 §1 L0 确认该主机无在跑作业。
+
+按顺序执行以下步骤：
+
+1. 确认失效子树不承载任何在用设备：`lsusb -t`，逐行看该 Bus 子树下有无非 Hub 设备。
+   预期：非 Hub 设备数为 0。不为 0 时停止本流程，改走现场处置。
+2. 确认失效分支的顶层对象是 root hub 的直接子设备：
+   `basename $(readlink -f /sys/bus/usb/devices/<Bus.Port>)`（例如 `2-5` → `usb2`）。
+   预期：输出形如 `usb1` / `usb2`。这一步决定第 3 步的 port-disable 请求是发给 root hub
+   还是发给那只已经不响应的 Hub；是后者时 `remove` 自己也会卡在超时里，执行者必须改走现场拔线。
+3. 对顶层对象执行软件断开：`echo 1 | sudo tee /sys/bus/usb/devices/<Bus.Port>/remove`。
+   预期：命令可阻塞十几到几十秒（内核要先耗掉在途控制请求）；返回后
+   `ls /sys/bus/usb/devices/ | grep -E '^<Bus>-'` 只剩 root hub 自身的接口目录；
+   `lsusb` 设备总数减少量等于被摘掉的 Hub 只数。
+4. 复测取证工具：`time uhubctl`，再做一次定向
+   `time uhubctl -l <在用 Hub 位置> -p <口> -a status -d 1`。
+   预期：全量列举降到秒级、定向调用降到亚秒级；在用侧列出的设备串号集合与第 3 步前逐条一致。
+5. 核对平台信号：下一次心跳 `capacity.usb_device_count` 与在用设备数一致；
+   `usb_link_degraded` 在 1 小时统计窗滑过后回落（`contracts/kernel_usb_faults.py` 的
+   `LINK_WINDOW_SECONDS`）。
+6. 排期更换该 Hub。`remove` 只停止软件面污染，不修硬件；终态出口仍是 §5.2 第 6 条。
+   以后要重新启用这条分支时，执行者先换 Hub 或换上行线，再重插并复跑 §5.2 第 4 条与本节第 4 步。
+
+### 5.5 2026-11-18 `.75` 实例（半枚举形态与 `uhubctl` 固定超时）
+
+HONOR MLD-NX2 站，16 台设备，xHCI 为单一控制器（两条总线：480M 与 5000M），开机 95 天未重启。
+
+- 取证（全程只读）：`uhubctl` 各形态耗时 22~31s，而 `user+sys` 合计 0.02~0.06s；阻塞时
+  `state=D`、`wchan=usb_start_wait_urb`，当时的 fd 指向失效分支最深一级 Hub 的
+  `/dev/bus/usb` 节点。同机 `lsusb` 0.011s。单口定向调用（含 `-d 1`）26.8s——耗时与端口数无关。
+- 拓扑：在用侧挂在一条总线的根口号 10 上，`0bda:5411` 五只级联、20 个口全部
+  `power highspeed enable connect`、无 `oc`；失效侧在另一条总线的根口号 5 上，`0bda:0411`
+  五只级联、子树下设备数 0、最深一级自 2026-10-21 起 `Driver=[none]/0p`。每条总线各只有一个
+  顶级设备对象 ⇒ 两侧是两根独立上行线，这是本次能安全 `remove` 的前提；执行者不得把它推广到
+  单根 USB3 线的场合。
+- 判据成立形态：15 分钟内核窗内 `hub_ext_port_status failed (err = -110)` 67 次、
+  `usb <X>: Failed to suspend device, error -110` 68 次，两者对象都是 Hub（`bDeviceClass=09`）；
+  同窗在用侧 0 条、重枚举 0、`USB disconnect` 0。判据 1 的重枚举风暴形态不成立、半枚举形态成立。
+- 处置与结果：按 §5.4 摘掉失效侧顶层对象（写入耗时 20.6s）。之后 `uhubctl` 全量 1.30s、
+  定向 0.30s；`lsusb` 28→23；在用侧 16 台串号逐条一致、`adb` 口径未变；内核不再出现失效侧任何行。
+- 同期发现的配置漂移：当日 11:30 Ansible 写入的 VBUS 槽位映射仍指向改插前的顶级口号，
+  19:47:37 该树已改插到新根口号（sysfs 目录 mtime 为证），11 条映射口的 sysfs 目录全部不存在
+  → `usb-power` 在查表阶段即 fail-closed。逐条比对结果：11/11 只有顶级口号变化，子 Hub 与端口号
+  不变。重登记与 5 台无槽位设备的缺口见
+  [`notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md`](../notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md)。
+
 ## 6. 相关
 
 - 列的设计与口径：[`notes/feature/2026-09-11-hosts-usb-device-count.md`](../notes/feature/2026-09-11-hosts-usb-device-count.md)
 - 只读诊断边界与凭据来源：[`production-diagnostics.md`](./production-diagnostics.md)
 - xHCI 死亡致 USB/ADB 全空：[`incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md`](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)
+- 半枚举形态与 `remove` 解法的决策记录：[`notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md`](../notes/process/2026-11-18-host-15-75-ss-wedge-uhubctl-timeout.md)
 - HONOR / MLD 刷机 runbook：[`honor-flash-runbook.md`](./honor-flash-runbook.md)
