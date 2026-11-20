@@ -36,7 +36,8 @@ B8 G0-b 把日志根切到外部 CIFS（`/mnt/stp-log` → 15.4）后，健康�
 - `./scripts/project_python.sh scripts/run_pytest.py backend/tests/services/test_file_server_monitor.py backend/tests/api/test_stats.py -q`（48 passed）
 - `frontend`: `tsc --noEmit`、`eslint`（touched）、`vitest run src/pages/storage/FileServerPage.test.tsx`（9 passed）
 - `./scripts/project_python.sh tools/dev/env_inventory.py --check`
-- `./scripts/project_python.sh scripts/run_gates.py check:quick`
+- `./scripts/project_python.sh scripts/run_gates.py check:quick`（16 gates）
+- `stp-ui-review`：`up --sha cd028109f` → `/storage` 控制平面 / 中心存储机截图（`/tmp/ui-review-probe-205/`）→ `down`
 
 ## Revisit
 
