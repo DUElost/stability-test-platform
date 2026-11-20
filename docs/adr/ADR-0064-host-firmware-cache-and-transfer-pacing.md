@@ -1,6 +1,6 @@
 # ADR-0064：Agent host 固件本地缓存、全局传输限流与心跳 NFS 隔离
 
-- 状态：Proposed v0.2（2026-11-21 修订：回应 U0 第 1 轮独立复核 R1/R2、M1–M5 及 C 节稳健性加固；原 v0.1 2026-11-20 起草；待第 2 轮独立复核并由 Owner 裁定转 Accepted）
+- 状态：Proposed v0.3（2026-11-21 修订：回应 U0 第 2 轮独立复核 R3、M6 及锁序/拷贝打戳/等待预算加固；v0.2 同日回应第 1 轮复核；原 v0.1 2026-11-20 起草；待第 3 轮独立复核并由 Owner 裁定转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-21
@@ -37,7 +37,7 @@
 
 | # | 事实 | 来源 |
 |---|---|---|
-| F1 | 实测 `/mnt/stp-aee/firmware/` 体积与布局：MTK V5 3.9–4.3 GB；MTK V6 6.5–8.9 GB（`P535AA-HONOR-NX2-16-261117V108` 全目录 6.91 GB，scatter `is_download=true` 为 5.51 GB，另含 `download_agent/` 约 1.3 MB）；展锐 `A57/GEN_NEEA_P615F03V1.0.0B19/`（约 25.27 GB）与 `A57Pro`、`A77` 均由 Fastboot 与 BSL 两族共用同一 `images/plan.json`，同目录并存稀疏 `images/super.img`（10.21 GB）、展开态 `images/raw/super.img`（13.69 GB，即 12.75 GiB）及 FDL 文件（`fdl1-sign.bin`、`lk-fdl2-sign.bin`）；源 `.pac`（10.52 GB）位于兄弟目录 `…B19_USERDEBUG/`。 | 2026-11-20～21 本地只读实测与独立复核核验 |
+| F1 | 实测 `/mnt/stp-aee/firmware/` 体积与布局：MTK V5 3.9–4.3 GB；MTK V6 6.5–8.9 GB（`P535AA-HONOR-NX2-16-261117V108` 全目录 6.91 GB，scatter `is_download=true` 为 5.51 GB，另含 `download_agent/` 约 1.3 MB）；展锐 `A57/GEN_NEEA_P615F03V1.0.0B19/`（约 25.27 GB）与 `A57Pro`、`A77` 的 `images/plan.json` 不含 `fdl` 键，仅 Fastboot 族可消费（其中 `A57` 并存稀疏 `images/super.img` 10.21 GB 与展开态 `images/raw/super.img` 13.69 GB 即 12.75 GiB，Fastboot 最小集约 15.03 GB，源 `.pac` 10.52 GB 位于兄弟目录 `…B19_USERDEBUG/`）；真正由 Fastboot 与 BSL 两族共用且两族均可消费的是 `P525AA/`（3 个版本目录，Fastboot 最小集约 15.00 GB，BSL 裁剪后 `super` 为 2.52–5.87 GB）与 `P532AA/`（1 个版本目录，Fastboot 最小集约 7.22 GB，BSL 裁剪后 `super` 为 2.58 GB）。 | 2026-11-20～21 本地只读实测与独立复核实跑核验 |
 | F2 | MTK V6 `download_agent/flash.xml`、scatter XML 与展锐 `images/plan.json` 均使用相对路径，整套必需文件复制到 Agent host 本地目录后三套刷机工具均可原生直读，无需改写 XML 或 JSON。 | #4076、2026-11-20～21 复核 |
 | F3 | `backend/agent/tool_cache.py` 已建立 Agent 侧内容寻址本地缓存范式（`STP_TOOLS_CACHE_ROOT` 默认 `{AGENT_INSTALL_DIR}/tools_cache`、`.stp-verified` 标记、临时目录原子 `os.replace`）。 | `backend/agent/tool_cache.py` |
 | F4 | `backend/agent/system_monitor.py` 的 `get_disk_usage` 已提供非保留可写口径 `avail_gb` 与 `writable_percent`（#4057），`backend/agent/aee/paths.py` 已提供 `_mount_fstype_for_path` 文件系统类型识别。 | `system_monitor.py`、`aee/paths.py` |
@@ -60,7 +60,10 @@
    - 展锐 BSL（`profile="unisoc_bsl"`）：必须包含 `manifest.json`、`images/plan.json`、`fdl1`、`fdl2`、`userdata` 与按 `flash_firmware_unisoc_bsl.py:_load_flash_spec` 同口径（`raw if (sparse and raw) else file`）解析出的非 `super` 可写分区镜像；当存在 `super` 时，上架工具必须用与 `get_sparse_trimmed_size` 逐字节一致的算法在发布期一次性生成裁剪后镜像并写入固定相对路径 `images/bsl/super_trimmed.img`（收录进 `profiles.unisoc_bsl.files` 且不改动原 `images/super.img` 与 `images/raw/super.img`），Agent host 不得在每台主机重复执行全量裁剪。
 4. 发布者与 Agent 必须将已封包的固件版本目录视为不可变。固件内容变更时，发布者必须发布新版本目录；应急原地替换时，发布者必须同步重新生成并原子替换 `staging_manifest.json`（及展锐派生 `images/bsl/super_trimmed.img`），不得只替换镜像文件而保留旧摘要。对于本 ADR 生效前已发布且尚未封包的存量版本目录，发布者可以执行一次只增不改的首次封包（仅新增 `staging_manifest.json` 与展锐派生 `images/bsl/super_trimmed.img`，不得修改或删除目录内既有文件）；首次封包完成后，发布者必须将该目录按不可变目录管理。
 5. `staging_manifest.json` 中的每个 `relpath` 必须为相对路径且不得含 `..` 或指向版本目录外的软链；Agent 校验到任一越界路径时必须整包拒绝。
-6. 对于未生成 `staging_manifest.json` 的临时救砖 `firmware_dir`，Agent 可以进入未封包兼容模式：仅读取目录内文件元数据 `(relpath, size, mtime_ns)` 计算轻量指纹并整目录缓存，且必须在步骤 `metrics` 中显式标记 `firmware_cache.sealed = false`。标准仓库固件不得长期依赖该兼容模式。
+6. 对于 `profile × 封包状态` 的边界组合，Agent 必须严格按以下规则执行（不得静默降级或产生未定义行为）：
+   - **已封包但缺少目标 profile**：当版本目录存在 `staging_manifest.json` 但其中不含调用方请求的 `profile`（例如对仅有 `unisoc_fastboot` 的 `A57` 目录请求 `unisoc_bsl`）时，Agent 必须以结构化错误 `firmware_profile_not_found` 显式失败（fail-closed），不得回落未封包整目录拷贝；
+   - **未封包目录走 `mtk` 或 `unisoc_fastboot`**：对于未生成 `staging_manifest.json` 的临时救砖或未封包目录，Agent 可以进入未封包兼容模式——仅读取目录内文件元数据 `(relpath, size, mtime_ns)` 计算轻量指纹并整目录缓存，缓存条目键必须使用固定段 `unsealed`（`<safe_label>_unsealed_<digest16>`，避免同目录按不同 profile 重复缓存两份整目录），且必须在步骤 `metrics` 中显式标记 `firmware_cache.sealed = false`；标准仓库固件不得长期依赖该兼容模式；
+   - **未封包目录走 `unisoc_bsl`**：Agent 与 `flash_firmware_unisoc_bsl` 新版本（`1.0.7`）不得对未封包目录执行主机现场裁剪或回落刷写未裁剪的全量 `raw/super.img`，必须在触碰设备与获取主机锁前以结构化错误 `firmware_unsealed_not_supported` 显式失败（fail-closed），提示先执行 U1 上架封包工具生成 `staging_manifest.json` 与 `images/bsl/super_trimmed.img`；运维必须在 B10 计划重指前完成全部在用 BSL 版本目录（当前 `P525AA/` 与 `P532AA/`）的首次封包。
 
 ### D2 Agent L1 统一固件缓存基座（`FirmwareCacheManager`）与脚本调用边界
 
@@ -72,12 +75,12 @@
    - **一级本地缓存根（Primary）**：由 `STP_FIRMWARE_CACHE_DIR` 指定，未设置时默认为 `{AGENT_INSTALL_DIR}/firmware_cache`（与 `tools_cache` 并列）；Agent 必须将纯 SSD、纯 HDD 或单盘主机的缓存直接落在一级本地缓存根；
    - **二级本地溢出根（Secondary）**：由 `STP_FIRMWARE_CACHE_FALLBACK_DIR` 指定，未设置时派生自 `STP_AEE_LOCAL_ROOT` 所在盘的同级目录（如 `/mnt/hdd/stp_firmware_cache`）。Agent 必须校验二级根与一级根的 `st_dev` 不同且可写；单盘或 `is_ssd_fallback_root` 主机上两者 `st_dev` 相同，Agent 必须自动跳过二级根；
    - Agent 必须校验所有候选缓存根所在挂载点的文件系统类型，不得将缓存写入 `nfs`、`nfs4`、`cifs`、`smb3` 或 `tmpfs`。
-3. 所有缓存配置旋钮（`STP_FIRMWARE_CACHE_DIR`、`STP_FIRMWARE_CACHE_FALLBACK_DIR`、`STP_FIRMWARE_CACHE_RESERVE_GB` 默认 `20`、`STP_FIRMWARE_CACHE_MAX_GB` 默认 `60`、`STP_FIRMWARE_CACHE_MAX_PCT` 默认 `30`、`STP_FIRMWARE_CACHE_TTL_DAYS` 默认 `14`、`STP_FIRMWARE_CACHE_CLEANUP_INTERVAL_SECONDS` 默认 `21600`、`STP_FIRMWARE_TRANSFER_PERMIT_WAIT_TIMEOUT_SECONDS` 默认 `1800`、`STP_FIRMWARE_TRANSFER_UNREACHABLE_TIMEOUT_SECONDS` 默认 `300`）必须收敛到 `backend/agent/settings.py`（ADR-0042），并随 `reload_config` 刷新。
+3. 所有缓存配置旋钮（`STP_FIRMWARE_CACHE_DIR`、`STP_FIRMWARE_CACHE_FALLBACK_DIR`、`STP_FIRMWARE_CACHE_RESERVE_GB` 默认 `20`、`STP_FIRMWARE_CACHE_MAX_GB` 默认 `60`、`STP_FIRMWARE_CACHE_MAX_PCT` 默认 `30`、`STP_FIRMWARE_CACHE_TTL_DAYS` 默认 `14`、`STP_FIRMWARE_CACHE_CLEANUP_INTERVAL_SECONDS` 默认 `21600`、`STP_FIRMWARE_TRANSFER_PERMIT_WAIT_TIMEOUT_SECONDS` 默认 `3600`、`STP_FIRMWARE_TRANSFER_UNREACHABLE_TIMEOUT_SECONDS` 默认 `300`）必须收敛到 `backend/agent/settings.py`（ADR-0042），并随 `reload_config` 刷新。
 4. 缓存落盘前，Agent 必须按非保留可写口径（`avail_gb` 与 `writable_percent`，对齐 `system_monitor.py` #4057）执行硬空间守卫：
    - 落盘后目标盘必须满足 `avail_after >= reserve_gb` 且该盘固件缓存总量 `<= min(max_gb, disk_total * max_pct / 100)`；
    - 若目标缓存盘与 `STP_AEE_LOCAL_ROOT` 处于同一块设备（`st_dev` 相同，含纯 HDD 单盘主机或二级溢出到日志盘的机器），落盘后该盘还必须满足 `writable_percent_after <= spill_threshold - 10%`（默认 `≤ 70%`），不得挤占日志盘触发 `HddSpillMonitor`（80%）。
 5. 缓存命中与写入必须满足以下并发与崩溃安全不变量：
-   - 每个缓存条目（键为 `<safe_label>_<profile>_<digest16>`，确保展锐共用目录的 `unisoc_fastboot` 与 `unisoc_bsl` 互不冲突）必须配备独立锁文件 `.entry.lock`（以 `O_NOFOLLOW` 打开）；写入方持 `LOCK_EX`，刷机消费方在刷机全程持 `LOCK_SH`，淘汰与定时清理方删除前必须非阻塞尝试 `LOCK_EX | LOCK_NB`，获取失败时必须跳过该条目，不得删除正在被刷机使用的固件；
+   - 每个缓存条目（已封包键为 `<safe_label>_<profile>_<digest16>`，未封包兼容模式键为 `<safe_label>_unsealed_<digest16>`，确保展锐共用目录的 `unisoc_fastboot` 与 `unisoc_bsl` 互不冲突且未封包整目录不重复存放）必须配备独立锁文件 `.entry.lock`（以 `O_NOFOLLOW` 打开）；写入方持 `LOCK_EX`，刷机消费方在刷机全程持 `LOCK_SH`，淘汰与定时清理方删除前必须非阻塞尝试 `LOCK_EX | LOCK_NB`，获取失败时必须跳过该条目，不得删除正在被刷机使用的固件；
    - 因为 Linux `flock(2)` 的 `LOCK_EX` 降级到 `LOCK_SH` 非原子，消费方在取得 `LOCK_SH` 后（无论直接命中还是写入完成后降级），必须在持 `LOCK_SH` 状态下复核 `.stp-fw-ready.json` 存在且 `content_digest` 与目标一致；若在降级窗口中被腾退或缺失，Agent 必须回退重入 `LOCK_EX` 备货流程（有界重试，默认最多 3 次）；
    - 命中已封包固件时，Agent 必须只校验本地 `.stp-fw-ready.json` 中的 `content_digest` 与本地文件完整性，不得为命中校验重读中心存储上的大镜像文件；命中后必须通过 `os.utime` 更新条目最近使用时间戳，不得依赖操作系统 `atime`；
    - 拷贝必须先写入 `<cache_root>/.staging/<key>.tmp.<pid>/`，并在单遍流式拷贝过程中同步计算 `sha256`（不得二次重读源盘）；本地磁盘写入建议在 Linux 上使用低 I/O 优先级（`ionice -c 3` 或等价 `ioprio_set`）；全部文件校验通过后，Agent 必须先落 `.stp-fw-ready.json` 再原子 `os.replace` 到最终目录。
@@ -92,8 +95,8 @@
 1. 控制面必须提供按源存储池限流的全局传输并发许可接口（`POST /api/v1/agent/transfer-permits/{acquire,renew,release}`，`X-Agent-Secret` 鉴权，默认池 `firmware_nfs`，默认并发上限 `STP_FIRMWARE_TRANSFER_MAX_HOSTS=2`，单次许可 TTL 默认 `60s`）。每次 `acquire` 必须绑定调用方生成的唯一 `lease_token` 与 `host_id`；`renew` 与 `release` 必须校验 `lease_token` 匹配后才操作对应槽位，防止旧请求或并行调用误释他人槽位。
 2. 传输并发许可属于瞬时跨进程协调态，控制面必须将其承载在 Redis 中，不得为此新增 PG 业务表（遵守 `AGENTS.md` Redis 边界）。
 3. 传输许可客户端必须归属 `backend/agent/firmware_cache.py`（在刷机脚本子进程内由 L1 模块调用），使用引擎继承自 Agent 进程的 `API_URL`、`HOST_ID` 与 `AGENT_SECRET` 访问控制面。Agent 必须在发生缓存未命中（cache miss）且即将跨 NFS 拷贝前申请本机级传输许可，并在拷贝期间按 TTL/3 周期续期、拷贝结束或异常退出时立即释放；缓存命中时，Agent 不得申请传输许可。
-4. 除单条目 `.entry.lock` 去重外，Agent 必须在一级缓存根维护本机级跨源传输锁 `.host-transfer.lock`（`flock(LOCK_EX)`，仅在发生 cache miss 需要跨源拉取时持有），确保同一主机即使并发刷写两种不同固件（如 NX2 与 NX3），同一时刻也只执行一次跨源拉取、只持有一张传输许可，不得按设备数或固件数放大源端并发。等待 `.entry.lock`、等待 `.host-transfer.lock` 或等待全局许可期间，刷机脚本必须周期打印 `PROGRESS` 戳（`stage="firmware-stage-wait"`），避免被步骤停滞钟误杀。
-5. 当控制面许可接口短暂不可达、单次请求超时（默认 `10s`）或返回 `5xx` 时，Agent 必须按带抖动的指数退避重试，直至达到不可达上限（`STP_FIRMWARE_TRANSFER_UNREACHABLE_TIMEOUT_SECONDS`，默认 `300s`）或总等待上限（`STP_FIRMWARE_TRANSFER_PERMIT_WAIT_TIMEOUT_SECONDS`，默认 `1800s`）。
+4. 除单条目 `.entry.lock` 去重外，Agent 必须在一级缓存根维护本机级跨源传输锁 `.host-transfer.lock`（`flock(LOCK_EX)`，仅在发生 cache miss 需要跨源拉取时持有），确保同一主机即使并发刷写两种不同固件（如 NX2 与 NX3），同一时刻也只执行一次跨源拉取、只持有一张传输许可，不得按设备数或固件数放大源端并发。Agent 在缓存未命中时的加锁必须严格遵守固定偏序 **`.entry.lock`（`LOCK_EX`）→ `.host-transfer.lock`（`LOCK_EX`）→ 控制面 Redis 传输许可**，释放必须严格按逆序执行，杜绝互锁死锁。等待 `.entry.lock`、等待 `.host-transfer.lock`、等待全局许可期间（`stage="firmware-stage-wait"`）以及跨源大文件拷贝期间（`stage="firmware-stage-copy"`），刷机脚本必须周期打印 `PROGRESS` 戳，避免被步骤停滞钟误杀。
+5. 无论是正常排队（许可接口返回未获批）还是控制面许可接口短暂不可达、单次请求超时（默认 `10s`）或返回 `5xx`，Agent 都必须将累计耗时计入总等待上限（`STP_FIRMWARE_TRANSFER_PERMIT_WAIT_TIMEOUT_SECONDS`，默认 `3600s`，可覆盖 20 台规模展锐 15 GB 冷拉波次）；对于不可达、超时或 `5xx` 异常，Agent 必须按带抖动的指数退避重试，且连续不可达累计耗时不得超过不可达上限（`STP_FIRMWARE_TRANSFER_UNREACHABLE_TIMEOUT_SECONDS`，默认 `300s`）。
 6. 当超过第 5 条上限仍无法获取许可时，Agent 默认必须显式失败（`transfer_permit_unavailable` 或 `transfer_permit_wait_timeout`，fail-closed），不得在控制面 I/O 饱和时静默取消限流而放大惊群。只有当步骤参数显式设置 `allow_permit_bypass=true`（默认 `false`）时，Agent 才可以在许可接口不可达超限后继续传输，且必须在步骤 `metrics` 中记录 `firmware_cache.permit_degraded = true`。
 
 ### D4 全刷机族统一接入与历史债务收口
@@ -101,7 +104,7 @@
 1. 现有三个刷机脚本族——`flash_firmware`（MTK `adb_reboot` 与 `vbus_cycle`，覆盖 V5 与 V6，请求 `profile="mtk"`）、`flash_firmware_unisoc`（展锐 Fastboot，请求 `profile="unisoc_fastboot"`）与 `flash_firmware_unisoc_bsl`（展锐 BSL，请求 `profile="unisoc_bsl"`）——必须全部按 D2 第 1 条契约接入 `agent.firmware_cache`。
 2. 所有刷机脚本必须在获取主机刷机排他锁 `/tmp/stp-flash-firmware.lock` **之前**完成固件缓存准备并持有对应条目的 `LOCK_SH`，在刷机进程退出时随文件描述符关闭由内核释放 `LOCK_SH`。缓存拉取耗时不得计入刷机工具自身的烧录超时（如 MTK `timeout_seconds=1200`、BSL `spd_dump_timeout_seconds`）。步骤级墙钟（`PlanStep.timeout_seconds`）仍覆盖等许可、拷贝、等主机锁与烧录全阶段；运维与计划配置在大波次冷拉展锐 14+ GB 固件时，建议为刷机步骤预留充足墙钟（如 `≥ 5400s`），并依赖 D3 第 5–6 条的有界等待超时在进入烧录前安全收敛。
 3. `flash_firmware` 的 `vbus_cycle` 路径接入本地缓存时，实施者不得改变 ADR-0063 D1–D7 定义的任何切电、门控、`-p` 端口绑定、回显核对、锁内关机或失败断电隔离不变量。
-4. `flash_firmware_unisoc_bsl` 新版本（`1.0.7`）必须删除脚本私有的 `/var/tmp/stp_flash` 缓存拷贝代码及锁内拷贝逻辑，统一改用 D2 缓存基座。在全部展锐 BSL 计划完成版本重指且回滚窗口关闭前，Agent 不得自动删除主机遗留的 `/var/tmp/stp_flash` 目录（避免回滚到 `1.0.6` 时重复触发冷拉）；回滚窗口关闭后，运维必须在 B10 激活收尾步骤中一次性清扫各主机遗留的 `/var/tmp/stp_flash` 目录（闭环 #4006 §8）。
+4. `flash_firmware_unisoc_bsl` 新版本（`1.0.7`）必须删除脚本私有的 `/var/tmp/stp_flash` 缓存拷贝代码、主机侧裁剪逻辑及锁内拷贝逻辑，统一改用 D2 缓存基座并遵循 D1 第 6 条对未封包目录的 fail-closed 约束（`firmware_unsealed_not_supported`）。在全部展锐 BSL 计划完成版本重指且回滚窗口关闭前，Agent 不得自动删除主机遗留的 `/var/tmp/stp_flash` 目录（避免回滚到 `1.0.6` 时重复触发冷拉）；回滚窗口关闭后，运维必须在 B10 激活收尾步骤中一次性清扫各主机遗留的 `/var/tmp/stp_flash` 目录（闭环 #4006 §8）。
 5. 实施者不得为接入固件缓存而在 `backend/agent/pipeline_engine.py` 中新增按 `script_name` 字面量的分支特判（遵守 #3779）。
 
 ### D5 心跳非阻塞隔离与载荷克制（闭环 #4054）
@@ -144,7 +147,7 @@
    - 校验确定性 `content_digest`（U1 与 U2 共用 `firmware_manifest.py`）、拒绝 `..` 与越界软链。
 3. **L1 `FirmwareCacheManager` 与运行契约（单测）**：
    - 导入口径与能力门控：在 `env -i` 无预设 `PYTHONPATH` 下验证 `pipeline_engine.py` 注入双路径使 `from agent.firmware_cache import ...` 与 `from config import AGENT_DIR` 同可用；`requires_agent_capabilities` 在缺失 `firmware_cache_v1` 时在 `verify_scripts` 与启动前拦截；
-   - 拓扑兼容：SSD+HDD 双盘、纯 HDD 单盘、小系统盘（`.33` 模拟）溢出异盘 HDD、`is_ssd_fallback_root`（同 `st_dev` 跳过二级）、拒绝 NFS/tmpfs 路径；
+   - 拓扑兼容与 `profile × 封包状态` 完备性：SSD+HDD 双盘、纯 HDD 单盘、小系统盘（`.33` 模拟）溢出异盘 HDD、`is_ssd_fallback_root`（同 `st_dev` 跳过二级）、拒绝 NFS/tmpfs 路径；已封包但缺目标 profile 返回 `firmware_profile_not_found`；未封包目录走 `mtk`/`unisoc_fastboot` 使用 `<safe_label>_unsealed_<digest16>` 并标 `sealed=false`；未封包目录走 `unisoc_bsl` 显式返回 `firmware_unsealed_not_supported`（fail-closed）；
    - 水位与配额：验证 `avail_gb` 与 `writable_percent`（含同日志盘 `≤ 70%` 约束）；两盘均不足默认 fail-closed，显式 `allow_nfs_direct_fallback=true` 才返回降级；
    - 并发与崩溃安全：同机同固件并发请求只拷贝一次；同机并发拉两种不同固件由 `.host-transfer.lock` 串行且各自独立 `lease_token`；`LOCK_EX` 降级到 `LOCK_SH` 后模拟窗口被腾退时自动重入恢复；`LOCK_SH` pin 住的条目不被写入 LRU 或定时 TTL 清理误删；崩溃残留 `.staging/*.tmp.*` 被自动回收；已封包命中**零 NFS 数据文件读取**（反例断言源镜像未被 `open()`）；
    - 定时清理：超过 `TTL` 的未加锁条目被回收；盘余量跌破安全线时主动腾退。
@@ -153,7 +156,7 @@
    - MTK `adb_reboot`（V5/V6）、MTK `vbus_cycle`（V5/V6，确认 ADR-0063 全部安全测试零回归）、Unisoc Fastboot（`profile="unisoc_fastboot"`）、Unisoc BSL（`profile="unisoc_bsl"`）均在主机刷机锁外完成缓存准备并持 `LOCK_SH` 指向本地目录；
    - 模拟旧 Agent 环境（缺失 `agent.firmware_cache` 或 API 版本不匹配），断言三脚本在碰设备与取主机锁前返回结构化错误 `agent_firmware_cache_unavailable`；
    - `pipeline_engine.py` 零新增 `script_name` 字面量分支（#3779 守卫通过）；
-   - `flash_firmware_unisoc_bsl` 无 `/var/tmp/stp_flash` 写入与无锁内拷贝。
+   - `flash_firmware_unisoc_bsl` 无 `/var/tmp/stp_flash` 写入与无锁内拷贝，且对未封包目录在碰设备与取主机锁前显式返回 `firmware_unsealed_not_supported`。
 
 ## 6. 实施单元（按 ADR-0058 批次）
 
