@@ -1,6 +1,6 @@
 # 存储与部署角色：统一语义（别称对照）
 
-- **状态**：Living（2026-11-02：同步 B8 G0-a 拆根契约；G0-b 尚未执行，本 PR 未复测部署）
+- **状态**：Living（2026-11-20：同步 ADR-0064 Proposed v0.1，登记 Agent host `firmware_cache/` 与 §4.4 hard mount 复议记录；B8 G0-b 尚未执行）
 - **目的**：角色、别称、env、IP 一一对应；冲突时以本文 + 代码为准
 - **关联**：ADR-0025、[方案 C 存储](./2026-plan-c-storage-and-access.md)、[#205](https://github.com/DUElost/stability-test-platform/issues/205)（健康页双目标，切盘前冻结）
 
@@ -93,6 +93,7 @@ G0-b 按切盘方案创建日志新挂载点；控制面根与旧日志保持原
 |--------|----------|----------|
 | Agent host | Agent、执行平面、Linux host、`host`、`host_id`、`android@<ip>`、`/opt/stability-test-agent` | 控制面、`debian13` |
 | Agent SSD | `logs/runs/{job_id}/`、运行日志唯一副本 | CIFS |
+| Agent 固件缓存（Proposed，[ADR-0064](../adr/ADR-0064-host-firmware-cache-and-transfer-pacing.md)） | `STP_FIRMWARE_CACHE_DIR`（默认 `{AGENT_INSTALL_DIR}/firmware_cache`）、`STP_FIRMWARE_CACHE_FALLBACK_DIR`（异盘本地溢出，兼容纯 HDD 主机） | 中心存储 `firmware/`、`/var/tmp/stp_flash`（待退役） |
 | Agent HDD | L1、`STP_AEE_LOCAL_ROOT`、`aee-local`、`/mnt/hdd/aee_events` | `STP_AEE_NFS_ROOT`（那是 CIFS 挂载点） |
 | LocalDB | `agent_state.db` | PG |
 
@@ -120,6 +121,7 @@ G0-b 按切盘方案创建日志新挂载点；控制面根与旧日志保持原
    **维持 hard 的理由**：站点内网同机房、可用性由 NFS 侧保证；改 soft 的代价是断线以 `EIO`
    暴露，而 Agent 侧对 `EIO` 的处理路径未经验证（改成 soft 之前必须先有那条处理链的验证）。
    复议触发：出现「控制面/NFS 侧非计划断线导致 Agent 线程挂死」的现场实例。
+   **2026-11-20 复议记录（#4054 / [ADR-0064](../adr/ADR-0064-host-firmware-cache-and-transfer-pacing.md) Proposed v0.1 D5）**：2026-11-18 控制面磁盘 I/O 饱和期间，多台 Agent 的 `heartbeat_thread` 在 `check_mounts` 同步 `stat` NFS 挂载点时进入 `rpc_wait_bit_killabl`（>18 分钟）并连坐心跳超时，命中上述复议触发器。裁决**维持 `hard` mount 不变**（避免未经验证的 `EIO` 传播到事件上送链），改为在 Agent 侧将心跳挂载判定迁至非阻塞 `/proc/self/mountinfo` + 独立后台探针线程，隔离 NFS 拥塞对心跳与租约续期的连坐。
 
 | 推荐名 | 合法别称 | 不要当成 |
 |--------|----------|----------|
@@ -242,6 +244,7 @@ PRUNE_LOCAL 可用余量；后者是 Linux 系统盘。两处数据分别来自�
 
 | 日期 | 变更 |
 |------|------|
+| 2026-11-20 | 同步 ADR-0064（Proposed v0.1）：§4.2 登记 Agent 固件缓存角色（兼容 SSD/HDD 任意本地盘）；§4.4 记录 #4054 命中 hard mount 复议触发器与心跳非阻塞隔离裁决 |
 | 2026-11-02 | B8 G0-a：日志根与控制面根分离；旧日志只读下载；`STP_NFS_ROOT` 镜像控制面根。合入不等于 G0-b 切盘 |
 | 2026-09-25 | 同步 ADR-0053 v0.2 Accepted：内容对象、观察引用、派生工作区职责分离；实施尚未开始 |
 | 2026-08-09 | 初版：九角色 + CIFS=中心存储 + 健康页≠CIFS + 8.202 过渡 / 15.4·9.4 目标 + #205 |
