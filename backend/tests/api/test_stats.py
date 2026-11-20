@@ -662,3 +662,87 @@ class TestFileServerOverview:
             "/api/v1/stats/file-server", params={"hours": 169}, headers=admin_headers,
         )
         assert response.status_code == 422
+
+    def test_cifs_split_source_fields_survive_response_model(
+        self, client, admin_headers, monkeypatch, tmp_path,
+    ):
+        """分源 CIFS + 无 STP_STORAGE_NODE_JOB：服务层字段经 FileServerOverview 序列化后仍保留。
+
+        回归 #205 返修：生产 API 丢 control_plane.nfs / unmonitored_reason / nfs.scope|export_path，
+        根因是响应 schema 缺字段被 model_validate 剥离。本用例走真实
+        ``collect_file_server_overview`` + FastAPI 路由，禁止假字典绕过契约。
+        旧 payload（无上述字段）仍由 ``test_returns_overview_for_admin`` 覆盖兼容。
+        """
+        from backend.services import file_server_monitor as monitor
+
+        log_root = tmp_path / "stp-log"
+        cp_root = tmp_path / "stp-aee"
+        log_root.mkdir()
+        cp_root.mkdir()
+
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(log_root))
+        monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(cp_root))
+        monkeypatch.setenv("STP_FILE_SERVER_ADDRESS", "192.0.2.202")
+        monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.154")
+        monkeypatch.delenv("STP_STORAGE_NODE_JOB", raising=False)
+        monkeypatch.delenv("STP_CONTROL_PLANE_NODE_JOB", raising=False)
+
+        monkeypatch.setattr(
+            monitor,
+            "_mount_details",
+            lambda _path: {
+                "mounted": True,
+                "source": "//192.0.2.154/jxtinno/sonic_tinno/stp",
+                "filesystem": "cifs",
+            },
+        )
+        monkeypatch.setattr(
+            monitor,
+            "_export_targets",
+            lambda path: ["192.0.2.0/24"] if str(path) == str(cp_root) else [],
+        )
+
+        class _FakePrometheus:
+            def close(self) -> None:
+                pass
+
+            def scalar(self, query: str) -> float:
+                if query.startswith("up{"):
+                    return 1.0
+                if "node_nfsd_server_threads" in query:
+                    return 16.0
+                if "node_boot_time_seconds" in query:
+                    return 1700000000.0
+                if "count(node_cpu_seconds_total" in query or "node_memory_MemTotal_bytes" in query:
+                    return 8.0
+                return 1.5
+
+            def range(self, query: str, *, start: float, end: float, step: int):
+                return [{"timestamp": start, "value": 1.0}, {"timestamp": end, "value": 2.0}]
+
+            def label(self, query: str, label: str) -> str | None:
+                return "control-host" if label == "nodename" else None
+
+            def vector(self, query: str):
+                return []
+
+        monkeypatch.setattr(monitor, "_PrometheusClient", lambda: _FakePrometheus())
+
+        response = client.get("/api/v1/stats/file-server", headers=admin_headers)
+        assert response.status_code == 200
+        data = response.json()
+
+        cp_nfs = data["control_plane"]["nfs"]
+        assert cp_nfs is not None
+        assert cp_nfs["scope"] == "control_plane_root"
+        assert cp_nfs["export_path"] == str(cp_root)
+        assert cp_nfs["exported"] is True
+        assert cp_nfs["service_ready"] is True
+
+        assert data["storage_server"]["monitoring"]["unmonitored_reason"] == (
+            "external_share_no_collector"
+        )
+        storage_nfs = data["storage_server"]["nfs"]
+        assert storage_nfs["scope"] == "control_plane_root"
+        assert storage_nfs["export_path"] == str(cp_root)
+        assert storage_nfs["applicable"] is True
