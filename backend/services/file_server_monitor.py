@@ -36,8 +36,16 @@ _STORAGE_PANEL_KEYS = frozenset({
     "nfs_requests", "nfs_errors", "nfs_stale", "nfs_threads", "nfs_connections",
 })
 _GIB = 1024 ** 3
+_TIB = 1024 ** 4
 _DEVICE_LOG_DISK_WARNING_PCT = 90.0
 _DEVICE_LOG_DISK_CRITICAL_PCT = 95.0
+# 共享日志根容量：小盘回退百分比；大盘（≥2 TiB）或显式 env 对齐 G0-c（#3860）。
+_CAPACITY_WARNING_PCT = 80.0
+_CAPACITY_CRITICAL_PCT = 90.0
+_CAPACITY_ABS_WARNING_AVAIL_GIB_DEFAULT = 800.0
+_CAPACITY_ABS_CRITICAL_AVAIL_GIB_DEFAULT = 300.0
+_CAPACITY_ABS_AUTO_MIN_TOTAL_BYTES = 2 * _TIB
+_REMOTE_CLIENT_FILESYSTEMS = frozenset({"cifs", "smb", "smb3"})
 # 宿主机进程内存采样器（deploy/control-plane/node-exporter/stp-mem-top.sh）指标。
 _TOP_PROCESS_LIMIT = 10
 _HOSTPROC_ANON_METRIC = "stp_hostproc_anon_bytes"
@@ -282,17 +290,17 @@ def _share_is_co_located(share_addr: str) -> bool:
     return share_ip == local_ip
 
 
-def _require_shared_root() -> Path:
-    """STP_AEE_NFS_ROOT 解析与门禁。
+def _require_storage_roots() -> tuple[Path, Path]:
+    """日志根 + 控制面根。日志根未设 → RuntimeError（健康页拒绝盯错路径）。
 
-    未设 → RuntimeError；与 backend/services/dedup_scan.py:99
-    同一 env var，但 dedup_scan 软降级（warning + 返回空串），本处 endpoint
-    强制需要——未设时给 admin 抛错，胜过盯错路径永远 STORAGE_NOT_MOUNTED 误报。
-    与 .env.example / agent paths 收敛到"必须显式设"，不再硬编码 fallback。
-    须指向与 Agent 共享的同一挂载，**路径字符串可与各 Agent 的 MOUNT_POINTS 不同**
-    （mount 统计按"任一 ok=True"识别，见 _host_mount_summary）。
+    与 backend/services/dedup_scan.py 同一主键，但 dedup_scan 软降级，本处强制需要。
+    控制面根未设时回落到日志根（B8 G0-a）。路径字符串可与各 Agent 的
+    MOUNT_POINTS 不同（mount 统计按"任一 ok=True"识别，见 _host_mount_summary）。
     """
-    from backend.core.storage_root import resolve_shared_storage_root
+    from backend.core.storage_root import (
+        resolve_control_plane_storage_root,
+        resolve_shared_storage_root,
+    )
 
     raw = resolve_shared_storage_root()
     if not raw:
@@ -303,7 +311,110 @@ def _require_shared_root() -> Path:
             "control plane (must point to the same share the agents mount, "
             "path string may differ from each agent's MOUNT_POINTS)."
         )
-    return Path(raw)
+    log_root = Path(raw)
+    cp_raw = resolve_control_plane_storage_root()
+    control_plane_root = Path(cp_raw) if cp_raw else log_root
+    return log_root, control_plane_root
+
+
+def _is_remote_client_share(
+    *,
+    filesystem: str | None,
+    same_source: bool,
+    log_root: Path,
+    control_plane_root: Path,
+) -> bool:
+    """日志根是否为远程客户端挂载（CIFS/SMB 或分源且路径不同于控制面根）。
+
+    此类挂载不是控制面本机 NFS 导出目录，不得拿它去查 ``/var/lib/nfs/etab``。
+    """
+    fs = (filesystem or "").lower()
+    if fs in _REMOTE_CLIENT_FILESYSTEMS:
+        return True
+    if same_source:
+        return False
+    return log_root.resolve(strict=False) != control_plane_root.resolve(strict=False)
+
+
+def _env_positive_float(name: str) -> float | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _capacity_avail_thresholds_gib(total_bytes: int) -> tuple[float | None, float | None]:
+    """Resolve absolute free-space thresholds (GiB) for the shared log root.
+
+    - Explicit ``STP_SHARED_LOG_CAPACITY_*_AVAIL_GIB`` win when set.
+    - Else, disks ``>= 2 TiB`` auto-use G0-c defaults (800 / 300) so a 13 TB
+      share with >1 TiB free is not stuck on ``used_pct >= 90%``.
+    - Smaller disks keep the legacy percentage path (tests + small volumes).
+    """
+    warn = _env_positive_float("STP_SHARED_LOG_CAPACITY_WARNING_AVAIL_GIB")
+    crit = _env_positive_float("STP_SHARED_LOG_CAPACITY_CRITICAL_AVAIL_GIB")
+    if warn is None and crit is None:
+        if total_bytes >= _CAPACITY_ABS_AUTO_MIN_TOTAL_BYTES:
+            return (
+                _CAPACITY_ABS_WARNING_AVAIL_GIB_DEFAULT,
+                _CAPACITY_ABS_CRITICAL_AVAIL_GIB_DEFAULT,
+            )
+        return None, None
+    if warn is None:
+        warn = _CAPACITY_ABS_WARNING_AVAIL_GIB_DEFAULT
+    if crit is None:
+        crit = _CAPACITY_ABS_CRITICAL_AVAIL_GIB_DEFAULT
+    if crit > warn:
+        crit = warn
+    return warn, crit
+
+
+def _capacity_alerts(
+    *,
+    available_bytes: int,
+    total_bytes: int,
+    used_pct: float,
+) -> list[dict[str, str]]:
+    alerts: list[dict[str, str]] = []
+    warn_gib, crit_gib = _capacity_avail_thresholds_gib(total_bytes)
+    if warn_gib is not None and crit_gib is not None:
+        available_gib = available_bytes / _GIB
+        if available_gib < crit_gib:
+            alerts.append({
+                "severity": "critical",
+                "code": "CAPACITY_CRITICAL",
+                "message": (
+                    f"Shared log root has {available_gib:.1f} GiB free "
+                    f"(critical < {crit_gib:g} GiB)"
+                ),
+            })
+        elif available_gib < warn_gib:
+            alerts.append({
+                "severity": "warning",
+                "code": "CAPACITY_WARNING",
+                "message": (
+                    f"Shared log root has {available_gib:.1f} GiB free "
+                    f"(warning < {warn_gib:g} GiB)"
+                ),
+            })
+        return alerts
+    if used_pct >= _CAPACITY_CRITICAL_PCT:
+        alerts.append({
+            "severity": "critical",
+            "code": "CAPACITY_CRITICAL",
+            "message": f"Storage usage is {used_pct:.1f}%",
+        })
+    elif used_pct >= _CAPACITY_WARNING_PCT:
+        alerts.append({
+            "severity": "warning",
+            "code": "CAPACITY_WARNING",
+            "message": f"Storage usage is {used_pct:.1f}%",
+        })
+    return alerts
 
 
 def _panel_jobs() -> tuple[str, str | None, str]:
@@ -444,9 +555,8 @@ def _device_log_disk_summary(hosts: list[Any]) -> dict[str, Any]:
 
 def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dict[str, Any]:
     hosts = list(hosts)
-    root = _require_shared_root()
+    root, control_plane_root = _require_storage_roots()
     mount = _mount_details(root)
-    exports = _export_targets(root)
 
     total_bytes = used_bytes = available_bytes = 0
     inode_total = inode_used = inode_available = 0
@@ -464,6 +574,28 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
     control_addr = _server_address()
     storage_addr = share_addr or control_addr
     same_source = _share_is_co_located(share_addr)
+    remote_log_share = _is_remote_client_share(
+        filesystem=mount.get("filesystem"),
+        same_source=same_source,
+        log_root=root,
+        control_plane_root=control_plane_root,
+    )
+    storage_job_env = os.getenv("STP_STORAGE_NODE_JOB", "").strip()
+    # 分源且未配 storage job：外部 NAS/CIFS 无 node_exporter 的预期态（#205）。
+    # 配了但非法 job 名仍算 misconfigured，保留 STORAGE_METRICS_UNAVAILABLE。
+    storage_external_unmonitored = (
+        (not same_source) and storage_job is None and not storage_job_env
+    )
+
+    # 控制面本机 etab 只反映本机 NFS 导出。远程 CIFS 日志根不是导出目录——
+    # 必须对准控制面根（如 /mnt/stp-aee），否则会误报 NFS_EXPORT_MISSING。
+    if remote_log_share:
+        nfs_export_root = control_plane_root
+        nfs_scope = "control_plane_root"
+    else:
+        nfs_export_root = root
+        nfs_scope = "shared_log_root"
+    exports = _export_targets(nfs_export_root)
 
     control_selector = f'job="{control_job}"'
     mount_selector = f'{control_selector},mountpoint="{_prom_string(str(root))}"'
@@ -486,6 +618,9 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             for key, query in _node_current_queries(control_job, device_selector).items()
             if key in _CONTROL_PANEL_KEYS
         }
+        # 远程日志根时，控制面根 NFS 的 nfsd 线程取自控制面 job（不再依赖 storage job）。
+        if remote_log_share:
+            control_queries["nfs_threads"] = _node_current_queries(control_job, None)["nfs_threads"]
         control_current, control_error = _run_queries(prom, control_queries)
 
         # 进程级内存（宿主机采样器，见 deploy/control-plane/node-exporter）：
@@ -547,6 +682,14 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
                     f"sum(rate(node_nfsd_requests_total{{{history_selector}}}[5m]))"
                 ),
             }
+        elif storage_external_unmonitored or remote_log_share:
+            # 外部共享无 host 采集器：容量仍可从控制面客户端挂载点取趋势。
+            range_queries = {
+                "capacity_usage_pct": (
+                    f"100 * (1 - node_filesystem_avail_bytes{{{mount_selector}}} / "
+                    f"node_filesystem_size_bytes{{{mount_selector}}})"
+                ),
+            }
         try:
             for key, query in range_queries.items():
                 history[key] = prom.range(query, start=start, end=end, step=step)
@@ -600,6 +743,52 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         if storage_current.get("nfs_threads") is not None
         else None
     )
+    control_nfs_threads = (
+        int(control_current["nfs_threads"])
+        if control_current.get("nfs_threads") is not None
+        else None
+    )
+    # 远程日志根：nfsd 归属控制面根导出；同源过渡：仍取 storage（=control）job。
+    nfs_threads = control_nfs_threads if remote_log_share else storage_threads
+    if remote_log_share:
+        nfs_service_ready = bool(exports) and (
+            (nfs_threads or 0) > 0 if nfs_threads is not None else True
+        )
+        nfs_requests = None
+        nfs_errors = None
+        nfs_stale = None
+        nfs_connections = None
+        # 有 storage job 时仍可展示存储机侧 nfsd 指标；无 job 时不为「异常」。
+        if storage_job:
+            nfs_requests = storage_current.get("nfs_requests")
+            nfs_errors = storage_current.get("nfs_errors")
+            nfs_stale = (
+                int(storage_current["nfs_stale"])
+                if storage_current.get("nfs_stale") is not None
+                else None
+            )
+            nfs_connections = (
+                int(storage_current["nfs_connections"])
+                if storage_current.get("nfs_connections") is not None
+                else None
+            )
+            if storage_threads is not None:
+                nfs_threads = storage_threads
+                nfs_service_ready = bool(exports) and storage_threads > 0
+    else:
+        nfs_service_ready = bool(exports) and (nfs_threads or 0) > 0
+        nfs_requests = storage_current.get("nfs_requests")
+        nfs_errors = storage_current.get("nfs_errors")
+        nfs_stale = (
+            int(storage_current["nfs_stale"])
+            if storage_current.get("nfs_stale") is not None
+            else None
+        )
+        nfs_connections = (
+            int(storage_current["nfs_connections"])
+            if storage_current.get("nfs_connections") is not None
+            else None
+        )
 
     control_panel = {
         "node": {
@@ -625,6 +814,16 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             "mounted": mount["mounted"],
             "backend_write_access": backend_write_access,
         },
+        "nfs": {
+            # 控制面本机 NFS 导出（切盘后对准控制面根；同源过渡期即日志根）。
+            "service_ready": nfs_service_ready,
+            "exported": bool(exports),
+            "export_targets": list(exports),
+            "export_path": str(nfs_export_root),
+            "scope": nfs_scope,
+            "server_threads": control_nfs_threads if remote_log_share else nfs_threads,
+            "applicable": True,
+        },
         "processes": {
             "available": bool(top_processes),
             "error": processes_error,
@@ -633,8 +832,22 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         "monitoring": {
             "prometheus_available": control_current.get("up") == 1,
             "error": control_error,
+            "unmonitored_reason": None,
         },
     }
+    storage_monitoring: dict[str, Any]
+    if storage_external_unmonitored:
+        storage_monitoring = {
+            "prometheus_available": False,
+            "error": None,
+            "unmonitored_reason": "external_share_no_collector",
+        }
+    else:
+        storage_monitoring = {
+            "prometheus_available": storage_current.get("up") == 1,
+            "error": storage_error,
+            "unmonitored_reason": None,
+        }
     storage_panel = {
         "node": {
             "hostname": storage_hostname
@@ -674,49 +887,72 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             "inode_used_pct": inode_used_pct,
         },
         "nfs": {
-            "service_ready": bool(exports) and (storage_threads or 0) > 0,
+            # 右栏在远程 CIFS 场景展示的是「控制面根 NFS 导出」摘要（同源时即日志根）。
+            "service_ready": nfs_service_ready,
             "exported": bool(exports),
             "export_targets": exports,
-            "server_threads": storage_threads,
-            "requests_per_second": storage_current.get("nfs_requests"),
-            "rpc_errors_per_second": storage_current.get("nfs_errors"),
-            "stale_file_handles_total": (
-                int(storage_current["nfs_stale"])
-                if storage_current.get("nfs_stale") is not None
-                else None
-            ),
-            "connections_total": (
-                int(storage_current["nfs_connections"])
-                if storage_current.get("nfs_connections") is not None
-                else None
-            ),
+            "export_path": str(nfs_export_root),
+            "scope": nfs_scope,
+            "server_threads": nfs_threads,
+            "requests_per_second": nfs_requests,
+            "rpc_errors_per_second": nfs_errors,
+            "stale_file_handles_total": nfs_stale,
+            "connections_total": nfs_connections,
+            "applicable": True,
         },
-        "monitoring": {
-            "prometheus_available": storage_current.get("up") == 1,
-            "error": storage_error,
-        },
+        "monitoring": storage_monitoring,
     }
 
     agents = _host_mount_summary(hosts)
     device_log_disks = _device_log_disk_summary(hosts)
     alerts: list[dict[str, str]] = []
     if not mount["mounted"]:
-        alerts.append({"severity": "critical", "code": "STORAGE_NOT_MOUNTED", "message": f"{root} is not mounted"})
+        alerts.append({
+            "severity": "critical",
+            "code": "STORAGE_NOT_MOUNTED",
+            "message": f"{root} is not mounted",
+        })
+    elif not backend_write_access:
+        alerts.append({
+            "severity": "critical",
+            "code": "STORAGE_NOT_WRITABLE",
+            "message": f"{root} is mounted but not writable by the control plane",
+        })
     if not exports:
-        alerts.append({"severity": "critical", "code": "NFS_EXPORT_MISSING", "message": f"{root} is not exported"})
+        alerts.append({
+            "severity": "critical",
+            "code": "NFS_EXPORT_MISSING",
+            "message": (
+                f"{nfs_export_root} is not exported"
+                + (" (control-plane root)" if nfs_scope == "control_plane_root" else "")
+            ),
+        })
     if control_panel["monitoring"]["prometheus_available"] is False:
-        alerts.append({"severity": "warning", "code": "METRICS_UNAVAILABLE", "message": "Control-plane metrics are unavailable"})
-    if storage_panel["monitoring"]["prometheus_available"] is False:
-        alerts.append({"severity": "warning", "code": "STORAGE_METRICS_UNAVAILABLE", "message": "Storage-server metrics are unavailable"})
-    if used_pct >= 90:
-        alerts.append({"severity": "critical", "code": "CAPACITY_CRITICAL", "message": f"Storage usage is {used_pct:.1f}%"})
-    elif used_pct >= 80:
-        alerts.append({"severity": "warning", "code": "CAPACITY_WARNING", "message": f"Storage usage is {used_pct:.1f}%"})
+        alerts.append({
+            "severity": "warning",
+            "code": "METRICS_UNAVAILABLE",
+            "message": "Control-plane metrics are unavailable",
+        })
+    # 外部共享未配采集器是预期降级，不发 STORAGE_METRICS_UNAVAILABLE 常驻 warning。
+    if (
+        not storage_external_unmonitored
+        and storage_panel["monitoring"]["prometheus_available"] is False
+    ):
+        alerts.append({
+            "severity": "warning",
+            "code": "STORAGE_METRICS_UNAVAILABLE",
+            "message": "Storage-server metrics are unavailable",
+        })
+    alerts.extend(_capacity_alerts(
+        available_bytes=available_bytes,
+        total_bytes=total_bytes,
+        used_pct=used_pct,
+    ))
     if agents["failed"] or agents["unreported"]:
         alerts.append({
             "severity": "warning",
             "code": "AGENT_MOUNT_INCOMPLETE",
-            "message": f'{agents["mounted"]}/{agents["total"]} active Agents report the NFS mount',
+            "message": f'{agents["mounted"]}/{agents["total"]} active Agents report the shared mount',
         })
     if device_log_disks["critical"]:
         alerts.append({

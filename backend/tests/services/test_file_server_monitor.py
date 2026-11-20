@@ -70,6 +70,9 @@ def _patch_file_server_deps(monkeypatch, tmp_path) -> _FakePrometheus:
     monkeypatch.delenv("STP_AEE_SHARE_ADDRESS", raising=False)
     monkeypatch.delenv("STP_STORAGE_NODE_JOB", raising=False)
     monkeypatch.delenv("STP_CONTROL_PLANE_NODE_JOB", raising=False)
+    monkeypatch.delenv("STP_CONTROL_PLANE_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("STP_SHARED_LOG_CAPACITY_WARNING_AVAIL_GIB", raising=False)
+    monkeypatch.delenv("STP_SHARED_LOG_CAPACITY_CRITICAL_AVAIL_GIB", raising=False)
     monkeypatch.setattr(
         monitor,
         "_mount_details",
@@ -213,7 +216,7 @@ def test_share_address_hostname_resolving_to_control_ip_stays_co_located(tmp_pat
 
 
 def test_share_address_unresolvable_hostname_does_not_crash(tmp_path, monkeypatch):
-    """share 地址解析失败时回落原串比较，不抛异常（同机判定为假→不可用路径）。"""
+    """share 地址解析失败时回落原串比较，不抛异常（同机判定为假→外部未监控降级）。"""
     _patch_file_server_deps(monkeypatch, tmp_path)
     monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "no-such-host")
     monkeypatch.setattr(
@@ -225,24 +228,199 @@ def test_share_address_unresolvable_hostname_does_not_crash(tmp_path, monkeypatc
     result = monitor.collect_file_server_overview([], hours=1)
 
     assert result["storage_server"]["same_source"] is False
-    assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
+    assert result["storage_server"]["monitoring"]["unmonitored_reason"] == (
+        "external_share_no_collector"
+    )
+    assert "STORAGE_METRICS_UNAVAILABLE" not in {a["code"] for a in result["alerts"]}
 
 
-def test_split_without_storage_job_reports_missing_storage_metrics(tmp_path, monkeypatch):
+def test_split_without_storage_job_is_external_unmonitored(tmp_path, monkeypatch):
+    """分源未配 STP_STORAGE_NODE_JOB：外部 NAS 预期降级，不发 STORAGE_METRICS_UNAVAILABLE。"""
     _patch_file_server_deps(monkeypatch, tmp_path)
     monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.204")
 
     result = monitor.collect_file_server_overview([], hours=1)
 
     assert result["storage_server"]["same_source"] is False
+    assert result["storage_server"]["node"]["address"] == "192.0.2.204"
     assert result["storage_server"]["monitoring"]["prometheus_available"] is False
+    assert result["storage_server"]["monitoring"]["unmonitored_reason"] == (
+        "external_share_no_collector"
+    )
     assert result["storage_server"]["system"]["cpu_usage_pct"] is None
-    assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
-    # 分源未配 job：历史 fail-closed 留空，不刮控制面冒充存储机（#205）
-    assert result["history"]["capacity_usage_pct"] == []
+    assert "STORAGE_METRICS_UNAVAILABLE" not in {a["code"] for a in result["alerts"]}
+    # 主机/nfsd 历史仍 fail-closed；容量可从控制面客户端挂载点取。
     assert result["history"]["cpu_usage_pct"] == []
     assert result["history"]["memory_usage_pct"] == []
     assert result["history"]["nfs_requests_per_second"] == []
+    assert len(result["history"]["capacity_usage_pct"]) == 2
+
+
+def test_cifs_remote_log_root_checks_control_plane_export(tmp_path, monkeypatch):
+    """CIFS 日志根不得拿去查本机 etab；NFS 导出对准控制面根（#205 / G0-b）。"""
+    log_root = tmp_path / "stp-log"
+    cp_root = tmp_path / "stp-aee"
+    log_root.mkdir()
+    cp_root.mkdir()
+    fake = _patch_file_server_deps(monkeypatch, log_root)
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(cp_root))
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.154")
+    export_calls: list[str] = []
+
+    def _fake_exports(path):
+        export_calls.append(str(path))
+        if str(path) == str(cp_root):
+            return ["192.0.2.0/24"]
+        return []
+
+    monkeypatch.setattr(
+        monitor,
+        "_mount_details",
+        lambda _path: {
+            "mounted": True,
+            "source": "//192.0.2.154/jxtinno/sonic_tinno/stp",
+            "filesystem": "cifs",
+        },
+    )
+    monkeypatch.setattr(monitor, "_export_targets", _fake_exports)
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert export_calls == [str(cp_root)]
+    assert result["storage_server"]["same_source"] is False
+    assert result["storage_server"]["disk"]["filesystem"] == "cifs"
+    assert result["storage_server"]["disk"]["mounted"] is True
+    assert result["storage_server"]["nfs"]["scope"] == "control_plane_root"
+    assert result["storage_server"]["nfs"]["export_path"] == str(cp_root)
+    assert result["storage_server"]["nfs"]["exported"] is True
+    assert result["storage_server"]["nfs"]["service_ready"] is True
+    assert result["control_plane"]["nfs"]["scope"] == "control_plane_root"
+    assert result["control_plane"]["nfs"]["export_path"] == str(cp_root)
+    assert result["storage_server"]["monitoring"]["unmonitored_reason"] == (
+        "external_share_no_collector"
+    )
+    assert "NFS_EXPORT_MISSING" not in {a["code"] for a in result["alerts"]}
+    assert "STORAGE_METRICS_UNAVAILABLE" not in {a["code"] for a in result["alerts"]}
+    # 远程日志根时向控制面 job 多查 nfs_threads
+    assert any("node_nfsd_server_threads" in q and 'job="file-server"' in q for q in fake.queries)
+
+
+def test_cifs_log_root_does_not_false_export_missing_when_only_cp_exported(
+    tmp_path, monkeypatch,
+):
+    """回归：日志根 /mnt/stp-log 不在 etab，但控制面根已导出 → 不得 NFS_EXPORT_MISSING。"""
+    log_root = tmp_path / "stp-log"
+    cp_root = tmp_path / "stp-aee"
+    log_root.mkdir()
+    cp_root.mkdir()
+    _patch_file_server_deps(monkeypatch, log_root)
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(cp_root))
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.154")
+    monkeypatch.setattr(
+        monitor,
+        "_mount_details",
+        lambda _path: {
+            "mounted": True,
+            "source": "//192.0.2.154/share",
+            "filesystem": "cifs",
+        },
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_export_targets",
+        lambda path: ["192.0.2.0/24"] if str(path) == str(cp_root) else [],
+    )
+
+    result = monitor.collect_file_server_overview([], hours=1)
+    assert "NFS_EXPORT_MISSING" not in {a["code"] for a in result["alerts"]}
+    assert result["status"] in {"healthy", "warning"}
+
+
+def test_capacity_absolute_thresholds_override_percentage(tmp_path, monkeypatch):
+    """显式绝对可用 GiB 阈值优先于 used_pct（对齐 G0-c）。"""
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_SHARED_LOG_CAPACITY_WARNING_AVAIL_GIB", "800")
+    monkeypatch.setenv("STP_SHARED_LOG_CAPACITY_CRITICAL_AVAIL_GIB", "300")
+    # 盘很小但 used_pct 会很高；绝对阈值按 available 判，不应因百分比误报 critical。
+    total = 100 * monitor._GIB
+    used = 95 * monitor._GIB
+    available = 5 * monitor._GIB
+
+    class _Usage:
+        def __init__(self) -> None:
+            self.total = total
+            self.used = used
+            self.free = available
+
+    monkeypatch.setattr(monitor.shutil, "disk_usage", lambda _path: _Usage())
+    monkeypatch.setattr(
+        monitor.os,
+        "statvfs",
+        lambda _path: type("S", (), {"f_files": 1000, "f_favail": 900})(),
+    )
+
+    result = monitor.collect_file_server_overview([], hours=1)
+    codes = {a["code"] for a in result["alerts"]}
+    assert "CAPACITY_CRITICAL" in codes
+    assert result["storage_server"]["disk"]["used_pct"] >= 90
+
+
+def test_capacity_percentage_fallback_on_small_disk(tmp_path, monkeypatch):
+    """小盘且未配绝对阈值：仍走 used_pct 80/90。"""
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.delenv("STP_SHARED_LOG_CAPACITY_WARNING_AVAIL_GIB", raising=False)
+    monkeypatch.delenv("STP_SHARED_LOG_CAPACITY_CRITICAL_AVAIL_GIB", raising=False)
+    total = 100 * monitor._GIB
+    used = 85 * monitor._GIB
+    available = 15 * monitor._GIB
+
+    class _Usage:
+        def __init__(self) -> None:
+            self.total = total
+            self.used = used
+            self.free = available
+
+    monkeypatch.setattr(monitor.shutil, "disk_usage", lambda _path: _Usage())
+    monkeypatch.setattr(
+        monitor.os,
+        "statvfs",
+        lambda _path: type("S", (), {"f_files": 1000, "f_favail": 900})(),
+    )
+
+    result = monitor.collect_file_server_overview([], hours=1)
+    codes = {a["code"]: a for a in result["alerts"]}
+    assert "CAPACITY_WARNING" in codes
+    assert "CAPACITY_CRITICAL" not in codes
+    assert "%" in codes["CAPACITY_WARNING"]["message"]
+
+
+def test_capacity_large_disk_auto_uses_g0c_absolute_thresholds(tmp_path, monkeypatch):
+    """≥2 TiB 盘自动启用 800/300 GiB：剩余 >800 GiB 时即使 used_pct≥90 也不 critical。"""
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.delenv("STP_SHARED_LOG_CAPACITY_WARNING_AVAIL_GIB", raising=False)
+    monkeypatch.delenv("STP_SHARED_LOG_CAPACITY_CRITICAL_AVAIL_GIB", raising=False)
+    total = 14 * monitor._TIB
+    available = 1300 * monitor._GIB
+    used = total - available
+
+    class _Usage:
+        def __init__(self) -> None:
+            self.total = total
+            self.used = used
+            self.free = available
+
+    monkeypatch.setattr(monitor.shutil, "disk_usage", lambda _path: _Usage())
+    monkeypatch.setattr(
+        monitor.os,
+        "statvfs",
+        lambda _path: type("S", (), {"f_files": 1000, "f_favail": 900})(),
+    )
+
+    result = monitor.collect_file_server_overview([], hours=1)
+    used_pct = result["storage_server"]["disk"]["used_pct"]
+    assert used_pct >= 90
+    assert "CAPACITY_CRITICAL" not in {a["code"] for a in result["alerts"]}
+    assert "CAPACITY_WARNING" not in {a["code"] for a in result["alerts"]}
 
 
 def test_device_log_disk_summary_and_threshold_alerts(tmp_path, monkeypatch):

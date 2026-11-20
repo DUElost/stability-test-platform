@@ -124,6 +124,9 @@ function isHistoryEmpty(history: FileServerOverview['history']): boolean {
 }
 
 function historyTrendEmptyMessage(data: FileServerOverview): string {
+  if (data.storage_server.monitoring.unmonitored_reason === 'external_share_no_collector') {
+    return '外部共享存储未接入宿主机采集器，主机/NFS 历史趋势暂不可用';
+  }
   if (data.alerts.some((alert) => alert.code === 'STORAGE_METRICS_UNAVAILABLE')) {
     return '分源且未配置存储机 Prometheus job，历史趋势暂不可用';
   }
@@ -242,23 +245,26 @@ function LoadingState() {
 }
 
 const alertText: Record<string, string> = {
-  STORAGE_NOT_MOUNTED: '存储盘未挂载',
-  NFS_EXPORT_MISSING: 'NFS export 缺失',
+  STORAGE_NOT_MOUNTED: '共享日志根未挂载',
+  STORAGE_NOT_WRITABLE: '共享日志根不可写',
+  NFS_EXPORT_MISSING: '控制面根 NFS export 缺失',
   METRICS_UNAVAILABLE: '控制面监控指标暂不可用',
   STORAGE_METRICS_UNAVAILABLE: '存储机监控指标暂不可用',
-  CAPACITY_CRITICAL: '存储容量超过 90%',
-  CAPACITY_WARNING: '存储容量超过 80%',
+  CAPACITY_CRITICAL: '共享日志根容量告警（严重）',
+  CAPACITY_WARNING: '共享日志根容量告警（警告）',
   AGENT_MOUNT_INCOMPLETE: '部分 Agent 尚未确认共享挂载',
   DEVICE_LOG_DISK_CRITICAL: '设备日志盘超过 95%',
   DEVICE_LOG_DISK_WARNING: '设备日志盘超过 90%',
 };
 
 function MonitoringBadge({ monitoring }: { monitoring: FileServerNodeMonitoring }) {
-  return monitoring.prometheus_available ? (
-    <Badge variant="success">Prometheus 在线</Badge>
-  ) : (
-    <Badge variant="destructive">Prometheus 不可用</Badge>
-  );
+  if (monitoring.prometheus_available) {
+    return <Badge variant="success">Prometheus 在线</Badge>;
+  }
+  if (monitoring.unmonitored_reason === 'external_share_no_collector') {
+    return <Badge variant="outline">未配置采集器（外部共享存储）</Badge>;
+  }
+  return <Badge variant="destructive">Prometheus 不可用</Badge>;
 }
 
 function NodeHeader({
@@ -493,20 +499,47 @@ function NfsSection({
   nfs: FileServerNfs;
   idPrefix: string;
 }) {
+  if (nfs.applicable === false) return null;
   const titleId = `${idPrefix}-nfs-service-title`;
+  const isControlPlaneRoot = nfs.scope === 'control_plane_root';
+  const title = isControlPlaneRoot ? '控制面根 NFS 导出' : 'NFS 服务';
+  const statusBadge = nfs.service_ready == null ? (
+    <Badge variant="outline">不适用</Badge>
+  ) : nfs.service_ready ? (
+    <Badge variant="success">运行中</Badge>
+  ) : (
+    <Badge variant="destructive">异常</Badge>
+  );
   return (
     <section className="border-t py-4" aria-labelledby={titleId}>
       <div className="mb-4 flex items-center gap-2">
         <Network className={cn('h-4 w-4', TEXT.subtitle)} />
-        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>NFS 服务</h2>
+        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>{title}</h2>
       </div>
       <dl className="divide-y text-sm">
-        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务状态</dt><dd>{nfs.service_ready ? <Badge variant="success">运行中</Badge> : <Badge variant="destructive">异常</Badge>}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务状态</dt><dd>{statusBadge}</dd></div>
+        {nfs.export_path ? (
+          <div className="flex items-center justify-between gap-4 py-2">
+            <dt className={cn('shrink-0', TEXT.subtitle)}>导出路径</dt>
+            <dd className="truncate text-right font-mono text-xs">{nfs.export_path}</dd>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between gap-4 py-2"><dt className={cn('shrink-0', TEXT.subtitle)}>Export</dt><dd className="truncate text-right font-mono text-xs">{nfs.export_targets.join(', ') || '—'}</dd></div>
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务线程</dt><dd className="font-mono">{nfs.server_threads ?? '—'}</dd></div>
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>RPC 错误</dt><dd className={cn('font-mono', (nfs.rpc_errors_per_second ?? 0) > 0 && 'text-destructive')}>{formatRate(nfs.rpc_errors_per_second)}</dd></div>
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>Stale handle</dt><dd className={cn('font-mono', (nfs.stale_file_handles_total ?? 0) > 0 && 'text-destructive')}>{nfs.stale_file_handles_total ?? '—'}</dd></div>
       </dl>
+    </section>
+  );
+}
+
+function ExternalShareUnmonitoredNotice() {
+  return (
+    <section className="border-t py-4" aria-label="外部共享存储采集器状态">
+      <InlineEmpty>
+        未配置采集器（外部共享存储）。右栏展示中心存储地址与日志根容量/挂载；宿主机 CPU/内存/nfsd
+        需配置 STP_STORAGE_NODE_JOB 后接入 Prometheus。
+      </InlineEmpty>
     </section>
   );
 }
@@ -780,6 +813,12 @@ export default function FileServerPage() {
                   totalSeries={data.history.hostproc_total_anon_bytes}
                 />
                 <ClientMountSection mount={data.control_plane.client_mount} idPrefix="control-plane" />
+                {/* 切盘后控制面根 NFS 归左栏；同源过渡期仍只在右栏展示，避免双份「运行中」。 */}
+                {data.control_plane.nfs
+                  && data.control_plane.nfs.scope === 'control_plane_root'
+                  && !data.storage_server.same_source ? (
+                  <NfsSection nfs={data.control_plane.nfs} idPrefix="control-plane" />
+                ) : null}
               </div>
             </div>
           </div>
@@ -804,12 +843,22 @@ export default function FileServerPage() {
                   trailing={
                     data.storage_server.same_source ? (
                       <Badge variant="outline">与控制面同机</Badge>
+                    ) : data.storage_server.monitoring.unmonitored_reason === 'external_share_no_collector' ? (
+                      <Badge variant="outline">外部共享存储</Badge>
                     ) : null
                   }
                 />
                 <div className="space-y-4 px-4 pb-4">
-                  <NfsSection nfs={data.storage_server.nfs} idPrefix="storage-server" />
-                  <SystemLoadSection system={data.storage_server.system} node={data.storage_server.node} idPrefix="storage-server" />
+                  {data.storage_server.monitoring.unmonitored_reason === 'external_share_no_collector' ? (
+                    <ExternalShareUnmonitoredNotice />
+                  ) : (
+                    <SystemLoadSection system={data.storage_server.system} node={data.storage_server.node} idPrefix="storage-server" />
+                  )}
+                  {/* 远程 CIFS 时 NFS 已在左栏「控制面根 NFS 导出」展示，右栏避免重复。 */}
+                  {data.storage_server.nfs.scope === 'control_plane_root'
+                    && !data.storage_server.same_source
+                    ? null
+                    : <NfsSection nfs={data.storage_server.nfs} idPrefix="storage-server" />}
                 </div>
               </div>
             </div>

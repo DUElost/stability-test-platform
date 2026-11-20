@@ -50,6 +50,7 @@ import time
 
 _PROGRESS_PREFIX = "PROGRESS "
 _DEFAULT_SUW_PACKAGE = "com.google.android.setupwizard"
+_DEFAULT_EXTRA_SUW_PACKAGES = ("com.tinno.factoryoobe",)
 
 
 def _progress_stamp(seq: int, **fields) -> str:
@@ -112,11 +113,11 @@ def _adb_device_state(serial: str, adb_path: str) -> str:
     return (proc.stdout or "").strip() or "unknown"
 
 
-def _adb_shell(serial: str, adb_path: str, shell_args: "list[str]",
-               timeout: int = 15) -> "tuple[int, str]":
+def _adb_cmd(serial: str, adb_path: str, adb_args: "list[str]",
+             timeout: int = 15) -> "tuple[int, str]":
     try:
         proc = subprocess_run(
-            [adb_path, "-s", serial, "shell"] + shell_args,
+            [adb_path, "-s", serial] + adb_args,
             capture_output=True, text=True, timeout=timeout,
         )
     except Exception as exc:
@@ -125,15 +126,79 @@ def _adb_shell(serial: str, adb_path: str, shell_args: "list[str]",
     return proc.returncode, tail[-300:]
 
 
+def _adb_shell(serial: str, adb_path: str, shell_args: "list[str]",
+               timeout: int = 15) -> "tuple[int, str]":
+    return _adb_cmd(serial, adb_path, ["shell"] + shell_args, timeout=timeout)
+
+
 def _wait_adbd_ready(serial: str, adb_path: str, deadline_seconds: float = 15.0) -> bool:
-    """adb root 后轮询 adbd 恢复（#816）：get-state == device 才算就绪。"""
+    """adb root 后轮询 adbd 恢复（#816/#4083）：adb get-state == device 才算就绪。"""
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
-        rc, tail = _adb_shell(serial, adb_path, ["get-state"], timeout=5)
+        rc, tail = _adb_cmd(serial, adb_path, ["get-state"], timeout=5)
         if rc == 0 and "device" in tail:
             return True
         time.sleep(1.0)
     return False
+
+
+def _extract_current_focus(focus_tail: str) -> str:
+    """多屏 dumpsys window 会先输出 mCurrentFocus=null，取最后一个非空焦点窗口。"""
+    non_null = [
+        ln.strip()
+        for ln in focus_tail.splitlines()
+        if "mCurrentFocus=" in ln and not ln.strip().endswith("=null")
+    ]
+    if non_null:
+        return non_null[-1]
+    return next(
+        (ln.strip() for ln in focus_tail.splitlines() if "mCurrentFocus" in ln),
+        "",
+    )
+
+
+def _parse_suw_packages(primary: str, extra_raw) -> "list[str]":
+    """合并主向导包与额外向导包（去重保序）。"""
+    pkgs: list[str] = [primary]
+    if isinstance(extra_raw, (list, tuple)):
+        extras = [str(x).strip() for x in extra_raw if str(x).strip()]
+    elif isinstance(extra_raw, str) and extra_raw.strip():
+        extras = [s.strip() for s in extra_raw.split(",") if s.strip()]
+    else:
+        extras = list(_DEFAULT_EXTRA_SUW_PACKAGES)
+    for pkg in extras:
+        if pkg not in pkgs:
+            pkgs.append(pkg)
+    return pkgs
+
+
+def _clear_suw_and_home(
+    serial: str,
+    adb_path: str,
+    suw_packages: "list[str]",
+    disable_suw: bool,
+    metrics: dict,
+    seq: "list[int]",
+) -> None:
+    """停止/禁用向导包并发送唤醒→解锁→HOME 键序。"""
+    for idx, pkg in enumerate(suw_packages):
+        rc, tail = _adb_shell(serial, adb_path, ["am", "force-stop", pkg])
+        cmd_name = "force-stop-setupwizard" if idx == 0 else f"force-stop-extra:{pkg}"
+        metrics["commands"].append({"name": cmd_name, "rc": rc, "tail": tail})
+        if idx == 0:
+            _emit_progress(seq, stage="force-stop-setupwizard", ok=rc == 0)
+        if disable_suw:
+            d_rc, d_tail = _adb_shell(
+                serial, adb_path, ["pm", "disable-user", "--user", "0", pkg])
+            d_name = "disable-setupwizard" if idx == 0 else f"disable-extra:{pkg}"
+            metrics["commands"].append({"name": d_name, "rc": d_rc, "tail": d_tail})
+
+    for name, keycode in (("keyevent-wakeup", "224"),
+                          ("keyevent-unlock", "82"),
+                          ("keyevent-home", "3")):
+        rc, tail = _adb_shell(serial, adb_path, ["input", "keyevent", keycode])
+        metrics["commands"].append({"name": name, "rc": rc, "tail": tail})
+        _emit_progress(seq, stage=name.replace("_", "-"), ok=rc == 0)
 
 
 def _boot_completed(serial: str, adb_path: str) -> bool:
@@ -198,6 +263,8 @@ def main() -> None:
     suw_package = str(
         _param_or_env(args, "setupwizard_package", "", _DEFAULT_SUW_PACKAGE)
     ).strip() or _DEFAULT_SUW_PACKAGE
+    suw_packages = _parse_suw_packages(suw_package, args.get("extra_setupwizard_packages"))
+    disable_suw = _as_bool(args.get("disable_setupwizard"), default=True)
 
     # ── 等设备回到 adb 且 boot_completed（刷完重启需要时间）───────────
     device_ready = _wait_device_ready(serial, adb_path, wait_seconds, seq)
@@ -213,8 +280,8 @@ def main() -> None:
                 metrics=metrics)
         return
 
-    # ── root（best-effort；部分固件无此命令，失败不阻断）──────────────
-    root_rc, root_tail = _adb_shell(serial, adb_path, ["root"])
+    # ── root（#4083：直调 adb root，不走 shell；失败仍继续 best-effort）──
+    root_rc, root_tail = _adb_cmd(serial, adb_path, ["root"])
     metrics["root"] = {"rc": root_rc, "tail": root_tail}
     _emit_progress(seq, stage="root", ok=root_rc == 0)
     if root_rc == 0:
@@ -224,12 +291,14 @@ def main() -> None:
         if not _wait_adbd_ready(serial, adb_path):
             metrics["root_wait_timeout"] = True
 
-    # ── 命令序列：provisioning 标志与 OOBE.bat 一致 ────────────────────
+    # ── 命令序列：provisioning 标志与 OOBE.sh 一致 + setup_skipped ────
     shell_commands: "list[tuple[str, list[str]]]" = [
         ("setup-complete", ["settings", "put", "secure",
                             "user_setup_complete", "1"]),
         ("device-provisioned", ["settings", "put", "global",
                                 "device_provisioned", "1"]),
+        ("setup-skipped", ["settings", "put", "secure",
+                           "setup_skipped", "1"]),
         ("system-locales", ["settings", "put", "system",
                             "system_locales", locales]),
     ]
@@ -238,23 +307,8 @@ def main() -> None:
         metrics["commands"].append({"name": name, "rc": rc, "tail": tail})
         _emit_progress(seq, stage=name.replace("_", "-"), ok=rc == 0)
 
-    # ── 清场：SUW 不会因标志位变化自行退出，必须显式停掉 ───────────────
-    suw_rc, suw_tail = _adb_shell(
-        serial, adb_path, ["am", "force-stop", suw_package])
-    metrics["commands"].append(
-        {"name": "force-stop-setupwizard", "rc": suw_rc, "tail": suw_tail})
-    _emit_progress(seq, stage="force-stop-setupwizard", ok=suw_rc == 0)
-
-    # ── 键序：唤醒 → 解锁 → HOME（实测落主界面）──────────────────────
-    keyevents: "list[tuple[str, str]]" = [
-        ("keyevent-wakeup", "224"),
-        ("keyevent-unlock", "82"),
-        ("keyevent-home", "3"),
-    ]
-    for name, keycode in keyevents:
-        rc, tail = _adb_shell(serial, adb_path, ["input", "keyevent", keycode])
-        metrics["commands"].append({"name": name, "rc": rc, "tail": tail})
-        _emit_progress(seq, stage=name.replace("_", "-"), ok=rc == 0)
+    # ── 清场：停掉/禁用向导（含 Tinno OOBE）并键序回桌面 ─────────────
+    _clear_suw_and_home(serial, adb_path, suw_packages, disable_suw, metrics, seq)
 
     # ── 回读核验（权威判据：两个 provisioning 标志位）─────────────────
     verify_report: dict = {"enabled": verify}
@@ -302,13 +356,17 @@ def main() -> None:
                 if oobe_done:
                     break
 
-    # ── UI 焦点诊断（best-effort，不参与成败判定）─────────────────────
+    # ── UI 焦点诊断（多屏过滤 mCurrentFocus=null；若仍停在向导则补清一次）──
     focus_rc, focus_tail = _adb_shell(
         serial, adb_path, ["dumpsys", "window"], timeout=20)
-    focus_line = next(
-        (ln.strip() for ln in focus_tail.splitlines()
-         if "mCurrentFocus" in ln), "")
-    ui_on_su = suw_package.lower() in focus_line.lower()
+    focus_line = _extract_current_focus(focus_tail)
+    ui_on_su = any(pkg.lower() in focus_line.lower() for pkg in suw_packages)
+    if ui_on_su:
+        time.sleep(3)
+        _clear_suw_and_home(serial, adb_path, suw_packages, disable_suw, metrics, seq)
+        _, focus_tail = _adb_shell(serial, adb_path, ["dumpsys", "window"], timeout=20)
+        focus_line = _extract_current_focus(focus_tail)
+        ui_on_su = any(pkg.lower() in focus_line.lower() for pkg in suw_packages)
     metrics["ui_focus"] = {
         "line": focus_line.split("mCurrentFocus=")[-1][:160],
         "on_setupwizard": ui_on_su,

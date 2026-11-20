@@ -97,12 +97,13 @@ def test_oobe_skip_wait_adbd_ready_polls_until_device(monkeypatch):
     seq = [(-1, "error: device offline"), (0, "device")]
     state = {"n": 0}
 
-    def fake_shell(serial, adb_path, args, timeout=15):
+    def fake_cmd(serial, adb_path, args, timeout=15):
+        assert args == ["get-state"]
         i = min(state["n"], len(seq) - 1)
         state["n"] += 1
         return seq[i]
 
-    monkeypatch.setattr(mod, "_adb_shell", fake_shell)
+    monkeypatch.setattr(mod, "_adb_cmd", fake_cmd)
     monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
 
     assert mod._wait_adbd_ready("S", "adb") is True
@@ -111,7 +112,7 @@ def test_oobe_skip_wait_adbd_ready_polls_until_device(monkeypatch):
 
 def test_oobe_skip_wait_adbd_ready_times_out(monkeypatch):
     mod = _load("oobe_skip_v111_to", "oobe_skip/oobe_skip.py")
-    monkeypatch.setattr(mod, "_adb_shell", lambda *a, **k: (-1, "offline"))
+    monkeypatch.setattr(mod, "_adb_cmd", lambda *a, **k: (-1, "offline"))
     ticks = iter([0.0, 100.0])
     monkeypatch.setattr(mod.time, "monotonic", lambda: next(ticks, 100.0))
     monkeypatch.setattr(mod.time, "sleep", lambda _s: None)

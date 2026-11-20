@@ -55,7 +55,9 @@
 | `STP_FILE_SERVER_ADDRESS` | 共享存储健康页**左栏控制面**展示 IP（现 8.202）。**不是** CIFS 根 / UNC |
 | `STP_AEE_SHARE_ADDRESS` | 健康页**右栏中心存储机**展示 IP。未设 = 与控制面同源（过渡期同机）；迁离 8.202 后必设（#205） |
 | `STP_CONTROL_PLANE_NODE_JOB` | 左栏控制面 node exporter 的 Prometheus job（默认 `file-server`；旧名 `STP_FILE_SERVER_NODE_JOB` 已删除，#289） |
-| `STP_STORAGE_NODE_JOB` | 右栏中心存储机 node exporter 的 Prometheus job（默认未设→同源；分源后必设，如 `storage-server`） |
+| `STP_STORAGE_NODE_JOB` | 右栏中心存储机 node exporter 的 Prometheus job。同源未设时复用控制面 job；分源后：已配则刮该 job，未配则降级为「外部共享存储未接入采集器」（不误报 `STORAGE_METRICS_UNAVAILABLE`） |
+| `STP_SHARED_LOG_CAPACITY_WARNING_AVAIL_GIB` | 共享日志根容量 **warning** 绝对可用阈值（GiB）。未设且盘 `<2 TiB` 时回退 `used_pct≥80`；盘 `≥2 TiB` 时自动 800（对齐 G0-c / #3860） |
+| `STP_SHARED_LOG_CAPACITY_CRITICAL_AVAIL_GIB` | 共享日志根容量 **critical** 绝对可用阈值（GiB）。未设且盘 `<2 TiB` 时回退 `used_pct≥90`；盘 `≥2 TiB` 时自动 300（对齐 G0-c / #3860） |
 | `STP_AEE_LOCAL_ROOT` | Agent **本机** L1 AEE 根（按机配置；hot-update **不下发**，见 #235） |
 | `STP_AGENT_INSTALL_API_URL` | **仅控制面**：`POST /hosts/{id}/install` 注入到 Agent `.env` 的 `API_URL`（站点公开入口 origin，不带路径/凭据）。未配置或非法 → 该接口返回 **400** `AGENT_INSTALL_NOT_CONFIGURED`（不再启动 ansible）；站点安装由 S2 按 `control_plane.public_url` 渲染 |
 | `STP_AEE_MAX_CONCURRENT_PULLS` | Agent only。主机级 AEE/`adb pull`+mobilelog/bugreport 并发槽（**默认 2**，#740）。机械盘宿主机保持小值；SSD 可酌情上调。hot-update **不下发**（按机 I/O 能力） |
@@ -380,7 +382,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_AEE_LOCAL_ROOT` | `-` | ✅ | 运行时 | `backend/agent/aee/paths.py:106` |
 | `STP_AEE_MAX_CONCURRENT_PULLS` | `-` | ✅ | 运行时 | `backend/agent/aee/extraction_slot.py:27` |
 | `STP_AEE_NFS_ROOT` | `` | ✅ | 运行时 | `backend/agent/aee/paths.py:27` |
-| `STP_AEE_SHARE_ADDRESS` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:323` |
+| `STP_AEE_SHARE_ADDRESS` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:439` |
 | `STP_AEE_SSD_FALLBACK_ROOT` | `-` | ✅ | 运行时 | `backend/agent/aee/paths.py:113` |
 | `STP_AGENT_INSTALL_API_URL` | `` | ✅ | 运行时 | `backend/services/agent_installer.py:52` |
 | `STP_AGENT_MIN_VERSION` | `-` | ✅ | 运行时 | `backend/services/agent_version_gate.py:16` |
@@ -409,7 +411,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_CONSOLE_CONTROL_TICK_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:980` |
 | `STP_CONSOLE_REGISTRY` | `` | ✅ | 运行时 | `backend/realtime/console_registry.py:72` |
 | `STP_CONSOLE_REGISTRY_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/console_registry.py:81` |
-| `STP_CONTROL_PLANE_NODE_JOB` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:321` |
+| `STP_CONTROL_PLANE_NODE_JOB` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:437` |
 | `STP_CONTROL_PLANE_STORAGE_ROOT` | `` | ✅ | 运行时 | `backend/agent/aee/paths.py:40` |
 | `STP_COUNTER_RECONCILE_BATCH` | `200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:116` |
 | `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:88` |
@@ -431,7 +433,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_ENABLE_INPROCESS_SAQ` | `1` | ✅ | 运行时 | `backend/core/task_queue.py:92` |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | `0` | ✅ | 运行时 | `backend/agent/event_uploader.py:712` |
 | `STP_EXTRACT_BACKEND` | `` | — | 运行时 | `backend/scripts/jira_extract_run52.py:10` |
-| `STP_FILE_SERVER_ADDRESS` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:253` |
+| `STP_FILE_SERVER_ADDRESS` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:261` |
 | `STP_FILE_SERVER_AGENT_FRESH_SECONDS` | `180` | ✅ | 运行时 | `backend/api/routes/stats.py:245` |
 | `STP_FLASH_FIRMWARE_ROOT` | `-` | ✅ | 测试 | `backend/agent/tests/test_flash_firmware_v131.py:62` |
 | `STP_FLASH_TOOL_DIR` | `-` | — | 测试 | `backend/agent/tests/test_required_tools_d7.py:299` |
@@ -466,7 +468,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_PHASE_BARRIER_ENABLED` | `1` | ✅ | 运行时 | `backend/agent/job_runner.py:241` |
 | `STP_PLATFORM_NAME` | `Stability Test Platform` | ✅ | 运行时 | `backend/api/routes/settings.py:19` |
 | `STP_PRECHECK_VERIFY_CONCURRENCY` | `5` | ✅ | 运行时 | `backend/services/precheck/__init__.py:16` |
-| `STP_PROMETHEUS_URL` | `-` | ✅ | 运行时 | `backend/services/file_server_monitor.py:120` |
+| `STP_PROMETHEUS_URL` | `-` | ✅ | 运行时 | `backend/services/file_server_monitor.py:128` |
 | `STP_RECOVERY_SYNC_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/agent/recovery_runtime.py:150` |
 | `STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:283` |
 | `STP_RUN_CONSOLE_LOG_ROOT` | `logs/console` | ✅ | 运行时 | `backend/main.py:211` |
@@ -494,7 +496,7 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_STEP_PARAMS` | `-` | — | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:95` |
 | `STP_STEP_STALL_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:317` |
 | `STP_STEP_WALL_CLOCK_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:149` |
-| `STP_STORAGE_NODE_JOB` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:325` |
+| `STP_STORAGE_NODE_JOB` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:441` |
 | `STP_TERMINAL_BULKHEAD_CONCURRENCY` | `-` | ✅ | 运行时 | `backend/core/terminal_bulkhead.py:74` |
 | `STP_TERMINAL_BULKHEAD_WAIT_MS` | `-` | ✅ | 运行时 | `backend/core/terminal_bulkhead.py:75` |
 | `STP_TIMEZONE` | `Asia/Shanghai` | ✅ | 运行时 | `backend/api/routes/settings.py:20` |
