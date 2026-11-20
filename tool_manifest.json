@@ -11,6 +11,14 @@
           "retired": false,
           "script": "scan_log_gt.py",
           "version": "2026.09.23"
+        },
+        {
+          "artifact": "packages/Monkey-Log-Scan-GT-SPRD/2026.11.20.tar.gz",
+          "package_sha256": "d089e13caeeb2e8be3c823c05a9b8d6f271d91057395944006e6fe649590d77a",
+          "python": null,
+          "retired": false,
+          "script": "scan_log_gt.py",
+          "version": "2026.11.20"
         }
       ]
     },
@@ -32,6 +40,14 @@
           "retired": false,
           "script": "scan_result.py",
           "version": "2026.11.19"
+        },
+        {
+          "artifact": "packages/Scan-Result-GT/2026.11.20.tar.gz",
+          "package_sha256": "a74276c840db3bd166e1b0212f904af3cfe359a86acda44535e77e42076034b9",
+          "python": null,
+          "retired": false,
+          "script": "scan_result.py",
+          "version": "2026.11.20"
         }
       ]
     },
