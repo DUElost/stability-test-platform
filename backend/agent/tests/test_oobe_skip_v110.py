@@ -161,8 +161,58 @@ class TestFocusDiagnostic:
         env.setattr(oskip.subprocess, "run", stub)
         oskip.main()
         payload = json.loads(capsys.readouterr().out.strip())
-        assert payload["success"] is True
         assert payload["metrics"]["ui_focus"]["on_setupwizard"] is False
+        assert "launcher3" in payload["metrics"]["ui_focus"]["line"]
+
+
+class TestOobeSkip4083Fixes:
+    def test_adb_root_runs_without_shell_and_polls_get_state(self, env, capsys):
+        stub = _DeviceStub()
+        env.setattr(oskip.subprocess, "run", stub)
+        oskip.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert payload["success"] is True
+        assert ["adb", "-s", "SER1", "root"] in stub.argvs
+        assert ["adb", "-s", "SER1", "shell", "root"] not in stub.argvs
+        assert ["adb", "-s", "SER1", "get-state"] in stub.argvs
+        assert ["adb", "-s", "SER1", "shell", "get-state"] not in stub.argvs
+
+    def test_setup_skipped_tinno_factoryoobe_and_disable(self, env, capsys):
+        stub = _DeviceStub()
+        env.setattr(oskip.subprocess, "run", stub)
+        oskip.main()
+        joined = stub.shell_joined()
+        assert "settings put secure setup_skipped 1" in joined
+        assert "am force-stop com.tinno.factoryoobe" in joined
+        assert "pm disable-user --user 0 com.google.android.setupwizard" in joined
+        assert "pm disable-user --user 0 com.tinno.factoryoobe" in joined
+
+    def test_multidisplay_null_focus_ignored_and_recleared(self, env, capsys):
+        calls = {"n": 0}
+        stub = _DeviceStub()
+
+        def multi_focus(argv, **kwargs):
+            if "dumpsys" in argv:
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return _Proc(
+                        stdout="  mCurrentFocus=null\n  mFocusedApp=null\n"
+                        "  mCurrentFocus=Window{1 u0 com.tinno.factoryoobe/Main}\n"
+                    )
+                return _Proc(
+                    stdout="  mCurrentFocus=null\n  mCurrentFocus=Window{2 u0 com.android.launcher3/Launcher}\n"
+                )
+            return stub(argv, **kwargs)
+
+        env.setattr(oskip.subprocess, "run", multi_focus)
+        oskip.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert payload["success"] is True
+        assert calls["n"] == 2
+        assert payload["metrics"]["ui_focus"]["on_setupwizard"] is False
+        assert "launcher3" in payload["metrics"]["ui_focus"]["line"]
+        # 触发了二次清场
+        assert sum(1 for c in payload["metrics"]["commands"] if c["name"] == "force-stop-setupwizard") == 2
 
 
 def test_failure_hint_mentions_reflash_when_su_alive(env, capsys):
