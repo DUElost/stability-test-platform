@@ -41,7 +41,7 @@ B8 G0-b 把日志根切到外部 CIFS（`/mnt/stp-log` → 15.4）后，健康�
 
 ## Revisit
 
-- 站点 `env.backend` 上线窗口补 `STP_AEE_SHARE_ADDRESS=172.21.15.4`（及可选
-  容量绝对阈值）；15.4 若日后接入 node_exporter，再设 `STP_STORAGE_NODE_JOB`。
-- 若产品要把右栏 NFS 指标改刮存储机而非展示控制面根摘要，需 15.4 侧协议与
+- 站点 `env.backend` 上线窗口补 `STP_AEE_SHARE_ADDRESS=192.0.2.204`（及可选
+  容量绝对阈值）；外部共享存储若日后接入 node_exporter，再设 `STP_STORAGE_NODE_JOB`。
+- 若产品要把右栏 NFS 指标改刮存储机而非展示控制面根摘要，需存储机侧协议与
   scrape target 就绪后再收紧。
