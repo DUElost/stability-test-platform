@@ -678,9 +678,13 @@ export interface FileServerNodeIdentity {
   uptime_seconds: number | null;
 }
 
+export type FileServerUnmonitoredReason = 'external_share_no_collector' | string;
+
 export interface FileServerNodeMonitoring {
   prometheus_available: boolean;
   error: string | null;
+  /** 分源且未配 STP_STORAGE_NODE_JOB 时的预期降级（外部 NAS 无采集器）。 */
+  unmonitored_reason?: FileServerUnmonitoredReason | null;
 }
 
 export interface FileServerClientMount {
@@ -719,14 +723,20 @@ export interface FileServerStorage {
 }
 
 export interface FileServerNfs {
-  service_ready: boolean;
+  service_ready: boolean | null;
   exported: boolean;
   export_targets: string[];
+  /** 实际参与 /var/lib/nfs/etab 比对的导出路径（控制面根或同源日志根）。 */
+  export_path?: string | null;
+  /** control_plane_root = 控制面 NFS 导出；shared_log_root = 同源过渡期日志根。 */
+  scope?: 'control_plane_root' | 'shared_log_root' | string | null;
+  /** false 时前端应隐藏 NFS 服务面板（预留）。 */
+  applicable?: boolean;
   server_threads: number | null;
-  requests_per_second: number | null;
-  rpc_errors_per_second: number | null;
-  stale_file_handles_total: number | null;
-  connections_total: number | null;
+  requests_per_second?: number | null;
+  rpc_errors_per_second?: number | null;
+  stale_file_handles_total?: number | null;
+  connections_total?: number | null;
 }
 
 export interface FileServerHostProcess {
@@ -747,6 +757,8 @@ export interface FileServerControlPlanePanel {
   node: FileServerNodeIdentity;
   system: FileServerNodeSystem;
   client_mount: FileServerClientMount;
+  /** 控制面本机 NFS 导出（切盘后对准控制面根；同源过渡期可与日志根相同）。 */
+  nfs?: FileServerNfs;
   monitoring: FileServerNodeMonitoring;
   processes: FileServerHostProcessPanel;
 }

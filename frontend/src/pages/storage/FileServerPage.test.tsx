@@ -48,7 +48,16 @@ const overview: FileServerOverview = {
       mounted: true,
       backend_write_access: true,
     },
-    monitoring: { prometheus_available: true, error: null },
+    nfs: {
+      service_ready: true,
+      exported: true,
+      export_targets: ['192.0.2.0/24', '198.51.100.0/24'],
+      export_path: '/mnt/stp-aee',
+      scope: 'shared_log_root',
+      applicable: true,
+      server_threads: 16,
+    },
+    monitoring: { prometheus_available: true, error: null, unmonitored_reason: null },
     processes: {
       available: true,
       error: null,
@@ -95,13 +104,16 @@ const overview: FileServerOverview = {
       service_ready: true,
       exported: true,
       export_targets: ['192.0.2.0/24', '198.51.100.0/24'],
+      export_path: '/mnt/stp-aee',
+      scope: 'shared_log_root',
+      applicable: true,
       server_threads: 16,
       requests_per_second: 1.5,
       rpc_errors_per_second: 0,
       stale_file_handles_total: 0,
       connections_total: 45,
     },
-    monitoring: { prometheus_available: true, error: null },
+    monitoring: { prometheus_available: true, error: null, unmonitored_reason: null },
   },
   agents: {
     total: 1,
@@ -194,6 +206,82 @@ describe('FileServerPage', () => {
 
     expect(await screen.findByText('分源且未配置存储机 Prometheus job，历史趋势暂不可用')).toBeInTheDocument();
     expect(screen.getByTestId('file-server-history-chart')).toBeInTheDocument();
+  });
+
+  it('shows external-share unmonitored notice for CIFS NAS without collector', async () => {
+    mocks.fileServer.mockResolvedValueOnce({
+      ...overview,
+      storage_server: {
+        ...overview.storage_server,
+        same_source: false,
+        node: {
+          ...overview.storage_server.node,
+          hostname: '192.0.2.154',
+          address: '192.0.2.154',
+          cpu_count: null,
+          uptime_seconds: null,
+        },
+        system: {
+          ...overview.storage_server.system,
+          cpu_usage_pct: null,
+          memory_usage_pct: null,
+          memory_total_bytes: null,
+          load1: null,
+        },
+        disk: {
+          ...overview.storage_server.disk,
+          path: '/mnt/stp-log',
+          source: '//192.0.2.154/jxtinno/sonic_tinno/stp',
+          filesystem: 'cifs',
+        },
+        nfs: {
+          ...overview.storage_server.nfs,
+          scope: 'control_plane_root',
+          export_path: '/mnt/stp-aee',
+        },
+        monitoring: {
+          prometheus_available: false,
+          error: null,
+          unmonitored_reason: 'external_share_no_collector',
+        },
+      },
+      control_plane: {
+        ...overview.control_plane,
+        client_mount: {
+          ...overview.control_plane.client_mount,
+          path: '/mnt/stp-log',
+          source: '//192.0.2.154/jxtinno/sonic_tinno/stp',
+          filesystem: 'cifs',
+        },
+        nfs: {
+          service_ready: true,
+          exported: true,
+          export_targets: ['192.0.2.0/24'],
+          export_path: '/mnt/stp-aee',
+          scope: 'control_plane_root',
+          applicable: true,
+          server_threads: 16,
+        },
+      },
+      history: {
+        hours: 6,
+        capacity_usage_pct: [],
+        cpu_usage_pct: [],
+        memory_usage_pct: [],
+        nfs_requests_per_second: [],
+        hostproc_total_anon_bytes: [],
+      },
+      alerts: [],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText(/192\.0\.2\.154（存储机）/)).toBeInTheDocument();
+    expect(screen.getByText('控制面根 NFS 导出')).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: '中心存储机' }));
+    expect(screen.getAllByText('未配置采集器（外部共享存储）').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('外部共享存储')).toBeInTheDocument();
+    expect(screen.getByText(/右栏展示中心存储地址与日志根容量/)).toBeInTheDocument();
   });
 
   it('renders control-plane process memory top list and total trend', async () => {
