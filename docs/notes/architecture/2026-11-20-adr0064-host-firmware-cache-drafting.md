@@ -5,7 +5,7 @@ Class: architecture
 
 ## Decision
 
-承接 #4076 专题讨论与 #4054 / #4075 / #4006 §8 / #4042 的统一问题面分析，按 Owner 2026-11-20 裁决起草 [ADR-0064](../../adr/ADR-0064-host-firmware-cache-and-transfer-pacing.md)（v0.1 → 2026-11-21 按 U0 第 1–3 轮独立复核修订为 Proposed v0.4），并同步登记 `docs/adr/README.md` 与 `docs/design/2026-storage-roles-and-aliases.md`：
+承接 #4076 专题讨论与 #4054 / #4075 / #4006 §8 / #4042 的统一问题面分析，按 Owner 2026-11-20 裁决起草 [ADR-0064](../../adr/ADR-0064-host-firmware-cache-and-transfer-pacing.md)（v0.1 → 2026-11-22 按 U0 第 1–4 轮独立复核修订为 Proposed v0.5），并同步登记 `docs/adr/README.md` 与 `docs/design/2026-storage-roles-and-aliases.md`：
 
 - **D1 发布期多 profile 不可变摘要契约与完备 `profile × 封包状态` 规则**：上架工具生成单份多 profile `staging_manifest.json`（MTK 用 `mtk`，`P525AA`/`P532AA` 等展锐共用目录并存 `unisoc_fastboot` 与 `unisoc_bsl`；规范化摘要 `[[relpath, size, sha256], ...]` 收归共享契约模块 `backend/agent/contracts/firmware_manifest.py`，不引入可执行位；展锐 BSL 预裁剪镜像写入 `images/bsl/super_trimmed.img` 且不改原镜像，存量目录允许一次只增不改首次封包；已封包缺 profile 返回 `firmware_profile_not_found`，未封包 `mtk`/`unisoc_fastboot` 用 `<safe_label>_unsealed_<digest16>`，未封包 `unisoc_bsl` 显式 fail-closed 返回 `firmware_unsealed_not_supported` 且全量在用 BSL 目录封包为计划重指前置）。
 - **D2 Agent L1 统一缓存基座与脚本运行契约**：`backend/agent/firmware_cache.py` 按本地块设备抽象为一级本地盘 + 异盘溢出（原生兼容纯 SSD、纯 HDD、SSD+HDD），配合 `avail_gb`/`writable_percent` 水位守卫、`<safe_label>_<profile>_<digest16>` 缓存键、`flock(LOCK_SH/LOCK_EX)` pin 安全 LRU（含 `LOCK_EX`→`LOCK_SH` 降级后持锁复核就绪标记）、写入 `ionice -c 3` 与后台定时 TTL（默认 14 天）清理；两盘均不足默认 fail-closed。`pipeline_engine.py` 显式注入 `<agent_dir>` + `<agent_dir.parent>` 双路径 `PYTHONPATH`，配合 `firmware_cache_v1` / `requires_agent_capabilities` 门控与脚本启动前 `FIRMWARE_CACHE_API_VERSION` 校验闭环版本交错。
@@ -31,5 +31,5 @@ Class: architecture
 
 ## Revisit
 
-- 第 4 轮独立复核通过并经 Owner 裁决后，将 ADR-0064 状态从 `Proposed v0.4` 转为 `Accepted v1.0`，并在 `docs/design/2026-semantic-ownership.md` `flash-tool` 行补锚。
+- 第 5 轮独立复核通过并经 Owner 裁决后，将 ADR-0064 状态从 `Proposed v0.5` 转为 `Accepted v1.0`，并在 `docs/design/2026-semantic-ownership.md` `flash-tool` 行补锚。
 - 50–150 台规模下波次错峰等待与步骤墙钟成为瓶颈时，启用 ADR-0064 §7 Revisit #1 的异步主机预置；千兆单源物理吞吐成为瓶颈时，启用 Revisit #2 的 HTTP/P2P 传输适配器。

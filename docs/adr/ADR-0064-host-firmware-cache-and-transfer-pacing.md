@@ -1,6 +1,6 @@
 # ADR-0064：Agent host 固件本地缓存、全局传输限流与心跳 NFS 隔离
 
-- 状态：Proposed v0.4（2026-11-21 修订：回应 U0 第 3 轮独立复核 R4、M7–M9 及 N8；v0.2–v0.3 同日回应第 1–2 轮复核；原 v0.1 2026-11-20 起草；待第 4 轮独立复核并由 Owner 裁定转 Accepted）
+- 状态：Proposed v0.5（2026-11-22 修订：回应 U0 第 4 轮独立复核 R5、M7 与 M9 单规则句拆分；v0.2–v0.4 回应第 1–3 轮复核；原 v0.1 2026-11-20 起草；待第 5 轮独立复核并由 Owner 裁定转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-21
@@ -70,8 +70,10 @@
      - 未封包兼容模式下，刷机脚本必须在步骤 `metrics` 中显式标记 `firmware_cache.sealed = false`。
      - 发布者不得让标准仓库固件长期依赖该兼容模式。
    - **未封包目录走 `unisoc_bsl`（明确只读身份探测与状态变更边界）**：
-     - 当调用方请求 `unisoc_bsl` 且选定的目标版本目录未封包时，Agent 与 `flash_firmware_unisoc_bsl` 新版本（`1.0.7`）不得执行主机现场裁剪，也不得回落刷写未裁剪的全量 `raw/super.img`。
-     - `flash_firmware_unisoc_bsl`（`1.0.7`）在获取主机刷机排他锁 `/tmp/stp-flash-firmware.lock` 之前，可以保留现役 B9 只读设备身份探测（如 `adb shell getprop`）以通过 `family + latest.json` 解析并绑定目标版本目录；该阶段脚本不得执行任何设备状态变更操作（不得重启、切电、擦写或进入下载/烧录态）。
+     - 当调用方请求 `unisoc_bsl` 且选定的目标版本目录未封包时，Agent 与 `flash_firmware_unisoc_bsl` 新版本（`1.0.7`）不得执行主机现场裁剪。
+     - 上述场景下，Agent 与 `flash_firmware_unisoc_bsl` 新版本（`1.0.7`）不得回落刷写未裁剪的全量 `raw/super.img`。
+     - `flash_firmware_unisoc_bsl`（`1.0.7`）在获取主机刷机排他锁 `/tmp/stp-flash-firmware.lock` 之前，可以保留现役 B9 只读设备身份探测（如 `adb shell getprop`）以通过 `family + latest.json` 解析并绑定目标版本目录。
+     - 上述只读选包阶段中，`flash_firmware_unisoc_bsl`（`1.0.7`）不得执行任何设备状态变更操作（如重启、切电、擦写或进入下载/烧录态）。
      - 目标版本目录一经解析完成且未封包，`flash_firmware_unisoc_bsl`（`1.0.7`）与 Agent 必须在获取 `/tmp/stp-flash-firmware.lock` 之前、且在任何设备状态变更（重启、切电、擦写或进入下载/烧录态）之前，以结构化错误 `firmware_unsealed_not_supported` 显式失败（fail-closed）。
      - 运维必须在 B10 计划重指前完成全部在用 BSL 版本目录（当前 `P525AA/` 与 `P532AA/`）的首次封包。
 
@@ -106,7 +108,8 @@
 2. 传输并发许可属于瞬时跨进程协调态，控制面必须将其承载在 Redis 中，不得为此新增 PG 业务表（遵守 `AGENTS.md` Redis 边界）。
 3. 传输许可客户端必须归属 `backend/agent/firmware_cache.py`（在刷机脚本子进程内由 L1 模块调用），使用引擎继承自 Agent 进程的 `API_URL`、`HOST_ID` 与 `AGENT_SECRET` 访问控制面。Agent 必须在发生缓存未命中（cache miss）且即将跨 NFS 拷贝前申请本机级传输许可，并在拷贝期间按 TTL/3 周期续期、拷贝结束或异常退出时立即释放；缓存命中时，Agent 不得申请传输许可。
 4. 本机跨源串行锁、固定加锁偏序与进度打戳必须遵守以下逐条规则：
-   - 除单条目 `.entry.lock` 去重外，Agent 必须在一级缓存根维护本机级跨源传输锁 `.host-transfer.lock`（`flock(LOCK_EX)`，仅在发生 cache miss 需要跨源拉取时持有），确保同一主机即使并发刷写两种不同固件（如 NX2 与 NX3），同一时刻也只执行一次跨源拉取并只持有一张传输许可，不得按设备数或固件数放大源端并发。
+   - 除单条目 `.entry.lock` 去重外，Agent 必须在一级缓存根维护本机级跨源传输锁 `.host-transfer.lock`（`flock(LOCK_EX)`，仅在发生 cache miss 需要跨源拉取时持有），确保同一主机即使并发刷写两种不同固件（如 NX2 与 NX3），同一时刻也只执行一次跨源拉取并只持有一张传输许可。
+   - 同一主机上并发执行多设备或多固件刷写时，Agent 不得按设备数或固件数放大源端传输并发。
    - Agent 在缓存未命中时必须按固定偏序依次获取 `.entry.lock`（`LOCK_EX`）→ `.host-transfer.lock`（`LOCK_EX`）→ 控制面 Redis 传输许可。
    - Agent 在拷贝结束或异常退出时必须按逆序依次释放上述许可与锁（控制面 Redis 传输许可 → `.host-transfer.lock` → `.entry.lock` 降级或释放），杜绝互锁死锁。
    - 等待 `.entry.lock`、等待 `.host-transfer.lock` 或等待全局许可期间，刷机脚本必须周期打印 `PROGRESS` 戳（`stage="firmware-stage-wait"`），避免被步骤停滞钟误杀。
@@ -116,9 +119,12 @@
    - 当控制面许可接口短暂不可达、单次请求超时（默认 `10s`）或返回 `5xx` 时，Agent 必须按带抖动的指数退避重试。
    - Agent 连续不可达的重试累计耗时不得超过不可达上限（`STP_FIRMWARE_TRANSFER_UNREACHABLE_TIMEOUT_SECONDS`，默认 `300s`）。
 6. 许可超限与显式逃生阀必须遵守以下逐条规则：
-   - 当超过第 5 条的不可达上限或总等待上限仍未获批时，Agent 默认必须分别以 `transfer_permit_unavailable` 或 `transfer_permit_wait_timeout` 显式失败（fail-closed），不得在控制面 I/O 饱和时静默取消限流而放大惊群。
-   - 仅当控制面许可接口连续不可达超限且步骤参数显式设置 `allow_permit_bypass=true`（默认 `false`）时，Agent 才可以继续跨源传输，且刷机脚本必须在步骤 `metrics` 中记录 `firmware_cache.permit_degraded = true`。
-   - 当许可接口可达但正常排队超过总等待上限时，即使步骤参数设置了 `allow_permit_bypass=true`，Agent 也不得绕过限流，必须返回 `transfer_permit_wait_timeout`。
+   - 当超过第 5 条的不可达上限或总等待上限仍未获批时，Agent 默认必须分别以 `transfer_permit_unavailable` 或 `transfer_permit_wait_timeout` 显式失败（fail-closed）。
+   - 控制面 I/O 饱和或许可超限时，Agent 不得静默取消限流。
+   - 仅当控制面许可接口连续不可达超限且步骤参数显式设置 `allow_permit_bypass=true`（默认 `false`）时，Agent 才可以继续跨源传输。
+   - 触发上述 `allow_permit_bypass` 放行后，刷机脚本必须在步骤 `metrics` 中记录 `firmware_cache.permit_degraded = true`。
+   - 当许可接口可达但正常排队超过总等待上限时，即使步骤参数设置了 `allow_permit_bypass=true`，Agent 也不得绕过限流。
+   - 上述正常排队超时场景下，Agent 必须返回 `transfer_permit_wait_timeout`。
 
 ### D4 全刷机族统一接入与历史债务收口
 
