@@ -34,7 +34,7 @@ export type {
   PipelineTemplate, AgentLogOut, User,
   RunsByStatus, TestTypeStat, RiskDistribution, RecentRun, ResultsSummary,
   ActivityPoint, ActivityResponse,
-  CompletionTrendPoint, CompletionTrendResponse, FileServerOverview, FileServerMetricPoint,
+  CompletionTrendPoint, CompletionTrendResponse, FileServerOverview, FileServerMetricPoint, FileServerNodeHistory,
   NotificationChannel, AlertRule, NotificationLog, NotificationLogsResponse, UnreadCountResponse,
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,

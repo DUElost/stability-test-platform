@@ -46,6 +46,7 @@ import type {
   FileServerClientMount,
   FileServerHostProcessPanel,
   FileServerMetricPoint,
+  FileServerNodeHistory,
   FileServerNodeIdentity,
   FileServerNodeMonitoring,
   FileServerNodeSystem,
@@ -114,12 +115,12 @@ function formatUsagePercent(value: number): string {
   return `${value.toFixed(2)}%`;
 }
 
-function isHistoryEmpty(history: FileServerOverview['history']): boolean {
+function isHistoryEmpty(history: FileServerNodeHistory): boolean {
   return (
     history.capacity_usage_pct.length === 0
     && history.cpu_usage_pct.length === 0
     && history.memory_usage_pct.length === 0
-    && history.nfs_requests_per_second.length === 0
+    && (history.nfs_requests_per_second?.length ?? 0) === 0
   );
 }
 
@@ -173,7 +174,7 @@ type ChartPoint = {
   memory?: number;
 };
 
-function mergeHistory(data: FileServerOverview['history']): ChartPoint[] {
+function mergeHistory(data: FileServerNodeHistory): ChartPoint[] {
   const points = new Map<number, ChartPoint>();
   const add = (series: FileServerMetricPoint[], key: keyof Omit<ChartPoint, 'timestamp'>) => {
     series.forEach((point) => {
@@ -192,7 +193,7 @@ function CapacityChart({
   data,
   emptyMessage,
 }: {
-  data: FileServerOverview['history'];
+  data: FileServerNodeHistory;
   emptyMessage?: string;
 }) {
   const points = useMemo(() => mergeHistory(data), [data]);
@@ -338,6 +339,48 @@ function SystemLoadSection({
           <div><div className={TEXT.caption}>磁盘写入</div><div className="mt-1 font-mono">{formatBytes(system.disk_write_bytes_per_second, true)}</div></div>
           <div><div className={TEXT.caption}>网络接收</div><div className="mt-1 font-mono">{formatBytes(system.network_receive_bytes_per_second, true)}</div></div>
           <div><div className={TEXT.caption}>网络发送</div><div className="mt-1 font-mono">{formatBytes(system.network_transmit_bytes_per_second, true)}</div></div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function LocalStorageSection({
+  disk,
+  idPrefix,
+}: {
+  disk: FileServerStorage;
+  idPrefix: string;
+}) {
+  const titleId = `${idPrefix}-local-storage-title`;
+  return (
+    <section className="border-t py-4" aria-labelledby={titleId}>
+      <div className="mb-4 flex items-center gap-2">
+        <Database className={cn('h-4 w-4', TEXT.subtitle)} />
+        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>本地存储（控制面根）</h2>
+      </div>
+      <div className="space-y-4">
+        <div>
+          <div className="mb-1.5 flex justify-between text-xs">
+            <span className={TEXT.subtitle}>容量使用率</span>
+            <span className={metricTone(disk.used_pct, 80, 90)}>{disk.used_pct.toFixed(1)}%</span>
+          </div>
+          <Progress value={disk.used_pct} />
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs sm:grid-cols-4">
+          <div><div className={TEXT.caption}>路径</div><div className="mt-1 truncate font-mono">{disk.path}</div></div>
+          <div><div className={TEXT.caption}>可用容量</div><div className="mt-1 font-mono">{formatBytes(disk.available_bytes)}</div></div>
+          <div><div className={TEXT.caption}>总容量</div><div className="mt-1 font-mono">{formatBytes(disk.total_bytes)}</div></div>
+          <div><div className={TEXT.caption}>inode 使用率</div><div className="mt-1 font-mono">{disk.inode_used_pct.toFixed(1)}%</div></div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs">
+          <span className={cn('truncate font-mono', TEXT.caption)}>
+            {[disk.source, disk.filesystem].filter(Boolean).join(' · ') || '—'}
+          </span>
+          <div className="flex items-center gap-2">
+            {disk.mounted ? <Badge variant="success">已挂载</Badge> : <Badge variant="destructive">未挂载</Badge>}
+            {disk.backend_write_access ? <Badge variant="success">可写</Badge> : <Badge variant="destructive">不可写</Badge>}
+          </div>
         </div>
       </div>
     </section>
@@ -629,6 +672,7 @@ function AgentStatusSection({
 export default function FileServerPage() {
   const [hours, setHours] = useState(6);
   const [activePanel, setActivePanel] = useState<PanelKey>('control-plane');
+  const [trendPanel, setTrendPanel] = useState<PanelKey>('control-plane');
   const query = useQuery({
     queryKey: ['file-server-overview', hours],
     queryFn: () => api.stats.fileServer(hours),
@@ -726,48 +770,99 @@ export default function FileServerPage() {
             </div>
           )}
 
-          <section className="rounded-xl border" aria-labelledby="resource-trend-title">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-              <div>
-                <h2 id="resource-trend-title" className={cn('text-sm font-semibold', TEXT.heading)}>资源趋势</h2>
-                <p className={cn('mt-0.5 text-xs', TEXT.caption)}>
-                  最近 {hours === 168 ? '7 天' : `${hours} 小时`}
-                  {query.isPlaceholderData ? '（更新中…）' : ''}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <div className={cn('flex gap-4 text-xs', TEXT.caption)}>
-                  <span className="text-warning">存储</span>
-                  <span className="text-primary">CPU</span>
-                  <span className="text-success">内存</span>
+          {(() => {
+            const hasControlHistory = !data.storage_server.same_source && Boolean(data.history.control_plane);
+            const activeTrendPanel: PanelKey = hasControlHistory ? trendPanel : 'storage-server';
+            const isControlTrend = activeTrendPanel === 'control-plane' && Boolean(data.history.control_plane);
+            const trendData: FileServerNodeHistory = isControlTrend
+              ? data.history.control_plane!
+              : data.history;
+            const trendEmptyMessage = isControlTrend
+              ? (data.control_plane.monitoring.prometheus_available
+                ? '所选时间范围内暂无趋势数据'
+                : 'Prometheus 不可用，无法加载控制面趋势数据')
+              : historyTrendEmptyMessage(data);
+            const trendSubject = isControlTrend
+              ? `${data.control_plane.node.address}${data.control_plane.disk?.path ? ` · ${data.control_plane.disk.path}` : ''}`
+              : (!data.storage_server.same_source
+                ? `${data.storage_server.node.address} · ${data.storage_server.disk.path}`
+                : null);
+            const storageCpuUnmonitored = (
+              !isControlTrend
+              && data.storage_server.monitoring.unmonitored_reason === 'external_share_no_collector'
+            );
+            return (
+              <section className="rounded-xl border" aria-labelledby="resource-trend-title">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+                  <div>
+                    <h2 id="resource-trend-title" className={cn('text-sm font-semibold', TEXT.heading)}>资源趋势</h2>
+                    <p className={cn('mt-0.5 text-xs', TEXT.caption)}>
+                      {trendSubject ? `${trendSubject} · ` : ''}
+                      最近 {hours === 168 ? '7 天' : `${hours} 小时`}
+                      {query.isPlaceholderData ? '（更新中…）' : ''}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className={cn('flex items-center gap-4 text-xs', TEXT.caption)}>
+                      <span className="text-warning">存储</span>
+                      <span className={cn('text-primary', storageCpuUnmonitored && 'line-through opacity-50')}>CPU</span>
+                      <span className={cn('text-success', storageCpuUnmonitored && 'line-through opacity-50')}>内存</span>
+                      {storageCpuUnmonitored ? (
+                        <span className={TEXT.caption}>（CPU/内存未接采集器）</span>
+                      ) : null}
+                    </div>
+                    {hasControlHistory ? (
+                      <div className="flex rounded-md border" role="group" aria-label="趋势主机">
+                        {([
+                          { key: 'control-plane', label: '控制平面' },
+                          { key: 'storage-server', label: '中心存储机' },
+                        ] as const).map((item) => (
+                          <Button
+                            key={item.key}
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              'rounded-none first:rounded-l-md last:rounded-r-md',
+                              activeTrendPanel === item.key && 'bg-muted font-medium',
+                            )}
+                            aria-pressed={activeTrendPanel === item.key}
+                            onClick={() => setTrendPanel(item.key)}
+                          >
+                            {item.label}
+                          </Button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="flex rounded-md border" role="group" aria-label="历史时间范围">
+                      {HISTORY_RANGES.map((range) => (
+                        <Button
+                          key={range.hours}
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            'rounded-none first:rounded-l-md last:rounded-r-md',
+                            hours === range.hours && 'bg-muted font-medium',
+                          )}
+                          aria-pressed={hours === range.hours}
+                          onClick={() => setHours(range.hours)}
+                        >
+                          {range.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-                <div className="flex rounded-md border" role="group" aria-label="历史时间范围">
-                  {HISTORY_RANGES.map((range) => (
-                    <Button
-                      key={range.hours}
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className={cn(
-                        'rounded-none first:rounded-l-md last:rounded-r-md',
-                        hours === range.hours && 'bg-muted font-medium',
-                      )}
-                      aria-pressed={hours === range.hours}
-                      onClick={() => setHours(range.hours)}
-                    >
-                      {range.label}
-                    </Button>
-                  ))}
+                <div className="p-3">
+                  <CapacityChart
+                    data={trendData}
+                    emptyMessage={trendEmptyMessage}
+                  />
                 </div>
-              </div>
-            </div>
-            <div className="p-3">
-              <CapacityChart
-                data={data.history}
-                emptyMessage={historyTrendEmptyMessage(data)}
-              />
-            </div>
-          </section>
+              </section>
+            );
+          })()}
 
           <div className="flex border-b" role="tablist" aria-label="节点面板">
             <button
@@ -808,6 +903,9 @@ export default function FileServerPage() {
               />
               <div className="space-y-4 px-4 pb-4">
                 <SystemLoadSection system={data.control_plane.system} node={data.control_plane.node} idPrefix="control-plane" />
+                {data.control_plane.disk ? (
+                  <LocalStorageSection disk={data.control_plane.disk} idPrefix="control-plane" />
+                ) : null}
                 <ProcessMemorySection
                   processes={data.control_plane.processes}
                   totalSeries={data.history.hostproc_total_anon_bytes}

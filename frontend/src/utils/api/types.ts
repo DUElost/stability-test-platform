@@ -757,6 +757,8 @@ export interface FileServerControlPlanePanel {
   node: FileServerNodeIdentity;
   system: FileServerNodeSystem;
   client_mount: FileServerClientMount;
+  /** 控制面根本地存储容量与挂载状态（分源后独立保留控制面磁盘监控）。 */
+  disk?: FileServerStorage | null;
   /** 控制面本机 NFS 导出（切盘后对准控制面根；同源过渡期可与日志根相同）。 */
   nfs?: FileServerNfs;
   monitoring: FileServerNodeMonitoring;
@@ -781,6 +783,13 @@ export interface FileServerDeviceLogDisk {
   available_bytes: number;
   usage_percent: number;
   last_heartbeat: string | null;
+}
+
+export interface FileServerNodeHistory {
+  capacity_usage_pct: FileServerMetricPoint[];
+  cpu_usage_pct: FileServerMetricPoint[];
+  memory_usage_pct: FileServerMetricPoint[];
+  nfs_requests_per_second?: FileServerMetricPoint[];
 }
 
 export interface FileServerOverview {
@@ -815,6 +824,7 @@ export interface FileServerOverview {
     memory_usage_pct: FileServerMetricPoint[];
     nfs_requests_per_second: FileServerMetricPoint[];
     hostproc_total_anon_bytes: FileServerMetricPoint[];
+    control_plane?: FileServerNodeHistory | null;
   };
   alerts: Array<{
     severity: 'warning' | 'critical';

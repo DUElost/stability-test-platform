@@ -561,3 +561,91 @@ def test_server_address_falls_back_to_resolved_ip(monkeypatch):
     monkeypatch.setattr(monitor.socket, "gethostname", lambda: "debian13")
     monkeypatch.setattr(monitor.socket, "gethostbyname", lambda _host: "127.0.1.1")
     assert monitor._server_address() == "127.0.1.1"
+
+
+def test_split_cifs_with_storage_job_preserves_control_plane_nfs_and_monitoring(
+    tmp_path, monkeypatch,
+):
+    """分源 CIFS + STP_STORAGE_NODE_JOB + storage_threads=0：不误报控制面 NFS 异常，且保留控制面存储/趋势（#4093）。"""
+    log_root = tmp_path / "stp-log"
+    cp_root = tmp_path / "stp-aee"
+    log_root.mkdir()
+    cp_root.mkdir()
+    fake = _patch_file_server_deps(monkeypatch, log_root)
+    monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(cp_root))
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.154")
+    monkeypatch.setenv("STP_STORAGE_NODE_JOB", "storage-server")
+
+    def _mount(path):
+        if path == log_root:
+            return {"mounted": True, "source": "//192.0.2.154/share", "filesystem": "cifs"}
+        if path == cp_root:
+            return {"mounted": True, "source": "/dev/sdb1", "filesystem": "ext4"}
+        return {"mounted": False, "source": None, "filesystem": None}
+
+    monkeypatch.setattr(monitor, "_mount_details", _mount)
+    monkeypatch.setattr(
+        monitor,
+        "_export_targets",
+        lambda path: ["192.0.2.0/24"] if str(path) == str(cp_root) else [],
+    )
+    orig_scalar = fake.scalar
+
+    def _scalar(query: str) -> float:
+        if "node_nfsd_server_threads" in query and 'job="storage-server"' in query:
+            fake.queries.append(query)
+            return 0.0
+        return orig_scalar(query)
+
+    monkeypatch.setattr(fake, "scalar", _scalar)
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    # #4093：控制面根 NFS 就绪态与线程数只取控制面 job，不被 storage_threads=0 覆盖
+    cp_nfs = result["control_plane"]["nfs"]
+    assert cp_nfs["service_ready"] is True
+    assert cp_nfs["server_threads"] == 16
+    assert cp_nfs["scope"] == "control_plane_root"
+    assert cp_nfs["export_path"] == str(cp_root)
+
+    # 控制面本地磁盘容量与控制面独立历史趋势同步保留
+    cp_disk = result["control_plane"]["disk"]
+    assert cp_disk["path"] == str(cp_root)
+    assert cp_disk["source"] == "/dev/sdb1"
+    assert cp_disk["filesystem"] == "ext4"
+    assert cp_disk["mounted"] is True
+    assert cp_disk["total_bytes"] > 0
+
+    cp_history = result["history"]["control_plane"]
+    assert len(cp_history["cpu_usage_pct"]) == 2
+    assert len(cp_history["memory_usage_pct"]) == 2
+    assert len(cp_history["capacity_usage_pct"]) == 2
+    assert len(cp_history["nfs_requests_per_second"]) == 2
+    assert any(
+        'job="file-server"' in q and f'mountpoint="{cp_root}"' in q
+        for q in fake.range_queries
+    )
+    # 中心存储机趋势仍按 storage-server + 共享日志根查询
+    assert len(result["history"]["cpu_usage_pct"]) == 2
+    assert any('job="storage-server"' in q for q in fake.range_queries)
+    assert any(
+        'job="file-server"' in q and f'mountpoint="{log_root}"' in q
+        for q in fake.range_queries
+    )
+
+
+def test_local_mount_info_falls_back_to_enclosing_mountpoint(tmp_path, monkeypatch):
+    """控制面根若只是某个父挂载点下的子目录，_local_mount_info 回溯匹配父挂载点。"""
+    cp_dir = tmp_path / "var" / "stp-aee"
+    cp_dir.mkdir(parents=True)
+
+    def _mount(path):
+        if path == tmp_path:
+            return {"mounted": True, "source": "/dev/nvme0n1p1", "filesystem": "ext4"}
+        return {"mounted": False, "source": None, "filesystem": None}
+
+    monkeypatch.setattr(monitor, "_mount_details", _mount)
+    mount_path, details = monitor._local_mount_info(cp_dir)
+    assert mount_path == tmp_path
+    assert details["mounted"] is True
+    assert details["source"] == "/dev/nvme0n1p1"
