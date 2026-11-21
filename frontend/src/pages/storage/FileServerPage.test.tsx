@@ -378,4 +378,77 @@ describe('FileServerPage', () => {
     expect(storagePanel).not.toHaveAttribute('hidden');
     expect(controlPanel).toHaveAttribute('hidden');
   });
+
+  it('retains control-plane disk capacity and trend switcher in split-source mode', async () => {
+    mocks.fileServer.mockResolvedValueOnce({
+      ...overview,
+      control_plane: {
+        ...overview.control_plane,
+        disk: {
+          path: '/mnt/stp-aee',
+          source: '/dev/sdb1',
+          filesystem: 'ext4',
+          mounted: true,
+          backend_write_access: true,
+          total_bytes: 536870912000,
+          used_bytes: 107374182400,
+          available_bytes: 429496729600,
+          used_pct: 20.0,
+          inode_total: 1000000,
+          inode_used: 10000,
+          inode_available: 990000,
+          inode_used_pct: 1.0,
+        },
+      },
+      storage_server: {
+        ...overview.storage_server,
+        same_source: false,
+        node: {
+          ...overview.storage_server.node,
+          hostname: 'storage-host',
+          address: '192.0.2.154',
+        },
+        disk: {
+          ...overview.storage_server.disk,
+          path: '/mnt/stp-log',
+          source: '//192.0.2.154/share',
+          filesystem: 'cifs',
+        },
+        monitoring: {
+          prometheus_available: false,
+          error: null,
+          unmonitored_reason: 'external_share_no_collector',
+        },
+      },
+      history: {
+        ...overview.history,
+        cpu_usage_pct: [],
+        memory_usage_pct: [],
+        nfs_requests_per_second: [],
+        control_plane: {
+          capacity_usage_pct: [{ timestamp: 1785158998, value: 20.0 }],
+          cpu_usage_pct: [{ timestamp: 1785158998, value: 12.3 }],
+          memory_usage_pct: [{ timestamp: 1785158998, value: 42.1 }],
+          nfs_requests_per_second: [{ timestamp: 1785158998, value: 2.0 }],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText('本地存储（控制面根）')).toBeInTheDocument();
+    expect(screen.getByText('20.0%')).toBeInTheDocument();
+    expect(screen.getByText('/dev/sdb1 · ext4')).toBeInTheDocument();
+
+    const cpTrendBtn = screen.getByRole('button', { name: '控制平面' });
+    const ssTrendBtn = screen.getByRole('button', { name: '中心存储机' });
+    expect(cpTrendBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/192\.0\.2\.202 · \/mnt\/stp-aee/)).toBeInTheDocument();
+    expect(screen.queryByText('（CPU/内存未接采集器）')).not.toBeInTheDocument();
+
+    await user.click(ssTrendBtn);
+    expect(ssTrendBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/192\.0\.2\.154 · \/mnt\/stp-log/)).toBeInTheDocument();
+    expect(screen.getByText('（CPU/内存未接采集器）')).toBeInTheDocument();
+  });
 });
