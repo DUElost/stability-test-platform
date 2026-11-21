@@ -16,6 +16,8 @@ class NodeIdentity(BaseModel):
 class NodeMonitoring(BaseModel):
     prometheus_available: bool
     error: Optional[str] = None
+    # 分源且未配 STP_STORAGE_NODE_JOB 时的预期降级（外部 NAS 无采集器）。
+    unmonitored_reason: Optional[str] = None
 
 
 class ClientMount(BaseModel):
@@ -58,9 +60,15 @@ class FileServerStorage(BaseModel):
 
 
 class FileServerNfs(BaseModel):
-    service_ready: bool
+    service_ready: Optional[bool] = None
     exported: bool
     export_targets: list[str]
+    # 实际参与 /var/lib/nfs/etab 比对的导出路径（控制面根或同源日志根）。
+    export_path: Optional[str] = None
+    # control_plane_root = 控制面 NFS 导出；shared_log_root = 同源过渡期日志根。
+    scope: Optional[str] = None
+    # false 时前端应隐藏 NFS 服务面板（预留）。
+    applicable: Optional[bool] = None
     server_threads: Optional[int] = None
     requests_per_second: Optional[float] = None
     rpc_errors_per_second: Optional[float] = None
@@ -92,6 +100,8 @@ class ControlPlanePanel(BaseModel):
     node: NodeIdentity
     system: NodeSystem
     client_mount: ClientMount
+    # 控制面本机 NFS 导出（切盘后对准控制面根；同源过渡期可与日志根相同）。
+    nfs: Optional[FileServerNfs] = None
     monitoring: NodeMonitoring
     processes: HostProcessMemoryPanel
 
