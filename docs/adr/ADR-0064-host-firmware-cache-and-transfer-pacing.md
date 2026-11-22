@@ -1,6 +1,6 @@
 # ADR-0064：Agent host 固件本地缓存、全局传输限流与心跳 NFS 隔离
 
-- 状态：Proposed v0.5（2026-11-22 修订：回应 U0 第 4 轮独立复核 R5、M7 与 M9 单规则句拆分；v0.2–v0.4 回应第 1–3 轮复核；原 v0.1 2026-11-20 起草；待第 5 轮独立复核并由 Owner 裁定转 Accepted）
+- 状态：Proposed v0.6（2026-11-22 修订：回应 U0 第 5 轮独立复核 R6 与 M9 单一执行者拆分；v0.2–v0.5 回应第 1–4 轮复核；原 v0.1 2026-11-20 起草；待第 6 轮独立复核并由 Owner 裁定转 Accepted）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-21
@@ -22,7 +22,7 @@
   [ADR-0063](./ADR-0063-vbus-cycle-flash-without-adb.md)（`vbus_cycle` 刷机安全边界）；
   [存储与部署角色](../design/2026-storage-roles-and-aliases.md)（§4.2 / §4.4）
 
-## 1. 背景与证据（2026-11-21，基线 `origin/main@4fe496a57`）
+## 1. 背景与证据（2026-11-22，基线 `origin/main@b0cd06e8b`）
 
 ### 1.1 现场问题
 
@@ -70,11 +70,13 @@
      - 未封包兼容模式下，刷机脚本必须在步骤 `metrics` 中显式标记 `firmware_cache.sealed = false`。
      - 发布者不得让标准仓库固件长期依赖该兼容模式。
    - **未封包目录走 `unisoc_bsl`（明确只读身份探测与状态变更边界）**：
-     - 当调用方请求 `unisoc_bsl` 且选定的目标版本目录未封包时，Agent 与 `flash_firmware_unisoc_bsl` 新版本（`1.0.7`）不得执行主机现场裁剪。
-     - 上述场景下，Agent 与 `flash_firmware_unisoc_bsl` 新版本（`1.0.7`）不得回落刷写未裁剪的全量 `raw/super.img`。
+     - 当调用方请求 `unisoc_bsl` 且选定的目标版本目录未封包时，Agent（`FirmwareCacheManager`）不得执行主机现场裁剪。
+     - 上述场景下，`flash_firmware_unisoc_bsl`（`1.0.7`）不得执行主机现场裁剪。
+     - 上述场景下，`flash_firmware_unisoc_bsl`（`1.0.7`）不得回落刷写未裁剪的全量 `raw/super.img`。
      - `flash_firmware_unisoc_bsl`（`1.0.7`）在获取主机刷机排他锁 `/tmp/stp-flash-firmware.lock` 之前，可以保留现役 B9 只读设备身份探测（如 `adb shell getprop`）以通过 `family + latest.json` 解析并绑定目标版本目录。
      - 上述只读选包阶段中，`flash_firmware_unisoc_bsl`（`1.0.7`）不得执行任何设备状态变更操作（如重启、切电、擦写或进入下载/烧录态）。
-     - 目标版本目录一经解析完成且未封包，`flash_firmware_unisoc_bsl`（`1.0.7`）与 Agent 必须在获取 `/tmp/stp-flash-firmware.lock` 之前、且在任何设备状态变更（重启、切电、擦写或进入下载/烧录态）之前，以结构化错误 `firmware_unsealed_not_supported` 显式失败（fail-closed）。
+     - 目标版本目录一经解析完成且未封包，Agent（`FirmwareCacheManager`）必须在被调用时立即以结构化错误 `firmware_unsealed_not_supported` 显式失败（fail-closed）。
+     - 收到上述错误后，`flash_firmware_unisoc_bsl`（`1.0.7`）必须在获取 `/tmp/stp-flash-firmware.lock` 之前、且在任何设备状态变更（重启、切电、擦写或进入下载/烧录态）之前透传失败并退出。
      - 运维必须在 B10 计划重指前完成全部在用 BSL 版本目录（当前 `P525AA/` 与 `P532AA/`）的首次封包。
 
 ### D2 Agent L1 统一固件缓存基座（`FirmwareCacheManager`）与脚本调用边界
