@@ -79,7 +79,9 @@ SCAN_DIRS = (ROOT / "backend", ROOT / "tools", ROOT / "scripts")
 #: → **610 → 608**。
 #: 2026-11-12 #3935 r2：`dedup_scan.run_merge_sync` 的 PlanRun 函数内导入随锚点
 #: 解析回顶层（models 纯定义，无环）→ **608 → 607**。
-_BASELINE = 603
+#: 2026-11-22 #4086 U1：`heartbeat_thread._tick` 去掉 `from .heartbeat import check_mounts`
+#: （改读 `MountHealthProbe.snapshot`，ADR-0064 D5）→ **603 → 602**。
+_BASELINE = 602
 
 # ADR-0051 Phase 3：版本目录已退役，脚本族树（backend/agent/scripts/<name>/）按包发布、
 # 属独立审计面，整棵排除（此前只排除 v<version>/ 冻结目录）。
