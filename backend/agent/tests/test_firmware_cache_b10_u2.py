@@ -131,11 +131,22 @@ def _disk(total=100.0, used=10.0, avail=90.0, writable=10.0):
 
 
 def test_dual_pythonpath_imports_agent_and_config(tmp_path):
-    """env -i 无预设 PYTHONPATH：双路径使 agent.* 与 config 同可用（对齐 pipeline_engine）。"""
-    agent_dir = _REPO / "backend" / "agent"
-    agent_parent = agent_dir.parent
-    dual = f"{agent_dir}{os.pathsep}{agent_parent}"
-    py = str(_REPO / ".venv" / "bin" / "python")
+    """env -i 无预设 PYTHONPATH：经 pipeline_engine 同源双路径使 agent.* 与 config 同可用。"""
+    import sys
+
+    import backend.agent.pipeline_engine as pipeline_engine
+
+    # 与 pipeline_engine 启动子进程处同一构造（ADR-0064 D2），不手拼仓库相对路径。
+    agent_dir = Path(pipeline_engine.__file__).resolve().parent
+    agent_parent = str(agent_dir.parent)
+    dual_prefix = f"{agent_dir}{os.pathsep}{agent_parent}"
+    env_probe: dict[str, str] = {}
+    env_probe["PYTHONPATH"] = dual_prefix  # 等同引擎：无既有 PYTHONPATH 时只写双路径前缀
+    assert env_probe["PYTHONPATH"].split(os.pathsep)[:2] == [
+        str(agent_dir),
+        agent_parent,
+    ]
+
     script = (
         "from agent.firmware_cache import FIRMWARE_CACHE_API_VERSION as v\n"
         "from config import AGENT_DIR\n"
@@ -144,14 +155,15 @@ def test_dual_pythonpath_imports_agent_and_config(tmp_path):
     )
     # 仅注入 PATH/HOME/PYTHONPATH——模拟无 systemd 预设的干净子进程。
     # PATH 字面量（不读 os.environ）：避免 env-inventory 把 PATH 登记为新读取名。
+    # 解释器取当前 pytest 进程（sys.executable），不硬编码 .venv 路径。
     proc = subprocess.run(
         [
             "env",
             "-i",
             "PATH=/usr/bin:/bin",
             f"HOME={tmp_path}",
-            f"PYTHONPATH={dual}",
-            py,
+            f"PYTHONPATH={env_probe['PYTHONPATH']}",
+            sys.executable,
             "-c",
             script,
         ],
