@@ -171,7 +171,7 @@
 | `R-merge-locus` | relation | `Merge ─executed_at→ 控制面实例` | `docs/adr/ADR-0027-control-plane-horizontal-scaling.md :: 7. **merge（\`run_merge_sync\`）为实例绑定操作**` | B1/B2/多实例互斥 |
 | `R-merge-consumes-log` | relation | `Merge ─consumes→ scan/日志产物` | `docs/design/2026-scan-upload-merge-contract.md :: ## 控制面 merge` | 改输入集 |
 | `R-tool-hosted-by-tier` | relation | `工具实现 ─hosted_by→ Tier` | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D1：确立严格的三层工具宿主分类与生命周期隔离` | 新宿主层 |
-| `flash-tool` | concept | 刷机工具族（0033 D1 已补登记） | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: 刷机补登记（v1.3 / #2546）`；提权 `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: D5 flash 链运行时提权收敛`；USB 切电刷机（v1.0 / #3892）`docs/adr/ADR-0063-vbus-cycle-flash-without-adb.md :: ## 2. 决策` | 新刷机二进制入仓；再改 Tier |
+| `flash-tool` | concept | 刷机工具族（0033 D1 已补登记） | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: 刷机补登记（v1.3 / #2546）`；提权 `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: D5 flash 链运行时提权收敛`；USB 切电刷机（v1.0 / #3892）`docs/adr/ADR-0063-vbus-cycle-flash-without-adb.md :: ## 2. 决策`；主机固件本地缓存与全局传输限流（v1.0 / #4076）`docs/adr/ADR-0064-host-firmware-cache-and-transfer-pacing.md :: ## 2. 决策` | 新刷机二进制入仓；再改 Tier |
 | `jira-post-completion` | concept | 后处理/Jira **平台核心闭环**（深嵌） | `docs/adr/ADR-0012-post-completion-pipeline-jira-automation.md :: 第 1 层（✅ 已实现）` | 第 2–3 层；客户方言回渗主干 |
 | `session-cookie-csrf` | concept | Web 会话 / CSRF / refresh 吊销 | `docs/adr/ADR-0024-browser-session-security-hardening.md :: ## 决策` | 改 Secure/SameSite 边界 |
 | `host-privilege-wrapper` | concept | Agent 主机单一提权入口 | `docs/adr/ADR-0037-agent-host-privilege-boundary.md :: ## 2. 决策` | 宽 sudoers 回流 |
