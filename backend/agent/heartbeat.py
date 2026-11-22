@@ -5,19 +5,18 @@ import os
 import requests
 
 from .contracts.capabilities import AGENT_CAPABILITIES, normalize_capabilities
+from .mount_health_probe import check_mounts_presence
 
 logger = logging.getLogger(__name__)
 
 
 def check_mounts(mount_points: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+    """非阻塞挂载在位检查（ADR-0064 D5）。
+
+    只读 ``/proc/self/mountinfo``，禁止 ``ismount`` / ``exists`` 等可能触达 NFS 的调用。
+    可达性/可读写由 ``MountHealthProbe`` 后台探测；本函数供 ``send_heartbeat`` 回退路径使用。
     """
-    简化的挂载点检查，直接在 agent 模块内实现
-    """
-    result = {}
-    for point in mount_points:
-        ok = os.path.ismount(point) and os.path.exists(point)
-        result[point] = {"ok": ok, "path": point}
-    return result
+    return check_mounts_presence(mount_points)
 
 
 def send_heartbeat(
