@@ -15,6 +15,7 @@ from .contracts.capabilities import AGENT_CAPABILITIES
 from .heartbeat import send_heartbeat
 from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
+from .mount_health_probe import MountHealthProbe
 from .usb_power_slots import read_usb_power_presence
 from .settings import get_heartbeat_settings
 from .startup_guards import single_instance_guard_degraded
@@ -122,6 +123,8 @@ class HeartbeatThread:
         # #2900：内核 USB 子系统故障（xHCI 死亡 / 慢性链路劣化）——低频扫描、后台线程，
         # 每拍只读快照；设备数口径（online_healthy/usb_device_count）看不见这类失明。
         self._kernel_usb_watch = KernelUsbWatch()
+        # ADR-0064 D5 / #4054：挂载可达性后台探测；主循环只读非阻塞快照。
+        self._mount_health_probe = MountHealthProbe()
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
@@ -603,7 +606,6 @@ class HeartbeatThread:
 
         # ADR-0019 Phase 3c: 结构化 capacity/health（一次采集，两处复用）
         from .capacity_reporter import compute_capacity
-        from .heartbeat import check_mounts
         from .system_monitor import collect_system_stats
 
         system_stats = collect_system_stats()
@@ -633,7 +635,8 @@ class HeartbeatThread:
                     system_stats["operations"] = ops
             except Exception as exc:
                 logger.debug("operation_stats_failed: %s", exc)
-        mount_status = check_mounts(self._mount_points)
+        # ADR-0064 D5：非阻塞快照；NFS 探针挂起时立即返回并标 probe_stale。
+        mount_status = self._mount_health_probe.snapshot(self._mount_points)
 
         active_count = self._get_active_job_count() if self._get_active_job_count else 0
         active_device_count = self._get_active_device_count() if self._get_active_device_count else 0
