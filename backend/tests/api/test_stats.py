@@ -746,3 +746,75 @@ class TestFileServerOverview:
         assert storage_nfs["scope"] == "control_plane_root"
         assert storage_nfs["export_path"] == str(cp_root)
         assert storage_nfs["applicable"] is True
+
+    def test_cifs_split_source_with_storage_job_keeps_cp_nfs_and_dual_history(
+        self, client, admin_headers, monkeypatch, tmp_path,
+    ):
+        """分源 CIFS + STP_STORAGE_NODE_JOB + storage_threads=0：路由回归（#4093 + 控制面趋势/磁盘保留）。"""
+        from backend.services import file_server_monitor as monitor
+
+        log_root = tmp_path / "stp-log"
+        cp_root = tmp_path / "stp-aee"
+        log_root.mkdir()
+        cp_root.mkdir()
+
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(log_root))
+        monkeypatch.setenv("STP_CONTROL_PLANE_STORAGE_ROOT", str(cp_root))
+        monkeypatch.setenv("STP_FILE_SERVER_ADDRESS", "192.0.2.202")
+        monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.154")
+        monkeypatch.setenv("STP_STORAGE_NODE_JOB", "storage-server")
+        monkeypatch.delenv("STP_CONTROL_PLANE_NODE_JOB", raising=False)
+
+        def _mount(path):
+            if path == log_root:
+                return {"mounted": True, "source": "//192.0.2.154/share", "filesystem": "cifs"}
+            if path == cp_root:
+                return {"mounted": True, "source": "/dev/sdb1", "filesystem": "ext4"}
+            return {"mounted": False, "source": None, "filesystem": None}
+
+        monkeypatch.setattr(monitor, "_mount_details", _mount)
+        monkeypatch.setattr(
+            monitor,
+            "_export_targets",
+            lambda path: ["192.0.2.0/24"] if str(path) == str(cp_root) else [],
+        )
+
+        class _FakePrometheus:
+            def close(self) -> None:
+                pass
+
+            def scalar(self, query: str) -> float:
+                if query.startswith("up{"):
+                    return 1.0
+                if "node_nfsd_server_threads" in query:
+                    return 0.0 if 'job="storage-server"' in query else 16.0
+                if "node_boot_time_seconds" in query:
+                    return 1700000000.0
+                if "count(node_cpu_seconds_total" in query or "node_memory_MemTotal_bytes" in query:
+                    return 8.0
+                return 1.5
+
+            def range(self, query: str, *, start: float, end: float, step: int):
+                return [{"timestamp": start, "value": 1.0}, {"timestamp": end, "value": 2.0}]
+
+            def label(self, query: str, label: str) -> str | None:
+                return "storage-host" if label == "nodename" else None
+
+            def vector(self, query: str):
+                return []
+
+        monkeypatch.setattr(monitor, "_PrometheusClient", lambda: _FakePrometheus())
+
+        response = client.get("/api/v1/stats/file-server", headers=admin_headers)
+        assert response.status_code == 200
+        data = response.json()
+
+        cp_nfs = data["control_plane"]["nfs"]
+        assert cp_nfs["service_ready"] is True
+        assert cp_nfs["server_threads"] == 16
+        assert data["control_plane"]["disk"]["path"] == str(cp_root)
+        assert data["control_plane"]["disk"]["filesystem"] == "ext4"
+        assert len(data["history"]["cpu_usage_pct"]) == 2
+        assert len(data["history"]["control_plane"]["cpu_usage_pct"]) == 2
+        assert len(data["history"]["control_plane"]["memory_usage_pct"]) == 2
+        assert len(data["history"]["control_plane"]["capacity_usage_pct"]) == 2

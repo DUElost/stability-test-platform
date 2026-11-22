@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class NodeIdentity(BaseModel):
@@ -100,6 +100,8 @@ class ControlPlanePanel(BaseModel):
     node: NodeIdentity
     system: NodeSystem
     client_mount: ClientMount
+    # 控制面根本地存储容量与挂载状态（分源后独立保留控制面磁盘监控；老响应兼容 None）。
+    disk: Optional[FileServerStorage] = None
     # 控制面本机 NFS 导出（切盘后对准控制面根；同源过渡期可与日志根相同）。
     nfs: Optional[FileServerNfs] = None
     monitoring: NodeMonitoring
@@ -127,6 +129,15 @@ class FileServerMetricPoint(BaseModel):
     value: float
 
 
+class FileServerNodeHistory(BaseModel):
+    """Per-node Prometheus history series (capacity, CPU, memory, nfsd)."""
+
+    capacity_usage_pct: list[FileServerMetricPoint]
+    cpu_usage_pct: list[FileServerMetricPoint]
+    memory_usage_pct: list[FileServerMetricPoint]
+    nfs_requests_per_second: list[FileServerMetricPoint] = Field(default_factory=list)
+
+
 class FileServerHistory(BaseModel):
     hours: int
     capacity_usage_pct: list[FileServerMetricPoint]
@@ -134,6 +145,8 @@ class FileServerHistory(BaseModel):
     memory_usage_pct: list[FileServerMetricPoint]
     nfs_requests_per_second: list[FileServerMetricPoint]
     hostproc_total_anon_bytes: list[FileServerMetricPoint]
+    # 控制面自身历史趋势（分源时与 storage 趋势并存；老响应兼容 None）。
+    control_plane: Optional[FileServerNodeHistory] = None
 
 
 class FileServerAgentMount(BaseModel):

@@ -81,6 +81,56 @@ def _mount_details(path: Path) -> dict[str, Any]:
     return {"mounted": False, "source": None, "filesystem": None}
 
 
+def _local_mount_info(path: Path) -> tuple[Path, dict[str, Any]]:
+    """Resolve the enclosing mountpoint and mount details for a local directory.
+
+    Checks ``path`` directly first (preserving ``_mount_details`` monkeypatches
+    in tests), then walks ancestors so a directory residing on ``/`` still
+    maps to its backing filesystem and Prometheus ``mountpoint`` label.
+    """
+    direct = _mount_details(path)
+    if direct["mounted"]:
+        return path, direct
+    for parent in path.resolve(strict=False).parents:
+        info = _mount_details(parent)
+        if info["mounted"]:
+            return parent, info
+    return path, direct
+
+
+def _collect_disk_metrics(path: Path, mount: dict[str, Any]) -> dict[str, Any]:
+    """Collect capacity, inode, and writeability stats for a storage path."""
+    total_bytes = used_bytes = available_bytes = 0
+    inode_total = inode_used = inode_available = 0
+    if path.exists():
+        usage = shutil.disk_usage(path)
+        total_bytes = usage.total
+        used_bytes = usage.used
+        available_bytes = usage.free
+        stat = os.statvfs(path)
+        inode_total = stat.f_files
+        inode_available = stat.f_favail
+        inode_used = max(0, inode_total - inode_available)
+    used_pct = round(used_bytes / total_bytes * 100, 2) if total_bytes else 0.0
+    inode_used_pct = round(inode_used / inode_total * 100, 2) if inode_total else 0.0
+    backend_write_access = path.exists() and os.access(path, os.W_OK)
+    return {
+        "path": str(path),
+        "source": mount["source"],
+        "filesystem": mount["filesystem"],
+        "mounted": mount["mounted"],
+        "backend_write_access": backend_write_access,
+        "total_bytes": total_bytes,
+        "used_bytes": used_bytes,
+        "available_bytes": available_bytes,
+        "used_pct": used_pct,
+        "inode_total": inode_total,
+        "inode_used": inode_used,
+        "inode_available": inode_available,
+        "inode_used_pct": inode_used_pct,
+    }
+
+
 def _export_targets(path: Path) -> list[str]:
     try:
         lines = Path("/var/lib/nfs/etab").read_text(encoding="utf-8").splitlines()
@@ -468,6 +518,34 @@ def _node_current_queries(job: str, device_selector: str | None) -> dict[str, st
     }
 
 
+def _capacity_range_query(job: str, mountpoint: Path) -> str:
+    """Build PromQL range query for filesystem usage percentage on ``job``."""
+    mount_selector = f'job="{job}",mountpoint="{_prom_string(str(mountpoint))}"'
+    return (
+        f"100 * (1 - node_filesystem_avail_bytes{{{mount_selector}}} / "
+        f"node_filesystem_size_bytes{{{mount_selector}}})"
+    )
+
+
+def _node_history_queries(
+    job: str,
+    *,
+    capacity_job: str | None = None,
+    mountpoint: Path | None = None,
+) -> dict[str, str]:
+    """Build PromQL range queries for one host's CPU, memory, nfsd, and optional disk."""
+    selector = f'job="{job}"'
+    current = _node_current_queries(job, None)
+    queries: dict[str, str] = {
+        "cpu_usage_pct": current["cpu"],
+        "memory_usage_pct": current["memory"],
+        "nfs_requests_per_second": f"sum(rate(node_nfsd_requests_total{{{selector}}}[5m]))",
+    }
+    if mountpoint is not None:
+        queries["capacity_usage_pct"] = _capacity_range_query(capacity_job or job, mountpoint)
+    return queries
+
+
 def _top_process_items(prom: _PrometheusClient, job: str) -> list[dict[str, Any]]:
     """Top-N process groups by anonymous memory from the host sampler.
 
@@ -557,18 +635,18 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
     hosts = list(hosts)
     root, control_plane_root = _require_storage_roots()
     mount = _mount_details(root)
+    storage_disk = _collect_disk_metrics(root, mount)
+    if control_plane_root.resolve(strict=False) == root.resolve(strict=False):
+        cp_mount_path = root
+        control_disk = dict(storage_disk)
+    else:
+        cp_mount_path, cp_mount = _local_mount_info(control_plane_root)
+        control_disk = _collect_disk_metrics(control_plane_root, cp_mount)
 
-    total_bytes = used_bytes = available_bytes = 0
-    inode_total = inode_used = inode_available = 0
-    if root.exists():
-        usage = shutil.disk_usage(root)
-        total_bytes = usage.total
-        used_bytes = usage.used
-        available_bytes = usage.free
-        stat = os.statvfs(root)
-        inode_total = stat.f_files
-        inode_available = stat.f_favail
-        inode_used = max(0, inode_total - inode_available)
+    total_bytes = storage_disk["total_bytes"]
+    available_bytes = storage_disk["available_bytes"]
+    used_pct = storage_disk["used_pct"]
+    backend_write_access = storage_disk["backend_write_access"]
 
     control_job, storage_job, share_addr = _panel_jobs()
     control_addr = _server_address()
@@ -598,10 +676,15 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
     exports = _export_targets(nfs_export_root)
 
     control_selector = f'job="{control_job}"'
-    mount_selector = f'{control_selector},mountpoint="{_prom_string(str(root))}"'
     device = _block_device(mount.get("source"))
     device_selector = f'{control_selector},device="{_prom_string(device)}"' if device else None
 
+    control_history: dict[str, Any] = {
+        "capacity_usage_pct": [],
+        "cpu_usage_pct": [],
+        "memory_usage_pct": [],
+        "nfs_requests_per_second": [],
+    }
     history: dict[str, Any] = {
         "hours": hours,
         "capacity_usage_pct": [],
@@ -609,6 +692,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         "memory_usage_pct": [],
         "nfs_requests_per_second": [],
         "hostproc_total_anon_bytes": [],
+        "control_plane": control_history,
     }
 
     prom = _PrometheusClient()
@@ -667,34 +751,55 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             history_job = None
         else:
             history_job = control_job
-        range_queries: dict[str, str] = {}
         if history_job:
-            history_selector = f'job="{history_job}"'
-            history_queries = _node_current_queries(history_job, None)
-            range_queries = {
-                "capacity_usage_pct": (
-                    f"100 * (1 - node_filesystem_avail_bytes{{{mount_selector}}} / "
-                    f"node_filesystem_size_bytes{{{mount_selector}}})"
-                ),
-                "cpu_usage_pct": history_queries["cpu"],
-                "memory_usage_pct": history_queries["memory"],
-                "nfs_requests_per_second": (
-                    f"sum(rate(node_nfsd_requests_total{{{history_selector}}}[5m]))"
-                ),
-            }
+            range_queries = _node_history_queries(
+                history_job,
+                capacity_job=control_job,
+                mountpoint=root,
+            )
         elif storage_external_unmonitored or remote_log_share:
             # 外部共享无 host 采集器：容量仍可从控制面客户端挂载点取趋势。
-            range_queries = {
-                "capacity_usage_pct": (
-                    f"100 * (1 - node_filesystem_avail_bytes{{{mount_selector}}} / "
-                    f"node_filesystem_size_bytes{{{mount_selector}}})"
-                ),
-            }
+            range_queries = {"capacity_usage_pct": _capacity_range_query(control_job, root)}
+        else:
+            range_queries = {}
         try:
             for key, query in range_queries.items():
                 history[key] = prom.range(query, start=start, end=end, step=step)
         except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
             logger.warning("file_server_history_query_failed error=%s", type(exc).__name__)
+        # 控制面自身 CPU/内存/控制面根容量趋势始终独立保留（分源时不随存储面板切换而丢失）。
+        same_cp_mount = cp_mount_path.resolve(strict=False) == root.resolve(strict=False)
+        if history_job == control_job:
+            for key in ("cpu_usage_pct", "memory_usage_pct", "nfs_requests_per_second"):
+                control_history[key] = list(history[key])
+            if same_cp_mount:
+                control_history["capacity_usage_pct"] = list(history["capacity_usage_pct"])
+            else:
+                try:
+                    control_history["capacity_usage_pct"] = prom.range(
+                        _capacity_range_query(control_job, cp_mount_path),
+                        start=start,
+                        end=end,
+                        step=step,
+                    )
+                except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
+                    logger.warning(
+                        "file_server_control_history_query_failed error=%s",
+                        type(exc).__name__,
+                    )
+        else:
+            cp_range_queries = _node_history_queries(control_job, mountpoint=cp_mount_path)
+            if same_cp_mount and history["capacity_usage_pct"]:
+                control_history["capacity_usage_pct"] = list(history["capacity_usage_pct"])
+                cp_range_queries.pop("capacity_usage_pct", None)
+            try:
+                for key, query in cp_range_queries.items():
+                    control_history[key] = prom.range(query, start=start, end=end, step=step)
+            except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
+                logger.warning(
+                    "file_server_control_history_query_failed error=%s",
+                    type(exc).__name__,
+                )
         # 进程匿名内存合计趋势固定取控制面 job：采样器装在控制面，
         # 与存储面板是否分源无关（history_job 分源时仍应能看控制面内存走势）。
         try:
@@ -727,10 +832,6 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
     except (OSError, ValueError, IndexError):
         local_uptime = None
 
-    used_pct = round(used_bytes / total_bytes * 100, 2) if total_bytes else 0.0
-    inode_used_pct = round(inode_used / inode_total * 100, 2) if inode_total else 0.0
-    backend_write_access = root.exists() and os.access(root, os.W_OK)
-
     now = datetime.now(timezone.utc).timestamp()
     storage_boot = storage_current.get("boot_time")
     storage_cpu_count = (
@@ -748,17 +849,18 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         if control_current.get("nfs_threads") is not None
         else None
     )
-    # 远程日志根：nfsd 归属控制面根导出；同源过渡：仍取 storage（=control）job。
+    control_nfs_service_ready = bool(exports) and (
+        (control_nfs_threads or 0) > 0 if control_nfs_threads is not None else True
+    )
+    # 远程日志根：控制面根导出只看控制面 nfsd；同源过渡：仍取 storage（=control）job。
     nfs_threads = control_nfs_threads if remote_log_share else storage_threads
     if remote_log_share:
-        nfs_service_ready = bool(exports) and (
-            (nfs_threads or 0) > 0 if nfs_threads is not None else True
-        )
+        nfs_service_ready = control_nfs_service_ready
         nfs_requests = None
         nfs_errors = None
         nfs_stale = None
         nfs_connections = None
-        # 有 storage job 时仍可展示存储机侧 nfsd 指标；无 job 时不为「异常」。
+        # 有 storage job 时仅补充存储机侧 nfsd 观测指标，不得反过来覆盖控制面 NFS 就绪态（#4093）。
         if storage_job:
             nfs_requests = storage_current.get("nfs_requests")
             nfs_errors = storage_current.get("nfs_errors")
@@ -774,7 +876,6 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             )
             if storage_threads is not None:
                 nfs_threads = storage_threads
-                nfs_service_ready = bool(exports) and storage_threads > 0
     else:
         nfs_service_ready = bool(exports) and (nfs_threads or 0) > 0
         nfs_requests = storage_current.get("nfs_requests")
@@ -814,9 +915,10 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             "mounted": mount["mounted"],
             "backend_write_access": backend_write_access,
         },
+        "disk": control_disk,
         "nfs": {
             # 控制面本机 NFS 导出（切盘后对准控制面根；同源过渡期即日志根）。
-            "service_ready": nfs_service_ready,
+            "service_ready": control_nfs_service_ready if remote_log_share else nfs_service_ready,
             "exported": bool(exports),
             "export_targets": list(exports),
             "export_path": str(nfs_export_root),
@@ -871,21 +973,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             "network_receive_bytes_per_second": storage_current.get("network_receive"),
             "network_transmit_bytes_per_second": storage_current.get("network_transmit"),
         },
-        "disk": {
-            "path": str(root),
-            "source": mount["source"],
-            "filesystem": mount["filesystem"],
-            "mounted": mount["mounted"],
-            "backend_write_access": backend_write_access,
-            "total_bytes": total_bytes,
-            "used_bytes": used_bytes,
-            "available_bytes": available_bytes,
-            "used_pct": used_pct,
-            "inode_total": inode_total,
-            "inode_used": inode_used,
-            "inode_available": inode_available,
-            "inode_used_pct": inode_used_pct,
-        },
+        "disk": storage_disk,
         "nfs": {
             # 右栏在远程 CIFS 场景展示的是「控制面根 NFS 导出」摘要（同源时即日志根）。
             "service_ready": nfs_service_ready,
