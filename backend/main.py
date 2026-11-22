@@ -56,7 +56,12 @@ from backend.api.routes.script_presence import router as script_presence_router
 from backend.api.routes.agent_api import router as agent_api_router
 from backend.api.routes.agent_evidence import router as agent_evidence_router
 from backend.api.routes.agent_device_return import router as agent_device_return_router
+from backend.api.routes.transfer_permits import router as transfer_permits_router
 from backend.api.routes.resource_pools import router as resource_pools_router
+from backend.services.transfer_permit import (
+    configure_transfer_permit,
+    shutdown_transfer_permit,
+)
 # ADR-0020: Plan-based orchestration
 from backend.api.routes.plans import router as plans_router
 from backend.api.routes.plan_runs import router as plan_runs_router
@@ -194,6 +199,9 @@ async def lifespan(app: FastAPI):
 
             configure_console_registry(redis_url)
 
+            # ADR-0064 D3 / B10 U3：固件传输全局并发许可（同步 Redis，与 console 同型）
+            configure_transfer_permit(redis_url)
+
             capture_main_loop()
             from backend.services.dashboard_summary_publisher import bind_event_loop
 
@@ -307,6 +315,10 @@ async def _lifespan_cleanup(scheduler) -> None:
         shutdown_console_registry()
     except Exception:
         logger.exception("console_registry_close_failed")
+    try:
+        shutdown_transfer_permit()
+    except Exception:
+        logger.exception("transfer_permit_close_failed")
     # #2447：撤销待执行的 dashboard 摘要 flush——关闭窗口里再触发一次全量聚合 + 广播
     # 没有收益，只会在引擎/DB 正在关闭时刷错误日志。
     try:
@@ -498,6 +510,7 @@ _fastapi_app.include_router(script_presence_router)
 _fastapi_app.include_router(agent_api_router)
 _fastapi_app.include_router(agent_evidence_router)
 _fastapi_app.include_router(agent_device_return_router)
+_fastapi_app.include_router(transfer_permits_router)
 _fastapi_app.include_router(resource_pools_router)
 # ADR-0020: Plan-based orchestration
 _fastapi_app.include_router(plans_router)
