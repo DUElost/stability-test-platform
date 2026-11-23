@@ -60,6 +60,8 @@ export default function DevicesPage() {
   const searchQuery = getString('q', '');
   const taggedOnly = getBool('tagged');
   const currentPage = getPositiveInt('page', 1);
+  const rawDrawerParam = getString('drawer');
+  const drawerDeviceId = rawDrawerParam ? getPositiveInt('drawer', 0) || null : null;
   const [retireDialog, setRetireDialog] = useState<{ open: boolean; mode: DeviceRetireMode }>(
     { open: false, mode: 'retire' },
   );
@@ -609,6 +611,10 @@ export default function DevicesPage() {
           }
           onNavigateToHost={(hostName) =>
             navigate(`/hosts?q=${encodeURIComponent(hostName)}`)
+          }
+          drawerDeviceId={drawerDeviceId}
+          onDrawerDeviceIdChange={(nextId) =>
+            updateParams({ drawer: nextId ?? undefined })
           }
         />
       </div>

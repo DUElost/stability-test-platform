@@ -108,7 +108,6 @@ _RAW_TABLE_ALLOWLIST = frozenset(
 )
 _CLICKABLE_TR_ALLOWLIST = frozenset(
     {
-        "components/device/ExpandableDeviceTable.tsx",
         "components/execution/plan-execute/DeviceTablePanel.tsx",
         "components/network/ExpandableHostTable.tsx",
         "components/plan-run/DeviceOverview.tsx",
