@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   X,
@@ -9,6 +9,12 @@ import {
   FileWarning,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   AlertDialog,
@@ -20,7 +26,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ALERT_BOX, DRAWER, TEXT } from '@/design-system';
+import { ALERT_BOX, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
 import type {
@@ -77,85 +83,75 @@ export default function DeviceDetailDrawer({
   isExitPending = false,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState<null | 'retry' | 'exit'>(null);
-  const drawerRef = useRef<HTMLElement>(null);
 
-  // Close on Escape (unless a confirm dialog is open — let it handle Esc first),
-  // and move focus into the drawer when it opens for keyboard / screen-reader users.
-  useEffect(() => {
-    if (!device) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && confirmOpen === null) onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    drawerRef.current?.focus();
-    return () => document.removeEventListener('keydown', onKey);
-  }, [device, confirmOpen, onClose]);
-
-  if (!device) return null;
-
-  const isTerminal = TERMINAL_DEVICE.includes(device.ui_status);
-  const exitRequested = device.manual_action === 'EXIT_REQUESTED';
-  const retryRequested = device.manual_action === 'RETRY_NOW';
-  const linkStatus = device.device_link_status;
-  const execStatus = (device.job_exec_status ?? device.ui_status) as DeviceUiStatus;
+  const isOpen = Boolean(device);
+  const isTerminal = device ? TERMINAL_DEVICE.includes(device.ui_status) : false;
+  const exitRequested = device?.manual_action === 'EXIT_REQUESTED';
+  const retryRequested = device?.manual_action === 'RETRY_NOW';
+  const linkStatus = device?.device_link_status;
+  const execStatus = (device?.job_exec_status ?? device?.ui_status ?? 'unknown') as DeviceUiStatus;
   const linkReachable =
     linkStatus == null || isDeviceLinkReachable(linkStatus);
   // Why: 「设备不可达」必须只有一处判定并直接否决 canManualRetry。
   //      两者各自算时,unauthorized 会让 capabilities 放行、link 判 adb_error,
   //      于是警告条和「立即重试」按钮同时渲染,点下去后端还真执行。
   const retryBlockedByDevice =
-    device.job_status === 'RUNNING' &&
+    device?.job_status === 'RUNNING' &&
     (device.capabilities?.manual_retry_blocked_reason === 'device_disconnected' ||
       !linkReachable);
   const canManualRetry =
     !retryBlockedByDevice &&
-    (device.capabilities
+    (device?.capabilities
       ? device.capabilities.manual_retry === true
       : !isTerminal && linkReachable);
-  const canManualExit = device.capabilities
+  const canManualExit = device?.capabilities
     ? device.capabilities.manual_exit === true
     : !isTerminal;
-  const canOpenReport = device.capabilities?.open_report ?? true;
+  const canOpenReport = device?.capabilities?.open_report ?? true;
 
   return (
     <>
-      {/* Overlay */}
-      <div
-        data-testid="device-drawer-overlay"
-        onClick={onClose}
-        className={DRAWER.overlay}
-      />
-
-      {/* Drawer */}
-      <aside
-        ref={drawerRef}
-        data-testid="device-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`设备 ${device.device_serial || `#${device.device_id}`} 详情`}
-        tabIndex={-1}
-        className={DRAWER.panel}
+      <Sheet
+        open={isOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && confirmOpen === null) onClose();
+        }}
       >
-        {/* Header */}
-        <header className="flex items-center justify-between border-b px-4 py-3">
-          <div className="min-w-0">
-            <p className={cn('truncate text-xs', TEXT.subtitle)}>
-              Job #{device.job_id} · {device.host_id || '—'}
-            </p>
-            <h2 className={cn('truncate font-mono text-base font-semibold', TEXT.heading)}>
-              {device.device_serial || `Device #${device.device_id}`}
-            </h2>
-          </div>
-          <Button
-            variant="ghost"
+        {device ? (
+          <SheetContent
+            side="right"
             size="sm"
-            onClick={onClose}
-            data-testid="device-drawer-close"
-            aria-label="关闭设备详情"
+            hideCloseButton
+            overlayTestId="device-drawer-overlay"
+            data-testid="device-drawer"
+            aria-label={`设备 ${device.device_serial || `#${device.device_id}`} 详情`}
+            onEscapeKeyDown={(event) => {
+              if (confirmOpen !== null) event.preventDefault();
+            }}
+            onInteractOutside={(event) => {
+              if (confirmOpen !== null) event.preventDefault();
+            }}
           >
-            <X className="h-4 w-4" />
-          </Button>
-        </header>
+            {/* Header */}
+            <header className="flex items-center justify-between border-b px-4 py-3">
+              <div className="min-w-0">
+                <SheetDescription className={cn('truncate text-xs', TEXT.subtitle)}>
+                  Job #{device.job_id} · {device.host_id || '—'}
+                </SheetDescription>
+                <SheetTitle className={cn('truncate font-mono text-base font-semibold', TEXT.heading)}>
+                  {device.device_serial || `Device #${device.device_id}`}
+                </SheetTitle>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
+                data-testid="device-drawer-close"
+                aria-label="关闭设备详情"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </header>
 
         {/* Body — scrollable */}
         <div className="flex-1 overflow-y-auto px-4 py-3 text-sm">
@@ -328,10 +324,12 @@ export default function DeviceDetailDrawer({
             </Button>
           )}
         </footer>
-      </aside>
+          </SheetContent>
+        ) : null}
+      </Sheet>
 
       <AlertDialog
-        open={confirmOpen !== null}
+        open={confirmOpen !== null && Boolean(device)}
         onOpenChange={(o) => !o && setConfirmOpen(null)}
       >
         <AlertDialogContent>
@@ -351,8 +349,8 @@ export default function DeviceDetailDrawer({
             <AlertDialogAction
               data-testid="device-drawer-confirm"
               onClick={() => {
-                if (confirmOpen === 'retry') onManualRetry(device.job_id);
-                else if (confirmOpen === 'exit') onManualExit(device.job_id);
+                if (device && confirmOpen === 'retry') onManualRetry(device.job_id);
+                else if (device && confirmOpen === 'exit') onManualExit(device.job_id);
                 setConfirmOpen(null);
               }}
               className={

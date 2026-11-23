@@ -3,7 +3,13 @@ import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import { ParameterProjectionList } from '@/components/parameters/ParameterProjectionList';
 import { Button } from '@/components/ui/button';
-import { DRAWER, PANEL, TEXT } from '@/design-system';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from '@/components/ui/sheet';
+import { PANEL, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type {
   DeviceMatrixItem,
@@ -211,22 +217,29 @@ export default function PlanSnapshotDrawer({
     : l2Unavailable || l2Projection == null;
   const hasSnapshotIdentity = steps.length > 0;
 
-  if (!open) return null;
-
   return (
-    <>
-      <div data-testid="plan-snapshot-overlay" onClick={onClose} className={DRAWER.overlay} />
-      <aside
+    <Sheet
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+    >
+      <SheetContent
+        side="right"
+        size="sm"
+        hideCloseButton
+        overlayTestId="plan-snapshot-overlay"
         data-testid="plan-snapshot-drawer"
-        role="dialog"
-        aria-modal="true"
         aria-label="计划快照"
-        className={DRAWER.panel}
       >
         <header className="flex items-center justify-between border-b px-4 py-3">
           <div className="min-w-0">
-            <p className={cn('truncate text-xs', TEXT.subtitle)}>运行设计与按设备下发</p>
-            <h2 className={cn('truncate text-base font-semibold', TEXT.heading)}>计划快照</h2>
+            <SheetDescription className={cn('truncate text-xs', TEXT.subtitle)}>
+              运行设计与按设备下发
+            </SheetDescription>
+            <SheetTitle className={cn('truncate text-base font-semibold', TEXT.heading)}>
+              计划快照
+            </SheetTitle>
           </div>
           <Button
             variant="ghost"
@@ -341,7 +354,7 @@ export default function PlanSnapshotDrawer({
         <footer className={cn('border-t px-4 py-2 text-[10px]', TEXT.subtitle)}>
           L2 只读冻结快照；L3 绑定具体 Job/设备/host。后续 Script 升级或当前 Plan 行不回填历史值。
         </footer>
-      </aside>
-    </>
+      </SheetContent>
+    </Sheet>
   );
 }

@@ -4,7 +4,56 @@ import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const Dialog = DialogPrimitive.Root
+const DialogFocusContext = React.createContext<React.RefObject<HTMLElement | null> | null>(null)
+
+/**
+ * 受控 `Dialog` 焦点归位包装（#3259）：
+ * Radix Dialog 仅在经由 `DialogTrigger` 打开时写入内部 `triggerRef`；
+ * 本仓 15 处对话框均为外部按钮控制的受控 `<Dialog open>`，关闭时焦点会掉回 `<body>`。
+ * 在 `open` 切为 `true` 时捕获当前 `document.activeElement`，关闭时若元素仍在 DOM 则自动归位。
+ */
+function Dialog({
+  open,
+  defaultOpen,
+  onOpenChange,
+  modal = true,
+  children,
+}: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>) {
+  const triggerElementRef = React.useRef<HTMLElement | null>(null)
+  const prevOpenRef = React.useRef<boolean>(Boolean(open ?? defaultOpen))
+
+  React.useLayoutEffect(() => {
+    const isOpen = Boolean(open)
+    if (isOpen && !prevOpenRef.current) {
+      const active = document.activeElement
+      triggerElementRef.current = active instanceof HTMLElement ? active : null
+    }
+    prevOpenRef.current = isOpen
+  }, [open])
+
+  React.useLayoutEffect(() => {
+    if (open && !triggerElementRef.current) {
+      const active = document.activeElement
+      if (active instanceof HTMLElement && active !== document.body) {
+        triggerElementRef.current = active
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <DialogFocusContext.Provider value={triggerElementRef}>
+      <DialogPrimitive.Root
+        open={open}
+        defaultOpen={defaultOpen}
+        onOpenChange={onOpenChange}
+        modal={modal}
+      >
+        {children}
+      </DialogPrimitive.Root>
+    </DialogFocusContext.Provider>
+  )
+}
 
 const DialogTrigger = DialogPrimitive.Trigger
 
@@ -30,25 +79,51 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
-  <DialogPortal>
-    <DialogOverlay />
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg max-h-[85vh] overflow-y-auto duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
-        className
-      )}
-      {...props}
-    >
-      {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-        <X className="h-4 w-4" />
-        <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>
-    </DialogPrimitive.Content>
-  </DialogPortal>
-))
+>(({ className, children, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
+  const triggerElementRef = React.useContext(DialogFocusContext)
+
+  const handleOpenAutoFocus = (event: Event) => {
+    if (triggerElementRef && !triggerElementRef.current) {
+      const active = document.activeElement
+      if (active instanceof HTMLElement && active !== document.body) {
+        triggerElementRef.current = active
+      }
+    }
+    onOpenAutoFocus?.(event)
+  }
+
+  const handleCloseAutoFocus = (event: Event) => {
+    onCloseAutoFocus?.(event)
+    if (event.defaultPrevented) return
+    const target = triggerElementRef?.current
+    if (target && target.isConnected && target !== document.body) {
+      event.preventDefault()
+      target.focus()
+    }
+  }
+
+  return (
+    <DialogPortal>
+      <DialogOverlay />
+      <DialogPrimitive.Content
+        ref={ref}
+        onOpenAutoFocus={handleOpenAutoFocus}
+        onCloseAutoFocus={handleCloseAutoFocus}
+        className={cn(
+          "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg max-h-[85vh] overflow-y-auto duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
+          className
+        )}
+        {...props}
+      >
+        {children}
+        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+          <X className="h-4 w-4" />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  )
+})
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 const DialogHeader = ({
