@@ -294,30 +294,32 @@ export function DeviceDetailDrawer({
               </div>
               <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
                 <div className="flex items-center justify-between gap-2">
-                  <dt className={TEXT.subtitle}>型号</dt>
-                  <dd className="truncate text-right font-medium text-foreground">{device.model}</dd>
+                  <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>型号</dt>
+                  <dd className="min-w-0 truncate text-right font-medium text-foreground" title={device.model}>
+                    {device.model}
+                  </dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <dt className={TEXT.subtitle}>Product</dt>
+                  <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>Product</dt>
                   <dd
-                    className="max-w-[65%] truncate text-right font-mono text-foreground"
+                    className="min-w-0 truncate text-right font-mono text-foreground"
                     title={deviceProductText(device.model, device.product)}
                   >
                     {deviceProductText(device.model, device.product)}
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <dt className={TEXT.subtitle}>系统版本</dt>
+                  <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>系统版本</dt>
                   <dd
-                    className="max-w-[65%] truncate text-right font-mono text-foreground"
+                    className="min-w-0 truncate text-right font-mono text-foreground"
                     title={device.build_display_id ?? undefined}
                   >
                     {device.build_display_id || '—'}
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <dt className={TEXT.subtitle}>归属项目</dt>
-                  <dd className="text-right font-mono text-foreground">
+                  <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>归属项目</dt>
+                  <dd className="min-w-0 truncate text-right font-mono text-foreground">
                     {device.project_key ? (
                       inRouter ? (
                         <Link
@@ -336,8 +338,8 @@ export function DeviceDetailDrawer({
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <dt className={TEXT.subtitle}>所属主机</dt>
-                  <dd className="truncate text-right text-foreground">
+                  <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>所属主机</dt>
+                  <dd className="min-w-0 truncate text-right text-foreground">
                     {device.host_name && onNavigateToHost ? (
                       <button
                         type="button"
@@ -353,17 +355,17 @@ export function DeviceDetailDrawer({
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <dt className={TEXT.subtitle}>ADB 状态</dt>
-                  <dd className="font-mono text-foreground">{device.adb_state || '—'}</dd>
+                  <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>ADB 状态</dt>
+                  <dd className="min-w-0 truncate font-mono text-foreground">{device.adb_state || '—'}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <dt className={TEXT.subtitle}>最后活跃</dt>
-                  <dd className="font-mono text-foreground">
+                  <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>最后活跃</dt>
+                  <dd className="min-w-0 truncate font-mono text-foreground">
                     {device.last_seen ? formatDateTimeFull(device.last_seen) : '—'}
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <dt className={cn('flex items-center gap-1', TEXT.subtitle)}>
+                  <dt className={cn('flex shrink-0 items-center gap-1 whitespace-nowrap', TEXT.subtitle)}>
                     <Tag className="h-3 w-3" />
                     标签
                   </dt>

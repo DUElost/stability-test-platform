@@ -532,7 +532,7 @@ export default function DevicesPage() {
   }
 
   return (
-    <PageContainer width="wide" className="py-4">
+    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
       <PageHeader
         title="物理设备"
         subtitle="管理和监控测试设备 · 点击设备行查看详情，勾选后可批量处理"

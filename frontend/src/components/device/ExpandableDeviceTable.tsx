@@ -560,7 +560,7 @@ export function ExpandableDeviceTable({
   };
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-2">
       {/* #3131：列表不完整时必须说出来——下方状态统计与搜索/筛选都只作用于已加载
           部分，静默截断会让「搜不到」被读成「不存在」 */}
       {truncated && (
@@ -903,9 +903,9 @@ export function ExpandableDeviceTable({
 
       {/* Table（固定视口滚容器 + sticky top-0 表头 + 虚拟化数据行 + ClickableRow） */}
       <div ref={tableContainerRef} className="rounded-xl border border-border bg-card">
-        <Table containerClassName="max-h-[calc(100vh-245px)] min-h-[280px]">
+        <Table containerClassName="max-h-[calc(100vh-225px)] min-h-[280px]">
           <TableHeader>
-            <TableRow className="sticky top-0 z-20 bg-muted/95 hover:bg-muted/95">
+            <TableRow className="sticky top-0 z-20 bg-muted/95 hover:bg-muted/95 [&>th]:h-9">
               {selectable && (
                 <TableHead className="sticky left-0 z-30 w-9 min-w-[36px] bg-muted px-2.5 py-2">
                   <input
