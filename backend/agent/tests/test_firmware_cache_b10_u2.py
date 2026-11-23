@@ -1369,7 +1369,11 @@ def test_unsealed_in_tree_file_symlink_is_cached(tmp_path, monkeypatch):
 
 
 def test_unsealed_symlink_realpath_lstat_eio_fail_closed(tmp_path, monkeypatch):
-    """软链 realpath(strict) 路径上 os.lstat 注入 EIO → ENUM_FAILED，零 ready。"""
+    """软链 realpath(strict) 内部对链接本身 lstat 注入 EIO → ENUM_FAILED，零 ready。
+
+    注入严格限定 ``basename == boot.img``（不跟链到 base.img），并断言命中恰好一次，
+    以保证测的是 ``realpath(..., strict=True)`` 而非普通文件分支。
+    """
     import errno
 
     unsealed = tmp_path / "fw"
@@ -1377,19 +1381,20 @@ def test_unsealed_symlink_realpath_lstat_eio_fail_closed(tmp_path, monkeypatch):
     (unsealed / "base.img").write_bytes(b"BASE_PAYLOAD_" + (b"Z" * 64))
     boot = unsealed / "boot.img"
     boot.symlink_to("base.img")
+    boot_link = str(boot)
     cache = tmp_path / "cache"
     cfg = _prep_unsealed_cache_env(tmp_path, monkeypatch, cache)
 
     real_lstat = os.lstat
-    boot_real = str(boot.resolve(strict=False))
+    hits = {"n": 0}
 
     def boom_lstat(path, *args, **kwargs):
-        path_s = str(path)
-        if path_s == boot_real or Path(path_s).name == "boot.img":
-            # 仅在解析 boot.img 软链时炸一次，避免误伤 scandir 前的其它调用
-            if getattr(boom_lstat, "_hit", 0) < 1:
-                boom_lstat._hit = 1  # type: ignore[attr-defined]
-                raise OSError(errno.EIO, "lstat boom during realpath")
+        # 只炸软链路径本身；base.img 等普通文件走原 lstat
+        if os.path.basename(os.fspath(path)) == "boot.img" or os.fspath(
+            path
+        ) == boot_link:
+            hits["n"] += 1
+            raise OSError(errno.EIO, "lstat boom during realpath")
         return real_lstat(path, *args, **kwargs)
 
     monkeypatch.setattr(os, "lstat", boom_lstat)
@@ -1403,6 +1408,7 @@ def test_unsealed_symlink_realpath_lstat_eio_fail_closed(tmp_path, monkeypatch):
         ):
             pass
     assert ei.value.code == CODE_ENUM_FAILED
+    assert hits["n"] == 1, hits
     assert list(cache.rglob(READY_MARKER)) == []
 
 

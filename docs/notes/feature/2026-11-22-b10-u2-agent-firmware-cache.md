@@ -57,3 +57,5 @@ Class: feature
   软链 fail-closed（修复 `S_ISREG(lstat)` 静默漏链回归）。
 - 第 5 轮：软链/`source_dir` 解析改 `os.path.realpath(..., strict=True)`，禁止非严格
   模式吞掉解析中 `lstat`/`readlink` 的 `OSError`。
+- 第 6 轮：收紧软链 `lstat` EIO 测试注入落点（仅 `boot.img` 链接本身，`hits==1`），
+  恢复对 `strict=True` 的区分度。
