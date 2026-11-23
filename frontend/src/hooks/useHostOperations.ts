@@ -597,6 +597,18 @@ export function useHostOperations(opts?: {
           if (terminal.ok) {
             updateOp(item.hostId, { status: 'success', consoleRunId });
             emitTerminal(item, true, terminal.status);
+          } else if (terminal.status === 'CANCELED') {
+            // #3193：与 install 批次（#2255）同口径——显式取消或运行记录丢失是独立终态，不得落成 failed。
+            const note =
+              terminal.message && terminal.message !== 'CANCELED'
+                ? terminal.message
+                : undefined;
+            updateOp(item.hostId, {
+              status: 'canceled',
+              consoleRunId,
+              error: note,
+            });
+            emitTerminal(item, false, 'CANCELED', note);
           } else {
             updateOp(item.hostId, {
               status: 'failed',
