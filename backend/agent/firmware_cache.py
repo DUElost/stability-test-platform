@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import threading
 import time
 from contextlib import contextmanager
@@ -318,37 +319,92 @@ def _load_sealed_profile(
 def _unsealed_file_fingerprint(
     source_dir: Path,
 ) -> tuple[str, int, list[dict[str, Any]]]:
-    """未封包兼容：``(relpath, size, mtime_ns)``；lstat / scandir 失败显式失败（M6）。"""
+    """未封包兼容：显式递归 ``os.scandir``，不吞任何 ``OSError``（#4086 v1.6）。
+
+    目录打开 / 条目类型判定 / ``lstat`` 任一失败立即
+    ``firmware_unsealed_enumerate_failed``，禁止产出残缺整包。
+    """
     entries: list[list[Any]] = []
     files_meta: list[dict[str, Any]] = []
     root = source_dir.resolve(strict=False)
 
-    def _on_walk_error(err: OSError) -> None:
-        raise FirmwareCacheError(
-            CODE_ENUM_FAILED,
-            f"os.walk/scandir failed during unsealed enumerate: {err}",
-        ) from err
+    def _enum_failed(message: str, exc: Optional[BaseException] = None) -> None:
+        err = FirmwareCacheError(CODE_ENUM_FAILED, message)
+        if exc is not None:
+            raise err from exc
+        raise err
 
-    for dirpath, dirnames, filenames in os.walk(root, onerror=_on_walk_error):
-        dirnames[:] = sorted(d for d in dirnames if d not in (".", ".."))
-        for name in sorted(filenames):
-            abs_path = Path(dirpath) / name
-            try:
-                st = abs_path.lstat()
-            except OSError as exc:
-                raise FirmwareCacheError(
-                    CODE_ENUM_FAILED,
-                    f"lstat failed during unsealed enumerate: {abs_path}: {exc}",
-                ) from exc
-            if not abs_path.is_file():
-                continue
-            rel = abs_path.relative_to(root).as_posix()
-            rel = normalize_relpath(rel)
-            mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))
-            entries.append([rel, int(st.st_size), mtime_ns])
-            files_meta.append(
-                {"relpath": rel, "size": int(st.st_size), "mtime_ns": mtime_ns}
+    def _walk(current: Path) -> None:
+        try:
+            scandir_iter = os.scandir(current)
+        except OSError as exc:
+            _enum_failed(
+                f"scandir failed during unsealed enumerate: {current}: {exc}",
+                exc,
             )
+            return  # pragma: no cover — _enum_failed always raises
+        assert scandir_iter is not None
+        with scandir_iter as it:
+            children: list[Any] = []
+            try:
+                for entry in it:
+                    children.append(entry)
+            except OSError as exc:
+                _enum_failed(
+                    f"scandir iteration failed during unsealed enumerate: "
+                    f"{current}: {exc}",
+                    exc,
+                )
+            children.sort(key=lambda e: e.name)
+            for entry in children:
+                try:
+                    is_sym = entry.is_symlink()
+                except OSError as exc:
+                    _enum_failed(
+                        f"is_symlink failed during unsealed enumerate: "
+                        f"{entry.path}: {exc}",
+                        exc,
+                    )
+                    continue  # pragma: no cover
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError as exc:
+                    _enum_failed(
+                        f"is_dir failed during unsealed enumerate: "
+                        f"{entry.path}: {exc}",
+                        exc,
+                    )
+                    continue  # pragma: no cover
+                if is_dir and not is_sym:
+                    _walk(Path(entry.path))
+                    continue
+                abs_path = Path(entry.path)
+                try:
+                    st = os.lstat(entry.path)
+                except OSError as exc:
+                    _enum_failed(
+                        f"lstat failed during unsealed enumerate: "
+                        f"{abs_path}: {exc}",
+                        exc,
+                    )
+                    continue  # pragma: no cover
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                rel = abs_path.relative_to(root).as_posix()
+                rel = normalize_relpath(rel)
+                mtime_ns = int(
+                    getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+                )
+                entries.append([rel, int(st.st_size), mtime_ns])
+                files_meta.append(
+                    {
+                        "relpath": rel,
+                        "size": int(st.st_size),
+                        "mtime_ns": mtime_ns,
+                    }
+                )
+
+    _walk(root)
     blob = json.dumps(entries, ensure_ascii=True, separators=(",", ":")).encode(
         "utf-8"
     )
@@ -492,50 +548,84 @@ def _literal_managed_child(
 def _safe_rmtree(
     target: Path, cache_root: Path, *, expected_key: str
 ) -> None:
-    """M3：拒绝软链目标、根目录本身、解析跳转到其它条目；只删持锁 key 的严格子项。"""
+    """M3：拒绝软链目标、根目录本身、``.staging`` 祖先别名与跨条目解析。
+
+    只删持锁 ``expected_key`` 的严格子项：条目目录，或
+    ``realpath(cache_root)/.staging/<key>.tmp.*`` 直接子项。
+    """
     if target.is_symlink() or os.path.islink(target):
         raise FirmwareCacheError(
             CODE_PATH_ESCAPE,
             f"refusing to delete symlink target itself: {target}",
         )
     literal = _literal_managed_child(target, cache_root, expected_key=expected_key)
-    root = _managed_root_resolved(cache_root)
+    root_real = Path(os.path.realpath(str(cache_root)))
+    root_abs = Path(os.path.abspath(str(cache_root)))
     try:
-        resolved = literal.resolve(strict=False)
+        rel = Path(os.path.abspath(str(target))).relative_to(root_abs)
+    except ValueError as exc:
+        raise FirmwareCacheError(
+            CODE_PATH_ESCAPE,
+            f"delete target not under cache root literal: {target}",
+        ) from exc
+    is_staging = (
+        len(rel.parts) == 2
+        and rel.parts[0] == STAGING_DIR_NAME
+        and rel.parts[1].startswith(f"{expected_key}.tmp.")
+    )
+    try:
+        resolved = Path(os.path.realpath(str(literal)))
     except OSError as exc:
         raise FirmwareCacheError(
             CODE_PATH_ESCAPE, f"cannot resolve delete target: {target}"
         ) from exc
-    root_s = str(root)
+    root_s = str(root_real)
     resolved_s = str(resolved)
-    # 严格子路径：禁止 resolved == root
     if resolved_s == root_s or not resolved_s.startswith(root_s + os.sep):
         raise FirmwareCacheError(
             CODE_PATH_ESCAPE,
             f"delete target escapes or equals cache root: {resolved}",
         )
-    expected_entry = (cache_root / expected_key).resolve(strict=False)
-    expected_staging_prefix = (
-        (cache_root / STAGING_DIR_NAME).resolve(strict=False)
-    )
-    if resolved == expected_entry:
-        pass
-    elif str(resolved).startswith(str(expected_staging_prefix) + os.sep):
-        # staging 子项：basename 必须仍属 expected_key
+
+    if is_staging:
+        staging_dir = cache_root / STAGING_DIR_NAME
+        if staging_dir.is_symlink() or os.path.islink(staging_dir):
+            raise FirmwareCacheError(
+                CODE_PATH_ESCAPE,
+                f"refusing delete: .staging ancestor is symlink: {staging_dir}",
+            )
+        staging_real = Path(os.path.realpath(str(staging_dir)))
+        expected_staging_real = root_real / STAGING_DIR_NAME
+        if staging_real != expected_staging_real:
+            raise FirmwareCacheError(
+                CODE_PATH_ESCAPE,
+                f".staging realpath mismatch: {staging_real} != "
+                f"{expected_staging_real}",
+            )
+        if resolved.parent != staging_real:
+            raise FirmwareCacheError(
+                CODE_PATH_ESCAPE,
+                f"resolved staging target not a direct child of "
+                f"{expected_staging_real}: {resolved}",
+            )
         if not resolved.name.startswith(f"{expected_key}.tmp."):
             raise FirmwareCacheError(
                 CODE_PATH_ESCAPE,
                 f"resolved staging name mismatch key={expected_key!r}: {resolved}",
             )
     else:
-        raise FirmwareCacheError(
-            CODE_PATH_ESCAPE,
-            f"resolved delete target not the locked entry/staging for "
-            f"key={expected_key!r}: {resolved}",
-        )
-    if resolved.is_dir():
+        expected_entry = root_real / expected_key
+        if resolved != expected_entry:
+            raise FirmwareCacheError(
+                CODE_PATH_ESCAPE,
+                f"resolved delete target not the locked entry for "
+                f"key={expected_key!r}: {resolved}",
+            )
+
+    if resolved.is_dir() and not resolved.is_symlink():
         shutil.rmtree(resolved)
-    elif resolved.exists():
+    elif resolved.exists() or resolved.is_symlink():
+        # 末级软链已在入口拒绝；此处仅处理普通文件
         resolved.unlink()
 
 
@@ -1475,6 +1565,8 @@ def ensure_firmware(
                         )
                     except FirmwareCacheError as exc:
                         if exc.retryable:
+                            # M6：降级复核等非空间可恢复错误不得被主盘空间不足掩盖
+                            saw_non_space_failure = True
                             last_error = exc
                             break  # 重入外层 attempt
                         if exc.code == CODE_INSUFFICIENT_SPACE:
@@ -1517,8 +1609,12 @@ def ensure_firmware(
                 _release_entry_lock(held_fd)
                 held_fd = None
 
-        # M6-2：仅「全部可用候选盘均因空间不足被拒」可走 NFS 降级。
-        if isinstance(last_error, FirmwareCacheError) and last_error.code == CODE_COPY_IO:
+        # M6：仅「全部可用候选盘均因空间不足被拒」可走 NFS 降级；
+        # 降级复核耗尽 / I/O 等非空间错误优先按原语义抛出。
+        if isinstance(last_error, FirmwareCacheError) and last_error.code in (
+            CODE_COPY_IO,
+            CODE_DOWNGRADE_RACE,
+        ):
             raise last_error
         if saw_non_space_failure:
             if isinstance(last_error, FirmwareCacheError):
@@ -1528,11 +1624,18 @@ def ensure_firmware(
                     CODE_COPY_IO,
                     f"non-space failure during populate: {last_error}",
                 ) from last_error
-        space_exhausted = saw_insufficient or (
-            isinstance(last_error, FirmwareCacheError)
-            and last_error.code == CODE_INSUFFICIENT_SPACE
+        space_exhausted = (
+            saw_insufficient
+            and not saw_non_space_failure
+            and (
+                last_error is None
+                or (
+                    isinstance(last_error, FirmwareCacheError)
+                    and last_error.code == CODE_INSUFFICIENT_SPACE
+                )
+            )
         )
-        if allow_nfs_direct_fallback and space_exhausted and not saw_non_space_failure:
+        if allow_nfs_direct_fallback and space_exhausted:
             yield FirmwareCacheResult(
                 local_dir=source,
                 cache_key=cache_key,

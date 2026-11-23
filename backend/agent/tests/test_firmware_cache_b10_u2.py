@@ -24,6 +24,7 @@ from backend.agent.contracts.firmware_manifest import (
 )
 from backend.agent.firmware_cache import (
     CODE_COPY_IO,
+    CODE_DOWNGRADE_RACE,
     CODE_ENUM_FAILED,
     CODE_INSUFFICIENT_SPACE,
     CODE_PATH_ESCAPE,
@@ -32,6 +33,7 @@ from backend.agent.firmware_cache import (
     FIRMWARE_CACHE_API_VERSION,
     FirmwareCacheError,
     FirmwareCacheManager,
+    READY_MARKER,
     _entry_lock_path,
     _safe_rmtree,
     _sweep_staging,
@@ -901,6 +903,68 @@ def test_safe_rmtree_rejects_other_entry_key(tmp_path):
     assert (entry_b / "f.bin").read_bytes() == b"keep"
 
 
+def test_safe_rmtree_rejects_staging_ancestor_alias_to_other_entry(
+    tmp_path, monkeypatch
+):
+    """M3：``.staging`` 软链指向同根另一条目 → 拒绝且不实际删除。"""
+    primary = tmp_path / "cache"
+    primary.mkdir()
+    pinned = primary / "pinned_other"
+    pinned.mkdir()
+    victim = pinned / "keep.bin"
+    victim.write_bytes(b"pin")
+    staging_link = primary / ".staging"
+    staging_link.symlink_to(pinned)
+    fake_child = staging_link / "key_a.tmp.1"
+    fake_child.mkdir()
+    (fake_child / "partial").write_bytes(b"x")
+
+    deleted: list[str] = []
+    import backend.agent.firmware_cache as fc
+
+    def no_rmtree(path, *a, **k):
+        deleted.append(str(path))
+        raise AssertionError(f"rmtree must not run: {path}")
+
+    monkeypatch.setattr(fc.shutil, "rmtree", no_rmtree)
+    with pytest.raises(FirmwareCacheError) as ei:
+        _safe_rmtree(fake_child, primary, expected_key="key_a")
+    assert ei.value.code == CODE_PATH_ESCAPE
+    assert deleted == []
+    assert victim.read_bytes() == b"pin"
+
+
+def test_safe_rmtree_rejects_same_key_leaf_symlink(tmp_path, monkeypatch):
+    """M3：同根同 key 末级软链目标 → 拒绝且不实际删除。"""
+    primary = tmp_path / "cache"
+    primary.mkdir()
+    (primary / ".staging").mkdir()
+    real_entry = primary / "key_a"
+    real_entry.mkdir()
+    (real_entry / "payload.bin").write_bytes(b"live")
+    leaf = primary / ".staging" / "key_a.tmp.9"
+    leaf.symlink_to(real_entry)
+
+    deleted: list[str] = []
+    import backend.agent.firmware_cache as fc
+
+    def no_rmtree(path, *a, **k):
+        deleted.append(str(path))
+        raise AssertionError(f"rmtree must not run: {path}")
+
+    def no_unlink(self):
+        deleted.append(str(self))
+        raise AssertionError(f"unlink must not run: {self}")
+
+    monkeypatch.setattr(fc.shutil, "rmtree", no_rmtree)
+    monkeypatch.setattr(Path, "unlink", no_unlink)
+    with pytest.raises(FirmwareCacheError) as ei:
+        _safe_rmtree(leaf, primary, expected_key="key_a")
+    assert ei.value.code == CODE_PATH_ESCAPE
+    assert deleted == []
+    assert (real_entry / "payload.bin").read_bytes() == b"live"
+
+
 # ── 7 / M4：空间耗尽与串行区水位 ──────────────────────────────────────────────
 
 
@@ -1272,21 +1336,21 @@ def test_unsealed_lstat_failure_is_explicit(tmp_path, monkeypatch):
     unsealed = tmp_path / "fw"
     unsealed.mkdir()
     (unsealed / "a.bin").write_bytes(b"x")
-    real_lstat = Path.lstat
+    real_lstat = os.lstat
 
-    def bad_lstat(self):
-        if self.name == "a.bin":
+    def bad_lstat(path):
+        if Path(path).name == "a.bin":
             raise OSError(errno.EIO, "boom")
-        return real_lstat(self)
+        return real_lstat(path)
 
-    monkeypatch.setattr(Path, "lstat", bad_lstat)
+    monkeypatch.setattr(os, "lstat", bad_lstat)
     with pytest.raises(FirmwareCacheError) as ei:
         resolve_cache_identity(unsealed, PROFILE_MTK)
     assert ei.value.code == CODE_ENUM_FAILED
 
 
 def test_unsealed_scandir_failure_is_explicit(tmp_path, monkeypatch):
-    """M6-3：未封包 os.walk 子目录 scandir 失败 → 显式 ENUM_FAILED。"""
+    """M6-3：未封包子目录 scandir 失败 → 显式 ENUM_FAILED。"""
     unsealed = tmp_path / "fw"
     unsealed.mkdir()
     sub = unsealed / "subdir"
@@ -1303,6 +1367,160 @@ def test_unsealed_scandir_failure_is_explicit(tmp_path, monkeypatch):
     with pytest.raises(FirmwareCacheError) as ei:
         resolve_cache_identity(unsealed, PROFILE_MTK)
     assert ei.value.code == CODE_ENUM_FAILED
+
+
+def test_unsealed_isdir_eio_fails_closed_no_partial_ready(tmp_path, monkeypatch):
+    """#4086 v1.6：现存子目录 DirEntry.is_dir 注入 EIO → ENUM_FAILED，无 ready 产物。"""
+    import errno
+
+    unsealed = tmp_path / "fw"
+    unsealed.mkdir()
+    (unsealed / "scatter.txt").write_bytes(b"top")
+    sub = unsealed / "images"
+    sub.mkdir()
+    (sub / "image.bin").write_bytes(b"img")
+
+    cache = tmp_path / "cache"
+    _mount_ok(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_aee_local_root",
+        lambda: tmp_path / "aee",
+    )
+    (tmp_path / "aee").mkdir()
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_disk_usage", lambda _p: _disk()
+    )
+    monkeypatch.setattr("backend.agent.firmware_cache._st_dev", lambda _p: 1)
+    monkeypatch.setenv("STP_AGENT_INSTALL_DIR", str(tmp_path / "install"))
+    (tmp_path / "install").mkdir()
+
+    real_scandir = os.scandir
+
+    class _WrappedEntry:
+        def __init__(self, entry):
+            self._entry = entry
+            self.name = entry.name
+            self.path = entry.path
+
+        def is_symlink(self):
+            return self._entry.is_symlink()
+
+        def is_dir(self, *, follow_symlinks=True):
+            if Path(self.path).resolve() == sub.resolve():
+                raise OSError(errno.EIO, "is_dir boom")
+            return self._entry.is_dir(follow_symlinks=follow_symlinks)
+
+        def is_file(self, *, follow_symlinks=True):
+            return self._entry.is_file(follow_symlinks=follow_symlinks)
+
+        def stat(self, *, follow_symlinks=True):
+            return self._entry.stat(follow_symlinks=follow_symlinks)
+
+    class _WrappedScan:
+        def __init__(self, it):
+            self._it = it
+
+        def __enter__(self):
+            self._it.__enter__()
+            return self
+
+        def __exit__(self, *a):
+            return self._it.__exit__(*a)
+
+        def __iter__(self):
+            for entry in self._it:
+                yield _WrappedEntry(entry)
+
+    def wrap_scandir(path):
+        return _WrappedScan(real_scandir(path))
+
+    monkeypatch.setattr(os, "scandir", wrap_scandir)
+
+    with pytest.raises(FirmwareCacheError) as ei:
+        resolve_cache_identity(unsealed, PROFILE_MTK)
+    assert ei.value.code == CODE_ENUM_FAILED
+
+    # 经 ensure 入口亦不得发布 ready
+    cfg = _settings(stp_firmware_cache_dir=str(cache))
+    with pytest.raises(FirmwareCacheError) as ei2:
+        with ensure_firmware(
+            unsealed,
+            PROFILE_MTK,
+            permit_client=_fake_permit(),
+            settings=cfg,
+            max_retries=1,
+        ):
+            pass
+    assert ei2.value.code == CODE_ENUM_FAILED
+    assert list(cache.rglob(READY_MARKER)) == []
+
+
+def test_primary_space_secondary_downgrade_race_not_nfs_fallback(
+    tmp_path, monkeypatch
+):
+    """M6：主盘空间不足 + 二级 3 次降级复核耗尽 → 抛 downgrade_race，非 nfs_direct。"""
+    primary = tmp_path / "ssd"
+    secondary = tmp_path / "hdd"
+    _mount_ok(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_aee_local_root",
+        lambda: tmp_path / "aee",
+    )
+    (tmp_path / "aee").mkdir()
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache._st_dev",
+        lambda p: 1 if "ssd" in str(p) else 2,
+    )
+
+    def usage(path):
+        if "ssd" in str(path):
+            return _disk(total=100.0, used=95.0, avail=1.0, writable=95.0)
+        return _disk(total=100.0, used=10.0, avail=90.0, writable=10.0)
+
+    monkeypatch.setattr("backend.agent.firmware_cache.get_disk_usage", usage)
+    monkeypatch.setenv("STP_AGENT_INSTALL_DIR", str(tmp_path / "install"))
+    (tmp_path / "install").mkdir()
+    src = _sealed_source(tmp_path / "fw", {PROFILE_MTK: [("a.bin", b"data")]})
+    cfg = _settings(
+        stp_firmware_cache_dir=str(primary),
+        stp_firmware_cache_fallback_dir=str(secondary),
+        stp_firmware_cache_reserve_gb=20.0,
+        stp_firmware_cache_max_gb=60.0,
+        stp_firmware_cache_max_pct=90.0,
+    )
+
+    import backend.agent.firmware_cache as fc
+
+    real_verify = fc._verify_ready_under_sh
+    # 仅在 populate 完成后的降级窗口失配：用计数区分 hit 探测
+    state = {"populate_done": 0}
+    real_populate = fc._populate_entry
+
+    def counting_populate(*a, **k):
+        out = real_populate(*a, **k)
+        state["populate_done"] += 1
+        return out
+
+    def flaky_verify(entry_dir, **kwargs):
+        if state["populate_done"] > 0:
+            return False
+        return real_verify(entry_dir, **kwargs)
+
+    monkeypatch.setattr(fc, "_populate_entry", counting_populate)
+    monkeypatch.setattr(fc, "_verify_ready_under_sh", flaky_verify)
+
+    with pytest.raises(FirmwareCacheError) as ei:
+        with ensure_firmware(
+            src,
+            PROFILE_MTK,
+            permit_client=_fake_permit(),
+            settings=cfg,
+            allow_nfs_direct_fallback=True,
+            max_retries=3,
+        ):
+            pass
+    assert ei.value.code == CODE_DOWNGRADE_RACE
+    assert state["populate_done"] >= 1
 
 
 def test_downgrade_lock_sh_emits_wait_progress(tmp_path, monkeypatch):

@@ -51,3 +51,5 @@ Class: feature
   许可返回后写前水位复核、二级 `.locks`/`.staging` 容错、已封包本地 SHA 命中校验、
   混合盘 I/O 不误归因空间不足、未封包 `os.walk(onerror)`、降级 `LOCK_SH` 轮询打戳；
   锁布局偏离已按 D12 写入 PR「偏离说明」。
+- 第 3 轮 / #4086 v1.6 收口：未封包改显式递归 `os.scandir`（含 `is_dir` EIO）、
+  `.staging` 祖先别名与同 key 末级软链防护、二级降级复核耗尽不被主盘空间不足掩盖为 NFS。
