@@ -8,7 +8,6 @@ import {
   FilterWorkbench,
   MoreFiltersPopover,
   type ActiveFilterChip,
-  type QuickViewOption,
 } from '@/components/ui/filter-bar';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import {
@@ -40,7 +39,7 @@ import {
   HardDrive,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
-import { ALERT_BOX, resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
+import { ALERT_BOX, resourceUsageBgClass, resourceUsageTextClass } from '@/design-system/tokens';
 import { formatBytes, formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { DeviceReturnPanel } from './DeviceReturnPanel';
@@ -172,6 +171,12 @@ interface ExpandableDeviceTableProps {
   onNavigateToHost?: (hostName: string) => void;
 }
 
+function matchesStatusFilter(status: DeviceStatus, filter: string): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'attention') return status === 'offline' || status === 'error';
+  return status === filter;
+}
+
 function hostFilterKey(device: DeviceTableData): string {
   return device.host_id != null ? String(device.host_id) : 'unassigned';
 }
@@ -254,7 +259,7 @@ export function ExpandableDeviceTable({
   const devicesInStatusAndTagScope = useMemo(
     () =>
       devices.filter((device) => {
-        if (statusFilter !== 'all' && device.status !== statusFilter) return false;
+        if (!matchesStatusFilter(device.status, statusFilter)) return false;
         if (taggedOnly && (!device.tags || device.tags.length === 0)) return false;
         return true;
       }),
@@ -273,9 +278,17 @@ export function ExpandableDeviceTable({
       .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
   }, [devicesInStatusAndTagScope]);
 
+  const effectiveHostFilter =
+    hostFilter !== 'all' && !hostOptions.some((opt) => opt.value === hostFilter)
+      ? 'all'
+      : hostFilter;
+
   const devicesInOptionScope = useMemo(
-    () => devicesInStatusAndTagScope.filter((device) => hostFilter === 'all' || hostFilterKey(device) === hostFilter),
-    [devicesInStatusAndTagScope, hostFilter],
+    () =>
+      devicesInStatusAndTagScope.filter(
+        (device) => effectiveHostFilter === 'all' || hostFilterKey(device) === effectiveHostFilter,
+      ),
+    [devicesInStatusAndTagScope, effectiveHostFilter],
   );
 
   const modelOptions = useMemo(
@@ -306,35 +319,29 @@ export function ExpandableDeviceTable({
     [devicesInOptionScope],
   );
 
-  const [prevHostOptions, setPrevHostOptions] = useState(hostOptions);
-  if (prevHostOptions !== hostOptions) {
-    setPrevHostOptions(hostOptions);
-    if (hostFilter !== 'all' && !hostOptions.some((opt) => opt.value === hostFilter)) {
-      setHostFilter('all');
-    }
-  }
+  const effectiveModelFilter =
+    modelFilter !== 'all' && !modelOptions.includes(modelFilter) ? 'all' : modelFilter;
+  const effectiveProductFilter =
+    productFilter !== 'all' && !productOptions.includes(productFilter) ? 'all' : productFilter;
+  const effectiveVersionFilter =
+    versionFilter !== 'all' && !versionOptions.includes(versionFilter) ? 'all' : versionFilter;
 
-  const [prevModelOptions, setPrevModelOptions] = useState(modelOptions);
-  if (prevModelOptions !== modelOptions) {
-    setPrevModelOptions(modelOptions);
-    if (modelFilter !== 'all' && !modelOptions.includes(modelFilter)) {
-      setModelFilter('all');
-    }
-  }
+  // 将失效子选项清理放入 effect，禁止在 render 期调用 setSearchParams（#4117 U2-1a）
+  useEffect(() => {
+    if (hostFilter !== effectiveHostFilter) setHostFilter('all');
+  }, [hostFilter, effectiveHostFilter, setHostFilter]);
 
-  const [prevProductOptions, setPrevProductOptions] = useState(productOptions);
-  if (prevProductOptions !== productOptions) {
-    setPrevProductOptions(productOptions);
-    if (productFilter !== 'all' && !productOptions.includes(productFilter)) setProductFilter('all');
-  }
+  useEffect(() => {
+    if (modelFilter !== effectiveModelFilter) setModelFilter('all');
+  }, [modelFilter, effectiveModelFilter, setModelFilter]);
 
-  const [prevVersionOptions, setPrevVersionOptions] = useState(versionOptions);
-  if (prevVersionOptions !== versionOptions) {
-    setPrevVersionOptions(versionOptions);
-    if (versionFilter !== 'all' && !versionOptions.includes(versionFilter)) {
-      setVersionFilter('all');
-    }
-  }
+  useEffect(() => {
+    if (productFilter !== effectiveProductFilter) setProductFilter('all');
+  }, [productFilter, effectiveProductFilter, setProductFilter]);
+
+  useEffect(() => {
+    if (versionFilter !== effectiveVersionFilter) setVersionFilter('all');
+  }, [versionFilter, effectiveVersionFilter, setVersionFilter]);
 
   const toggleRow = (id: number) => {
     const newExpanded = new Set(expandedRows);
@@ -348,11 +355,11 @@ export function ExpandableDeviceTable({
 
   const filteredDevices = useMemo(() => {
     return devices.filter(device => {
-      if (statusFilter !== 'all' && device.status !== statusFilter) return false;
-      if (hostFilter !== 'all' && hostFilterKey(device) !== hostFilter) return false;
-      if (modelFilter !== 'all' && device.model !== modelFilter) return false;
-      if (productFilter !== 'all' && device.product !== productFilter) return false;
-      if (versionFilter !== 'all' && device.build_display_id !== versionFilter) return false;
+      if (!matchesStatusFilter(device.status, statusFilter)) return false;
+      if (effectiveHostFilter !== 'all' && hostFilterKey(device) !== effectiveHostFilter) return false;
+      if (effectiveModelFilter !== 'all' && device.model !== effectiveModelFilter) return false;
+      if (effectiveProductFilter !== 'all' && device.product !== effectiveProductFilter) return false;
+      if (effectiveVersionFilter !== 'all' && device.build_display_id !== effectiveVersionFilter) return false;
       if (taggedOnly && (!device.tags || device.tags.length === 0)) return false;
       if (debouncedSearch) {
         const query = debouncedSearch.toLowerCase();
@@ -367,21 +374,42 @@ export function ExpandableDeviceTable({
       }
       return true;
     });
-  }, [devices, statusFilter, hostFilter, modelFilter, productFilter, versionFilter, taggedOnly, debouncedSearch]);
+  }, [
+    devices,
+    statusFilter,
+    effectiveHostFilter,
+    effectiveModelFilter,
+    effectiveProductFilter,
+    effectiveVersionFilter,
+    taggedOnly,
+    debouncedSearch,
+  ]);
 
-  // Reset to page 1 when filter or search changes
-  const pageResetKey = JSON.stringify([statusFilter, hostFilter, modelFilter, productFilter, versionFilter, taggedOnly, debouncedSearch]);
-  const [prevPageResetKey, setPrevPageResetKey] = useState(pageResetKey);
-  if (prevPageResetKey !== pageResetKey) {
-    setPrevPageResetKey(pageResetKey);
-    setCurrentPage(1);
-  }
+  // Reset to page 1 when filter or search changes (in effect, never during render)
+  const pageResetKey = JSON.stringify([
+    statusFilter,
+    effectiveHostFilter,
+    effectiveModelFilter,
+    effectiveProductFilter,
+    effectiveVersionFilter,
+    taggedOnly,
+    debouncedSearch,
+  ]);
+  const prevPageResetKeyRef = useRef(pageResetKey);
+  useEffect(() => {
+    if (prevPageResetKeyRef.current !== pageResetKey) {
+      prevPageResetKeyRef.current = pageResetKey;
+      if (currentPage !== 1) setCurrentPage(1);
+    }
+  }, [pageResetKey, currentPage, setCurrentPage]);
 
   const totalPages = Math.max(1, Math.ceil(filteredDevices.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
-  if (safeCurrentPage !== currentPage) {
-    setCurrentPage(safeCurrentPage);
-  }
+  useEffect(() => {
+    if (safeCurrentPage !== currentPage) {
+      setCurrentPage(safeCurrentPage);
+    }
+  }, [safeCurrentPage, currentPage, setCurrentPage]);
   const paginatedDevices = filteredDevices.slice(
     (safeCurrentPage - 1) * pageSize,
     safeCurrentPage * pageSize
@@ -436,7 +464,7 @@ export function ExpandableDeviceTable({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2.5">
       {/* #3131：列表不完整时必须说出来——下方状态统计与搜索/筛选都只作用于已加载
           部分，静默截断会让「搜不到」被读成「不存在」 */}
       {truncated && (
@@ -453,109 +481,26 @@ export function ExpandableDeviceTable({
         </div>
       )}
 
-      {/* Summary Stats — 稀疏数字筛选卡 */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <button
-          type="button"
-          aria-pressed={statusFilter === 'all'}
-          onClick={() => setStatusFilter('all')}
-          className={cn(
-            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-            statusFilter === 'all' ? 'border-foreground/40 bg-muted/30' : 'border-border hover:bg-muted/20',
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <p className={STAT.label}>全部设备</p>
-            <div className={cn(STAT.iconWell, STAT.iconWellMuted)}>
-              <Smartphone />
-            </div>
-          </div>
-          <div className={cn(STAT.value, 'text-2xl')}>{stats.total}</div>
-        </button>
-        <button
-          type="button"
-          aria-pressed={statusFilter === 'idle'}
-          onClick={() => setStatusFilter(statusFilter === 'idle' ? 'all' : 'idle')}
-          className={cn(
-            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-            statusFilter === 'idle'
-              ? 'border-success bg-success/5'
-              : 'border-success/20 hover:border-success/40 hover:bg-success/5',
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <p className={STAT.label}>空闲</p>
-            <div className={cn(STAT.iconWell, STAT.iconWellSuccess)}>
-              <CheckCircle2 className={ENTITY_STATUS_COLORS.device.idle} />
-            </div>
-          </div>
-          <div className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.device.idle)}>{stats.idle}</div>
-        </button>
-        <button
-          type="button"
-          aria-pressed={statusFilter === 'testing'}
-          onClick={() => setStatusFilter(statusFilter === 'testing' ? 'all' : 'testing')}
-          className={cn(
-            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-            statusFilter === 'testing'
-              ? 'border-primary bg-primary/5'
-              : 'border-primary/20 hover:border-primary/40 hover:bg-primary/5',
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <p className={STAT.label}>测试中</p>
-            <div className={cn(STAT.iconWell, stats.testing > 0 ? STAT.iconWellPrimary : STAT.iconWellMuted)}>
-              <Zap className={stats.testing > 0 ? ENTITY_STATUS_COLORS.device.testing : 'text-muted-foreground'} />
-            </div>
-          </div>
-          <div className={cn(STAT.value, 'text-2xl', stats.testing > 0 ? ENTITY_STATUS_COLORS.device.testing : 'text-muted-foreground')}>
-            {stats.testing}
-          </div>
-        </button>
-        <button
-          type="button"
-          aria-pressed={statusFilter === 'offline'}
-          onClick={() => setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline')}
-          className={cn(
-            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-            statusFilter === 'offline' ? 'border-foreground/40 bg-muted/30' : 'border-border hover:bg-muted/20',
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <p className={STAT.label}>离线</p>
-            <div className={cn(STAT.iconWell, STAT.iconWellMuted)}>
-              <WifiOff />
-            </div>
-          </div>
-          <div className={cn(STAT.value, 'text-2xl text-muted-foreground')}>{stats.offline}</div>
-        </button>
-        <button
-          type="button"
-          aria-pressed={statusFilter === 'error'}
-          onClick={() => setStatusFilter(statusFilter === 'error' ? 'all' : 'error')}
-          className={cn(
-            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-            statusFilter === 'error'
-              ? 'border-destructive bg-destructive/5'
-              : 'border-destructive/20 hover:border-destructive/40 hover:bg-destructive/5',
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <p className={STAT.label}>错误</p>
-            <div className={cn(STAT.iconWell, stats.error > 0 ? STAT.iconWellDestructive : STAT.iconWellMuted)}>
-              <AlertTriangle className={stats.error > 0 ? ENTITY_STATUS_COLORS.device.error : 'text-muted-foreground'} />
-            </div>
-          </div>
-          <div className={cn(STAT.value, 'text-2xl', stats.error > 0 ? ENTITY_STATUS_COLORS.device.error : 'text-muted-foreground')}>
-            {stats.error}
-          </div>
-        </button>
-      </div>
-
-      {/* 统一筛选条：搜索 + 项目 + 主机(可搜) + 型号(可搜) + 更多筛选 + Chips */}
+      {/* 统一单行工作台：顶行合并状态统计与快捷视角（省去 92px 稀疏五卡），主筛选行严格单行 */}
       {(() => {
         // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip，避免与搜索框 / 下拉 / 快捷视图重复
         const hiddenChips: ActiveFilterChip[] = [];
+        if (effectiveProductFilter !== 'all') {
+          hiddenChips.push({
+            key: 'product',
+            label: 'Product',
+            value: effectiveProductFilter,
+            onRemove: () => setProductFilter('all'),
+          });
+        }
+        if (effectiveVersionFilter !== 'all') {
+          hiddenChips.push({
+            key: 'version',
+            label: '版本',
+            value: effectiveVersionFilter,
+            onRemove: () => setVersionFilter('all'),
+          });
+        }
         if (includeStale && onIncludeStaleChange) {
           hiddenChips.push({
             key: 'stale',
@@ -573,15 +518,19 @@ export function ExpandableDeviceTable({
           });
         }
 
-        // 只统计仅存在于「更多筛选」内的条件（陈旧 / 退役）
-        const moreActiveCount = (includeStale ? 1 : 0) + (includeRetired ? 1 : 0);
+        // 只统计存在于「更多筛选」内的条件（Product / 版本 / 陈旧 / 退役）
+        const moreActiveCount =
+          (effectiveProductFilter !== 'all' ? 1 : 0) +
+          (effectiveVersionFilter !== 'all' ? 1 : 0) +
+          (includeStale ? 1 : 0) +
+          (includeRetired ? 1 : 0);
 
         const hasAnyActiveFilter =
           statusFilter !== 'all' ||
-          hostFilter !== 'all' ||
-          modelFilter !== 'all' ||
-          productFilter !== 'all' ||
-          versionFilter !== 'all' ||
+          effectiveHostFilter !== 'all' ||
+          effectiveModelFilter !== 'all' ||
+          effectiveProductFilter !== 'all' ||
+          effectiveVersionFilter !== 'all' ||
           taggedOnly ||
           Boolean(searchQuery.trim()) ||
           Boolean(projectChipLabel) ||
@@ -606,44 +555,160 @@ export function ExpandableDeviceTable({
         };
 
         const taggedCount = devices.filter((d) => d.tags && d.tags.length > 0).length;
-        const quickViews: QuickViewOption[] = [
-          {
-            key: 'all',
-            label: '全部视角',
-            count: stats.total,
-            active: statusFilter === 'all' && !taggedOnly,
-            tone: 'default',
-            onClick: () => {
-              if (onClearQuickView) {
-                onClearQuickView();
-                return;
-              }
-              setStatusFilter('all');
-              setTaggedOnly(false);
-            },
-          },
-          {
-            key: 'tagged',
-            label: '仅看有标签',
-            count: taggedCount,
-            active: taggedOnly,
-            tone: 'primary',
-            onClick: () => setTaggedOnly(!taggedOnly),
-          },
-          {
-            key: 'issue',
-            label: '需关注(离线/异常)',
-            count: stats.offline + stats.error,
-            active: statusFilter === 'offline' || statusFilter === 'error',
-            tone: 'warning',
-            onClick: () =>
-              setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline'),
-          },
-        ];
+        const attentionCount = stats.offline + stats.error;
+
+        const unifiedStatusViews = (
+          <div
+            data-testid="device-status-strip"
+            className="flex flex-wrap items-center gap-1"
+          >
+            <button
+              type="button"
+              aria-pressed={statusFilter === 'all' && !taggedOnly}
+              onClick={() => {
+                if (onClearQuickView) {
+                  onClearQuickView();
+                  return;
+                }
+                setStatusFilter('all');
+                setTaggedOnly(false);
+              }}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                statusFilter === 'all' && !taggedOnly
+                  ? 'border-foreground/35 bg-muted/60 font-medium text-foreground'
+                  : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+              )}
+            >
+              <Smartphone className="h-3.5 w-3.5 shrink-0" />
+              <span>全部设备</span>
+              <span className="font-mono font-semibold tabular-nums text-foreground">{stats.total}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={statusFilter === 'idle'}
+              onClick={() => setStatusFilter(statusFilter === 'idle' ? 'all' : 'idle')}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                statusFilter === 'idle'
+                  ? 'border-success bg-success/10 font-medium text-foreground'
+                  : 'border-transparent text-muted-foreground hover:bg-success/5 hover:text-foreground',
+              )}
+            >
+              <CheckCircle2 className={cn('h-3.5 w-3.5 shrink-0', ENTITY_STATUS_COLORS.device.idle)} />
+              <span>空闲</span>
+              <span className={cn('font-mono font-semibold tabular-nums', ENTITY_STATUS_COLORS.device.idle)}>
+                {stats.idle}
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={statusFilter === 'testing'}
+              onClick={() => setStatusFilter(statusFilter === 'testing' ? 'all' : 'testing')}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                statusFilter === 'testing'
+                  ? 'border-primary bg-primary/10 font-medium text-foreground'
+                  : 'border-transparent text-muted-foreground hover:bg-primary/5 hover:text-foreground',
+              )}
+            >
+              <Zap
+                className={cn(
+                  'h-3.5 w-3.5 shrink-0',
+                  stats.testing > 0 ? ENTITY_STATUS_COLORS.device.testing : 'text-muted-foreground',
+                )}
+              />
+              <span>测试中</span>
+              <span
+                className={cn(
+                  'font-mono font-semibold tabular-nums',
+                  stats.testing > 0 ? ENTITY_STATUS_COLORS.device.testing : 'text-muted-foreground',
+                )}
+              >
+                {stats.testing}
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={statusFilter === 'offline'}
+              onClick={() => setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline')}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                statusFilter === 'offline'
+                  ? 'border-foreground/35 bg-muted/60 font-medium text-foreground'
+                  : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+              )}
+            >
+              <WifiOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span>离线</span>
+              <span className="font-mono font-semibold tabular-nums text-muted-foreground">{stats.offline}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={statusFilter === 'error'}
+              onClick={() => setStatusFilter(statusFilter === 'error' ? 'all' : 'error')}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                statusFilter === 'error'
+                  ? 'border-destructive bg-destructive/10 font-medium text-foreground'
+                  : 'border-transparent text-muted-foreground hover:bg-destructive/5 hover:text-foreground',
+              )}
+            >
+              <AlertTriangle
+                className={cn(
+                  'h-3.5 w-3.5 shrink-0',
+                  stats.error > 0 ? ENTITY_STATUS_COLORS.device.error : 'text-muted-foreground',
+                )}
+              />
+              <span>错误</span>
+              <span
+                className={cn(
+                  'font-mono font-semibold tabular-nums',
+                  stats.error > 0 ? ENTITY_STATUS_COLORS.device.error : 'text-muted-foreground',
+                )}
+              >
+                {stats.error}
+              </span>
+            </button>
+
+            <span className="mx-1 hidden h-4 w-px bg-border sm:inline-block" aria-hidden="true" />
+
+            <button
+              type="button"
+              aria-pressed={statusFilter === 'attention'}
+              title="筛选离线或异常设备"
+              onClick={() => setStatusFilter(statusFilter === 'attention' ? 'all' : 'attention')}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                statusFilter === 'attention'
+                  ? 'border-warning/40 bg-warning/10 font-medium text-warning'
+                  : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+              )}
+            >
+              <span>需关注</span>
+              <span className="font-mono font-semibold tabular-nums">{attentionCount}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={taggedOnly}
+              onClick={() => setTaggedOnly(!taggedOnly)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                taggedOnly
+                  ? 'border-primary/35 bg-primary/10 font-medium text-primary'
+                  : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+              )}
+            >
+              <Tag className="h-3 w-3 shrink-0" />
+              <span>仅看有标签</span>
+              <span className="font-mono font-semibold tabular-nums">{taggedCount}</span>
+            </button>
+          </div>
+        );
 
         return (
           <FilterWorkbench
-            quickViews={quickViews}
+            headerLeft={unifiedStatusViews}
             headerRight={extraHeaderRight}
             hiddenChips={hiddenChips}
             hasAnyActiveFilter={hasAnyActiveFilter}
@@ -651,18 +716,18 @@ export function ExpandableDeviceTable({
             matchSummary={`匹配 ${filteredDevices.length} / ${devices.length} 台设备`}
             chipsTestId="devices-filter-chips"
           >
-            <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:flex-nowrap">
               <FilterSearchInput
                 id="device-search"
                 value={searchQuery}
                 onChange={setSearchQuery}
                 placeholder="搜索序列号 / 型号 / product / 版本 / 主机 / 标签..."
                 ariaLabel="搜索设备"
-                className="flex-1 min-w-[200px] sm:max-w-xs"
+                className="flex-1 min-w-[200px] sm:max-w-[280px]"
               />
               {extraToolbarControls}
               <SearchableSelect
-                value={hostFilter}
+                value={effectiveHostFilter}
                 onChange={setHostFilter}
                 options={hostOptions}
                 allLabel="全部主机"
@@ -673,7 +738,7 @@ export function ExpandableDeviceTable({
                 testId="device-host-filter"
               />
               <SearchableSelect
-                value={modelFilter}
+                value={effectiveModelFilter}
                 onChange={setModelFilter}
                 options={modelOptions.map((m) => ({ value: m, label: m }))}
                 allLabel="全部型号"
@@ -683,27 +748,33 @@ export function ExpandableDeviceTable({
                 className="w-full sm:w-36"
                 testId="device-model-filter"
               />
-              <SearchableSelect
-                value={productFilter}
-                onChange={setProductFilter}
-                options={productOptions.map((p) => ({ value: p, label: p }))}
-                allLabel="全部 product"
-                searchPlaceholder="输入 product 搜索..."
-                ariaLabel="按 product 筛选"
-                className="w-full sm:w-36"
-                testId="device-product-filter"
-              />
-              <SearchableSelect
-                value={versionFilter}
-                onChange={setVersionFilter}
-                options={versionOptions.map((v) => ({ value: v, label: v }))}
-                allLabel="全部版本"
-                searchPlaceholder="输入版本号搜索..."
-                ariaLabel="按版本筛选"
-                className="w-full sm:w-36"
-                testId="device-version-filter"
-              />
               <MoreFiltersPopover activeCount={moreActiveCount} testId="devices-more-filters">
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-medium text-muted-foreground">Product</div>
+                  <SearchableSelect
+                    value={effectiveProductFilter}
+                    onChange={setProductFilter}
+                    options={productOptions.map((p) => ({ value: p, label: p }))}
+                    allLabel="全部 product"
+                    searchPlaceholder="输入 product 搜索..."
+                    ariaLabel="按 product 筛选"
+                    className="w-full"
+                    testId="device-product-filter"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-medium text-muted-foreground">系统版本</div>
+                  <SearchableSelect
+                    value={effectiveVersionFilter}
+                    onChange={setVersionFilter}
+                    options={versionOptions.map((v) => ({ value: v, label: v }))}
+                    allLabel="全部版本"
+                    searchPlaceholder="输入版本号搜索..."
+                    ariaLabel="按版本筛选"
+                    className="w-full"
+                    testId="device-version-filter"
+                  />
+                </div>
                 {onIncludeStaleChange && (
                   <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
                     <span>显示陈旧设备</span>
@@ -848,14 +919,7 @@ export function ExpandableDeviceTable({
                             {device.project_key}
                           </span>
                         ) : null}
-                        {device.attribution_source === 'mapped' ? (
-                          <span
-                            className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[11px] text-success"
-                            title="型号有活跃成员行（归属派生）"
-                          >
-                            已映射
-                          </span>
-                        ) : (
+                        {device.attribution_source === 'mapped' ? null : (
                           <span
                             className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
                             title="型号未映射：在 /projects 添加型号成员"
