@@ -57,10 +57,20 @@ def test_start_disk_subsystems_skips_watcher_when_disabled():
             "backend.agent.bootstrap_subsystems.LocalDiskMonitor.instance",
             return_value=disk_monitor,
         ),
+        patch(
+            "backend.agent.bootstrap_subsystems.EvidenceUploader.instance",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "backend.agent.bootstrap_subsystems.FirmwareCacheManager.instance",
+        ) as fw_cache,
         patch("backend.agent.bootstrap_subsystems.LogWatcherManager.instance") as watcher,
         patch("backend.agent.bootstrap_subsystems.OutboxDrainer.instance") as drainer,
         patch("backend.agent.bootstrap_subsystems.ArtifactUploader.instance") as art,
     ):
+        fw = MagicMock()
+        fw.configure.return_value = fw
+        fw_cache.return_value = fw
         result = start_disk_and_watcher_subsystems(
             local_db=MagicMock(),
             api_url="http://x",
@@ -84,6 +94,8 @@ def test_start_disk_subsystems_skips_watcher_when_disabled():
     event_uploader.start.assert_called_once()
     disk_monitor.configure.assert_called_once()
     disk_monitor.start.assert_called_once()
+    fw.configure.assert_called_once()
+    fw.start.assert_called_once()
     watcher.assert_not_called()
     drainer.assert_not_called()
     art.assert_not_called()
@@ -137,6 +149,9 @@ def test_start_disk_subsystems_enables_watcher_stack():
             return_value=disk_monitor,
         ),
         patch(
+            "backend.agent.bootstrap_subsystems.FirmwareCacheManager.instance",
+        ) as fw_cache,
+        patch(
             "backend.agent.bootstrap_subsystems.LogWatcherManager.instance",
             return_value=watcher_mgr,
         ),
@@ -149,6 +164,9 @@ def test_start_disk_subsystems_enables_watcher_stack():
             return_value=art,
         ),
     ):
+        fw = MagicMock()
+        fw.configure.return_value = fw
+        fw_cache.return_value = fw
         result = start_disk_and_watcher_subsystems(
             local_db=MagicMock(),
             api_url="http://x",

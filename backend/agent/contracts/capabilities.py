@@ -11,8 +11,9 @@ from __future__ import annotations
 from typing import Iterable
 
 SCAN_ROUND_V1 = "scan_round_v1"
+FIRMWARE_CACHE_V1 = "firmware_cache_v1"
 
-AGENT_CAPABILITIES: tuple[str, ...] = (SCAN_ROUND_V1,)
+AGENT_CAPABILITIES: tuple[str, ...] = (SCAN_ROUND_V1, FIRMWARE_CACHE_V1)
 
 
 def normalize_capabilities(raw: object) -> tuple[str, ...]:

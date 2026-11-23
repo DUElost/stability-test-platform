@@ -2201,12 +2201,17 @@ class PipelineEngine:
             pass
         # ADR-0051 D4：agent 目录 = 本模块所在目录（部署态 <install>/agent、开发态
         # backend/agent），不再由 nfs_path 的 parents[3] 推导——包路径深度不同，推导会算错。
-        agent_dir = str(Path(__file__).resolve().parent)
+        # ADR-0064 D2：双路径 PYTHONPATH——<agent_dir> 保 `from config import …`，
+        # 父目录保 `from agent.firmware_cache import …`（部署态 <install>、开发态 backend/）。
+        agent_dir = Path(__file__).resolve().parent
+        agent_parent = str(agent_dir.parent)
+        agent_dir_s = str(agent_dir)
         existing_py_path = env.get("PYTHONPATH", "")
+        dual_prefix = f"{agent_dir_s}{os.pathsep}{agent_parent}"
         env["PYTHONPATH"] = (
-            agent_dir
+            dual_prefix
             if not existing_py_path
-            else f"{agent_dir}{os.pathsep}{existing_py_path}"
+            else f"{dual_prefix}{os.pathsep}{existing_py_path}"
         )
         env["STP_SCRIPT_SOURCE"] = resolved.source
         # ADR-0051 v1.7 D7：脚本包声明的工具依赖（capabilities.json requires_tools）——核验拉取后

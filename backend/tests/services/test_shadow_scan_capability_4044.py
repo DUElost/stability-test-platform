@@ -359,8 +359,10 @@ def test_server_and_client_read_the_same_capability_constant():
     """
     from backend.agent.contracts.capabilities import AGENT_CAPABILITIES
 
+    from backend.agent.contracts.capabilities import FIRMWARE_CACHE_V1
+
     assert socketio_server.SCAN_ROUND_V1 is SCAN_ROUND_V1
-    assert list(AGENT_CAPABILITIES) == [SCAN_ROUND_V1]
+    assert list(AGENT_CAPABILITIES) == [SCAN_ROUND_V1, FIRMWARE_CACHE_V1]
 
 
 def _dedup_final_round_with_gap(factory, run_id, host_id, *, now):
