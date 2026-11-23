@@ -134,7 +134,9 @@ export default function Sidebar({
       <div className="px-3 pt-3">
         <NavLink
           to="/assistant"
+          onClick={onNavigate}
           aria-label="AI 助手"
+          title={collapsed && !isMobile ? 'AI 助手' : undefined}
           className={cn(
             'flex items-center gap-3 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200',
             assistantActive

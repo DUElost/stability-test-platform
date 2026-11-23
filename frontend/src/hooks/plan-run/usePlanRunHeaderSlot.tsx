@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, PanelLeft, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
-import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { useHeaderSlotSetter } from '@/contexts/HeaderSlotContext';
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
@@ -26,7 +26,9 @@ export function usePlanRunHeaderSlot({
   onToggleLeftPanel,
 }: Options) {
   const navigate = useNavigate();
-  const { setHeaderSlot } = useHeaderSlot();
+  const { setHeaderSlot } = useHeaderSlotSetter();
+
+  useEffect(() => () => setHeaderSlot(null), [setHeaderSlot]);
 
   useEffect(() => {
     if (!runId || Number.isNaN(runId)) return;
@@ -78,7 +80,6 @@ export function usePlanRunHeaderSlot({
         </div>
       </div>,
     );
-    return () => setHeaderSlot(null);
   }, [
     runId,
     active,

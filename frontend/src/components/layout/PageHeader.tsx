@@ -1,7 +1,7 @@
 import React, { ReactNode, useEffect, useMemo } from 'react';
 import { ChevronRight, Home } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { useHeaderSlotSetter } from '@/contexts/HeaderSlotContext';
 import { INTERACTIVE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
@@ -52,11 +52,17 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   action,
   breadcrumbs,
 }) => {
-  const { setHeaderSlot, isDefault } = useHeaderSlot();
+  const { setHeaderSlot, isDefault } = useHeaderSlotSetter();
   const breadcrumbKey = useMemo(
     () => (breadcrumbs?.length ? JSON.stringify(breadcrumbs) : ''),
     [breadcrumbs],
   );
+
+  // 仅卸载时清空顶栏槽位，避免同页 props 更新时先置 null 引发闪烁
+  useEffect(() => {
+    if (isDefault) return;
+    return () => setHeaderSlot(null);
+  }, [isDefault, setHeaderSlot]);
 
   useEffect(() => {
     if (isDefault) return;
@@ -80,7 +86,6 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
         )}
       </div>,
     );
-    return () => setHeaderSlot(null);
   }, [title, subtitle, action, breadcrumbKey, breadcrumbs, isDefault, setHeaderSlot]);
 
   if (!isDefault) {
