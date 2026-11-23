@@ -258,8 +258,21 @@ def resolve_cache_roots(
     if is_ssd_fallback_root(get_aee_local_root()) and primary_dev == secondary_dev:
         return primary, None
 
-    (secondary_candidate / LOCKS_DIR_NAME).mkdir(parents=True, exist_ok=True)
-    (secondary_candidate / STAGING_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    # M5：二级 .locks / .staging 初始化失败 → 跳过二级，不阻断一级。
+    try:
+        (secondary_candidate / LOCKS_DIR_NAME).mkdir(parents=True, exist_ok=True)
+        (secondary_candidate / STAGING_DIR_NAME).mkdir(parents=True, exist_ok=True)
+        if not os.access(secondary_candidate / LOCKS_DIR_NAME, os.W_OK):
+            raise PermissionError("secondary .locks not writable")
+        if not os.access(secondary_candidate / STAGING_DIR_NAME, os.W_OK):
+            raise PermissionError("secondary .staging not writable")
+    except (PermissionError, OSError) as exc:
+        logger.info(
+            "firmware_cache_secondary_skipped reason=subdir_unusable path=%s err=%s",
+            secondary_candidate,
+            exc,
+        )
+        return primary, None
     return primary, secondary_candidate
 
 
@@ -305,11 +318,18 @@ def _load_sealed_profile(
 def _unsealed_file_fingerprint(
     source_dir: Path,
 ) -> tuple[str, int, list[dict[str, Any]]]:
-    """未封包兼容：``(relpath, size, mtime_ns)``；单文件 lstat 失败显式失败（M6）。"""
+    """未封包兼容：``(relpath, size, mtime_ns)``；lstat / scandir 失败显式失败（M6）。"""
     entries: list[list[Any]] = []
     files_meta: list[dict[str, Any]] = []
     root = source_dir.resolve(strict=False)
-    for dirpath, dirnames, filenames in os.walk(root):
+
+    def _on_walk_error(err: OSError) -> None:
+        raise FirmwareCacheError(
+            CODE_ENUM_FAILED,
+            f"os.walk/scandir failed during unsealed enumerate: {err}",
+        ) from err
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_on_walk_error):
         dirnames[:] = sorted(d for d in dirnames if d not in (".", ".."))
         for name in sorted(filenames):
             abs_path = Path(dirpath) / name
@@ -441,30 +461,81 @@ def _managed_root_resolved(cache_root: Path) -> Path:
     return cache_root.resolve(strict=False)
 
 
-def _assert_under_managed_root(target: Path, cache_root: Path) -> Path:
-    """M3：删除前确认目标（及若为 staging 则其祖先）严格落在受管根内。"""
+def _literal_managed_child(
+    target: Path, cache_root: Path, *, expected_key: str
+) -> Path:
+    """M3：字面路径必须是持锁 ``expected_key`` 的直接条目或对应 staging 子项。"""
+    root_abs = Path(os.path.abspath(str(cache_root)))
+    target_abs = Path(os.path.abspath(str(target)))
+    try:
+        rel = target_abs.relative_to(root_abs)
+    except ValueError as exc:
+        raise FirmwareCacheError(
+            CODE_PATH_ESCAPE,
+            f"delete target not under cache root literal: {target}",
+        ) from exc
+    parts = rel.parts
+    if len(parts) == 1 and parts[0] == expected_key:
+        return target_abs
+    if (
+        len(parts) == 2
+        and parts[0] == STAGING_DIR_NAME
+        and parts[1].startswith(f"{expected_key}.tmp.")
+    ):
+        return target_abs
+    raise FirmwareCacheError(
+        CODE_PATH_ESCAPE,
+        f"delete target {target} is not locked child for key={expected_key!r}",
+    )
+
+
+def _safe_rmtree(
+    target: Path, cache_root: Path, *, expected_key: str
+) -> None:
+    """M3：拒绝软链目标、根目录本身、解析跳转到其它条目；只删持锁 key 的严格子项。"""
+    if target.is_symlink() or os.path.islink(target):
+        raise FirmwareCacheError(
+            CODE_PATH_ESCAPE,
+            f"refusing to delete symlink target itself: {target}",
+        )
+    literal = _literal_managed_child(target, cache_root, expected_key=expected_key)
     root = _managed_root_resolved(cache_root)
     try:
-        resolved = target.resolve(strict=False)
+        resolved = literal.resolve(strict=False)
     except OSError as exc:
         raise FirmwareCacheError(
             CODE_PATH_ESCAPE, f"cannot resolve delete target: {target}"
         ) from exc
     root_s = str(root)
     resolved_s = str(resolved)
-    if resolved_s != root_s and not resolved_s.startswith(root_s + os.sep):
+    # 严格子路径：禁止 resolved == root
+    if resolved_s == root_s or not resolved_s.startswith(root_s + os.sep):
         raise FirmwareCacheError(
             CODE_PATH_ESCAPE,
-            f"delete target escapes cache root: {resolved} not under {root}",
+            f"delete target escapes or equals cache root: {resolved}",
         )
-    return resolved
-
-
-def _safe_rmtree(target: Path, cache_root: Path) -> None:
-    resolved = _assert_under_managed_root(target, cache_root)
+    expected_entry = (cache_root / expected_key).resolve(strict=False)
+    expected_staging_prefix = (
+        (cache_root / STAGING_DIR_NAME).resolve(strict=False)
+    )
+    if resolved == expected_entry:
+        pass
+    elif str(resolved).startswith(str(expected_staging_prefix) + os.sep):
+        # staging 子项：basename 必须仍属 expected_key
+        if not resolved.name.startswith(f"{expected_key}.tmp."):
+            raise FirmwareCacheError(
+                CODE_PATH_ESCAPE,
+                f"resolved staging name mismatch key={expected_key!r}: {resolved}",
+            )
+    else:
+        raise FirmwareCacheError(
+            CODE_PATH_ESCAPE,
+            f"resolved delete target not the locked entry/staging for "
+            f"key={expected_key!r}: {resolved}",
+        )
     if resolved.is_dir():
         shutil.rmtree(resolved)
-    elif resolved.exists() or resolved.is_symlink():
+    elif resolved.exists():
         resolved.unlink()
 
 
@@ -507,7 +578,10 @@ def _touch_last_used(entry_dir: Path) -> None:
 def _local_matches_authoritative_files(
     entry_dir: Path, files: Sequence[Mapping[str, Any]]
 ) -> bool:
-    """M6：按权威清单核对本地必需文件存在与尺寸（不只看 ready marker 字符串）。"""
+    """M6：按权威清单核对本地必需文件存在、尺寸与 SHA-256（有 sha 时必校）。
+
+    只读本地缓存目录；不打开源目录大镜像。拦截「尺寸未变但内容损坏」的脏命中。
+    """
     for item in files:
         rel = item.get("relpath")
         if not isinstance(rel, str):
@@ -521,6 +595,13 @@ def _local_matches_authoritative_files(
             return False
         if int(item.get("size", -1)) != int(size):
             return False
+        expected_sha = item.get("sha256")
+        if isinstance(expected_sha, str) and expected_sha:
+            try:
+                if _sha256_file(abs_path) != expected_sha:
+                    return False
+            except OSError:
+                return False
     return True
 
 
@@ -755,7 +836,7 @@ def _evict_one_unlocked_entry(
             fd = _open_lock(lock_path, create=True)
             if not _try_flock(fd, fcntl.LOCK_EX):
                 continue
-            _safe_rmtree(entry, cache_root)
+            _safe_rmtree(entry, cache_root, expected_key=entry.name)
             logger.info("firmware_cache_evicted entry=%s", entry)
             return True
         except (OSError, FirmwareCacheError):
@@ -803,7 +884,7 @@ def _sweep_staging(cache_root: Path) -> None:
             fd = _open_lock(lock_path, create=True)
             if not _try_flock(fd, fcntl.LOCK_EX):
                 continue
-            _safe_rmtree(child, cache_root)
+            _safe_rmtree(child, cache_root, expected_key=key)
         except FirmwareCacheError as exc:
             if exc.code == CODE_PATH_ESCAPE:
                 logger.warning(
@@ -848,7 +929,7 @@ def _cleanup_pass(_manager: "FirmwareCacheManager") -> None:
                 age = now - _entry_last_used(entry)
                 if age < ttl_seconds:
                     continue
-                _safe_rmtree(entry, root)
+                _safe_rmtree(entry, root, expected_key=entry.name)
                 logger.info(
                     "firmware_cache_ttl_evicted entry=%s age_s=%.0f", entry, age
                 )
@@ -976,7 +1057,7 @@ def _populate_entry(
     staging_root.mkdir(parents=True, exist_ok=True)
     staging = staging_root / f"{cache_key}.tmp.{os.getpid()}"
     if staging.exists():
-        _safe_rmtree(staging, cache_root)
+        _safe_rmtree(staging, cache_root, expected_key=cache_key)
     staging.mkdir(parents=True, exist_ok=True)
 
     host_lock = host_transfer_lock_path()
@@ -1016,6 +1097,24 @@ def _populate_entry(
             )
             permit_degraded = bool(getattr(permit_hold, "permit_degraded", False))
         try:
+            # M4：许可返回后、真正写入 .staging 前再以最新水位过门（排队期间可能跌破）
+            _evict_until_space_ok(
+                cache_root,
+                additional_bytes=total_bytes,
+                settings=settings,
+                aee_root=aee_root,
+                protect_keys={cache_key},
+            )
+            if not _space_ok_after(
+                cache_root,
+                additional_bytes=total_bytes,
+                settings=settings,
+                aee_root=aee_root,
+            ):
+                raise FirmwareCacheError(
+                    CODE_INSUFFICIENT_SPACE,
+                    f"insufficient space after permit before write root={cache_root}",
+                )
             copied_files = _copy_files_streaming(
                 source_dir,
                 staging,
@@ -1032,10 +1131,16 @@ def _populate_entry(
                 "total_bytes": total_bytes,
                 "files": copied_files,
             }
-            _write_ready(staging, ready_payload)
-            if entry_dir.exists():
-                _safe_rmtree(entry_dir, cache_root)
-            os.replace(staging, entry_dir)
+            try:
+                _write_ready(staging, ready_payload)
+                if entry_dir.exists():
+                    _safe_rmtree(entry_dir, cache_root, expected_key=cache_key)
+                os.replace(staging, entry_dir)
+            except OSError as exc:
+                raise FirmwareCacheError(
+                    CODE_COPY_IO,
+                    f"publish/ready I/O failed root={cache_root}: {exc}",
+                ) from exc
             staging_final = None
             return copied_files, permit_degraded
         finally:
@@ -1052,7 +1157,9 @@ def _populate_entry(
             pass
         if staging_final is not None and Path(staging_final).exists():
             try:
-                _safe_rmtree(Path(staging_final), cache_root)
+                _safe_rmtree(
+                    Path(staging_final), cache_root, expected_key=cache_key
+                )
             except FirmwareCacheError:
                 pass
 
@@ -1156,7 +1263,13 @@ def _populate_locked(
             content_digest=content_digest,
             authoritative_files=files,
         ):
-            fcntl.flock(fd, fcntl.LOCK_SH)
+            # M7：降级取 LOCK_SH 走非阻塞轮询 + 周期打戳
+            _flock_wait(
+                fd,
+                fcntl.LOCK_SH,
+                progress_callback=progress_callback,
+                wait_for="entry-lock-sh-downgrade",
+            )
             if _verify_ready_under_sh(
                 entry_dir,
                 content_digest=content_digest,
@@ -1218,7 +1331,13 @@ def _populate_locked(
             aee_root=aee_root,
         )
         # M2：LOCK_EX → LOCK_SH 降级后持锁复核；失配 → 可恢复重入
-        fcntl.flock(fd, fcntl.LOCK_SH)
+        # M7：降级取 LOCK_SH 走非阻塞轮询 + 周期打戳
+        _flock_wait(
+            fd,
+            fcntl.LOCK_SH,
+            progress_callback=progress_callback,
+            wait_for="entry-lock-sh-downgrade",
+        )
         if not _verify_ready_under_sh(
             entry_dir,
             content_digest=content_digest,
@@ -1282,6 +1401,8 @@ def ensure_firmware(
 
     last_error: Optional[Exception] = None
     saw_insufficient = False
+    # M6-2：任一候选盘非空间类失败后，禁止误归因 insufficient → NFS 直读
+    saw_non_space_failure = False
     held_fd: Optional[int] = None
     try:
         for attempt in range(1, max_retries + 1):
@@ -1361,11 +1482,14 @@ def ensure_firmware(
                             last_error = exc
                             continue
                         if exc.code == CODE_COPY_IO:
-                            raise  # M6：I/O 错误不降级 NFS
+                            # M6-2：I/O 错误直接失败，不降级 NFS
+                            raise
+                        saw_non_space_failure = True
                         raise
                     except TransferPermitClientError:
                         raise
                     except Exception as exc:
+                        saw_non_space_failure = True
                         last_error = exc
                         logger.warning(
                             "firmware_cache_populate_failed tier=%s attempt=%s err=%s",
@@ -1393,14 +1517,22 @@ def ensure_firmware(
                 _release_entry_lock(held_fd)
                 held_fd = None
 
-        # M6：仅「两盘空间不足」可走 NFS 降级；拷贝 I/O / 完整性错误必须硬失败。
+        # M6-2：仅「全部可用候选盘均因空间不足被拒」可走 NFS 降级。
         if isinstance(last_error, FirmwareCacheError) and last_error.code == CODE_COPY_IO:
             raise last_error
+        if saw_non_space_failure:
+            if isinstance(last_error, FirmwareCacheError):
+                raise last_error
+            if last_error is not None:
+                raise FirmwareCacheError(
+                    CODE_COPY_IO,
+                    f"non-space failure during populate: {last_error}",
+                ) from last_error
         space_exhausted = saw_insufficient or (
             isinstance(last_error, FirmwareCacheError)
             and last_error.code == CODE_INSUFFICIENT_SPACE
         )
-        if allow_nfs_direct_fallback and space_exhausted:
+        if allow_nfs_direct_fallback and space_exhausted and not saw_non_space_failure:
             yield FirmwareCacheResult(
                 local_dir=source,
                 cache_key=cache_key,

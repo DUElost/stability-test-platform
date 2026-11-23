@@ -33,7 +33,6 @@ from backend.agent.firmware_cache import (
     FirmwareCacheError,
     FirmwareCacheManager,
     _entry_lock_path,
-    _evict_until_space_ok,
     _safe_rmtree,
     _sweep_staging,
     ensure_firmware,
@@ -873,9 +872,33 @@ def test_staging_symlink_escape_blocked(tmp_path):
     link = staging / "evil.tmp.1"
     link.symlink_to(outside)
     with pytest.raises(FirmwareCacheError) as ei:
-        _safe_rmtree(link, primary)
+        _safe_rmtree(link, primary, expected_key="evil")
     assert ei.value.code == CODE_PATH_ESCAPE
     assert victim.exists()
+
+
+def test_safe_rmtree_rejects_root_itself(tmp_path):
+    """M3：目标解析到缓存根本身 → 拦截。"""
+    primary = tmp_path / "cache"
+    primary.mkdir()
+    (primary / ".staging").mkdir()
+    with pytest.raises(FirmwareCacheError) as ei:
+        _safe_rmtree(primary, primary, expected_key="cache")
+    assert ei.value.code == CODE_PATH_ESCAPE
+
+
+def test_safe_rmtree_rejects_other_entry_key(tmp_path):
+    """M3：持锁 key=A 不得删除字面指向条目 B。"""
+    primary = tmp_path / "cache"
+    primary.mkdir()
+    entry_b = primary / "key_b"
+    entry_b.mkdir()
+    (entry_b / "f.bin").write_bytes(b"keep")
+    with pytest.raises(FirmwareCacheError) as ei:
+        _safe_rmtree(entry_b, primary, expected_key="key_a")
+    assert ei.value.code == CODE_PATH_ESCAPE
+    assert entry_b.exists()
+    assert (entry_b / "f.bin").read_bytes() == b"keep"
 
 
 # ── 7 / M4：空间耗尽与串行区水位 ──────────────────────────────────────────────
@@ -936,13 +959,14 @@ def test_insufficient_space_fail_closed_and_fallback(tmp_path, monkeypatch):
 def test_serial_zone_rechecks_space_and_evicts_only_target_disk(
     tmp_path, monkeypatch
 ):
-    """M4：串行区复核水位；主盘不足时不误删二级盘条目。"""
+    """M4：真实 ensure 入口——预检通过后许可期间水位跌破 → 写前复核腾退主盘。
+
+    去掉许可后水位复核时 e1 不会被删，本断言必红。
+    """
     primary = tmp_path / "ssd"
     secondary = tmp_path / "hdd"
     primary.mkdir()
     secondary.mkdir()
-    (secondary / ".locks").mkdir()
-    # 二级已有缓存条目
     sec_entry = secondary / "keep_me"
     sec_entry.mkdir()
     (sec_entry / ".stp-fw-ready.json").write_text(
@@ -961,15 +985,48 @@ def test_serial_zone_rechecks_space_and_evicts_only_target_disk(
     monkeypatch.setenv("STP_AGENT_INSTALL_DIR", str(tmp_path / "install"))
     (tmp_path / "install").mkdir()
 
-    # 主盘始终紧张；腾退只应碰 primary
-    state = {"avail": 5.0}
+    state = {"avail": 50.0}
 
     def usage(path):
         if "ssd" in str(path):
-            return _disk(total=100.0, used=95.0, avail=state["avail"], writable=95.0)
+            return _disk(
+                total=100.0, used=95.0, avail=state["avail"], writable=95.0
+            )
         return _disk(total=100.0, used=10.0, avail=90.0, writable=10.0)
 
     monkeypatch.setattr("backend.agent.firmware_cache.get_disk_usage", usage)
+
+    e1 = primary / "e1"
+    e1.mkdir()
+    (e1 / ".stp-fw-ready.json").write_text("{}", encoding="utf-8")
+    os.utime(e1 / ".stp-fw-ready.json", (1, 1))
+
+    import backend.agent.firmware_cache as fc
+
+    real_rmtree = fc._safe_rmtree
+
+    def tracking_rmtree(target, cache_root, *, expected_key):
+        real_rmtree(target, cache_root, expected_key=expected_key)
+        if "ssd" in str(cache_root) and Path(target).name == "e1":
+            state["avail"] = 50.0
+
+    monkeypatch.setattr(fc, "_safe_rmtree", tracking_rmtree)
+
+    permit = MagicMock()
+
+    def acquire_permit(**_kw):
+        state["avail"] = 5.0  # 跌破 reserve_gb=20
+        return TransferPermitHold(
+            lease_token="t",
+            host_id="h",
+            pool="firmware_nfs",
+            permit_degraded=False,
+            _client=None,
+        )
+
+    permit.acquire_permit.side_effect = acquire_permit
+
+    src = _sealed_source(tmp_path / "fw", {PROFILE_MTK: [("a.bin", b"payload")]})
     cfg = _settings(
         stp_firmware_cache_dir=str(primary),
         stp_firmware_cache_fallback_dir=str(secondary),
@@ -977,32 +1034,48 @@ def test_serial_zone_rechecks_space_and_evicts_only_target_disk(
         stp_firmware_cache_max_gb=60.0,
         stp_firmware_cache_max_pct=90.0,
     )
-    # 在 primary 放两条旧条目，每删一条「恢复」水位
-    for i, name in enumerate(("e1", "e2")):
-        e = primary / name
-        e.mkdir()
-        (e / ".stp-fw-ready.json").write_text("{}", encoding="utf-8")
-        os.utime(e / ".stp-fw-ready.json", (10 + i, 10 + i))
-    (primary / ".locks").mkdir(exist_ok=True)
+    with ensure_firmware(
+        src, PROFILE_MTK, permit_client=permit, settings=cfg, max_retries=1
+    ) as r:
+        assert r.tier == "primary"
+        assert (r.local_dir / "a.bin").is_file()
+    assert not e1.exists(), "post-permit recheck must evict primary e1"
+    assert sec_entry.exists(), "secondary entry must not be touched"
 
-    def fake_rmtree(target, cache_root):
-        # 删除成功后抬升主盘 avail
-        import shutil
 
-        shutil.rmtree(target)
-        state["avail"] += 10.0
-
+def test_secondary_locks_permission_error_skips_to_primary(tmp_path, monkeypatch):
+    """M5：二级 .locks PermissionError → 跳过二级，一级冷拉仍成功。"""
+    primary = tmp_path / "ssd"
+    secondary = tmp_path / "hdd"
+    secondary.mkdir()
+    (secondary / ".locks").write_text("blocked", encoding="utf-8")
+    _mount_ok(monkeypatch)
     monkeypatch.setattr(
-        "backend.agent.firmware_cache._safe_rmtree", fake_rmtree
+        "backend.agent.firmware_cache.get_aee_local_root",
+        lambda: tmp_path / "aee",
     )
-    _evict_until_space_ok(
-        primary,
-        additional_bytes=0,
-        settings=cfg,
-        aee_root=tmp_path / "aee",
+    (tmp_path / "aee").mkdir()
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache._st_dev",
+        lambda p: 1 if "ssd" in str(p) else 2,
     )
-    assert state["avail"] >= 20.0
-    assert sec_entry.exists()  # 二级未被误删
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_disk_usage", lambda _p: _disk()
+    )
+    monkeypatch.setenv("STP_AGENT_INSTALL_DIR", str(tmp_path / "install"))
+    (tmp_path / "install").mkdir()
+    src = _sealed_source(tmp_path / "fw", {PROFILE_MTK: [("a.bin", b"ok")]})
+    cfg = _settings(
+        stp_firmware_cache_dir=str(primary),
+        stp_firmware_cache_fallback_dir=str(secondary),
+    )
+    _p, s = resolve_cache_roots(settings=cfg)
+    assert s is None
+    with ensure_firmware(
+        src, PROFILE_MTK, permit_client=_fake_permit(), settings=cfg
+    ) as r:
+        assert r.tier == "primary"
+        assert r.hit is False
 
 
 # ── 6 / M6：错误语义与完整性 ──────────────────────────────────────────────────
@@ -1031,6 +1104,61 @@ def test_copy_io_error_not_nfs_fallback(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "backend.agent.firmware_cache._copy_files_streaming", boom
+    )
+    with pytest.raises(FirmwareCacheError) as ei:
+        with ensure_firmware(
+            src,
+            PROFILE_MTK,
+            permit_client=_fake_permit(),
+            settings=cfg,
+            allow_nfs_direct_fallback=True,
+            max_retries=1,
+        ):
+            pass
+    assert ei.value.code == CODE_COPY_IO
+
+
+def test_mixed_primary_space_secondary_ready_eio_not_nfs_fallback(
+    tmp_path, monkeypatch
+):
+    """M6-2：主盘空间不足 + 二级写 ready 报 EIO → 不得误判 insufficient/NFS。"""
+    import errno
+
+    primary = tmp_path / "ssd"
+    secondary = tmp_path / "hdd"
+    _mount_ok(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_aee_local_root",
+        lambda: tmp_path / "aee",
+    )
+    (tmp_path / "aee").mkdir()
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache._st_dev",
+        lambda p: 1 if "ssd" in str(p) else 2,
+    )
+
+    def usage(path):
+        if "ssd" in str(path):
+            return _disk(total=100.0, used=95.0, avail=1.0, writable=95.0)
+        return _disk(total=100.0, used=10.0, avail=90.0, writable=10.0)
+
+    monkeypatch.setattr("backend.agent.firmware_cache.get_disk_usage", usage)
+    monkeypatch.setenv("STP_AGENT_INSTALL_DIR", str(tmp_path / "install"))
+    (tmp_path / "install").mkdir()
+    src = _sealed_source(tmp_path / "fw", {PROFILE_MTK: [("a.bin", b"data")]})
+    cfg = _settings(
+        stp_firmware_cache_dir=str(primary),
+        stp_firmware_cache_fallback_dir=str(secondary),
+        stp_firmware_cache_reserve_gb=20.0,
+        stp_firmware_cache_max_gb=60.0,
+        stp_firmware_cache_max_pct=90.0,
+    )
+
+    def boom_ready(*_a, **_k):
+        raise OSError(errno.EIO, "ready write failed")
+
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache._write_ready", boom_ready
     )
     with pytest.raises(FirmwareCacheError) as ei:
         with ensure_firmware(
@@ -1081,6 +1209,62 @@ def test_sealed_hit_requires_authoritative_files(tmp_path, monkeypatch):
         assert (r2.local_dir / "b.bin").is_file()
 
 
+def test_sealed_hit_detects_same_size_one_byte_corruption(tmp_path, monkeypatch):
+    """M6-1：尺寸未变但本地 1 字节损坏 → SHA 失配重拉；干净命中仍零读源镜像。"""
+    primary = tmp_path / "cache"
+    _mount_ok(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_aee_local_root",
+        lambda: tmp_path / "aee",
+    )
+    (tmp_path / "aee").mkdir()
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_disk_usage", lambda _p: _disk()
+    )
+    monkeypatch.setattr("backend.agent.firmware_cache._st_dev", lambda _p: 1)
+    monkeypatch.setenv("STP_AGENT_INSTALL_DIR", str(tmp_path / "install"))
+    (tmp_path / "install").mkdir()
+
+    payload = b"ABCD"
+    src = _sealed_source(
+        tmp_path / "fw", {PROFILE_MTK: [("images/raw/super.img", payload)]}
+    )
+    cfg = _settings(stp_firmware_cache_dir=str(primary))
+    permit = _fake_permit()
+    with ensure_firmware(
+        src, PROFILE_MTK, permit_client=permit, settings=cfg
+    ) as r1:
+        entry = r1.local_dir
+        assert r1.hit is False
+        local_img = entry / "images" / "raw" / "super.img"
+        assert local_img.read_bytes() == payload
+        local_img.write_bytes(b"XBCD")
+
+    with ensure_firmware(
+        src, PROFILE_MTK, permit_client=permit, settings=cfg
+    ) as r2:
+        assert (
+            r2.local_dir / "images" / "raw" / "super.img"
+        ).read_bytes() == payload
+        assert r2.hit is False
+
+    opened_source_images: list[str] = []
+    real_open = open
+
+    def tracking_open(file, *args, **kwargs):
+        path = str(file)
+        if str(src) in path and path.endswith(".img"):
+            opened_source_images.append(path)
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", tracking_open)
+    with ensure_firmware(
+        src, PROFILE_MTK, permit_client=permit, settings=cfg
+    ) as r3:
+        assert r3.hit is True
+    assert opened_source_images == []
+
+
 def test_unsealed_lstat_failure_is_explicit(tmp_path, monkeypatch):
     """M6：未封包枚举单文件 lstat 失败 → 显式失败。"""
     import errno
@@ -1099,6 +1283,63 @@ def test_unsealed_lstat_failure_is_explicit(tmp_path, monkeypatch):
     with pytest.raises(FirmwareCacheError) as ei:
         resolve_cache_identity(unsealed, PROFILE_MTK)
     assert ei.value.code == CODE_ENUM_FAILED
+
+
+def test_unsealed_scandir_failure_is_explicit(tmp_path, monkeypatch):
+    """M6-3：未封包 os.walk 子目录 scandir 失败 → 显式 ENUM_FAILED。"""
+    unsealed = tmp_path / "fw"
+    unsealed.mkdir()
+    sub = unsealed / "subdir"
+    sub.mkdir()
+    (sub / "a.bin").write_bytes(b"x")
+    real_scandir = os.scandir
+
+    def boom_scandir(path):
+        if Path(path).resolve() == sub.resolve():
+            raise PermissionError("scandir denied")
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", boom_scandir)
+    with pytest.raises(FirmwareCacheError) as ei:
+        resolve_cache_identity(unsealed, PROFILE_MTK)
+    assert ei.value.code == CODE_ENUM_FAILED
+
+
+def test_downgrade_lock_sh_emits_wait_progress(tmp_path, monkeypatch):
+    """M7：降级取 LOCK_SH 非阻塞轮询时，占用期间周期打 firmware-stage-wait。"""
+    import backend.agent.firmware_cache as fc
+
+    lock_path = tmp_path / "entry.lock"
+    lock_path.write_bytes(b"")
+    holder = os.open(str(lock_path), os.O_RDWR)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    waiter = os.open(str(lock_path), os.O_RDWR)
+    stages: list[dict] = []
+
+    def on_progress(**kwargs):
+        stages.append(dict(kwargs))
+
+    def releaser():
+        time.sleep(0.25)
+        fcntl.flock(holder, fcntl.LOCK_UN)
+        os.close(holder)
+
+    threading.Thread(target=releaser, daemon=True).start()
+    fc._flock_wait(
+        waiter,
+        fcntl.LOCK_SH,
+        progress_callback=on_progress,
+        wait_for="entry-lock-sh-downgrade",
+        poll_seconds=0.04,
+    )
+    os.close(waiter)
+    wait_stamps = [
+        s for s in stages if s.get("stage") == "firmware-stage-wait"
+    ]
+    assert len(wait_stamps) >= 2
+    assert all(
+        s.get("wait_for") == "entry-lock-sh-downgrade" for s in wait_stamps
+    )
 
 
 def test_sealed_manifest_rejects_other_profile_escape(tmp_path):

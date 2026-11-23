@@ -15,9 +15,10 @@ Class: feature
 
 1. 新增 `backend/agent/firmware_cache.py`：`FIRMWARE_CACHE_API_VERSION = 1`、
    `ensure_firmware` 上下文管理器；复用 U1 `firmware_manifest` 与 U3
-   `TransferPermitClient`；一级/异盘溢出、空间守卫、`.entry.lock` /
-   `.host-transfer.lock` 固定偏序、降级复核、TTL 清理与 `insufficient_local_cache_space`
-   fail-closed。
+   `TransferPermitClient`；一级/异盘溢出、空间守卫、稳定
+   `<cache_root>/.locks/<key>.lock` 与
+   `{AGENT_INSTALL_DIR}/.stp_firmware_host_transfer.lock` 固定偏序、降级复核、
+   TTL 清理与 `insufficient_local_cache_space` fail-closed。
 2. `FirmwareCacheSettings` 收敛 ADR-0064 D2 #3 全部 9 个 `STP_FIRMWARE_*` 旋钮，并接入
    `reset_agent_settings_caches` / env 清单。
 3. `pipeline_engine` 双路径 `PYTHONPATH`；`firmware_cache_v1` 能力常量；
@@ -26,7 +27,8 @@ Class: feature
 ## Alternatives
 
 - 在刷机脚本内各自维护缓存：违背 ADR-0064 D2「归属 L1」与 #3498，否决。
-- 命中时重读源盘算 SHA：正是 F2 缺陷形态，否决；已封包命中只校本地 ready + 本地完整性。
+- 命中时重读源盘算 SHA：正是 F2 缺陷形态，否决；已封包命中只读本地缓存文件按权威
+  `staging_manifest` 校尺寸与 SHA-256（零读源大镜像）。
 - 清理线程停机挂入 `graceful_shutdown.py`：该文件不在 U2 declare scope；采用 daemon
   线程 + `FirmwareCacheManager.stop()`（测试/可选），进程退出由内核收口。记入 PR「观察」。
 
@@ -45,3 +47,7 @@ Class: feature
 - 第 1 轮独立复核 M1–M8 已在同 PR 返修：稳定 `.locks/<key>.lock`、冷拉降级重入、
   staging 保护与越界守卫、串行区水位复核、拓扑拒绝顺序、错误语义分离、主机级
   host-transfer 锁与等待打戳、真实 `_run_script_action` 双路径回归。
+- 第 2 轮独立复核返修（#7090166418 / 规划者 #7090194180）：`_safe_rmtree` 严格持锁子项、
+  许可返回后写前水位复核、二级 `.locks`/`.staging` 容错、已封包本地 SHA 命中校验、
+  混合盘 I/O 不误归因空间不足、未封包 `os.walk(onerror)`、降级 `LOCK_SH` 轮询打戳；
+  锁布局偏离已按 D12 写入 PR「偏离说明」。
