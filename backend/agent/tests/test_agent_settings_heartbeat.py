@@ -270,6 +270,62 @@ def test_heartbeat_pacing_reload_takes_effect(heartbeat_env):
     assert thread._last_adb_repair_at == last_repair_at, "冷却窗口不因重载作废"
 
 
+def test_reload_from_settings_switches_shared_root_and_gates_capacity(heartbeat_env):
+    """#4077 B1: reload_config 切换 STP_AEE_NFS_ROOT 到未挂载新根后心跳立刻降槽为 0。"""
+    from backend.agent.capacity_reporter import compute_capacity
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    mountinfo_text = "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n"
+    probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _path: mountinfo_text,
+    )
+    thread._mount_health_probe = probe
+
+    before_status = probe.snapshot(thread._mount_points)
+    before_cap = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=2,
+        total_devices=2,
+        system_stats={"cpu_load": 1.0, "ram_usage": 10.0, "disk_usage": {"writable_percent": 10.0}},
+        mount_status=before_status,
+    )
+    assert before_cap["health"]["mount_ok"] is True
+    assert before_cap["capacity"]["effective_slots"] == 2
+
+    # 模拟 reload_config 将 STP_AEE_NFS_ROOT 切到未挂载的新根
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    thread.reload_from_settings()
+
+    assert thread._mount_points == ["/mnt/old", "/mnt/stp-log-new"]
+    after_status = probe.snapshot(thread._mount_points)
+    after_cap = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=2,
+        total_devices=2,
+        system_stats={"cpu_load": 1.0, "ram_usage": 10.0, "disk_usage": {"writable_percent": 10.0}},
+        mount_status=after_status,
+    )
+    assert after_status["/mnt/stp-log-new"]["ok"] is False
+    assert after_cap["health"]["mount_ok"] is False
+    assert after_cap["health"]["status"] == "UNSCHEDULABLE"
+    assert after_cap["capacity"]["effective_slots"] == 0
+
+
 def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
     from backend.agent.coordinator import HostRunCoordinator
 

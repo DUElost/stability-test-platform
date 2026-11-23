@@ -506,21 +506,41 @@ def test_host_mount_summary_counts_any_ok_flag_as_mounted():
 
 
 def test_host_mount_summary_prefers_authoritative_shared_root_over_stale_entry():
-    """#4077: stale MOUNT_POINTS (/mnt/stp-aee ok=True) must not mask unmounted STP_AEE_NFS_ROOT."""
+    """#4077: stale MOUNT_POINTS (/mnt/stp-aee ok=True) must not mask unmounted/invalid STP_AEE_NFS_ROOT."""
     summary = monitor._host_mount_summary(
         [
             _host("h-stale-ok", {"/mnt/stp-aee": {"ok": True}, "/mnt/stp-log": {"ok": False}}),
             _host("h-both-ok", {"/mnt/stp-aee": {"ok": True}, "/mnt/stp-log/": {"ok": True}}),
+            _host("h-invalid-bool", {"/mnt/stp-aee": {"ok": True}, "/mnt/stp-log": {"ok": "false"}}),
             _host("h-legacy-only", {"/mnt/stp-aee": {"ok": True}}),
         ],
         shared_root="/mnt/stp-log",
     )
     assert summary["mounted"] == 2
     assert summary["failed"] == 1
+    assert summary["unreported"] == 1
     items_by_ip = {item["ip"]: item for item in summary["items"]}
     assert items_by_ip["h-stale-ok"]["mounted"] is False
     assert items_by_ip["h-both-ok"]["mounted"] is True
+    assert items_by_ip["h-invalid-bool"]["mounted"] is None
     assert items_by_ip["h-legacy-only"]["mounted"] is True
+
+
+def test_collect_file_server_overview_passes_shared_root(tmp_path, monkeypatch):
+    """#4077 入口接线：collect_file_server_overview 传入权威 shared_root。"""
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    result = monitor.collect_file_server_overview(
+        [
+            _host("198.51.100.201", {"/mnt/stp-aee": {"ok": True}, str(tmp_path): {"ok": False}}),
+            _host("198.51.100.202", {"/mnt/stp-aee": {"ok": True}, str(tmp_path): {"ok": True}}),
+        ],
+        hours=1,
+    )
+    assert result["agents"]["mounted"] == 1
+    assert result["agents"]["failed"] == 1
+    by_ip = {item["ip"]: item for item in result["agents"]["items"]}
+    assert by_ip["198.51.100.201"]["mounted"] is False
+    assert by_ip["198.51.100.202"]["mounted"] is True
 
 
 def test_collect_file_server_overview_requires_shared_root(monkeypatch, tmp_path):

@@ -4,6 +4,7 @@
 """
 
 import logging
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from .mount_health_probe import MountHealthProbe
 from .usb_power_slots import read_usb_power_presence
 from .settings import get_heartbeat_settings
 from .startup_guards import single_instance_guard_degraded
+from .startup_identity import resolve_monitored_mount_points
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,7 @@ class HeartbeatThread:
         self._kernel_usb_watch = KernelUsbWatch()
         # ADR-0064 D5 / #4054：挂载可达性后台探测；主循环只读非阻塞快照。
         self._mount_health_probe = MountHealthProbe()
+        self._mount_points_lock = threading.Lock()
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
@@ -161,11 +164,19 @@ class HeartbeatThread:
         self._max_poll_interval = _hb.stp_heartbeat_interval_max
         self._adb_repair_cooldown = _hb.stp_adb_repair_cooldown_seconds
         self._reconnect_cooldown = _hb.stp_adb_reconnect_cooldown_seconds
+        if "MOUNT_POINTS" in os.environ or "STP_AEE_NFS_ROOT" in os.environ:
+            updated_mounts = resolve_monitored_mount_points()
+            with self._mount_points_lock:
+                changed = list(self._mount_points) != updated_mounts
+                self._mount_points = updated_mounts
+            if changed:
+                self._mount_health_probe.reset()
         logger.info(
             "heartbeat_pacing_reloaded min=%s max=%s adb_repair_cooldown=%s "
-            "reconnect_cooldown=%s",
+            "reconnect_cooldown=%s mount_points=%s",
             self._min_poll_interval, self._max_poll_interval,
             self._adb_repair_cooldown, self._reconnect_cooldown,
+            self._mount_points,
         )
 
     @property
@@ -636,7 +647,9 @@ class HeartbeatThread:
             except Exception as exc:
                 logger.debug("operation_stats_failed: %s", exc)
         # ADR-0064 D5：非阻塞快照；NFS 探针挂起时立即返回并标 probe_stale。
-        mount_status = self._mount_health_probe.snapshot(self._mount_points)
+        with self._mount_points_lock:
+            mount_points = list(self._mount_points)
+        mount_status = self._mount_health_probe.snapshot(mount_points)
 
         active_count = self._get_active_job_count() if self._get_active_job_count else 0
         active_device_count = self._get_active_device_count() if self._get_active_device_count else 0
@@ -776,7 +789,7 @@ class HeartbeatThread:
             response = send_heartbeat(
                 self._api_url,
                 self._host_id,
-                self._mount_points,
+                mount_points,
                 host_info=self._host_info,
                 devices=devices_list,
                 script_catalog_version=versions.get("script_catalog_version", ""),

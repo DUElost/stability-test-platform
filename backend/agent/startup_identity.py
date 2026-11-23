@@ -42,24 +42,21 @@ class AgentProcessIdentity:
 def resolve_monitored_mount_points() -> List[str]:
     """Build heartbeat mount check paths from ``MOUNT_POINTS`` plus ``STP_AEE_NFS_ROOT``.
 
-    Always monitoring ``STP_AEE_NFS_ROOT`` ensures storage cutovers (e.g.
-    ``/mnt/stp-aee`` -> ``/mnt/stp-log``) cannot leave an unmounted center root
-    hidden behind a stale ``MOUNT_POINTS`` entry (#4077).
+    When ``STP_AEE_NFS_ROOT`` is unset or empty, preserves the legacy
+    ``[p for p in MOUNT_POINTS.split(",") if p]`` behavior (no whitespace
+    trimming or deduplication). When ``STP_AEE_NFS_ROOT`` is configured, keeps
+    all existing ``MOUNT_POINTS`` entries and appends ``STP_AEE_NFS_ROOT`` if not
+    already represented (#4077).
     """
-    raw_items = [p.strip() for p in os.getenv("MOUNT_POINTS", "").split(",") if p.strip()]
-    points: List[str] = []
-    seen: set[str] = set()
-    for item in raw_items:
-        norm = item.rstrip("/") or "/"
-        if norm not in seen:
-            seen.add(norm)
-            points.append(item)
+    points = [p for p in os.getenv("MOUNT_POINTS", "").split(",") if p]
     shared_root = resolve_shared_storage_root()
-    if shared_root:
-        norm_shared = shared_root.rstrip("/") or "/"
-        if norm_shared not in seen:
-            seen.add(norm_shared)
-            points.append(shared_root)
+    if not shared_root:
+        return points
+
+    seen = {(item.strip().rstrip("/") or "/") for item in points if item.strip()}
+    norm_shared = shared_root.rstrip("/") or "/"
+    if norm_shared not in seen:
+        points.append(shared_root)
     return points
 
 

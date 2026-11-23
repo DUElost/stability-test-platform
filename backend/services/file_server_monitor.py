@@ -254,16 +254,23 @@ def _block_device(source: str | None) -> str | None:
 
 
 def _resolve_host_mount_ok(raw_status: Any, authoritative_key: str) -> bool | None:
-    """Resolve a host's mount health from heartbeat ``mount_status``."""
+    """Resolve a host's mount health from heartbeat ``mount_status``.
+
+    When ``authoritative_key`` (``STP_AEE_NFS_ROOT``) is present as a key in
+    ``raw_status``, only its ``ok`` boolean is authoritative (an invalid/missing
+    boolean returns ``None`` rather than falling back to legacy keys, #4077).
+    """
     if not isinstance(raw_status, dict) or not raw_status:
         return None
     if authoritative_key:
         for key, entry in raw_status.items():
-            if not isinstance(key, str) or not isinstance(entry, dict):
+            if not isinstance(key, str):
                 continue
             norm_key = key.strip().rstrip("/") or ("/" if key.strip() == "/" else "")
-            if norm_key == authoritative_key and isinstance(entry.get("ok"), bool):
-                return bool(entry["ok"])
+            if norm_key == authoritative_key:
+                if isinstance(entry, dict) and isinstance(entry.get("ok"), bool):
+                    return bool(entry["ok"])
+                return None
     ok_flags = [
         bool(entry.get("ok"))
         for entry in raw_status.values()

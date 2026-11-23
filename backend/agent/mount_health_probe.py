@@ -156,6 +156,13 @@ class MountHealthProbe:
         self._reachable_by_point: Dict[str, bool] = {}
         self._probed_at_wall: Optional[float] = None
 
+    def reset(self) -> None:
+        """清除已缓存的可达性快照，供 reload_config 切换挂载根后重探（#4077）。"""
+        with self._lock:
+            self._last_probe_monotonic = None
+            self._reachable_by_point = {}
+            self._probed_at_wall = None
+
     def snapshot(self, mount_points: Iterable[str]) -> Dict[str, Dict[str, Any]]:
         """非阻塞快照；必要时安排后台探测。"""
         points = list(mount_points)
