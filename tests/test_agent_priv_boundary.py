@@ -62,11 +62,12 @@ def test_wrapper_is_standalone_system_python_script():
 
     assert text.startswith("#!/usr/bin/python3")
     # 只能是 stdlib：部署环境不保证 venv/三方包，root 执行面越小越好
-    # （select / time 为 #2957 read-kernel-log 的带超时读与 8 MiB 上限所需）
+    # （select / time 为 #2957 read-kernel-log 的带超时读与 8 MiB 上限所需；
+    # errno / signal 为 #2972 xhci-rebind 的 O_NOFOLLOW ELOOP 判定与同步 probe 总超时所需）
     imports = re.findall(r"^(?:import|from)\s+([a-zA-Z_][\w.]*)", text, re.MULTILINE)
     allowed_roots = {
-        "argparse", "base64", "contextlib", "grp", "io", "json", "os", "pwd", "re", "select",
-        "shutil", "stat", "subprocess", "sys", "time", "uuid",
+        "argparse", "base64", "contextlib", "errno", "grp", "io", "json", "os", "pwd", "re",
+        "select", "shutil", "signal", "stat", "subprocess", "sys", "time", "uuid",
     }
     assert {name.split(".")[0] for name in imports} <= allowed_roots
 

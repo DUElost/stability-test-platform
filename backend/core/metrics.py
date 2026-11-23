@@ -397,6 +397,14 @@ host_health_probe_strike = Gauge(
     ['host_id'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #2972 / ADR-0037 D9：Agent 侧 USB/ADB 自愈持久化熔断升级信号（1=已触发熔断）。
+# state 封闭词表：hardware_suspect（probe 失败/重试耗尽）| need_human（boot/48h 上限或状态文件损坏）。
+host_self_heal_fuse_open = Gauge(
+    'stability_host_self_heal_fuse_open',
+    'Agent USB/ADB self-heal fuse open state requiring human intervention (1=open)',
+    ['host_id', 'state'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Risk Classification Metrics
 # ============================================================================

@@ -6,6 +6,7 @@ submit. The ``while`` / signal / ``finally`` shell lives in ``agent_loop``.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import logging
 from concurrent.futures import Executor
 from typing import Any, Callable
@@ -43,6 +44,57 @@ def process_claim_tick(
     run_task_wrapper: Callable[..., Any],
 ) -> None:
     """ADR-0026 Step 5b claim tick (free healthy device capacity)."""
+    pause_gate = getattr(occupancy, "claim_pause_gate", None)
+    scope = pause_gate.claim_scope() if pause_gate is not None else nullcontext(True)
+    with scope as claim_allowed:
+        if not claim_allowed:
+            logger.info("claim_tick_paused_for_self_heal host_id=%s", host_id)
+            return
+        _run_claim_tick_body(
+            api_url=api_url,
+            host_id=host_id,
+            agent_instance_id=agent_instance_id,
+            occupancy=occupancy,
+            heartbeat_thread=heartbeat_thread,
+            register_active_job=register_active_job,
+            deregister_active_job=deregister_active_job,
+            lease_renewer=lease_renewer,
+            local_db=local_db,
+            coordinator=coordinator,
+            executor=executor,
+            adb=adb,
+            job_runner_state=job_runner_state,
+            mq_producer=mq_producer,
+            script_registry=script_registry,
+            patrol_checkpoint_store=patrol_checkpoint_store,
+            operation_scheduler=operation_scheduler,
+            step_trace_uploader=step_trace_uploader,
+            run_task_wrapper=run_task_wrapper,
+        )
+
+
+def _run_claim_tick_body(
+    *,
+    api_url: str,
+    host_id: str,
+    agent_instance_id: str,
+    occupancy: ActiveJobOccupancy,
+    heartbeat_thread: Any,
+    register_active_job: Callable[..., None],
+    deregister_active_job: Callable[..., None],
+    lease_renewer: Any,
+    local_db: Any,
+    coordinator: Any,
+    executor: Executor,
+    adb: Any,
+    job_runner_state: Any,
+    mq_producer: Any,
+    script_registry: Any,
+    patrol_checkpoint_store: Any,
+    operation_scheduler: Any,
+    step_trace_uploader: Any,
+    run_task_wrapper: Callable[..., Any],
+) -> None:
     with occupancy.lock:
         active_job_ids = set(occupancy.job_ids)
         active_count = len(active_job_ids)

@@ -73,6 +73,7 @@ class HeartbeatThread:
         on_devices_reconnected: Optional[Callable[[List[str]], None]] = None,
         on_log_rate_limit: Optional[Callable[[Optional[int]], None]] = None,
         on_return_state: Optional[Callable[[Optional[dict], List[dict]], None]] = None,
+        self_heal_coordinator: Optional[Any] = None,
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -101,6 +102,7 @@ class HeartbeatThread:
         self._on_devices_reconnected = on_devices_reconnected
         self._on_log_rate_limit = on_log_rate_limit
         self._on_return_state = on_return_state
+        self._self_heal_coordinator = self_heal_coordinator
         # Late-bound by main after OperationScheduler is constructed.
         self._get_operation_stats: Optional[Callable[[], Optional[Dict[str, Any]]]] = None
         self._stop_event = threading.Event()
@@ -743,9 +745,25 @@ class HeartbeatThread:
                 except Exception as exc:
                     logger.warning("adb_auto_repair_failed: %s", exc)
 
-        # #2754 自愈半边：批量 offline 的 reconnect offline 巡检（独立于上面的
-        # server 级修复——reconnect offline 只作用于 offline 设备，不重启 server）。
-        self._maybe_auto_reconnect_offline(devices_list, heartbeat_settings)
+        # #2754 / ADR-0037 D9.7：批量 offline 自愈。接入 self_heal_coordinator 时走
+        # D9.7 同构空闲窗互斥门闸 + boot_id 持久化熔断；未接入时保留旧单测兼容路径。
+        tick_snapshot_monotonic = time.monotonic()
+        coordinator_sh = getattr(self, "_self_heal_coordinator", None)
+        if coordinator_sh is not None:
+            coordinator_sh.maybe_trigger_adb_reconnect_offline(
+                enabled=bool(
+                    heartbeat_settings is not None
+                    and getattr(heartbeat_settings, "adb_reconnect_auto_enabled", False)
+                ),
+                devices_list=devices_list,
+                cooldown_seconds=self._reconnect_cooldown,
+                active_jobs=active_count,
+                active_devices=active_device_count,
+                snapshot_monotonic=tick_snapshot_monotonic,
+                poll_interval=self._poll_interval,
+            )
+        else:
+            self._maybe_auto_reconnect_offline(devices_list, heartbeat_settings)
 
         online_healthy = sum(
             1 for d in devices_list
@@ -821,6 +839,51 @@ class HeartbeatThread:
         except Exception as exc:
             logger.debug("usb_kernel_errors_1h_failed: %s", exc)
             usb_kernel_errors_1h = None
+
+        # S4 / ADR-0037 D9：xHCI 主控自动恢复评估与心跳 self_heal 状态上报。
+        if coordinator_sh is not None:
+            xhci_usb_count = usb_device_count
+            xhci_root_hubs = usb_root_hub_count
+            other_usb_nodes: Optional[int] = 0
+            if (
+                usb_device_count == 0
+                and usb_root_hub_count is not None
+                and usb_root_hub_count > 0
+                and total_devices == 0
+            ):
+                try:
+                    xhci_usb_count, xhci_root_hubs, other_usb_nodes = (
+                        device_discovery.count_usb_lsusb_summary()
+                    )
+                except Exception as exc:
+                    logger.debug("usb_lsusb_summary_failed: %s", exc)
+                    xhci_usb_count, xhci_root_hubs, other_usb_nodes = None, None, None
+            try:
+                coordinator_sh.maybe_trigger_xhci_rebind(
+                    enabled=bool(
+                        heartbeat_settings is not None
+                        and getattr(heartbeat_settings, "xhci_auto_rebind_enabled", False)
+                    ),
+                    whitelist=(
+                        getattr(heartbeat_settings, "xhci_auto_rebind_hosts", frozenset())
+                        if heartbeat_settings is not None
+                        else frozenset()
+                    ),
+                    usb_device_count=xhci_usb_count,
+                    usb_root_hub_count=xhci_root_hubs,
+                    other_usb_nodes=other_usb_nodes,
+                    discovered_devices=total_devices,
+                    active_jobs=active_count,
+                    active_devices=active_device_count,
+                    snapshot_monotonic=tick_snapshot_monotonic,
+                    poll_interval=self._poll_interval,
+                )
+            except Exception as exc:
+                logger.debug("xhci_self_heal_eval_failed: %s", exc)
+            try:
+                system_stats["self_heal"] = coordinator_sh.snapshot()
+            except Exception as exc:
+                logger.debug("self_heal_snapshot_failed: %s", exc)
 
         response = None
         for attempt in range(3):
@@ -900,6 +963,14 @@ class HeartbeatThread:
 
         # ADR-0026 P0: close the backpressure loop — honour server interval hint.
         if isinstance(response, dict):
+            if coordinator_sh is not None:
+                try:
+                    coordinator_sh.update_control_plane_hints(
+                        host_ledger_device_rows=response.get("host_ledger_device_rows"),
+                        in_maintenance=response.get("in_maintenance"),
+                    )
+                except Exception as exc:
+                    logger.debug("self_heal_hints_update_failed: %s", exc)
             hint = response.get("heartbeat_interval_seconds")
             bp = response.get("backpressure")
             if hint is None and isinstance(bp, dict):

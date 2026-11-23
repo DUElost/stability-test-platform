@@ -41,7 +41,8 @@ export const TEXT = {
   caption: 'text-muted-foreground',
   subtle: 'text-muted-foreground/80',
   onPrimary: 'text-primary-foreground',
-  destructive: 'text-destructive',
+  // #2027 / #4117 U1-2：错误正文统一使用 WCAG AA 6.42:1 的 --destructive-text
+  destructive: 'text-destructive-text',
 } as const;
 
 /** 交互态（悬停 / 聚焦背景） */
@@ -200,13 +201,13 @@ export const CHART_SECTION = {
 
 /** 横幅提示（Watcher 阈值、派发门禁 stale 等） */
 export const ALERT_BANNER = {
-  destructive: 'border-b border-destructive/25 bg-destructive/10 text-destructive',
+  destructive: 'border-b border-destructive/25 bg-destructive/10 text-destructive-text',
   warning: 'border-b border-warning/25 bg-warning/10 text-warning',
 } as const;
 
 /** 独立提示盒（全边边框）：ALERT_BANNER 是卡片顶部 border-b 横幅，独立盒子用全边 */
 export const ALERT_BOX = {
-  destructive: 'border border-destructive/25 bg-destructive/10 text-destructive',
+  destructive: 'border border-destructive/25 bg-destructive/10 text-destructive-text',
   warning: 'border border-warning/25 bg-warning/10 text-warning',
   info: 'border border-info/25 bg-info/10 text-info',
   success: 'border border-success/25 bg-success/10 text-success',
@@ -263,11 +264,11 @@ export const TOAST = {
   dismiss: 'text-muted-foreground hover:text-foreground',
 } as const;
 
-/** AEE 风险等级 S/A/B 文字色 */
+/** AEE 风险等级 S/A/B 文字色（与 StatusBadge kind="risk" 对齐：B 为低风险 success） */
 export const RISK_RATING_TEXT = {
-  S: 'text-destructive',
+  S: 'text-destructive-text',
   A: 'text-warning',
-  B: 'text-warning/80',
+  B: 'text-success',
 } as const;
 
 export const SCRIPT_MATCH_ROW = {
@@ -295,13 +296,14 @@ export const PANEL = {
 } as const;
 
 /** 表单控件 */
-// B4 决议（issue #371）：全站下拉的唯一形态 = 原生 <select> + FORM.select /
-// selectSm。Radix ui/select 已删除——原生在长列表（机型/项目名）下性能与
-// 可访问性更好，且是历史多数派；不要再引入第二条下拉线。
+// D1 决议（#4117，docs/design/2026-11-23-frontend-ui-governance-contract.md §2.1）：
+// 废止旧 B4「全站仅用原生 <select>」注释，改为两档分层——
+// ① 筛选栏及动态/长列表（>8 项）必须使用 SearchableSelect；
+// ② 表单与高级筛选中的固定短枚举（≤8 项）可以使用原生 <select> + FORM.select / selectSm。
 export const FORM = {
   label: 'block text-sm font-medium text-foreground mb-1',
   hint: 'mt-1 text-xs text-muted-foreground',
-  error: 'mt-1 text-sm text-destructive',
+  error: 'mt-1 text-sm text-destructive-text',
   input:
     'w-full px-3 py-2 border border-border rounded-md bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring transition-all',
   inputSm:

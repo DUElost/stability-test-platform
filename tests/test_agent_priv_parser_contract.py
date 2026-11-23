@@ -102,6 +102,22 @@ def test_ensure_udev_rule_accepts_no_args(wrapper):
     assert ns.command == "ensure-udev-rule"
 
 
+def test_xhci_rebind_accepts_no_args_and_rejects_extra_args(wrapper):
+    """ADR-0037 D9：xhci-rebind 必须无目标参数且 allow_abbrev=False。"""
+    parser = wrapper._build_parser()
+    ns = parser.parse_args(["xhci-rebind"])
+    assert ns.command == "xhci-rebind"
+    assert "xhci-rebind" in wrapper._SUBCOMMAND_CONTRACT
+    for bad in (
+        ["xhci-rebind", "0000:00:14.0"],
+        ["xhci-rebind", "--bdf", "0000:00:14.0"],
+        ["xhci-rebind", "--path", "/sys/bus/pci/drivers/xhci_hcd"],
+    ):
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(bad)
+        assert exc.value.code == 2, bad
+
+
 def test_full_contract_passes_on_current_wiring(wrapper):
     assert wrapper._validate_parser_contract(wrapper._build_parser()) == []
 
