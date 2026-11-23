@@ -168,6 +168,8 @@ class MountHealthProbe:
 
     def snapshot(self, mount_points: Iterable[str]) -> Dict[str, Dict[str, Any]]:
         """非阻塞快照；必要时安排后台探测。"""
+        with self._lock:
+            sample_gen = self._probe_generation
         points = list(mount_points)
         targets = read_mountinfo_targets(
             mountinfo_path=self._mountinfo_path,
@@ -203,12 +205,19 @@ class MountHealthProbe:
                 "probe_stale": stale,
                 "probed_at": probed_at,
             }
-        self._maybe_start_probe(points)
+        self._maybe_start_probe(points, expected_generation=sample_gen)
         return result
 
-    def _maybe_start_probe(self, mount_points: List[str]) -> None:
+    def _maybe_start_probe(
+        self,
+        mount_points: List[str],
+        *,
+        expected_generation: Optional[int] = None,
+    ) -> None:
         with self._lock:
             gen = self._probe_generation
+            if expected_generation is not None and gen != expected_generation:
+                return
             if self._active_probe_generation == gen:
                 return
             now = self._monotonic()

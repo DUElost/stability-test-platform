@@ -16,11 +16,12 @@ from .contracts.capabilities import AGENT_CAPABILITIES
 from .heartbeat import send_heartbeat
 from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
-from .mount_health_probe import MountHealthProbe
+from .mount_health_probe import MountHealthProbe, normalize_mount_point
 from .usb_power_slots import read_usb_power_presence
 from .settings import get_heartbeat_settings
 from .startup_guards import single_instance_guard_degraded
 from .startup_identity import resolve_monitored_mount_points
+from .aee.paths import resolve_shared_storage_root
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,7 @@ class HeartbeatThread:
         self._mount_health_probe = MountHealthProbe()
         self._mount_points_lock = threading.Lock()
         self._mount_points_generation: int = 0
+        self._shared_storage_root: str = normalize_mount_point(resolve_shared_storage_root())
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
@@ -141,51 +143,26 @@ class HeartbeatThread:
         self._last_disk_due_count = 0
 
     def _reload_mount_points_from_env(self) -> None:
-        """从 env 刷新监控挂载列表、隔离旧探针快照，并即时失效普通认领槽位（#4077）。"""
+        """从 env 刷新监控挂载列表与权威中心根、隔离旧探针快照，并即时失效普通认领槽位（#4077）。"""
         if "MOUNT_POINTS" not in os.environ and "STP_AEE_NFS_ROOT" not in os.environ:
             return
         updated_mounts = resolve_monitored_mount_points()
+        updated_shared_root = normalize_mount_point(resolve_shared_storage_root())
         with self._mount_points_lock:
-            changed = list(self._mount_points) != updated_mounts
+            prev_shared_root = getattr(self, "_shared_storage_root", "")
+            changed = (
+                list(self._mount_points) != updated_mounts
+                or prev_shared_root != updated_shared_root
+            )
             if changed:
                 self._mount_points_generation += 1
                 self._mount_points = updated_mounts
+                self._shared_storage_root = updated_shared_root
                 self._mount_health_probe.reset()
                 # 切根后立即归零普通有效槽位（VBUS 名额由 vbus_claim_slots 独立控制），
                 # 防止 ACK 返回后、下一拍心跳完成前按旧配置继续发起普通认领。
                 with self._capacity_lock:
                     self._effective_slots = 0
-
-    def _matches_mount_generation(self, generation: int) -> bool:
-        with self._mount_points_lock:
-            return generation == self._mount_points_generation
-
-    def _commit_mount_capacity(
-        self,
-        compute_capacity_fn: Callable[..., Dict[str, Any]],
-        cap_kwargs: Dict[str, Any],
-        *,
-        initial: Optional[tuple[int, List[str], Dict[str, Any]]] = None,
-    ) -> Optional[tuple[int, List[str], Dict[str, Any], Dict[str, Any]]]:
-        """按当前挂载列表代际采样并原子提交普通有效槽位；若代际期间变更则重采或放弃。"""
-        for attempt in range(3):
-            if attempt == 0 and initial is not None:
-                mount_gen, mount_points, mount_status = initial
-            else:
-                with self._mount_points_lock:
-                    mount_gen = self._mount_points_generation
-                    mount_points = list(self._mount_points)
-                mount_status = self._mount_health_probe.snapshot(mount_points)
-            cap_result = compute_capacity_fn(mount_status=mount_status, **cap_kwargs)
-            with self._mount_points_lock:
-                if mount_gen != self._mount_points_generation:
-                    continue
-                with self._capacity_lock:
-                    self._effective_slots = cap_result.get("capacity", {}).get(
-                        "effective_slots", 0
-                    )
-                return mount_gen, mount_points, mount_status, cap_result
-        return None
 
     def reload_from_settings(self) -> None:
         """#2086：`reload_config` 的实例级 re-apply（心跳域）。
@@ -805,60 +782,70 @@ class HeartbeatThread:
             logger.debug("usb_power_presence_failed: %s", exc)
             usb_power_slots = None
 
-        cap_kwargs: Dict[str, Any] = {
-            "active_job_count": active_count,
-            "active_device_count": active_device_count,
-            "online_healthy_devices": online_healthy,
-            "total_devices": total_devices,
-            "system_stats": system_stats,
-            "adb_server_conflict": adb_server_conflict,
-            "usb_device_count": usb_device_count,
-            "adb_interface_count": adb_interface_count,
-            "adb_state_counts": adb_state_counts,
-            "usb_root_hub_count": usb_root_hub_count,
-            "usb_fault_reasons": usb_fault_reasons,
-            "usb_kernel_log_channel": usb_kernel_log_channel,
-            # #3092：启动期常量——守卫降级时让「第二个实例可能静默叠加」随心跳可见
-            "single_instance_degraded": single_instance_guard_degraded(),
-            "usb_power_slots": usb_power_slots,
-        }
-        resolved = self._commit_mount_capacity(
-            compute_capacity,
-            cap_kwargs,
-            initial=(mount_gen, mount_points, mount_status),
-        )
-        if resolved is None:
-            logger.info("heartbeat_tick_superseded_by_mount_reload")
-            return
-        mount_gen, mount_points, mount_status, cap_result = resolved
-
-        if self._tick_phases is not None:
-            self._tick_phases["prepare"] = time.monotonic() - prepare_started
-        if not self._matches_mount_generation(mount_gen):
-            resolved = self._commit_mount_capacity(compute_capacity, cap_kwargs)
-            if resolved is None:
-                logger.info("heartbeat_tick_superseded_before_http")
-                return
-            mount_gen, mount_points, mount_status, cap_result = resolved
-        with self._phase("http"):
-            response = send_heartbeat(
-                self._api_url,
-                self._host_id,
-                mount_points,
-                host_info=self._host_info,
-                devices=devices_list,
-                script_catalog_version=versions.get("script_catalog_version", ""),
-                capacity=cap_result.get("capacity"),
-                health=cap_result.get("health"),
-                agent_instance_id=self._agent_instance_id,
-                boot_id=self._boot_id,
-                agent_version=self._agent_version,
-                agent_code_revision=self._agent_code_revision,
-                agent_artifact_digest=self._resolve_artifact_digest(),
+        response = None
+        for attempt in range(3):
+            if attempt > 0:
+                with self._mount_points_lock:
+                    mount_gen = self._mount_points_generation
+                    mount_points = list(self._mount_points)
+                mount_status = self._mount_health_probe.snapshot(mount_points)
+            artifact_digest = self._resolve_artifact_digest()
+            cap_result = compute_capacity(
+                active_job_count=active_count,
+                active_device_count=active_device_count,
+                online_healthy_devices=online_healthy,
+                total_devices=total_devices,
                 system_stats=system_stats,
                 mount_status=mount_status,
-                capabilities=AGENT_CAPABILITIES,
+                adb_server_conflict=adb_server_conflict,
+                usb_device_count=usb_device_count,
+                adb_interface_count=adb_interface_count,
+                adb_state_counts=adb_state_counts,
+                usb_root_hub_count=usb_root_hub_count,
+                usb_fault_reasons=usb_fault_reasons,
+                usb_kernel_log_channel=usb_kernel_log_channel,
+                # #3092：启动期常量——守卫降级时让「第二个实例可能静默叠加」随心跳可见
+                single_instance_degraded=single_instance_guard_degraded(),
+                usb_power_slots=usb_power_slots,
             )
+            with self._mount_points_lock:
+                if mount_gen != self._mount_points_generation:
+                    continue
+                with self._capacity_lock:
+                    self._effective_slots = cap_result.get("capacity", {}).get(
+                        "effective_slots", 0
+                    )
+            if self._tick_phases is not None:
+                self._tick_phases["prepare"] = time.monotonic() - prepare_started
+            catalog_ver = versions.get("script_catalog_version", "")
+            cap_payload = cap_result.get("capacity")
+            health_payload = cap_result.get("health")
+            with self._phase("http"):
+                with self._mount_points_lock:
+                    if mount_gen != self._mount_points_generation:
+                        continue
+                response = send_heartbeat(
+                    self._api_url,
+                    self._host_id,
+                    mount_points,
+                    host_info=self._host_info,
+                    devices=devices_list,
+                    script_catalog_version=catalog_ver,
+                    capacity=cap_payload,
+                    health=health_payload,
+                    agent_instance_id=self._agent_instance_id,
+                    boot_id=self._boot_id,
+                    agent_version=self._agent_version,
+                    agent_code_revision=self._agent_code_revision,
+                    agent_artifact_digest=artifact_digest,
+                    system_stats=system_stats,
+                    mount_status=mount_status,
+                    capabilities=AGENT_CAPABILITIES,
+                )
+            break
+        else:
+            logger.info("heartbeat_tick_superseded_by_mount_reload")
+            return
         if response and response.get("script_catalog_outdated") and self._on_scripts_outdated:
             try:
                 self._on_scripts_outdated()
@@ -929,16 +916,15 @@ class HeartbeatThread:
                 self._pending_reconnected_serials.clear()
 
         # WS push 复用同一份 stats（不再重复 collect_system_stats / check_mounts）
-        if (
-            self._sio_client
-            and self._sio_client.connected
-            and self._matches_mount_generation(mount_gen)
-        ):
+        if self._sio_client and self._sio_client.connected:
             try:
                 stats = dict(system_stats)
                 stats["devices"] = devices_list
                 stats["mount_status"] = mount_status
-                self._sio_client.send_heartbeat(stats)
-                logger.debug("heartbeat_ws_push_sent")
+                with self._mount_points_lock:
+                    ws_stale = mount_gen != self._mount_points_generation
+                if not ws_stale:
+                    self._sio_client.send_heartbeat(stats)
+                    logger.debug("heartbeat_ws_push_sent")
             except Exception as e:
                 logger.debug("heartbeat_ws_push_failed: %s", e)

@@ -488,6 +488,155 @@ def test_reload_mount_points_succeeds_even_with_invalid_pacing_knob(
     assert thread.effective_slots == 0
 
 
+def test_reload_from_settings_zeroes_slots_when_shared_root_switches_within_same_list(
+    heartbeat_env,
+):
+    """#4077 R3 B1: 监控列表不变仅切换 STP_AEE_NFS_ROOT 时，仍递增代际、reset 探针并归零槽位。"""
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old,/mnt/new")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old", "/mnt/new"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    with thread._capacity_lock:
+        thread._effective_slots = 2
+    before_gen = thread._mount_points_generation
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/new")
+    thread.reload_from_settings()
+
+    assert thread._mount_points == ["/mnt/old", "/mnt/new"]
+    assert thread._mount_points_generation == before_gen + 1
+    assert thread.effective_slots == 0
+
+
+def test_heartbeat_tick_rechecks_generation_after_artifact_digest_and_before_ws(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R3 B1: artifact_digest 回调期间若切根，HTTP 不得携带旧根 ok=true 且 WS 不推送旧根。"""
+    import threading
+    from types import SimpleNamespace
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+
+    sent_payloads: list[dict] = []
+    ws_payloads: list[dict] = []
+    digest_entered = threading.Event()
+    digest_release = threading.Event()
+    pause_on_digest = True
+
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.discover_devices",
+        lambda *_a: [
+            {"serial": "dev-1", "adb_state": "device"},
+            {"serial": "dev-2", "adb_state": "device"},
+        ],
+    )
+    monkeypatch.setattr(
+        HeartbeatThread,
+        "_collect_device_infos",
+        lambda _self, devs: [
+            {"adb_state": "device", "adb_connected": True} for _ in devs
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.list_adb_fork_servers",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.get_adb_server_port",
+        lambda: 5037,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_usb_devices_and_root_hubs",
+        lambda: (2, 1),
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_adb_interface_devices",
+        lambda: 2,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.read_usb_power_presence",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agent.system_monitor.collect_system_stats",
+        lambda: {
+            "cpu_load": 1.0,
+            "ram_usage": 10.0,
+            "disk_usage": {"writable_percent": 10.0},
+        },
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.send_heartbeat",
+        lambda *_a, **kwargs: sent_payloads.append(kwargs) or {"ok": True},
+    )
+
+    def digest_cb():
+        if pause_on_digest:
+            digest_entered.set()
+            assert digest_release.wait(5.0)
+        return "dig-1"
+
+    ws_client = SimpleNamespace(
+        connected=True,
+        send_heartbeat=lambda stats: ws_payloads.append(stats),
+    )
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        sio_client=ws_client,
+        agent_artifact_digest=digest_cb,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    thread._kernel_usb_watch = SimpleNamespace(
+        poll=lambda **_k: [],
+        channel_state=lambda: "ok",
+    )
+
+    t = threading.Thread(target=thread._tick, daemon=True)
+    t.start()
+    assert digest_entered.wait(2.0)
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    thread.reload_from_settings()
+    pause_on_digest = False
+    digest_release.set()
+    t.join(timeout=3.0)
+    assert not t.is_alive()
+
+    assert len(sent_payloads) == 1
+    assert sent_payloads[0]["mount_status"]["/mnt/stp-log-new"]["ok"] is False
+    assert sent_payloads[0]["health"]["mount_ok"] is False
+    assert sent_payloads[0]["capacity"]["effective_slots"] == 0
+    assert len(ws_payloads) == 1
+    assert "/mnt/stp-log-new" in ws_payloads[0]["mount_status"]
+    assert ws_payloads[0]["mount_status"]["/mnt/stp-log-new"]["ok"] is False
+
+
 def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
     from backend.agent.coordinator import HostRunCoordinator
 
