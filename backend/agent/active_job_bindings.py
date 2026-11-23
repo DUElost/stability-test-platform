@@ -30,6 +30,7 @@ class ActiveJobOccupancy:
     device_ids: Set[int]
     job_tokens: Dict[int, str]
     device_owner: Dict[int, int]
+    claim_pause_gate: Optional[Any] = None
 
 
 def build_on_lease_lost(

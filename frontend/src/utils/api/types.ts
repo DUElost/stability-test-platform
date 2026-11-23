@@ -83,6 +83,32 @@ export interface Host {
     strike_open?: boolean;
     strike_need?: number;
   } | null;
+  /** #2972 / S4：Agent 侧 USB/ADB 自愈与持久化熔断状态 */
+  self_heal?: {
+    state?: 'idle' | 'healing' | 'recovered' | 'hardware_suspect' | 'need_human' | string;
+    fuse_open?: boolean;
+    fuse_reason?: string | null;
+    xhci?: {
+      state?: string;
+      fuse_open?: boolean;
+      fuse_reason?: string | null;
+      boot_attempts?: number;
+      window_attempts?: number;
+      episode_failures?: number;
+      last_action_at?: string | null;
+      last_marker?: string | null;
+    };
+    adb_reconnect?: {
+      state?: string;
+      fuse_open?: boolean;
+      fuse_reason?: string | null;
+      boot_attempts?: number;
+      window_attempts?: number;
+      episode_failures?: number;
+      last_action_at?: string | null;
+      last_marker?: string | null;
+    };
+  } | null;
   // ADR-0021 hot-update gate — populated only on GET /hosts/{id}.
   active_job_count?: number;
   active_jobs?: HostActiveJob[];

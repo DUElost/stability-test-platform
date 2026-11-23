@@ -35,6 +35,7 @@ from backend.services.device_retirement import (
     should_alert_retired_device_heartbeat,
 )
 from backend.services.host_health_probe import HEALTH_PROBE_EXTRA_KEY
+from backend.services.host_maintenance import in_maintenance_window
 
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
 logger = logging.getLogger(__name__)
@@ -740,6 +741,13 @@ def _process_heartbeat_with_db(
     suggested_log_rate = _suggested_log_rate_limit(online_healthy_count)
     # ADR-0061 D5.5 / #3723 §3.0 第 8 条：下发该 host 在线设备的未关闭欠账。
     return_debts = open_debts_for_host_sync(db, host.id)
+    # ADR-0037 D9.5 / #2972：给 Agent 自愈门控提供控制面只读台账行数与维护窗状态。
+    host_ledger_device_rows = (
+        db.query(Device.id)
+        .filter(Device.host_id == host.id, Device.retired_at.is_(None))
+        .count()
+    )
+    host_in_maintenance = in_maintenance_window(host.maintenance_until, now=now)
 
     return {
         "ok": True,
@@ -759,4 +767,6 @@ def _process_heartbeat_with_db(
         "heartbeat_interval_seconds": suggested_interval,
         "return_debts": return_debts,
         "return_init_check_available": True,
+        "host_ledger_device_rows": host_ledger_device_rows,
+        "in_maintenance": host_in_maintenance,
     }, ws_device_updates

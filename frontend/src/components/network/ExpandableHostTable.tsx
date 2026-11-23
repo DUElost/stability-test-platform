@@ -126,6 +126,32 @@ export interface HostTableData {
     strike_open?: boolean;
     strike_need?: number;
   } | null;
+  /** #2972 / S4：Agent 侧 USB/ADB 自愈与持久化熔断状态 */
+  self_heal?: {
+    state?: string;
+    fuse_open?: boolean;
+    fuse_reason?: string | null;
+    xhci?: {
+      state?: string;
+      fuse_open?: boolean;
+      fuse_reason?: string | null;
+      boot_attempts?: number;
+      window_attempts?: number;
+      episode_failures?: number;
+      last_action_at?: string | null;
+      last_marker?: string | null;
+    };
+    adb_reconnect?: {
+      state?: string;
+      fuse_open?: boolean;
+      fuse_reason?: string | null;
+      boot_attempts?: number;
+      window_attempts?: number;
+      episode_failures?: number;
+      last_action_at?: string | null;
+      last_marker?: string | null;
+    };
+  } | null;
   /** Tooltip: adb/lease exclusions from device list (frontend-derived). */
   claim_hint?: string | null;
   active_tasks?: number;
@@ -269,6 +295,7 @@ function hostUsbFaultPriority(host: HostTableData): number {
   if (
     reasons.has('usb_host_controller_dead') ||
     host.health_probe?.strike_open === true ||
+    host.self_heal?.fuse_open === true ||
     activeUnboundHubs > 0
   ) {
     return 3;
@@ -346,6 +373,15 @@ function buildInlineFaultChips(host: HostTableData): InlineFaultChip[] {
       label: '探针对账异常',
       tone: 'danger',
       title: `控制面 SSH 探针连续异常：${PROBE_VERDICT_LABELS[host.health_probe.verdict ?? ''] ?? host.health_probe.verdict ?? '未知'}`,
+    });
+  }
+  if (host.self_heal?.fuse_open) {
+    const isHw = host.self_heal.state === 'hardware_suspect';
+    chips.push({
+      key: 'self_heal_fuse',
+      label: isHw ? '自愈熔断(疑似硬件)' : '自愈熔断(需人工)',
+      tone: 'danger',
+      title: `USB/ADB 自动恢复已熔断（${host.self_heal.fuse_reason ?? host.self_heal.state ?? 'unknown'}）`,
     });
   }
   return chips;
@@ -1925,6 +1961,27 @@ export function ExpandableHostTable({
                                   </>
                                 ) : (
                                   <div className="text-muted-foreground">暂无探针记录</div>
+                                )}
+                                {host.self_heal && (
+                                  <div className="mt-1.5 border-t border-border/60 pt-1.5 text-[11px]">
+                                    <div className="flex justify-between gap-2">
+                                      <span className="text-muted-foreground">自愈熔断态</span>
+                                      <span className={host.self_heal.fuse_open ? 'font-medium text-destructive' : 'text-foreground'}>
+                                        {host.self_heal.fuse_open
+                                          ? `${host.self_heal.state === 'hardware_suspect' ? '疑似硬件' : '需人工'} (${host.self_heal.fuse_reason ?? '—'})`
+                                          : host.self_heal.state ?? 'idle'}
+                                      </span>
+                                    </div>
+                                    {host.self_heal.xhci && (
+                                      <div className="flex justify-between gap-2 text-muted-foreground">
+                                        <span>xHCI 计数 (boot/48h)</span>
+                                        <span className="font-mono">
+                                          {host.self_heal.xhci.boot_attempts ?? 0} / {host.self_heal.xhci.window_attempts ?? 0}
+                                          {host.self_heal.xhci.last_marker ? ` · ${host.self_heal.xhci.last_marker}` : ''}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             </div>
