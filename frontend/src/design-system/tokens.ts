@@ -295,9 +295,10 @@ export const PANEL = {
 } as const;
 
 /** 表单控件 */
-// B4 决议（issue #371）：全站下拉的唯一形态 = 原生 <select> + FORM.select /
-// selectSm。Radix ui/select 已删除——原生在长列表（机型/项目名）下性能与
-// 可访问性更好，且是历史多数派；不要再引入第二条下拉线。
+// D1 决议（#4117，docs/design/2026-11-23-frontend-ui-governance-contract.md §2.1）：
+// 废止旧 B4「全站仅用原生 <select>」注释，改为两档分层——
+// ① 筛选栏及动态/长列表（>8 项）必须使用 SearchableSelect；
+// ② 表单与高级筛选中的固定短枚举（≤8 项）可以使用原生 <select> + FORM.select / selectSm。
 export const FORM = {
   label: 'block text-sm font-medium text-foreground mb-1',
   hint: 'mt-1 text-xs text-muted-foreground',
