@@ -1,5 +1,13 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
+v1.4.5（2026-11-23 / #4086 U4 / ADR-0064 D4）：接入 Agent L1 `ensure_firmware`
+（profile=`mtk`）。四段次序：① 零设备访问启动自检 `FIRMWARE_CACHE_API_VERSION==1`；
+② 保留固件目标解析、V5/V6、`skip_if_current`、取锁前遗留门控恢复（不改 ADR-0063
+D1–D7）；③ 主机锁外完成缓存并持 `LOCK_SH`；④ 再取 `/tmp/stp-flash-firmware.lock`
+进入下载/烧录。工具命令行指向本地缓存；`metrics.firmware_cache` 记录命中摘要。
+能力声明 `requires_agent_capabilities: ["firmware_cache_v1"]`。
+
+
 v1.4.3（#3892，15.93 LX3 金丝雀 PlanRun 1265 / Job 206967）：
   - 根因：`_tty_usb_port` 用「路径段含 `:`」判断 USB 接口边界。真实 x86 sysfs 路径在
     USB 端口之前有 `pci0000:00` / `0000:00:14.0` 两个含冒号的 PCI 段，循环在第一个就
@@ -187,6 +195,8 @@ STP_STEP_PARAMS schema:
     family                  : str  (optional; 显式指定机型族，缺省按指纹路由)
     skip_if_current         : bool (optional, default true; env STP_FLASH_SKIP_IF_CURRENT；
                           刷前 getprop 比对，已是目标版本则 skipped 收场)
+    allow_nfs_direct_fallback : bool (optional, default false; L1 缓存空间不足时直读 NFS)
+    allow_permit_bypass     : bool (optional, default false; 仅许可不可达超限时降级)
     verify_version          : bool (optional, default true; env STP_FLASH_VERIFY_VERSION；
                           刷后回读版本核验，不一致判失败)
     verify_wait_seconds     : int  (optional, default 300; 刷后等设备回到 adb 的上限)
@@ -1930,6 +1940,66 @@ def _as_bool(value, default: bool) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+_AGENT_FW_CACHE_UNAVAILABLE = "agent_firmware_cache_unavailable"
+
+
+def _load_firmware_cache_api():
+    """① 零设备访问启动自检：导入 L1 并校验 API 版本（ADR-0064 D2/D4）。
+
+    生产路径：``from agent.firmware_cache``（引擎双路径 PYTHONPATH）。
+    回退 ``backend.agent.firmware_cache`` 仅覆盖仓内 pytest 以仓库根为
+    ``sys.path`` 的布局；两者均失败或 API 版本不匹配 → fail-closed。
+    """
+    try:
+        from agent.firmware_cache import (  # type: ignore
+            FIRMWARE_CACHE_API_VERSION,
+            FirmwareCacheError,
+            ensure_firmware,
+        )
+    except Exception:
+        try:
+            from backend.agent.firmware_cache import (  # type: ignore
+                FIRMWARE_CACHE_API_VERSION,
+                FirmwareCacheError,
+                ensure_firmware,
+            )
+        except Exception as exc:  # noqa: BLE001 - fail-closed structured error
+            return None, None, (
+                f"{_AGENT_FW_CACHE_UNAVAILABLE}: import failed ({type(exc).__name__})"
+            )
+    if FIRMWARE_CACHE_API_VERSION != 1:
+        return None, None, (
+            f"{_AGENT_FW_CACHE_UNAVAILABLE}: API version "
+            f"{FIRMWARE_CACHE_API_VERSION!r} != 1"
+        )
+    return ensure_firmware, FirmwareCacheError, None
+
+
+def _firmware_cache_metrics(fw_cache, elapsed_seconds: float) -> dict:
+    return {
+        "hit": bool(getattr(fw_cache, "hit", False)),
+        "elapsed_seconds": round(float(elapsed_seconds), 3),
+        "tier": getattr(fw_cache, "tier", None),
+        "sealed": bool(getattr(fw_cache, "sealed", False)),
+        "cache_key": getattr(fw_cache, "cache_key", None),
+        "fallback_reason": getattr(fw_cache, "fallback_reason", None),
+        "permit_degraded": bool(getattr(fw_cache, "permit_degraded", False)),
+    }
+
+
+def _remap_under_cache(path: "str | None", src_root: str, cache_root: str) -> "str | None":
+    """把源固件目录下的绝对路径改写到本地缓存目录（工具命令行指向 L1）。"""
+    if not path:
+        return path
+    src = os.path.realpath(src_root)
+    dst = os.path.realpath(cache_root)
+    real = os.path.realpath(path)
+    if real == src or real.startswith(src + os.sep):
+        return dst + real[len(src):]
+    return path
+
+
+
 def _load_json_file(path: str):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -2806,6 +2876,12 @@ def _vbus_post_flash(
 
 
 def main() -> None:
+    # ① 零设备访问启动自检（任何 getprop / ADB / 主机锁之前）
+    ensure_firmware, FirmwareCacheError, api_err = _load_firmware_cache_api()
+    if api_err is not None:
+        _output(False, error_message=_AGENT_FW_CACHE_UNAVAILABLE)
+        return
+
     args = _step_params()
     serial = os.environ.get("STP_DEVICE_SERIAL", "")
     adb_path = os.environ.get("STP_ADB_PATH", "adb")
@@ -3164,646 +3240,700 @@ def main() -> None:
             result=json.dumps(orphan_gates, ensure_ascii=False),
         )
 
-    try:
-        lock_fd = _acquire_host_lock(
-            on_wait_tick=lambda waited: _emit_progress(
-                seq, stage="lock-wait", waited_seconds=waited,
-            )
-        )
-    except OSError as exc:
-        _output(False, error_message=f"lock setup failed: {exc}",
-                metrics={"route": route, "version_check": version_check})
-        return
-    lock_acquired_at = time.time()
-
-    # ── v1.3.0：门控（必须在 adb reboot 之前反查目标口——BROM 态无 serial）
-    # v1.3.20：目标口优先取身份判定结果；判定已跑过（V6）时不再二次反查，
-    # 避免"判定用一个口、门控用另一个口"的两条真相。
-    target_port = identity_port
-    if target_port is None and _is_linux():
-        # 显式传 base：默认参数在定义时绑定，不传就吃不到运行期的基址
-        target_port = _port_for_serial(serial, _SYSFS_USB_BASE)
-    initial_gate_pids = _BROM_GATE_PIDS if gate_pid_scope == "brom" else None
-    if gate_other_mtk:
-        gating = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
-                                 hold_pids=initial_gate_pids)
-    else:
-        gating = {"hidden": [], "errors": {},
-                  "skipped_reason": "disabled by params",
-                  "target_port": target_port}
-    _emit_progress(seq, stage="gating", result=json.dumps(
-        {"hidden": gating.get("hidden", []),
-         "skipped_reason": gating.get("skipped_reason"),
-         "target_port": gating.get("target_port")},
-        ensure_ascii=False))
-    hidden_ports: list = list(gating.get("hidden", []))
-    if hidden_ports:
-        _persist_gated_ports(hidden_ports)
-
-    # require_binding ⇒ 目标口非空：这一点在**抢锁之前**的身份判定里已经是硬
-    # 判据（判不出即 fail-closed），这里不再重复检查——在锁内 return 会漏结算。
-    bound_port = target_port if require_binding else None
-    cmd = _build_flash_argv(
-        flash_tool_exe, generation, command, boot_mode,
-        da_file=da_file, scatter_file=scatter_file, flash_xml_file=flash_xml_file,
-        port=bound_port,
-        v5_port=bound_port if vbus else None,
+    # ③ 锁外固件缓存准备与封包校验；持 LOCK_SH 覆盖整个刷机生命周期
+    allow_nfs = _as_bool(args.get("allow_nfs_direct_fallback"), False)
+    allow_bypass = _as_bool(args.get("allow_permit_bypass"), False)
+    source_firmware_dir = firmware_dir
+    cache_t0 = time.time()
+    _fw_cm = ensure_firmware(
+        source_firmware_dir,
+        profile="mtk",
+        progress_callback=lambda **kw: _emit_progress(seq, **kw),
+        allow_nfs_direct_fallback=allow_nfs,
+        allow_permit_bypass=allow_bypass,
+        label=str(route.get("version") or "") or None,
     )
-    # v1.4.2：V5 vbus 带槽位口时，工具经 stdbuf 按行输出，并在每次尝试里记录 tty 历史。
-    v5_vbus_echo = bool(vbus and bound_port and generation != GENERATION_V6)
-    if v5_vbus_echo and v5_stdbuf:
-        cmd = _line_buffered_argv(cmd, v5_stdbuf)
-
-    attempts_report: list = []
-    aborted_report: "dict | None" = None
-    final_output, final_rc = "", None
-    final_error: "tuple[str, str] | None" = ("exhausted", "no attempt made")
-    verdict_ok = False
-    verdict_evidence = ""
-    pre_reboot: dict = {"attempted": False, "skip_reason": "not attempted"}
-
-    # ── v1.3.4：锁结算幂等化 + 持锁穿过核验 ────────────────────────────
-    # 场景 2 实证（2026-08-26 .66 双机并发）：旧顺序在工具退出后立即释放
-    # 锁，而本机手机的看门狗重启发生在锁外——下一任持锁者的工具扫描窗会
-    # 撞上这个可捕获态，把新固件刷进错误的手机。改为：成功路径持锁穿过
-    # re-enumerate 与 verify（自己的手机稳定后——adb 已回归或确认卡死——
-    # 才交出锁）；失败与异常路径立即结算，保持原兜底语义。
-    lock_settled = False
-    # v1.4.0：vbus 成功收尾前置 True；其余任何路径（失败 / 异常 / 信号）在交出锁
-    # 之前都要把本槽位断电（ADR-0063 D3 第 8 条：隔离一台状态不明的设备）。
-    vbus_keep_power = False
-    # 必须先于 _settle_lock 的任何调用点（含信号处理器）定义。
-    vbus_state: dict = {"power_on_at": None, "brom_seen": False, "ctx": None}
-
-    # v1.4.2（ADR-0063 v1.3 D3 第 4 条「信号打断停止流程」，复核 #3924 第 4 轮）：结算按步骤
-    # 记完成。信号在任一步中途到达时，处理器里重入的结算从未完成的那一步接着做完，而不是
-    # 因为「已开始结算」直接返回（旧闸门 lock_settled 在第一步之前就置位，信号处理器随后
-    # 终止进程，隔离与释放锁都没有执行）。步骤本身都可重复执行：重复断电、重复恢复门控无害；
-    # 释放锁只做一次（标记在调用之前置位）。
-    settle_done: set = set()
-
-    def _settle_step(name: str, fn: "callable") -> None:
-        if name in settle_done:
-            return
-        fn()
-        settle_done.add(name)
-
-    def _settle_stop_sampler() -> None:
-        ctx = vbus_state.get("ctx")
-        if ctx is not None and ctx.get("tty_history") is not None:
-            ctx["tty_history"].stop()
-
-    def _settle_isolate() -> None:
-        if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
-                and not vbus_state.get("slot_mismatch"):
-            # 一次切电都没做过（如锁内复核发现设备在开机态）就不碰供电。
-            # 槽位取脚本读到的那一份：映射此后被改写时 wrapper 会拒绝，记为隔离失败，
-            # 而不是去断映射里的新槽位。
-            isolate = _usb_power(serial, "off", vbus_report["slot"])
-            vbus_report["power_actions"].append(dict(isolate, phase="isolate"))
-            echo_ok = bool(isolate.get("ok")) and _usb_power_echo_matches(
-                isolate, vbus_report["slot"])
-            if isolate.get("ok") and not echo_ok:
-                # 回显的是另一个槽位：本设备没有被隔离（复核 #3902 B3）。
-                vbus_state["slot_mismatch"] = True
-                vbus_report["isolate_echo_mismatch"] = True
-            vbus_report["isolated"] = echo_ok
-
-    def _settle_restore() -> None:
-        gating["restore"] = _restore_gated({"hidden": hidden_ports}, _SYSFS_USB_BASE)
-        _clear_gated_state()
-
-    def _settle_release() -> None:
-        settle_done.add("release")  # 先置位：释放锁不重入
-        _release_host_lock(lock_fd)
-        _emit_progress(seq, stage="lock-released")
-
-    def _settle_lock() -> None:
-        nonlocal lock_settled
-        if "release" in settle_done:
-            return
-        lock_settled = True
-        # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。
-        _settle_step("stop-sampler", _settle_stop_sampler)
-        _settle_step("isolate", _settle_isolate)
-        _settle_step("restore", _settle_restore)
-        _settle_step("release", _settle_release)
-
-    def _settle_on_signal(signum: int) -> None:
-        # #1025：取消/超时路径唯一会经过的清理点——先结算再死
-        _settle_lock()
-        _emit_progress(seq, stage="signal-cleanup", signal=signum)
-
-    _install_termination_cleanup(_settle_on_signal)
-
+    fw_cache_metrics = None
+    _fw_entered = False
     try:
-        for attempt in range(1, max_attempts + 1):
-            if vbus and attempt == 1 and needs_adb_poweroff:
-                poweroff = _vbus_adb_power_off(
-                    serial, adb_path, target_port,
-                    vbus_cfg["poweroff_timeout_seconds"], _SYSFS_USB_BASE)
-                identity["adb_poweroff"] = poweroff
-                vbus_report["stages"]["adb_poweroff_seconds"] = poweroff.get("seconds")
-                _emit_progress(seq, stage="vbus-adb-poweroff", ok=bool(poweroff.get("ok")))
-                if not poweroff.get("ok"):
-                    attempts_report.append({"attempt": attempt,
-                                            "outcome": "vbus-adb-poweroff-failed"})
-                    final_error = ("vbus-adb-poweroff", (
-                        f"device {serial} did not power off via adb within "
-                        f"{vbus_cfg['poweroff_timeout_seconds']}s "
-                        f"(last state {poweroff.get('last_state')}, "
-                        f"port occupant {poweroff.get('occupant')})"))
-                    break
-            if vbus and attempt == 1:
-                # 等锁期间设备可能被人开机：切电前在锁内复核一次。
-                occupant = _vbus_port_powered_on(target_port, _SYSFS_USB_BASE)
-                if occupant:
-                    attempts_report.append({"attempt": attempt,
-                                            "outcome": "vbus-device-powered-on",
-                                            "occupant": occupant})
-                    final_error = ("vbus-powered-on", (
-                        f"slot port {target_port} has a USB device ({occupant}) "
-                        "at flash time; device must be powered off"))
-                    break
-            if vbus:
-                # 每次尝试都从断电起算：上一次尝试可能停在 BROM/DA 半程。
-                vbus_state.update({"power_on_at": None, "brom_seen": False,
-                                   "attempt": attempt, "abort": None})
-                off = _usb_power(serial, "off", vbus_report["slot"])
-                vbus_report["power_actions"].append(
-                    dict(off, phase="pre-flash", attempt=attempt))
-                _emit_progress(seq, stage="vbus-off", ok=off["ok"],
-                               attempt=attempt)
-                if off.get("slot_refused"):
-                    # wrapper 在切电之前发现映射与脚本读到的不一致：本次没有切任何口。
-                    attempts_report.append({"attempt": attempt,
-                                            "outcome": "vbus-slot-refused"})
-                    final_error = ("vbus-slot-mismatch", (
-                        "wrapper refused before powering anything: the slot map no "
-                        f"longer maps {serial} to {vbus_report['slot']['hub_location']}:"
-                        f"{vbus_report['slot']['port']} ({off['tail']})"))
-                    break
-                if not off["ok"]:
-                    attempts_report.append({"attempt": attempt,
-                                            "outcome": "vbus-power-off-failed"})
-                    final_error = ("vbus-power",
-                                   f"usb-power off failed: {off['tail']}")
-                    break
-                # 纵深防御：wrapper 已按 --expect-slot 在切电前比对；回显仍不符说明
-                # wrapper 没有按约定执行，立即停手，不再做任何切电（含隔离）。
-                slot = vbus_report["slot"]
-                echo = off.get("echo") or {}
-                if not _usb_power_echo_matches(off, slot):
-                    vbus_state["slot_mismatch"] = True
-                    attempts_report.append({"attempt": attempt,
-                                            "outcome": "vbus-slot-mismatch",
-                                            "echo": echo or None})
-                    final_error = ("vbus-slot-mismatch", (
-                        f"wrapper powered off slot {echo or '(no echo)'} but the "
-                        f"script resolved {slot['hub_location']}:{slot['port']}; "
-                        "slot map changed underneath — stopped without further "
-                        "power actions"))
-                    break
-                settle_started = time.monotonic()
-                time.sleep(vbus_cfg["off_settle_seconds"])
-                vbus_report["stages"]["off_settle_seconds"] = round(
-                    time.monotonic() - settle_started, 1)
-            if attempt > 1:
-                _emit_progress(seq, stage="retry", attempt=attempt,
-                               total=max_attempts)
-                if retry_backoff > 0:
-                    time.sleep(retry_backoff)
-                # 防御性重画门控：上次尝试期间可能有别的手机重启进刷机态
-                # （authorized=0 只对当前实例生效，见 note §Decision.3）
-                # v1.3.20：口径与初始门控一致——V6 不得在这里把邻机的正常 adb 态
-                # (201c) 再压制一遍，那正是 run 921 制造出错刷目标的机制。
-                regate = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
-                                         hold_pids=initial_gate_pids)
-                for name in regate.get("hidden", []):
-                    if name not in hidden_ports:
-                        hidden_ports.append(name)
-                if hidden_ports:
-                    _persist_gated_ports(hidden_ports)
-
-            # v1.3.3 时序：工具先启动进入 USB 扫描，on_running 回调里再发
-            # adb reboot——BROM 窗口只存在于上电最初几秒，观测者必须就位在先
-            # （Agent Note Decision 流程图的原序；v1.2.0 遗留的先 reboot 后起
-            # 工具顺序真机证伪：工具只能看到窗口过后的普通态枚举）。重试轮里
-            # 即使 params 关了 reboot 也照发（设备多半已在 BROM/DA 态，adb
-            # 调用会 no-op）。
-            do_reboot = bool(args.get("reboot_to_flash", True)) or attempt > 1
-
-            # ── v1.3.8：门控保持 ──────────────────────────────────────
-            # 实证（2026-08-30 run 258/259/260，.68）：BROM 幽灵设备
-            # （1-7.4.4，serial 空 pid 2000）周期性重枚举——新 USB 实例
-            # authorized 回到 1（门控只对当前实例生效），一次性门控被
-            # 逃逸；工具扫描/下载期间抓到它，3.3G 固件写进幽灵（BROM
-            # 态不变），目标设备空等 → verify mismatch。dmesg 佐证：
-            # run 260 目标 BROM 窗口仅 3s（正常重启流程快速经过），而
-            # 幽灵 2000 常驻。修复：工具运行期间周期重写非目标刷机态口
-            # authorized=0——on_running（reboot 前）一次 + on_percent
-            # 每 10s 节流一次，直到下载完成。
-            regate_count = 0
-            # -inf：首次调用必触发（on_running 就在定义后 ~15s 内到达,
-            # 若用当前时刻会把 reboot 前那次关键压制节流掉）
-            last_regate_at = float("-inf")
-
-            def _regate() -> None:
-                nonlocal regate_count, last_regate_at, hidden_ports
-                now = time.monotonic()
-                if now - last_regate_at < 10:
-                    return
-                last_regate_at = now
-                # v1.3.9：保持阶段只压制 BROM/preloader 态口——201c 正常
-                # 态设备周期 toggle 会制造 udev 风暴,干扰工具捕获目标的
-                # 3 秒 BROM 窗口（run 261 实证:120s S_TIMEOUT）。
-                regate = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
-                                         hold_pids=_BROM_STAGE_PIDS)
-                for name in regate.get("hidden", []):
-                    if name not in hidden_ports:
-                        hidden_ports.append(name)
-                if hidden_ports:
-                    _persist_gated_ports(hidden_ports)
-                regate_count += 1
-
-            tty_history = _TtyPortHistory() if v5_vbus_echo else None
-            # 复核 #3924 第 1 项：每轮一个上下文。回调以缺省参数绑定本轮上下文，上一轮遗留的
-            # reader 回调发现上下文已换就不再写任何状态；最终判定只读本轮记下的回显。
-            attempt_ctx: dict = {"tty_history": tty_history, "echoes": [], "readers": {}}
-            vbus_state["ctx"] = attempt_ctx
-
-            def _abort_on_wrong_port(line: str) -> "str | None":
-                # 第二道闸（`-p` 之外的独立判据）：逐行核工具回显的绑定口。
-                # 只在 require_binding 时才接进工具循环——V5 不经过这条新路径。
-                return _port_mismatch_reason(line, target_port, serial)
-
-            run_kwargs: dict = {}
-            if require_binding:
-                run_kwargs["abort_check"] = _abort_on_wrong_port
-            if vbus:
-                def _vbus_line_check(line: str, ctx: dict = attempt_ctx) -> "str | None":
-                    if vbus_state.get("ctx") is not ctx:
-                        return None  # 上一轮遗留的 reader：不改本轮任何状态
-                    echo_at = time.monotonic()
-                    if _output_caught_brom(line) or re.search(r"\d{1,3}%", line):
-                        vbus_state["brom_seen"] = True
-                    if not require_binding:
-                        return None
-                    # v1.4.1：vbus 分支才认 V5 的 com portName 回显（复核 #3917 B3）；
-                    # 每行只解析一次，判错口与记已验证用同一结果（复核 #3917 B1-R2）。
-                    observed: list = []
-                    bound, reason = _check_bound_echo(line, target_port, serial,
-                                                      v5_echo=True,
-                                                      tty_history=ctx["tty_history"],
-                                                      observed=observed)
-                    if reason:
-                        return reason
-                    if bound == target_port:
-                        for name, live in observed:
-                            ctx["echoes"].append((name, echo_at, live))
-                    return None
-
-                def _vbus_brom_deadline() -> "tuple[str, str] | None":
-                    if vbus_state.get("abort"):
-                        return vbus_state["abort"]
-                    on_at = vbus_state["power_on_at"]
-                    if on_at is None or vbus_state["brom_seen"]:
-                        return None
-                    if time.monotonic() - on_at < vbus_cfg["brom_timeout_seconds"]:
-                        return None
-                    return ("brom-timeout",
-                            f"no BROM capture within "
-                            f"{vbus_cfg['brom_timeout_seconds']}s after power-on")
-
-                run_kwargs["abort_check"] = _vbus_line_check
-                run_kwargs["poll_check"] = _vbus_brom_deadline
-
-            def _fire_reboot_when_tool_ready() -> None:
-                nonlocal pre_reboot
-                _regate()  # v1.3.8：reboot 前再压制一轮（堵重枚举逃逸）
-                if vbus:
-                    # 工具已进入 USB 扫描：此刻上电，BROM 窗口落在观测里。
-                    time.sleep(pre_reboot_wait)
-                    history = (vbus_state.get("ctx") or {}).get("tty_history")
-                    if history is not None:
-                        # 调用 wrapper 之前开窗：此前本设备没有供电，采到的同名节点属于别的
-                        # 设备。调用期间的采样保留（通电可能早于返回，复核 #3924 第 2 轮第 3 项）。
-                        history.reset()
-                    on = _usb_power(serial, "on", vbus_report["slot"])
-                    vbus_report["power_actions"].append(
-                        dict(on, phase="trigger", attempt=vbus_state["attempt"]))
-                    vbus_state["power_on_at"] = time.monotonic()
-                    _emit_progress(seq, stage="vbus-on", ok=on["ok"])
-                    # 上电失败或回显另一个槽位：不能让工具继续等，下一秒的 poll_check
-                    # 杀工具并终止尝试环（复核 #3902 B3）；工具先于 poll_check 退出时
-                    # 由工具返回后的补查终止（B4）。
-                    if on["ok"] and not _usb_power_echo_matches(on, vbus_report["slot"]):
-                        vbus_state["slot_mismatch"] = True
-                        vbus_state["abort"] = ("slot-mismatch", (
-                            f"wrapper powered on slot {on.get('echo')} but the script "
-                            f"resolved {vbus_report['slot']['hub_location']}:"
-                            f"{vbus_report['slot']['port']}; stopped without further "
-                            "power actions"))
-                    elif not on["ok"]:
-                        vbus_state["abort"] = ("vbus-power", (
-                            "wrapper refused before powering anything: slot map changed"
-                            if on.get("slot_refused")
-                            else f"usb-power on failed: {on['tail']}"))
-                    return
-                if not do_reboot:
-                    return
-                time.sleep(pre_reboot_wait)  # 给工具进入扫描的提前量
-                pre_reboot = _reboot_into_flash_mode(
-                    serial=serial,
-                    target=reboot_target,
-                    adb_path=adb_path,
-                    wait_seconds=0,
-                )
-                if pre_reboot.get("attempted"):
-                    # reboot 进入 flash 模式本身是一个阶段（#134）
-                    _emit_progress(seq, stage="reboot", target=reboot_target)
-
-            attempt_record: dict = {"attempt": attempt}
-            if tty_history is not None:
-                run_kwargs["readers_status"] = attempt_ctx["readers"]
-            try:
-                if tty_history is not None:
-                    # 放进 try：线程起不来按启动失败处理，finally 照常停采样（复核 #3924 第 2 轮第 4 项）。
-                    tty_history.start()
-                output, flash_rc = _run_flash_tool_with_progress(
-                    cmd,
-                    cwd=os.path.dirname(flash_tool_exe),
-                    env=subprocess_env,
-                    timeout=timeout,
-                    on_stage=lambda tok: _emit_progress(seq, stage=tok),
-                    on_percent=lambda pct: (
-                        _emit_progress(seq, percent=pct),
-                        _regate(),
-                    ),
-                    on_running=_fire_reboot_when_tool_ready,
-                    **run_kwargs,
-                )
-                # 工具在第一次 poll_check 之前就退出时，上电那一步写下的 abort
-                # 没被消费：返回后补查一次，按同一分支终止尝试环，不按输出判定
-                # 成败、也不重试（ADR-0063 D3 第 13 条第 2 款；复核 #3902 B4）。
-                if vbus and vbus_state.get("abort"):
-                    kind, reason = vbus_state["abort"]
-                    raise FlashToolAborted(reason, kind=kind)
-            except FlashToolAborted as exc:
-                if exc.kind == "brom-timeout":
-                    # 没抓到 BROM：工具已被杀，下一次尝试重新断电再上电。
-                    attempt_record.update({"outcome": "brom-timeout",
-                                           "reason": exc.reason})
-                    attempts_report.append(attempt_record)
-                    final_error = ("brom-timeout", exc.reason)
-                    continue
-                if exc.kind in ("slot-mismatch", "vbus-power"):
-                    # 上电那一步出错：重试只会再切一次电，立即终止尝试环。
-                    attempt_record.update({"outcome": f"vbus-{exc.kind}",
-                                           "reason": exc.reason})
-                    attempts_report.append(attempt_record)
-                    final_error = (exc.kind, exc.reason)
-                    break
-                # 止损成功：记 attempt 后**立即终止尝试环**——重试只会让工具
-                # 再去找一个非目标口。门控与锁由统一结算路径恢复。
-                attempt_record.update({"outcome": "aborted-port-mismatch",
-                                       "reason": exc.reason})
-                attempts_report.append(attempt_record)
-                aborted_report = {"attempt": attempt, "reason": exc.reason}
-                final_error = ("port-mismatch", exc.reason)
-                break
-            except subprocess.TimeoutExpired:
-                attempt_record.update({"outcome": "timeout",
-                                       "timeout_seconds": timeout})
-                attempts_report.append(attempt_record)
-                final_error = ("timeout",
-                               f"flash_tool timed out after {timeout}s")
-                continue
-            except FileNotFoundError as exc:
-                attempts_report.append(
-                    {"attempt": attempt, "outcome": "launch-failed"})
-                final_error = (
-                    "launch",
-                    f"flash_tool not executable ({exc}); chmod +x or check libs")
-                break  # 环境性问题，重试无意义
-            except Exception as exc:
-                attempts_report.append(
-                    {"attempt": attempt, "outcome": "launch-failed"})
-                final_error = ("launch", f"flash_tool launch failed: {exc}")
-                break
-            finally:
-                if tty_history is not None:
-                    attempt_record["tty_sampler_stopped"] = tty_history.stop()
-                    attempt_record["tty_history"] = tty_history.snapshot()
-
-            unverified = None
-            if vbus and require_binding and generation != GENERATION_V6:
-                # v1.4.1（复核 #3917 B1）：V5 vbus 工具退出时始终没有回显过本槽位口，
-                # 就无法证明写的是目标机。按止损处理：不判成功、不重试，结算时断电隔离。
-                # v1.4.2（复核 #3924 第 1、4 项）：采样停止、记录冻结之后按本轮回显重算。
-                unverified = (_final_v5_binding_reason(
-                    attempt_ctx["echoes"], tty_history,
-                    bool(attempt_record.get("tty_sampler_stopped")), target_port, serial,
-                    readers=attempt_ctx["readers"])
-                    if tty_history is not None else
-                    f"V5 tool exited without a verifiable bound-port echo for target "
-                    f"port {target_port!r} (serial={serial}); result not trusted")
-            if unverified:
-                reason = unverified
-                attempt_record.update({"outcome": "aborted-port-unverified",
-                                       "exit_code": flash_rc, "reason": reason})
-                attempts_report.append(attempt_record)
-                aborted_report = {"attempt": attempt, "reason": reason}
-                final_output, final_rc = output, flash_rc
-                final_error = ("port-unverified", reason)
-                break
-
-            v_ok, v_evidence = _scan_output_for_verdict(output, "")
-            attempt_record.update({
-                "outcome": "ok" if v_ok else "verdict-failed",
-                "exit_code": flash_rc,
-                # 两代措辞不同：V5 打「BROM connected」，V6 打「connect brom
-                # successed.」（2026-10-12 真机日志与本机实测一致）。只认 V5 字样
-                # 会让 v6 的每次成功刷机都在 attempts 里留下 caught_brom=false 的
-                # 假诊断——排查时会被引向「没抓到 BROM」这个错误方向。
-                "caught_brom": _output_caught_brom(output),
-                "verdict": v_evidence,
-            })
-            attempts_report.append(attempt_record)
-            if vbus and vbus_state["power_on_at"] is not None:
-                attempt_record["seconds_since_power_on"] = round(
-                    time.monotonic() - vbus_state["power_on_at"], 1)
-            final_output, final_rc = output, flash_rc
-            verdict_ok, verdict_evidence = v_ok, v_evidence
-            final_error = None if v_ok else ("verdict", v_evidence)
-            if v_ok:
-                break
-
-    except Exception:
-        _settle_lock()  # 异常兜底：不能把邻机留在 authorized=0 的隐藏态
-        raise
-
-    if not verdict_ok:
-        kind, detail = final_error
-        _settle_lock()
-        # v1.3.14（#1591）：失败后尝试恢复设备态（避免停在 BROM → USB 死态）
-        # v1.4.0：vbus 已在结算里断电隔离，adb reboot 对断电设备没有意义。
-        if vbus:
-            recovery = {"skipped_reason": "vbus_cycle: slot powered off for isolation"}
-        else:
-            recovery = _attempt_device_recovery(serial, adb_path)
-        _output(False,
-                error_message=(
-                    f"flash failed after {len(attempts_report)} attempt(s): "
-                    f"{detail}"),
-                metrics={"command_argv": cmd,
-                         "route": route,
-                         "version_check": version_check,
-                         "env_precheck": env_precheck,
-                         "gating": gating,
-                         "target_port": target_port,
-                         # v1.3.20：排查"绑错口/目标不可控"必须一眼看到这三项
-                         "identity": identity,
-                         "port_binding": {"required": require_binding,
-                                          "bound_port": bound_port},
-                         "aborted": aborted_report,
-                         "attempts": attempts_report,
-                         "attempt_count": len(attempts_report),
-                         "recovery": recovery,
-                         "pre_reboot": pre_reboot,
-                         "stdout_tail": final_output[-1500:],
-                         "trigger_mode": trigger_mode,
-                         **({"vbus": vbus_report} if vbus else {}),
-                         "duration_seconds":
-                             round(time.time() - started_at, 2)})
-        return
-
-    if vbus:
-        # ── v1.4.0：vbus 刷后阶段（锁内，各自独立硬超时，ADR-0063 D3 第 3、7 条）
-        # 开机到 ADB → boot 稳定（沿用 v1.3.7 首刷二次重启守卫）→ 跳过 OOBE →
-        # 版本核验 → 机型回读。任一不过即失败，结算时断电隔离。
-        # 上电之后抛出的任何异常都必须先断电隔离再交出锁（D3 第 8 条；复核 #3902
-        # comment 6706267244 B1）：vbus_keep_power 只在整条收尾不抛异常后才置 True。
         try:
-            reenumerated, verify_ok, verify_report, boot_stable_report = \
-                _vbus_post_flash(route, serial, adb_path, vbus_cfg, vbus_report,
-                                 boot_stabilize_seconds, boot_stabilize_max_wait,
-                                 seq)
-            vbus_success = verify_ok and verdict_ok and final_rc == 0
-            _emit_progress(seq, stage="done")
-        except Exception:
-            _settle_lock()
-            raise
-        vbus_keep_power = vbus_success
-    else:
-        # flash_tool 退出后：等设备重新枚举（最长 60s），期间打戳。
-        # 设备没回来**不判失败**——flash 成功但枚举慢是常态，记录字段供诊断。
-        reenumerated = _wait_device_back(
-            serial=serial,
-            adb_path=adb_path,
-            timeout=60,
-            on_tick=lambda: _emit_progress(seq, stage="re-enumerate"),
+            fw_cache = _fw_cm.__enter__()
+            _fw_entered = True
+        except FirmwareCacheError as exc:
+            _output(
+                False,
+                error_message=getattr(exc, "code", None) or str(exc),
+                metrics={
+                    "route": route,
+                    "version_check": version_check,
+                    "env_precheck": env_precheck,
+                    "trigger_mode": trigger_mode,
+                },
+            )
+            return
+        fw_cache_metrics = _firmware_cache_metrics(fw_cache, time.time() - cache_t0)
+        local_firmware_dir = str(fw_cache.local_dir)
+        da_file = _remap_under_cache(da_file, source_firmware_dir, local_firmware_dir)
+        scatter_file = _remap_under_cache(
+            scatter_file, source_firmware_dir, local_firmware_dir
         )
+        flash_xml_file = _remap_under_cache(
+            flash_xml_file, source_firmware_dir, local_firmware_dir
+        )
+        firmware_dir = local_firmware_dir
 
-        # ── v1.2.0：刷后版本核验（verify 开启时不一致/等不到设备 → 失败）──
-        if verify_version:
-            verify_ok, verify_report = _verify_after_flash(
-                route, serial, adb_path, verify_wait,
-                on_tick=lambda: _emit_progress(seq, stage="verify-wait"),
+        # ④ 持 LOCK_SH 后再取主机刷机排他锁
+        try:
+            lock_fd = _acquire_host_lock(
+                on_wait_tick=lambda waited: _emit_progress(
+                    seq, stage="lock-wait", waited_seconds=waited,
+                )
             )
-            _emit_progress(seq, stage="verify", ok=verify_ok)
+        except OSError as exc:
+            _output(False, error_message=f"lock setup failed: {exc}",
+                    metrics={"route": route, "version_check": version_check,
+                             "firmware_cache": fw_cache_metrics})
+            return
+        lock_acquired_at = time.time()
+
+        # ── v1.3.0：门控（必须在 adb reboot 之前反查目标口——BROM 态无 serial）
+        # v1.3.20：目标口优先取身份判定结果；判定已跑过（V6）时不再二次反查，
+        # 避免"判定用一个口、门控用另一个口"的两条真相。
+        target_port = identity_port
+        if target_port is None and _is_linux():
+            # 显式传 base：默认参数在定义时绑定，不传就吃不到运行期的基址
+            target_port = _port_for_serial(serial, _SYSFS_USB_BASE)
+        initial_gate_pids = _BROM_GATE_PIDS if gate_pid_scope == "brom" else None
+        if gate_other_mtk:
+            gating = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
+                                     hold_pids=initial_gate_pids)
         else:
-            verify_ok, verify_report = True, {"skipped_reason": "verify_version disabled"}
+            gating = {"hidden": [], "errors": {},
+                      "skipped_reason": "disabled by params",
+                      "target_port": target_port}
+        _emit_progress(seq, stage="gating", result=json.dumps(
+            {"hidden": gating.get("hidden", []),
+             "skipped_reason": gating.get("skipped_reason"),
+             "target_port": gating.get("target_port")},
+            ensure_ascii=False))
+        hidden_ports: list = list(gating.get("hidden", []))
+        if hidden_ports:
+            _persist_gated_ports(hidden_ports)
 
-        # ── v1.3.7：锁内 boot 稳定等待 ────────────────────────────────────
-        # 实证（2026-08-30 run 258，.68 串行 14 台）：verify 通过（adb 回归 +
-        # 版本一致）≠ 设备完成首次开机——HONOR 首刷后 boot 完成后会再重启一次
-        # （初始化），重启窗口期以 BROM/preloader 可捕获态暴露（新 USB 实例
-        # authorized=1，门控失效），下一任持锁者的工具扫描把新固件刷进上一台。
-        # v1.3.4 持锁穿过 verify 只覆盖 verify 期间；这里把「锁内稳定」延伸
-        # 到 boot_completed=1 且 USB 拓扑稳定（设备不再重启）才交出锁。
-        boot_stable_report: dict = {"skipped_reason": "not reached"}
-        if verify_ok:
-            boot_stable_report = _wait_boot_stable(
-                serial=serial, adb_path=adb_path,
-                stable_seconds=boot_stabilize_seconds,
-                max_wait=boot_stabilize_max_wait,
-                on_tick=lambda: _emit_progress(seq, stage="boot-stabilize"),
+        # require_binding ⇒ 目标口非空：这一点在**抢锁之前**的身份判定里已经是硬
+        # 判据（判不出即 fail-closed），这里不再重复检查——在锁内 return 会漏结算。
+        bound_port = target_port if require_binding else None
+        cmd = _build_flash_argv(
+            flash_tool_exe, generation, command, boot_mode,
+            da_file=da_file, scatter_file=scatter_file, flash_xml_file=flash_xml_file,
+            port=bound_port,
+            v5_port=bound_port if vbus else None,
+        )
+        # v1.4.2：V5 vbus 带槽位口时，工具经 stdbuf 按行输出，并在每次尝试里记录 tty 历史。
+        v5_vbus_echo = bool(vbus and bound_port and generation != GENERATION_V6)
+        if v5_vbus_echo and v5_stdbuf:
+            cmd = _line_buffered_argv(cmd, v5_stdbuf)
+
+        attempts_report: list = []
+        aborted_report: "dict | None" = None
+        final_output, final_rc = "", None
+        final_error: "tuple[str, str] | None" = ("exhausted", "no attempt made")
+        verdict_ok = False
+        verdict_evidence = ""
+        pre_reboot: dict = {"attempted": False, "skip_reason": "not attempted"}
+
+        # ── v1.3.4：锁结算幂等化 + 持锁穿过核验 ────────────────────────────
+        # 场景 2 实证（2026-08-26 .66 双机并发）：旧顺序在工具退出后立即释放
+        # 锁，而本机手机的看门狗重启发生在锁外——下一任持锁者的工具扫描窗会
+        # 撞上这个可捕获态，把新固件刷进错误的手机。改为：成功路径持锁穿过
+        # re-enumerate 与 verify（自己的手机稳定后——adb 已回归或确认卡死——
+        # 才交出锁）；失败与异常路径立即结算，保持原兜底语义。
+        lock_settled = False
+        # v1.4.0：vbus 成功收尾前置 True；其余任何路径（失败 / 异常 / 信号）在交出锁
+        # 之前都要把本槽位断电（ADR-0063 D3 第 8 条：隔离一台状态不明的设备）。
+        vbus_keep_power = False
+        # 必须先于 _settle_lock 的任何调用点（含信号处理器）定义。
+        vbus_state: dict = {"power_on_at": None, "brom_seen": False, "ctx": None}
+
+        # v1.4.2（ADR-0063 v1.3 D3 第 4 条「信号打断停止流程」，复核 #3924 第 4 轮）：结算按步骤
+        # 记完成。信号在任一步中途到达时，处理器里重入的结算从未完成的那一步接着做完，而不是
+        # 因为「已开始结算」直接返回（旧闸门 lock_settled 在第一步之前就置位，信号处理器随后
+        # 终止进程，隔离与释放锁都没有执行）。步骤本身都可重复执行：重复断电、重复恢复门控无害；
+        # 释放锁只做一次（标记在调用之前置位）。
+        settle_done: set = set()
+
+        def _settle_step(name: str, fn: "callable") -> None:
+            if name in settle_done:
+                return
+            fn()
+            settle_done.add(name)
+
+        def _settle_stop_sampler() -> None:
+            ctx = vbus_state.get("ctx")
+            if ctx is not None and ctx.get("tty_history") is not None:
+                ctx["tty_history"].stop()
+
+        def _settle_isolate() -> None:
+            if vbus and not vbus_keep_power and vbus_report.get("power_actions") \
+                    and not vbus_state.get("slot_mismatch"):
+                # 一次切电都没做过（如锁内复核发现设备在开机态）就不碰供电。
+                # 槽位取脚本读到的那一份：映射此后被改写时 wrapper 会拒绝，记为隔离失败，
+                # 而不是去断映射里的新槽位。
+                isolate = _usb_power(serial, "off", vbus_report["slot"])
+                vbus_report["power_actions"].append(dict(isolate, phase="isolate"))
+                echo_ok = bool(isolate.get("ok")) and _usb_power_echo_matches(
+                    isolate, vbus_report["slot"])
+                if isolate.get("ok") and not echo_ok:
+                    # 回显的是另一个槽位：本设备没有被隔离（复核 #3902 B3）。
+                    vbus_state["slot_mismatch"] = True
+                    vbus_report["isolate_echo_mismatch"] = True
+                vbus_report["isolated"] = echo_ok
+
+        def _settle_restore() -> None:
+            gating["restore"] = _restore_gated({"hidden": hidden_ports}, _SYSFS_USB_BASE)
+            _clear_gated_state()
+
+        def _settle_release() -> None:
+            settle_done.add("release")  # 先置位：释放锁不重入
+            _release_host_lock(lock_fd)
+            _emit_progress(seq, stage="lock-released")
+
+        def _settle_lock() -> None:
+            nonlocal lock_settled
+            if "release" in settle_done:
+                return
+            lock_settled = True
+            # 复核 #3924 第 4 项：先停采样、冻结记录，再动供电与锁。
+            _settle_step("stop-sampler", _settle_stop_sampler)
+            _settle_step("isolate", _settle_isolate)
+            _settle_step("restore", _settle_restore)
+            _settle_step("release", _settle_release)
+
+        def _settle_on_signal(signum: int) -> None:
+            # #1025：取消/超时路径唯一会经过的清理点——先结算再死
+            _settle_lock()
+            _emit_progress(seq, stage="signal-cleanup", signal=signum)
+
+        _install_termination_cleanup(_settle_on_signal)
+
+        try:
+            for attempt in range(1, max_attempts + 1):
+                if vbus and attempt == 1 and needs_adb_poweroff:
+                    poweroff = _vbus_adb_power_off(
+                        serial, adb_path, target_port,
+                        vbus_cfg["poweroff_timeout_seconds"], _SYSFS_USB_BASE)
+                    identity["adb_poweroff"] = poweroff
+                    vbus_report["stages"]["adb_poweroff_seconds"] = poweroff.get("seconds")
+                    _emit_progress(seq, stage="vbus-adb-poweroff", ok=bool(poweroff.get("ok")))
+                    if not poweroff.get("ok"):
+                        attempts_report.append({"attempt": attempt,
+                                                "outcome": "vbus-adb-poweroff-failed"})
+                        final_error = ("vbus-adb-poweroff", (
+                            f"device {serial} did not power off via adb within "
+                            f"{vbus_cfg['poweroff_timeout_seconds']}s "
+                            f"(last state {poweroff.get('last_state')}, "
+                            f"port occupant {poweroff.get('occupant')})"))
+                        break
+                if vbus and attempt == 1:
+                    # 等锁期间设备可能被人开机：切电前在锁内复核一次。
+                    occupant = _vbus_port_powered_on(target_port, _SYSFS_USB_BASE)
+                    if occupant:
+                        attempts_report.append({"attempt": attempt,
+                                                "outcome": "vbus-device-powered-on",
+                                                "occupant": occupant})
+                        final_error = ("vbus-powered-on", (
+                            f"slot port {target_port} has a USB device ({occupant}) "
+                            "at flash time; device must be powered off"))
+                        break
+                if vbus:
+                    # 每次尝试都从断电起算：上一次尝试可能停在 BROM/DA 半程。
+                    vbus_state.update({"power_on_at": None, "brom_seen": False,
+                                       "attempt": attempt, "abort": None})
+                    off = _usb_power(serial, "off", vbus_report["slot"])
+                    vbus_report["power_actions"].append(
+                        dict(off, phase="pre-flash", attempt=attempt))
+                    _emit_progress(seq, stage="vbus-off", ok=off["ok"],
+                                   attempt=attempt)
+                    if off.get("slot_refused"):
+                        # wrapper 在切电之前发现映射与脚本读到的不一致：本次没有切任何口。
+                        attempts_report.append({"attempt": attempt,
+                                                "outcome": "vbus-slot-refused"})
+                        final_error = ("vbus-slot-mismatch", (
+                            "wrapper refused before powering anything: the slot map no "
+                            f"longer maps {serial} to {vbus_report['slot']['hub_location']}:"
+                            f"{vbus_report['slot']['port']} ({off['tail']})"))
+                        break
+                    if not off["ok"]:
+                        attempts_report.append({"attempt": attempt,
+                                                "outcome": "vbus-power-off-failed"})
+                        final_error = ("vbus-power",
+                                       f"usb-power off failed: {off['tail']}")
+                        break
+                    # 纵深防御：wrapper 已按 --expect-slot 在切电前比对；回显仍不符说明
+                    # wrapper 没有按约定执行，立即停手，不再做任何切电（含隔离）。
+                    slot = vbus_report["slot"]
+                    echo = off.get("echo") or {}
+                    if not _usb_power_echo_matches(off, slot):
+                        vbus_state["slot_mismatch"] = True
+                        attempts_report.append({"attempt": attempt,
+                                                "outcome": "vbus-slot-mismatch",
+                                                "echo": echo or None})
+                        final_error = ("vbus-slot-mismatch", (
+                            f"wrapper powered off slot {echo or '(no echo)'} but the "
+                            f"script resolved {slot['hub_location']}:{slot['port']}; "
+                            "slot map changed underneath — stopped without further "
+                            "power actions"))
+                        break
+                    settle_started = time.monotonic()
+                    time.sleep(vbus_cfg["off_settle_seconds"])
+                    vbus_report["stages"]["off_settle_seconds"] = round(
+                        time.monotonic() - settle_started, 1)
+                if attempt > 1:
+                    _emit_progress(seq, stage="retry", attempt=attempt,
+                                   total=max_attempts)
+                    if retry_backoff > 0:
+                        time.sleep(retry_backoff)
+                    # 防御性重画门控：上次尝试期间可能有别的手机重启进刷机态
+                    # （authorized=0 只对当前实例生效，见 note §Decision.3）
+                    # v1.3.20：口径与初始门控一致——V6 不得在这里把邻机的正常 adb 态
+                    # (201c) 再压制一遍，那正是 run 921 制造出错刷目标的机制。
+                    regate = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
+                                             hold_pids=initial_gate_pids)
+                    for name in regate.get("hidden", []):
+                        if name not in hidden_ports:
+                            hidden_ports.append(name)
+                    if hidden_ports:
+                        _persist_gated_ports(hidden_ports)
+
+                # v1.3.3 时序：工具先启动进入 USB 扫描，on_running 回调里再发
+                # adb reboot——BROM 窗口只存在于上电最初几秒，观测者必须就位在先
+                # （Agent Note Decision 流程图的原序；v1.2.0 遗留的先 reboot 后起
+                # 工具顺序真机证伪：工具只能看到窗口过后的普通态枚举）。重试轮里
+                # 即使 params 关了 reboot 也照发（设备多半已在 BROM/DA 态，adb
+                # 调用会 no-op）。
+                do_reboot = bool(args.get("reboot_to_flash", True)) or attempt > 1
+
+                # ── v1.3.8：门控保持 ──────────────────────────────────────
+                # 实证（2026-08-30 run 258/259/260，.68）：BROM 幽灵设备
+                # （1-7.4.4，serial 空 pid 2000）周期性重枚举——新 USB 实例
+                # authorized 回到 1（门控只对当前实例生效），一次性门控被
+                # 逃逸；工具扫描/下载期间抓到它，3.3G 固件写进幽灵（BROM
+                # 态不变），目标设备空等 → verify mismatch。dmesg 佐证：
+                # run 260 目标 BROM 窗口仅 3s（正常重启流程快速经过），而
+                # 幽灵 2000 常驻。修复：工具运行期间周期重写非目标刷机态口
+                # authorized=0——on_running（reboot 前）一次 + on_percent
+                # 每 10s 节流一次，直到下载完成。
+                regate_count = 0
+                # -inf：首次调用必触发（on_running 就在定义后 ~15s 内到达,
+                # 若用当前时刻会把 reboot 前那次关键压制节流掉）
+                last_regate_at = float("-inf")
+
+                def _regate() -> None:
+                    nonlocal regate_count, last_regate_at, hidden_ports
+                    now = time.monotonic()
+                    if now - last_regate_at < 10:
+                        return
+                    last_regate_at = now
+                    # v1.3.9：保持阶段只压制 BROM/preloader 态口——201c 正常
+                    # 态设备周期 toggle 会制造 udev 风暴,干扰工具捕获目标的
+                    # 3 秒 BROM 窗口（run 261 实证:120s S_TIMEOUT）。
+                    regate = _gate_other_mtk(target_port, base=_SYSFS_USB_BASE,
+                                             hold_pids=_BROM_STAGE_PIDS)
+                    for name in regate.get("hidden", []):
+                        if name not in hidden_ports:
+                            hidden_ports.append(name)
+                    if hidden_ports:
+                        _persist_gated_ports(hidden_ports)
+                    regate_count += 1
+
+                tty_history = _TtyPortHistory() if v5_vbus_echo else None
+                # 复核 #3924 第 1 项：每轮一个上下文。回调以缺省参数绑定本轮上下文，上一轮遗留的
+                # reader 回调发现上下文已换就不再写任何状态；最终判定只读本轮记下的回显。
+                attempt_ctx: dict = {"tty_history": tty_history, "echoes": [], "readers": {}}
+                vbus_state["ctx"] = attempt_ctx
+
+                def _abort_on_wrong_port(line: str) -> "str | None":
+                    # 第二道闸（`-p` 之外的独立判据）：逐行核工具回显的绑定口。
+                    # 只在 require_binding 时才接进工具循环——V5 不经过这条新路径。
+                    return _port_mismatch_reason(line, target_port, serial)
+
+                run_kwargs: dict = {}
+                if require_binding:
+                    run_kwargs["abort_check"] = _abort_on_wrong_port
+                if vbus:
+                    def _vbus_line_check(line: str, ctx: dict = attempt_ctx) -> "str | None":
+                        if vbus_state.get("ctx") is not ctx:
+                            return None  # 上一轮遗留的 reader：不改本轮任何状态
+                        echo_at = time.monotonic()
+                        if _output_caught_brom(line) or re.search(r"\d{1,3}%", line):
+                            vbus_state["brom_seen"] = True
+                        if not require_binding:
+                            return None
+                        # v1.4.1：vbus 分支才认 V5 的 com portName 回显（复核 #3917 B3）；
+                        # 每行只解析一次，判错口与记已验证用同一结果（复核 #3917 B1-R2）。
+                        observed: list = []
+                        bound, reason = _check_bound_echo(line, target_port, serial,
+                                                          v5_echo=True,
+                                                          tty_history=ctx["tty_history"],
+                                                          observed=observed)
+                        if reason:
+                            return reason
+                        if bound == target_port:
+                            for name, live in observed:
+                                ctx["echoes"].append((name, echo_at, live))
+                        return None
+
+                    def _vbus_brom_deadline() -> "tuple[str, str] | None":
+                        if vbus_state.get("abort"):
+                            return vbus_state["abort"]
+                        on_at = vbus_state["power_on_at"]
+                        if on_at is None or vbus_state["brom_seen"]:
+                            return None
+                        if time.monotonic() - on_at < vbus_cfg["brom_timeout_seconds"]:
+                            return None
+                        return ("brom-timeout",
+                                f"no BROM capture within "
+                                f"{vbus_cfg['brom_timeout_seconds']}s after power-on")
+
+                    run_kwargs["abort_check"] = _vbus_line_check
+                    run_kwargs["poll_check"] = _vbus_brom_deadline
+
+                def _fire_reboot_when_tool_ready() -> None:
+                    nonlocal pre_reboot
+                    _regate()  # v1.3.8：reboot 前再压制一轮（堵重枚举逃逸）
+                    if vbus:
+                        # 工具已进入 USB 扫描：此刻上电，BROM 窗口落在观测里。
+                        time.sleep(pre_reboot_wait)
+                        history = (vbus_state.get("ctx") or {}).get("tty_history")
+                        if history is not None:
+                            # 调用 wrapper 之前开窗：此前本设备没有供电，采到的同名节点属于别的
+                            # 设备。调用期间的采样保留（通电可能早于返回，复核 #3924 第 2 轮第 3 项）。
+                            history.reset()
+                        on = _usb_power(serial, "on", vbus_report["slot"])
+                        vbus_report["power_actions"].append(
+                            dict(on, phase="trigger", attempt=vbus_state["attempt"]))
+                        vbus_state["power_on_at"] = time.monotonic()
+                        _emit_progress(seq, stage="vbus-on", ok=on["ok"])
+                        # 上电失败或回显另一个槽位：不能让工具继续等，下一秒的 poll_check
+                        # 杀工具并终止尝试环（复核 #3902 B3）；工具先于 poll_check 退出时
+                        # 由工具返回后的补查终止（B4）。
+                        if on["ok"] and not _usb_power_echo_matches(on, vbus_report["slot"]):
+                            vbus_state["slot_mismatch"] = True
+                            vbus_state["abort"] = ("slot-mismatch", (
+                                f"wrapper powered on slot {on.get('echo')} but the script "
+                                f"resolved {vbus_report['slot']['hub_location']}:"
+                                f"{vbus_report['slot']['port']}; stopped without further "
+                                "power actions"))
+                        elif not on["ok"]:
+                            vbus_state["abort"] = ("vbus-power", (
+                                "wrapper refused before powering anything: slot map changed"
+                                if on.get("slot_refused")
+                                else f"usb-power on failed: {on['tail']}"))
+                        return
+                    if not do_reboot:
+                        return
+                    time.sleep(pre_reboot_wait)  # 给工具进入扫描的提前量
+                    pre_reboot = _reboot_into_flash_mode(
+                        serial=serial,
+                        target=reboot_target,
+                        adb_path=adb_path,
+                        wait_seconds=0,
+                    )
+                    if pre_reboot.get("attempted"):
+                        # reboot 进入 flash 模式本身是一个阶段（#134）
+                        _emit_progress(seq, stage="reboot", target=reboot_target)
+
+                attempt_record: dict = {"attempt": attempt}
+                if tty_history is not None:
+                    run_kwargs["readers_status"] = attempt_ctx["readers"]
+                try:
+                    if tty_history is not None:
+                        # 放进 try：线程起不来按启动失败处理，finally 照常停采样（复核 #3924 第 2 轮第 4 项）。
+                        tty_history.start()
+                    output, flash_rc = _run_flash_tool_with_progress(
+                        cmd,
+                        cwd=os.path.dirname(flash_tool_exe),
+                        env=subprocess_env,
+                        timeout=timeout,
+                        on_stage=lambda tok: _emit_progress(seq, stage=tok),
+                        on_percent=lambda pct: (
+                            _emit_progress(seq, percent=pct),
+                            _regate(),
+                        ),
+                        on_running=_fire_reboot_when_tool_ready,
+                        **run_kwargs,
+                    )
+                    # 工具在第一次 poll_check 之前就退出时，上电那一步写下的 abort
+                    # 没被消费：返回后补查一次，按同一分支终止尝试环，不按输出判定
+                    # 成败、也不重试（ADR-0063 D3 第 13 条第 2 款；复核 #3902 B4）。
+                    if vbus and vbus_state.get("abort"):
+                        kind, reason = vbus_state["abort"]
+                        raise FlashToolAborted(reason, kind=kind)
+                except FlashToolAborted as exc:
+                    if exc.kind == "brom-timeout":
+                        # 没抓到 BROM：工具已被杀，下一次尝试重新断电再上电。
+                        attempt_record.update({"outcome": "brom-timeout",
+                                               "reason": exc.reason})
+                        attempts_report.append(attempt_record)
+                        final_error = ("brom-timeout", exc.reason)
+                        continue
+                    if exc.kind in ("slot-mismatch", "vbus-power"):
+                        # 上电那一步出错：重试只会再切一次电，立即终止尝试环。
+                        attempt_record.update({"outcome": f"vbus-{exc.kind}",
+                                               "reason": exc.reason})
+                        attempts_report.append(attempt_record)
+                        final_error = (exc.kind, exc.reason)
+                        break
+                    # 止损成功：记 attempt 后**立即终止尝试环**——重试只会让工具
+                    # 再去找一个非目标口。门控与锁由统一结算路径恢复。
+                    attempt_record.update({"outcome": "aborted-port-mismatch",
+                                           "reason": exc.reason})
+                    attempts_report.append(attempt_record)
+                    aborted_report = {"attempt": attempt, "reason": exc.reason}
+                    final_error = ("port-mismatch", exc.reason)
+                    break
+                except subprocess.TimeoutExpired:
+                    attempt_record.update({"outcome": "timeout",
+                                           "timeout_seconds": timeout})
+                    attempts_report.append(attempt_record)
+                    final_error = ("timeout",
+                                   f"flash_tool timed out after {timeout}s")
+                    continue
+                except FileNotFoundError as exc:
+                    attempts_report.append(
+                        {"attempt": attempt, "outcome": "launch-failed"})
+                    final_error = (
+                        "launch",
+                        f"flash_tool not executable ({exc}); chmod +x or check libs")
+                    break  # 环境性问题，重试无意义
+                except Exception as exc:
+                    attempts_report.append(
+                        {"attempt": attempt, "outcome": "launch-failed"})
+                    final_error = ("launch", f"flash_tool launch failed: {exc}")
+                    break
+                finally:
+                    if tty_history is not None:
+                        attempt_record["tty_sampler_stopped"] = tty_history.stop()
+                        attempt_record["tty_history"] = tty_history.snapshot()
+
+                unverified = None
+                if vbus and require_binding and generation != GENERATION_V6:
+                    # v1.4.1（复核 #3917 B1）：V5 vbus 工具退出时始终没有回显过本槽位口，
+                    # 就无法证明写的是目标机。按止损处理：不判成功、不重试，结算时断电隔离。
+                    # v1.4.2（复核 #3924 第 1、4 项）：采样停止、记录冻结之后按本轮回显重算。
+                    unverified = (_final_v5_binding_reason(
+                        attempt_ctx["echoes"], tty_history,
+                        bool(attempt_record.get("tty_sampler_stopped")), target_port, serial,
+                        readers=attempt_ctx["readers"])
+                        if tty_history is not None else
+                        f"V5 tool exited without a verifiable bound-port echo for target "
+                        f"port {target_port!r} (serial={serial}); result not trusted")
+                if unverified:
+                    reason = unverified
+                    attempt_record.update({"outcome": "aborted-port-unverified",
+                                           "exit_code": flash_rc, "reason": reason})
+                    attempts_report.append(attempt_record)
+                    aborted_report = {"attempt": attempt, "reason": reason}
+                    final_output, final_rc = output, flash_rc
+                    final_error = ("port-unverified", reason)
+                    break
+
+                v_ok, v_evidence = _scan_output_for_verdict(output, "")
+                attempt_record.update({
+                    "outcome": "ok" if v_ok else "verdict-failed",
+                    "exit_code": flash_rc,
+                    # 两代措辞不同：V5 打「BROM connected」，V6 打「connect brom
+                    # successed.」（2026-10-12 真机日志与本机实测一致）。只认 V5 字样
+                    # 会让 v6 的每次成功刷机都在 attempts 里留下 caught_brom=false 的
+                    # 假诊断——排查时会被引向「没抓到 BROM」这个错误方向。
+                    "caught_brom": _output_caught_brom(output),
+                    "verdict": v_evidence,
+                })
+                attempts_report.append(attempt_record)
+                if vbus and vbus_state["power_on_at"] is not None:
+                    attempt_record["seconds_since_power_on"] = round(
+                        time.monotonic() - vbus_state["power_on_at"], 1)
+                final_output, final_rc = output, flash_rc
+                verdict_ok, verdict_evidence = v_ok, v_evidence
+                final_error = None if v_ok else ("verdict", v_evidence)
+                if v_ok:
+                    break
+
+        except Exception:
+            _settle_lock()  # 异常兜底：不能把邻机留在 authorized=0 的隐藏态
+            raise
+
+        if not verdict_ok:
+            kind, detail = final_error
+            _settle_lock()
+            # v1.3.14（#1591）：失败后尝试恢复设备态（避免停在 BROM → USB 死态）
+            # v1.4.0：vbus 已在结算里断电隔离，adb reboot 对断电设备没有意义。
+            if vbus:
+                recovery = {"skipped_reason": "vbus_cycle: slot powered off for isolation"}
+            else:
+                recovery = _attempt_device_recovery(serial, adb_path)
+            _output(False,
+                    error_message=(
+                        f"flash failed after {len(attempts_report)} attempt(s): "
+                        f"{detail}"),
+                    metrics={"command_argv": cmd,
+                             "route": route,
+                             "version_check": version_check,
+                             "env_precheck": env_precheck,
+                             "gating": gating,
+                             "target_port": target_port,
+                             # v1.3.20：排查"绑错口/目标不可控"必须一眼看到这三项
+                             "identity": identity,
+                             "port_binding": {"required": require_binding,
+                                              "bound_port": bound_port},
+                             "aborted": aborted_report,
+                             "attempts": attempts_report,
+                             "attempt_count": len(attempts_report),
+                             "recovery": recovery,
+                             "pre_reboot": pre_reboot,
+                             "stdout_tail": final_output[-1500:],
+                             "trigger_mode": trigger_mode,
+                             **({"vbus": vbus_report} if vbus else {}),
+                             "duration_seconds":
+                                 round(time.time() - started_at, 2)})
+            return
+
+        if vbus:
+            # ── v1.4.0：vbus 刷后阶段（锁内，各自独立硬超时，ADR-0063 D3 第 3、7 条）
+            # 开机到 ADB → boot 稳定（沿用 v1.3.7 首刷二次重启守卫）→ 跳过 OOBE →
+            # 版本核验 → 机型回读。任一不过即失败，结算时断电隔离。
+            # 上电之后抛出的任何异常都必须先断电隔离再交出锁（D3 第 8 条；复核 #3902
+            # comment 6706267244 B1）：vbus_keep_power 只在整条收尾不抛异常后才置 True。
+            try:
+                reenumerated, verify_ok, verify_report, boot_stable_report = \
+                    _vbus_post_flash(route, serial, adb_path, vbus_cfg, vbus_report,
+                                     boot_stabilize_seconds, boot_stabilize_max_wait,
+                                     seq)
+                vbus_success = verify_ok and verdict_ok and final_rc == 0
+                _emit_progress(seq, stage="done")
+            except Exception:
+                _settle_lock()
+                raise
+            vbus_keep_power = vbus_success
+        else:
+            # flash_tool 退出后：等设备重新枚举（最长 60s），期间打戳。
+            # 设备没回来**不判失败**——flash 成功但枚举慢是常态，记录字段供诊断。
+            reenumerated = _wait_device_back(
+                serial=serial,
+                adb_path=adb_path,
+                timeout=60,
+                on_tick=lambda: _emit_progress(seq, stage="re-enumerate"),
             )
-        # 失败路径不等待：设备状态已知异常，立即结算（v1.3.4 兜底语义）。
-        # boot 稳定超时（ok=False）不判失败——卡死设备不会重启,无窗口可撞。
 
-        # done 戳必须落在 boot 稳定等待**之后**：在此之前设备还可能再重启一次，
-        # 称 done 名不副实，会让按 stage 解析终态的下游误判。
-        _emit_progress(seq, stage="done")
+            # ── v1.2.0：刷后版本核验（verify 开启时不一致/等不到设备 → 失败）──
+            if verify_version:
+                verify_ok, verify_report = _verify_after_flash(
+                    route, serial, adb_path, verify_wait,
+                    on_tick=lambda: _emit_progress(seq, stage="verify-wait"),
+                )
+                _emit_progress(seq, stage="verify", ok=verify_ok)
+            else:
+                verify_ok, verify_report = True, {"skipped_reason": "verify_version disabled"}
 
-    # v1.3.8：门控保持计数并入 gating（诊断：重枚举逃逸被压制的轮次）
-    gating["regate_count"] = regate_count
+            # ── v1.3.7：锁内 boot 稳定等待 ────────────────────────────────────
+            # 实证（2026-08-30 run 258，.68 串行 14 台）：verify 通过（adb 回归 +
+            # 版本一致）≠ 设备完成首次开机——HONOR 首刷后 boot 完成后会再重启一次
+            # （初始化），重启窗口期以 BROM/preloader 可捕获态暴露（新 USB 实例
+            # authorized=1，门控失效），下一任持锁者的工具扫描把新固件刷进上一台。
+            # v1.3.4 持锁穿过 verify 只覆盖 verify 期间；这里把「锁内稳定」延伸
+            # 到 boot_completed=1 且 USB 拓扑稳定（设备不再重启）才交出锁。
+            boot_stable_report: dict = {"skipped_reason": "not reached"}
+            if verify_ok:
+                boot_stable_report = _wait_boot_stable(
+                    serial=serial, adb_path=adb_path,
+                    stable_seconds=boot_stabilize_seconds,
+                    max_wait=boot_stabilize_max_wait,
+                    on_tick=lambda: _emit_progress(seq, stage="boot-stabilize"),
+                )
+            # 失败路径不等待：设备状态已知异常，立即结算（v1.3.4 兜底语义）。
+            # boot 稳定超时（ok=False）不判失败——卡死设备不会重启,无窗口可撞。
 
-    # v1.3.4 核心改动点：核验完成后才结算锁。此刻自己的手机已稳定
-    # （adb 回归或确认卡死），下一任持锁者的门控/扫描不会撞上可捕获态。
-    _settle_lock()
+            # done 戳必须落在 boot 稳定等待**之后**：在此之前设备还可能再重启一次，
+            # 称 done 名不副实，会让按 stage 解析终态的下游误判。
+            _emit_progress(seq, stage="done")
 
-    stdout = final_output
-    stderr = ""
-    duration = round(time.time() - started_at, 2)
-    lock_wait = round(lock_acquired_at - started_at, 2)
+        # v1.3.8：门控保持计数并入 gating（诊断：重枚举逃逸被压制的轮次）
+        gating["regate_count"] = regate_count
 
-    metrics = {
-        "duration_seconds": duration,
-        "lock_wait_seconds": lock_wait,
-        "device_reenumerated": reenumerated,
-        "exit_code": final_rc,
-        "command_argv": cmd,
-        "tool_generation": generation,
-        "da_file": da_file,
-        "scatter_file": scatter_file,
-        "flash_xml_file": flash_xml_file,
-        "firmware_dir": firmware_dir,
-        "route": route,
-        "version_check": version_check,
-        "post_flash_verify": verify_report,
-        "pre_reboot": pre_reboot,
-        "stdout_tail": stdout[-1500:],
-        "stderr_tail": stderr[-500:],
-        # ── v1.3.0 ──
-        "env_precheck": env_precheck,
-        "gating": gating,
-        "target_port": target_port,
-        # v1.3.20：每次刷机都要留下"身份如何确定、工具绑在哪个口"的账
-        "identity": identity,
-        "port_binding": {"required": require_binding, "bound_port": bound_port},
-        "aborted": aborted_report,
-        "attempts": attempts_report,
-        "attempt_count": len(attempts_report),
-        # ── v1.3.7 ──
-        "boot_stable": boot_stable_report,
-        # ── v1.4.0 ──
-        "trigger_mode": trigger_mode,
-    }
-    if vbus:
-        metrics["vbus"] = vbus_report
+        # v1.3.4 核心改动点：核验完成后才结算锁。此刻自己的手机已稳定
+        # （adb 回归或确认卡死），下一任持锁者的门控/扫描不会撞上可捕获态。
+        _settle_lock()
 
-    if final_rc != 0:
-        _output(False,
-                error_message=f"flash_tool exited {final_rc}: {(stderr or stdout)[:1500]}",
-                metrics=metrics)
-        return
+        stdout = final_output
+        stderr = ""
+        duration = round(time.time() - started_at, 2)
+        lock_wait = round(lock_acquired_at - started_at, 2)
 
-    # 判决已在尝试环内得出（verdict_ok / verdict_evidence）；此处仅落账。
-    if not verdict_ok:
-        _output(False, error_message=f"verdict failed: {verdict_evidence}",
-                metrics=metrics)
-        return
+        metrics = {
+            "duration_seconds": duration,
+            "lock_wait_seconds": lock_wait,
+            "device_reenumerated": reenumerated,
+            "exit_code": final_rc,
+            "command_argv": cmd,
+            "tool_generation": generation,
+            "da_file": da_file,
+            "scatter_file": scatter_file,
+            "flash_xml_file": flash_xml_file,
+            "firmware_dir": firmware_dir,
+            "source_firmware_dir": source_firmware_dir,
+            "route": route,
+            "version_check": version_check,
+            "post_flash_verify": verify_report,
+            "pre_reboot": pre_reboot,
+            "stdout_tail": stdout[-1500:],
+            "stderr_tail": stderr[-500:],
+            # ── v1.3.0 ──
+            "env_precheck": env_precheck,
+            "gating": gating,
+            "target_port": target_port,
+            # v1.3.20：每次刷机都要留下"身份如何确定、工具绑在哪个口"的账
+            "identity": identity,
+            "port_binding": {"required": require_binding, "bound_port": bound_port},
+            "aborted": aborted_report,
+            "attempts": attempts_report,
+            "attempt_count": len(attempts_report),
+            # ── v1.3.7 ──
+            "boot_stable": boot_stable_report,
+            # ── v1.4.0 ──
+            "trigger_mode": trigger_mode,
+            # ── v1.4.5 / ADR-0064 D4 ──
+            "firmware_cache": fw_cache_metrics,
+        }
+        if vbus:
+            metrics["vbus"] = vbus_report
 
-    if not verify_ok:
-        _output(False,
-                error_message=f"post-flash verify failed: {verify_report.get('error')}",
-                metrics=metrics)
-        return
+        if final_rc != 0:
+            _output(False,
+                    error_message=f"flash_tool exited {final_rc}: {(stderr or stdout)[:1500]}",
+                    metrics=metrics)
+            return
 
-    metrics["verdict"] = verdict_evidence
-    _output(True, metrics=metrics)
+        # 判决已在尝试环内得出（verdict_ok / verdict_evidence）；此处仅落账。
+        if not verdict_ok:
+            _output(False, error_message=f"verdict failed: {verdict_evidence}",
+                    metrics=metrics)
+            return
+
+        if not verify_ok:
+            _output(False,
+                    error_message=f"post-flash verify failed: {verify_report.get('error')}",
+                    metrics=metrics)
+            return
+
+        metrics["verdict"] = verdict_evidence
+        _output(True, metrics=metrics)
+    finally:
+        # 退出 ensure_firmware 上下文：释放条目 LOCK_SH（进程退出由内核兜底）
+        if _fw_entered:
+            try:
+                _fw_cm.__exit__(None, None, None)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

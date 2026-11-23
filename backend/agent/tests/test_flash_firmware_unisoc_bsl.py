@@ -32,6 +32,25 @@ def _load_module():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _identity_firmware_cache(monkeypatch: pytest.MonkeyPatch, request):
+    """既有 BSL 用例默认恒等 ensure；U4 反例可标记 ``no_identity_fw_cache`` 关闭。"""
+    if request.node.get_closest_marker("no_identity_fw_cache"):
+        return
+    from backend.agent.tests.firmware_cache_testkit import identity_ensure_firmware
+
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.ensure_firmware",
+        identity_ensure_firmware,
+    )
+    try:
+        import agent.firmware_cache as _afc  # type: ignore
+
+        monkeypatch.setattr(_afc, "ensure_firmware", identity_ensure_firmware)
+    except Exception:
+        pass
+
+
 def _make_sparse_image(path: Path, chunks: list[tuple[int, int, bytes]]) -> None:
     """Write a minimal Android sparse image with (chunk_type, chunk_blocks, payload)."""
     blk_sz = 4096
@@ -214,6 +233,16 @@ def _create_firmware_dir(
                 rp = images / raw_rel
                 rp.parent.mkdir(parents=True, exist_ok=True)
                 rp.write_bytes(b"R" * (16 * 4096))
+        # B10 U4：L1 缓存消费预裁剪 super（images/bsl/super_trimmed.img）
+        has_super = any(
+            "super" in (item.get("partitions") or [])
+            for item in (plan_data.get("entries") or [])
+            if isinstance(item, dict)
+        )
+        if has_super:
+            bsl_dir = images / "bsl"
+            bsl_dir.mkdir(parents=True, exist_ok=True)
+            (bsl_dir / "super_trimmed.img").write_bytes(b"T" * 4096)
     return ver_dir
 
 
@@ -317,20 +346,6 @@ def _install_fake_adb(
     return state
 
 
-def test_sparse_trimmed_size_ignores_trailing_dont_care(tmp_path: Path) -> None:
-    mod = _load_module()
-    sparse_file = tmp_path / "super.img"
-    _make_sparse_image(
-        sparse_file,
-        [
-            (0xCAC2, 5000, b"\x00\x00\x00\x00"),
-            (0xCAC3, 100000, b""),
-        ],
-    )
-    trimmed = mod.get_sparse_trimmed_size(str(sparse_file))
-    assert trimmed == 32 * 1024 * 1024
-
-
 def test_build_spd_dump_args_rejects_without_plan_json(tmp_path: Path) -> None:
     """Rewritten per J1 & #4006 §4 #21: missing plan.json must reject instead of using legacy P532AA defaults."""
     mod = _load_module()
@@ -419,12 +434,11 @@ def test_main_missing_serial_outputs_contract_json() -> None:
     assert "STP_DEVICE_SERIAL" in data["error_message"]
 
 
-def test_run_acquires_host_lock_before_preparing_local_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Updated per J1/J2/J7/J9: supplies manifest.json, plan.json, and fake adb hooks while verifying lock ordering."""
+def test_run_ensures_firmware_before_host_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """B10 U4：ensure_firmware（锁外）必须先于 acquire_host_lock。"""
     mod = _load_module()
     order: list[str] = []
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    images_dir = ver_dir / "images"
     sysfs_base = _make_fake_sysfs(tmp_path)
 
     adb_state = _install_fake_adb(
@@ -452,14 +466,18 @@ def test_run_acquires_host_lock_before_preparing_local_cache(tmp_path: Path, mon
     monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/usr/local/bin/spd_dump")
 
     lock_file = tmp_path / "host.lock"
+    from backend.agent.tests.firmware_cache_testkit import identity_ensure_firmware
+    from contextlib import contextmanager
 
-    def fake_acquire(progress, timeout_seconds=7200):
+    @contextmanager
+    def tracking_ensure(source_dir, profile, **kwargs):
+        order.append(("ensure_firmware", profile, str(source_dir)))
+        with identity_ensure_firmware(source_dir, profile, **kwargs) as fw:
+            yield fw
+
+    def fake_acquire(progress, timeout_seconds=7200, lock_path=None):
         order.append("acquire_host_lock")
         return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
-
-    def fake_prepare(fw_dir, cache_dir, progress, spec=None):
-        order.append("prepare_local_cache")
-        return str(images_dir), str(images_dir / "raw" / "super.img")
 
     clock = _patch_advancing_clock(monkeypatch, mod)
 
@@ -469,15 +487,19 @@ def test_run_acquires_host_lock_before_preparing_local_cache(tmp_path: Path, mon
         clock["now"] += 30.0
         return 1.0
 
+    monkeypatch.setattr(mod, "_load_firmware_cache_api", lambda: (tracking_ensure, Exception, None))
     monkeypatch.setattr(mod, "acquire_host_lock", fake_acquire)
-    monkeypatch.setattr(mod, "prepare_local_cache", fake_prepare)
     monkeypatch.setattr(mod, "run_spd_dump", fake_spd_dump)
     monkeypatch.setattr(mod, "wait_boot_completed", lambda *_a: 1.0)
 
     res = mod.run({"firmware_dir": str(ver_dir), "verify_root": False}, "SN1", mod.Progress(), [])
     assert res["metrics"]["duration_seconds"] >= 0
-    assert order == ["acquire_host_lock", "prepare_local_cache"]
-
+    assert res["metrics"]["firmware_cache"]["hit"] is True
+    assert order[0][0] == "ensure_firmware"
+    assert order[0][1] == "unisoc_bsl"
+    assert order[1] == "acquire_host_lock"
+    assert "prepare_local_cache" not in order
+    assert not hasattr(mod, "prepare_local_cache")
 
 def test_is_protected_partition_blocks_lte_and_nr_nv() -> None:
     mod = _load_module()
@@ -561,50 +583,6 @@ def test_build_spd_dump_args_reads_p525aa_plan_json(tmp_path: Path) -> None:
     for protected in ("splloader", "l_fixnv1_a", "l_runtimenv1", "l_deltanv_a", "prodnv", "persist", "miscdata"):
         assert protected not in written_parts
 
-
-def test_prepare_local_cache_isolates_distinct_firmware_dirs(tmp_path: Path) -> None:
-    mod = _load_module()
-    cache_root = tmp_path / "ssd_cache"
-
-    def _make_fw(name: str, fdl2_name: str, fdl2_bytes: bytes, boot_bytes: bytes, sparse_blocks: int) -> Path:
-        fw = tmp_path / name / "images"
-        (fw / "raw").mkdir(parents=True)
-        (fw / "fdl1-sign.bin").write_bytes(b"fdl1")
-        (fw / fdl2_name).write_bytes(fdl2_bytes)
-        (fw / "userdata.img").write_bytes(b"\x00" * 4096)
-        (fw / "boot.img").write_bytes(boot_bytes)
-        sparse_super = fw / "super.img"
-        _make_sparse_image(sparse_super, [(0xCAC2, sparse_blocks, b"\x11\x11\x11\x11"), (0xCAC3, 5000, b"")])
-        raw_super = fw / "raw" / "super.img"
-        with open(raw_super, "wb") as fh:
-            fh.write(b"S" * (sparse_blocks * 4096))
-            fh.truncate(20 * 1024 * 1024)
-        plan = {
-            "fdl": {
-                "fdl1": {"file": "fdl1-sign.bin", "base": "0x65000800"},
-                "fdl2": {"file": fdl2_name, "base": "0x9EFFFE00"},
-            },
-            "erases": ["misc", "metadata"],
-            "entries": [
-                {"id": "UserData", "file": "userdata.img", "sparse": False, "partitions": ["userdata"], "flush_type": "YAFFS_IMG2", "preserve": True},
-                {"id": "BOOT", "file": "boot.img", "sparse": False, "partitions": ["boot_a"], "flush_type": "CODE2"},
-                {"id": "Super", "file": "super.img", "sparse": True, "raw": "raw/super.img", "partitions": ["super"], "flush_type": "YAFFS_IMG2"},
-            ],
-        }
-        (fw / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
-        return fw
-
-    fw_a = _make_fw("P532AA_v119", "edk2-fdl2-sign.bin", b"A" * 16, b"BOOT_A", 100)
-    fw_b = _make_fw("P525AA_v36", "lk-fdl2-sign.bin", b"B" * 24, b"BOOT_B_DIFF", 200)
-
-    local_a, super_a = mod.prepare_local_cache(str(fw_a), str(cache_root), mod.Progress())
-    local_b, super_b = mod.prepare_local_cache(str(fw_b), str(cache_root), mod.Progress())
-
-    assert local_a != local_b
-    assert Path(super_a).parent != Path(super_b).parent
-    assert (Path(local_a) / "boot.img").read_bytes() == b"BOOT_A"
-    assert (Path(local_b) / "boot.img").read_bytes() == b"BOOT_B_DIFF"
-    assert (Path(local_b) / "lk-fdl2-sign.bin").read_bytes() == b"B" * 24
 
 
 # ── B9-U2 Finite Acceptance Checklist (#4006 §4) ──────────────────────────
@@ -1056,26 +1034,6 @@ def test_u2_15_rejects_when_post_flash_version_mismatch_manifest_version(
         )
 
 
-def test_u2_16_same_length_image_replacement_rebuilds_cache(tmp_path: Path) -> None:
-    mod = _load_module()
-    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    images = ver_dir / "images"
-    cache_dir = tmp_path / "cache"
-    (images / "boot.img").write_bytes(b"AAAA1111")
-    raw_super = images / "raw" / "super.img"
-    raw_super.write_bytes(b"S1" * (16 * 4096 // 2))
-
-    local_1, super_1 = mod.prepare_local_cache(str(images), str(cache_dir), mod.Progress())
-    assert (Path(local_1) / "boot.img").read_bytes() == b"AAAA1111"
-    assert Path(super_1).read_bytes()[:4] == b"S1S1"
-
-    # Replace with exact same byte length
-    (images / "boot.img").write_bytes(b"BBBB2222")
-    raw_super.write_bytes(b"S2" * (16 * 4096 // 2))
-    local_2, super_2 = mod.prepare_local_cache(str(images), str(cache_dir), mod.Progress())
-    assert (Path(local_2) / "boot.img").read_bytes() == b"BBBB2222"
-    assert Path(super_2).read_bytes()[:4] == b"S2S2"
-
 
 def test_u2_17_same_length_plan_json_replacement_uses_new_fdl_address(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1151,26 +1109,6 @@ def test_u2_17_same_length_plan_json_replacement_uses_new_fdl_address(
     assert "0x9EFFFE00" not in seen_cmds[-1]
 
 
-def test_u2_18_cache_prepare_failure_cleans_staging_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    mod = _load_module()
-    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    cache_dir = tmp_path / "cache"
-
-    orig_copyfile = mod.shutil.copyfile
-
-    def failing_copyfile(src, dst, *args, **kwargs):
-        if Path(src).name == "boot.img":
-            Path(dst).write_bytes(b"partial-staging")
-            raise OSError("disk full")
-        return orig_copyfile(src, dst, *args, **kwargs)
-
-    monkeypatch.setattr(mod.shutil, "copyfile", failing_copyfile)
-    with pytest.raises(OSError, match="disk full"):
-        mod.prepare_local_cache(str(ver_dir / "images"), str(cache_dir), mod.Progress())
-
-    leftovers = list(cache_dir.rglob("*.tmp.*"))
-    assert leftovers == []
-
 
 def test_u2_19_dry_run_returns_fdl_erases_skipped_partitions_and_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1195,7 +1133,7 @@ def test_u2_19_dry_run_returns_fdl_erases_skipped_partitions_and_route(
     assert m["erases"] == ["uboot_log", "misc", "sysdumpdb", "metadata"]
     assert m["skipped_erases"] == ["splloader", "l_runtimenv1"]
     assert len(m["partitions"]) == 25  # userdata + 23 writable + super
-    assert {"partition": "super", "image": "raw/super.img"} in m["partitions"]
+    assert {"partition": "super", "image": "bsl/super_trimmed.img"} in m["partitions"]
     assert m["route"]["decided_by"] == "params"
     assert m["route"]["model"] == "MLY-LX2"
     assert m["route"]["family"] == "P525AA"
@@ -1352,9 +1290,10 @@ def test_u2_j11_main_emits_route_on_rejection_and_success(
 # ── B9-U2 Finite Acceptance Checklist (#4006 §4 v1.1 #23–#35) ─────────────
 
 
-def test_u2_23_super_raw_non_default_filename_used_in_cmd_and_dry_run(
+def test_u2_23_super_uses_bsl_trimmed_not_legacy_raw_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """B10 U4：BSL 固定消费 images/bsl/super_trimmed.img，不读 plan 内 raw/super 路径。"""
     mod = _load_module()
     plan = {
         "fdl": {
@@ -1381,9 +1320,10 @@ def test_u2_23_super_raw_non_default_filename_used_in_cmd_and_dry_run(
     alt_raw = images / "custom" / "alt_super.img"
     alt_raw.parent.mkdir(parents=True, exist_ok=True)
     alt_raw.write_bytes(b"ALT_SUPER_BYTES_" + b"X" * (16 * 4096 - 16))
-    # Place decoys at legacy hardcoded paths to prove neither is used
     (images / "super.img").write_bytes(b"WRONG_SPARSE")
     (images / "raw" / "super.img").write_bytes(b"WRONG_RAW" * 1024)
+    trimmed = images / "bsl" / "super_trimmed.img"
+    trimmed.write_bytes(b"TRIMMED_SUPER_PAYLOAD")
 
     sysfs_base = _make_fake_sysfs(tmp_path)
     lock_file = tmp_path / "host.lock"
@@ -1401,13 +1341,14 @@ def test_u2_23_super_raw_non_default_filename_used_in_cmd_and_dry_run(
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     dry_res = mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
-    assert {"partition": "super", "image": "custom/alt_super.img"} in dry_res["metrics"]["partitions"]
-    assert {"partition": "super", "image": "super.img"} not in dry_res["metrics"]["partitions"]
+    assert {"partition": "super", "image": "bsl/super_trimmed.img"} in dry_res["metrics"]["partitions"]
+    assert {"partition": "super", "image": "custom/alt_super.img"} not in dry_res["metrics"]["partitions"]
 
     captured: dict = {}
 
     def fake_spd_dump(cmd, *_a, **_kw):
         written = {cmd[i + 1]: cmd[i + 2] for i, t in enumerate(cmd) if t == "write_part"}
+        captured["super_path"] = written["super"]
         captured["super_bytes"] = Path(written["super"]).read_bytes()
         adb_state["rebooted"] = True
         adb_state["nonce"] = ""
@@ -1416,14 +1357,14 @@ def test_u2_23_super_raw_non_default_filename_used_in_cmd_and_dry_run(
 
     monkeypatch.setattr(mod, "run_spd_dump", fake_spd_dump)
     run_res = mod.run(
-        {"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False},
+        {"firmware_dir": str(ver_dir), "verify_root": False},
         "SN1",
         mod.Progress(),
         [],
     )
-    assert captured["super_bytes"].startswith(b"ALT_SUPER_BYTES_")
-    assert {"partition": "super", "image": "custom/alt_super.img"} in run_res["metrics"]["partitions"]
-
+    assert captured["super_bytes"] == b"TRIMMED_SUPER_PAYLOAD"
+    assert captured["super_path"].endswith("bsl/super_trimmed.img")
+    assert {"partition": "super", "image": "bsl/super_trimmed.img"} in run_res["metrics"]["partitions"]
 
 def test_u2_24_rejects_non_userdata_id_targeting_userdata(tmp_path: Path) -> None:
     mod = _load_module()
@@ -1465,9 +1406,10 @@ def test_u2_25_regression_userdata_written_with_preserve_while_other_preserve_sk
     assert "init_boot_a" in written
 
 
-def test_u2_26_rejects_download_port_appearing_during_cache_prepare_without_spd_dump(
+def test_u2_26_rejects_download_port_appearing_after_ensure_before_spd_dump(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """B10 U4：下载口闸门仍在锁内、spd_dump 之前；ensure 之后插入 1782:4d00 必须拒绝。"""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
     sysfs_base = _make_fake_sysfs(tmp_path)
@@ -1480,25 +1422,22 @@ def test_u2_26_rejects_download_port_appearing_during_cache_prepare_without_spd_
         adb_calls=adb_calls,
     )
     spd_called = {"n": 0}
-    orig_prepare = mod.prepare_local_cache
 
-    def prepare_then_plug_download_port(fw_dir, cache_dir, progress, *args, **kwargs):
-        res = orig_prepare(fw_dir, cache_dir, progress, *args, **kwargs)
+    def acquire_then_plug(progress, timeout_seconds=7200, lock_path=None):
         d = sysfs_base / "1-4.1"
         d.mkdir(parents=True, exist_ok=True)
         (d / "idVendor").write_text("1782\n", encoding="utf-8")
         (d / "idProduct").write_text("4d00\n", encoding="utf-8")
-        return res
+        return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
 
     monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
     monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
     monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
-    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
-    monkeypatch.setattr(mod, "prepare_local_cache", prepare_then_plug_download_port)
+    monkeypatch.setattr(mod, "acquire_host_lock", acquire_then_plug)
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
 
     with pytest.raises(RuntimeError, match="1782:4d00"):
-        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache")}, "SN1", mod.Progress(), [])
+        mod.run({"firmware_dir": str(ver_dir)}, "SN1", mod.Progress(), [])
     assert spd_called["n"] == 0
     assert ["reboot", "autodloader"] not in adb_calls
 
@@ -2000,58 +1939,6 @@ def test_u2_36_wall_clock_rollback_inside_stage_still_times_out_on_monotonic(
             [],
         )
 
-
-def test_u2_32_rejects_when_plan_replaced_and_image_deleted_before_cache_prepare(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mod = _load_module()
-    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
-    images = ver_dir / "images"
-    cache_dir = tmp_path / "cache"
-    sysfs_base = _make_fake_sysfs(tmp_path)
-    lock_file = tmp_path / "host.lock"
-    clock = _patch_advancing_clock(monkeypatch, mod)
-    adb_state = _install_fake_adb(
-        monkeypatch,
-        mod,
-        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug"},
-        post_props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2", "ro.build.type": "userdebug", "ro.build.sw_internal_version": "v36"},
-        clock=clock,
-    )
-    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base), raising=False)
-    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
-    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: str(tmp_path / "spd_dump_stub"))
-    monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
-
-    spd_called = {"n": 0}
-
-    def fake_spd_dump(*_a, **_kw):
-        spd_called["n"] += 1
-        adb_state["rebooted"] = True
-        adb_state["nonce"] = ""
-        clock["now"] += 30.0
-        return 1.0
-
-    monkeypatch.setattr(mod, "run_spd_dump", fake_spd_dump)
-
-    # First run populates cache including boot.img
-    mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(cache_dir), "verify_root": False}, "SN1", mod.Progress(), [])
-    assert spd_called["n"] == 1
-
-    # Second run: between initial _load_flash_spec and prepare_local_cache, replace plan.json & delete boot.img
-    adb_state["rebooted"] = False
-
-    def swap_plan_and_delete_boot_on_lock(progress, timeout_seconds=7200):
-        plan_obj = json.loads((images / "plan.json").read_text(encoding="utf-8"))
-        plan_obj["entries"] = [e for e in plan_obj["entries"] if e.get("id") != "BOOT"]
-        (images / "plan.json").write_text(json.dumps(plan_obj), encoding="utf-8")
-        (images / "boot.img").unlink()
-        return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
-
-    monkeypatch.setattr(mod, "acquire_host_lock", swap_plan_and_delete_boot_on_lock)
-    with pytest.raises(RuntimeError, match="boot\\.img"):
-        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(cache_dir), "verify_root": False}, "SN1", mod.Progress(), [])
-    assert spd_called["n"] == 1
 
 
 def test_u2_33_route_records_selected_dir_not_manifest_family_or_version(

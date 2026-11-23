@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Flash one Unisoc (SPRD) device to a firmware version prepared from a .pac.
 
+v1.0.8（2026-11-23 / #4086 U4 / ADR-0064 D4）：接入 Agent L1 `ensure_firmware`
+（profile=`unisoc_fastboot`）。四段次序：① 零设备访问启动自检
+`FIRMWARE_CACHE_API_VERSION == 1`；② 保留 `ensure_root` / `resolve_firmware` /
+`skip_if_current`；③ 主机刷机锁外完成缓存准备并持 `LOCK_SH`；④ 再取
+`/tmp/stp-flash-firmware.lock` 进入烧录。`flash_partitions` / `spl_decision`
+指向本地缓存目录；等待/拷贝打 `firmware-stage-wait` / `firmware-stage-copy`；
+`metrics.firmware_cache` 记录 hit/elapsed/tier/sealed/cache_key/fallback_reason/
+permit_degraded。能力声明 `requires_agent_capabilities: ["firmware_cache_v1"]`。
+
 v1.0.6（2026-10-21）：host 串行锁——与 MTK `flash_firmware` 共用
 /tmp/stp-flash-firmware.lock（flock，O_NOFOLLOW）。展锐 fastboot 没有 flash_tool
 那样的 USB 口绑定能力（SN→端口映射经 adb/lsusb 不可靠，Owner 已裁定同 host 并发
@@ -81,6 +90,8 @@ Params:
     allow_downgrade    default false  （本流水线只升级；降级需显式放开）
     verify_version     default true   （刷后回读 version_prop，必须等于目标）
     verify_wait_seconds default 300   （重启后等 adb + boot_completed 的预算）
+    allow_nfs_direct_fallback  default false（L1 缓存两盘不足时才允许直读 NFS）
+    allow_permit_bypass        default false（仅许可接口不可达超限时降级）
 
 CLI（产线排障用，绕过 STP_STEP_PARAMS）::
 
@@ -126,6 +137,48 @@ def _bool(value, default: bool) -> bool:
     if value is None or str(value).strip() == "":
         return default
     return str(value).strip().lower() not in ("0", "false", "no", "off")
+
+
+_AGENT_FW_CACHE_UNAVAILABLE = "agent_firmware_cache_unavailable"
+
+
+def _load_firmware_cache_api():
+    """① 零设备访问启动自检：导入 L1 并校验 API 版本（ADR-0064 D2/D4）。"""
+    try:
+        from agent.firmware_cache import (  # type: ignore
+            FIRMWARE_CACHE_API_VERSION,
+            FirmwareCacheError,
+            ensure_firmware,
+        )
+    except Exception:
+        try:
+            from backend.agent.firmware_cache import (  # type: ignore
+                FIRMWARE_CACHE_API_VERSION,
+                FirmwareCacheError,
+                ensure_firmware,
+            )
+        except Exception as exc:  # noqa: BLE001 - fail-closed structured error
+            return None, None, None, (
+                f"{_AGENT_FW_CACHE_UNAVAILABLE}: import failed ({type(exc).__name__})"
+            )
+    if FIRMWARE_CACHE_API_VERSION != 1:
+        return None, None, None, (
+            f"{_AGENT_FW_CACHE_UNAVAILABLE}: API version "
+            f"{FIRMWARE_CACHE_API_VERSION!r} != 1"
+        )
+    return ensure_firmware, FirmwareCacheError, FIRMWARE_CACHE_API_VERSION, None
+
+
+def _firmware_cache_metrics(fw_cache, elapsed_seconds: float) -> dict:
+    return {
+        "hit": bool(getattr(fw_cache, "hit", False)),
+        "elapsed_seconds": round(float(elapsed_seconds), 3),
+        "tier": getattr(fw_cache, "tier", None),
+        "sealed": bool(getattr(fw_cache, "sealed", False)),
+        "cache_key": getattr(fw_cache, "cache_key", None),
+        "fallback_reason": getattr(fw_cache, "fallback_reason", None),
+        "permit_degraded": bool(getattr(fw_cache, "permit_degraded", False)),
+    }
 
 
 class Progress:
@@ -648,6 +701,11 @@ def wait_boot(serial: str, progress: Progress, log: list, timeout: int) -> dict:
 
 def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
     t0 = time.time()
+    # ① 零设备访问启动自检（任何 getprop / ensure_root / 主机锁之前）
+    ensure_firmware, FirmwareCacheError, _api_ver, api_err = _load_firmware_cache_api()
+    if api_err is not None:
+        raise RuntimeError(_AGENT_FW_CACHE_UNAVAILABLE)
+
     # 指纹路由要读 ro.product.model，所以先等设备回来再解析固件目录
     global _FASTBOOT_BIN
     _FASTBOOT_BIN = resolve_fastboot()
@@ -677,19 +735,13 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
         raise RuntimeError(f"downgrade not allowed: {cur_version} -> {target} "
                            f"(set allow_downgrade=true to override)")
 
-    lock_fd = -1
-    if not _bool(args.get("dry_run"), False):
-        # host 锁覆盖一切破坏性面：SPL boot0 写、进 bootloader、逐分区刷写。
-        lock_fd = acquire_host_lock(progress)
-
-    if mode == "adb":
-        spl = spl_decision(fw_dir, entries, serial, args, progress, log)
-    else:
-        spl = {"mode": "auto", "action": "skipped",
-               "reason": "recovery: device started in fastboot, boot0 not touched"}
-    progress.stamp(stage="spl-check", **{k: v for k, v in spl.items() if k != "image"})
-
     if _bool(args.get("dry_run"), False):
+        if mode == "adb":
+            spl = spl_decision(fw_dir, entries, serial, args, progress, log)
+        else:
+            spl = {"mode": "auto", "action": "skipped",
+                   "reason": "recovery: device started in fastboot, boot0 not touched"}
+        progress.stamp(stage="spl-check", **{k: v for k, v in spl.items() if k != "image"})
         order = []
         for e in entries:
             if e.get("preserve") or not e.get("partitions"):
@@ -702,47 +754,85 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                             "current": cur_version, "spl": spl,
                             "partitions": [{"partition": p_, "image": f_} for _, p_, f_ in order]}}
 
-    if spl["action"] in ("differ", "write"):
-        spl = write_spl(spl["image"], serial, progress, log, args)
+    allow_nfs = _bool(args.get("allow_nfs_direct_fallback"), False)
+    allow_bypass = _bool(args.get("allow_permit_bypass"), False)
+    cache_t0 = time.time()
+    try:
+        with ensure_firmware(
+            fw_dir,
+            profile="unisoc_fastboot",
+            progress_callback=progress.stamp,
+            allow_nfs_direct_fallback=allow_nfs,
+            allow_permit_bypass=allow_bypass,
+            label=str(manifest.get("version") or "") or None,
+        ) as fw_cache:
+            fc_metrics = _firmware_cache_metrics(fw_cache, time.time() - cache_t0)
+            local_fw = str(fw_cache.local_dir)
+            # ④ 仅在持有条目 LOCK_SH 后再取主机刷机排他锁
+            lock_fd = acquire_host_lock(progress)
 
-    if mode == "adb":
-        progress.stamp(stage="reboot-bootloader")
-        dev.run(["reboot", "bootloader"], timeout=15)
-        time.sleep(3)
-        fb = wait_fastboot(serial, progress, log, 90)
-    else:
-        fb = fb0
-    slot = boot_slot(serial, progress, log)
-    progress.stamp(stage="fastboot", slot=slot)
+            if mode == "adb":
+                spl = spl_decision(local_fw, entries, serial, args, progress, log)
+            else:
+                spl = {"mode": "auto", "action": "skipped",
+                       "reason": "recovery: device started in fastboot, boot0 not touched"}
+            progress.stamp(stage="spl-check", **{k: v for k, v in spl.items() if k != "image"})
 
-    metrics = {"firmware_dir": fw_dir, "target": target, "previous": cur_version,
-               "spl": spl, "root_uid": root_uid, "fastboot": _FASTBOOT_BIN,
-               "host_lock_fd": lock_fd}
-    metrics.update(flash_partitions(fw_dir, entries, serial, args, progress, log))
-    if _bool(args.get("wipe"), True):
-        metrics.update(wipe(serial, progress, log, args))
+            if spl["action"] in ("differ", "write"):
+                spl = write_spl(spl["image"], serial, progress, log, args)
 
-    progress.stamp(stage="reboot")
-    reboot_out_of_fastboot(fb, progress, log)
-    boot = wait_boot(serial, progress, log, int(args.get("verify_wait_seconds", 300)))
-    metrics["boot"] = boot
+            if mode == "adb":
+                progress.stamp(stage="reboot-bootloader")
+                dev.run(["reboot", "bootloader"], timeout=15)
+                time.sleep(3)
+                fb = wait_fastboot(serial, progress, log, 90)
+            else:
+                fb = fb0
+            slot = boot_slot(serial, progress, log)
+            progress.stamp(stage="fastboot", slot=slot)
 
-    result = {"metrics": metrics}
-    if _bool(args.get("verify_version"), True):
-        dev = adb(serial, progress, log)
-        now = getprop(dev, manifest.get("version_prop") or "ro.build.sw_internal_version")
-        state = getprop(dev, "ro.boot.verifiedbootstate")
-        setup = getprop(dev, "sys.boot_completed")
-        user_setup = (dev.run(["shell", "settings", "get", "secure", "user_setup_complete"],
-                              timeout=15).stdout or "").strip()
-        metrics["verify"] = {"version": now, "verifiedbootstate": state, "boot_completed": setup,
-                             "user_setup_complete": user_setup}
-        if now != target:
-            raise RuntimeError(f"post-flash version mismatch: {now!r} != {target!r}")
-        if state and state != "green":
-            raise RuntimeError(f"verified boot state is {state!r}, expected green")
-    metrics["duration_seconds"] = round(time.time() - t0, 1)
-    return result
+            metrics = {
+                "firmware_dir": local_fw,
+                "source_firmware_dir": fw_dir,
+                "target": target,
+                "previous": cur_version,
+                "spl": spl,
+                "root_uid": root_uid,
+                "fastboot": _FASTBOOT_BIN,
+                "host_lock_fd": lock_fd,
+                "firmware_cache": fc_metrics,
+            }
+            metrics.update(flash_partitions(local_fw, entries, serial, args, progress, log))
+            if _bool(args.get("wipe"), True):
+                metrics.update(wipe(serial, progress, log, args))
+
+            progress.stamp(stage="reboot")
+            reboot_out_of_fastboot(fb, progress, log)
+            boot = wait_boot(serial, progress, log, int(args.get("verify_wait_seconds", 300)))
+            metrics["boot"] = boot
+
+            if _bool(args.get("verify_version"), True):
+                dev = adb(serial, progress, log)
+                now = getprop(dev, manifest.get("version_prop") or "ro.build.sw_internal_version")
+                state = getprop(dev, "ro.boot.verifiedbootstate")
+                setup = getprop(dev, "sys.boot_completed")
+                user_setup = (dev.run(["shell", "settings", "get", "secure", "user_setup_complete"],
+                                      timeout=15).stdout or "").strip()
+                metrics["verify"] = {
+                    "version": now,
+                    "verifiedbootstate": state,
+                    "boot_completed": setup,
+                    "user_setup_complete": user_setup,
+                }
+                if now != target:
+                    raise RuntimeError(f"post-flash version mismatch: {now!r} != {target!r}")
+                if state and state != "green":
+                    raise RuntimeError(f"verified boot state is {state!r}, expected green")
+            metrics["duration_seconds"] = round(time.time() - t0, 1)
+            return {"metrics": metrics}
+    except FirmwareCacheError as exc:
+        code = getattr(exc, "code", None) or str(exc)
+        raise RuntimeError(code) from exc
 
 
 def main() -> None:
@@ -781,7 +871,10 @@ def main() -> None:
         else:
             _output(True, metrics=result["metrics"])
     except Exception as exc:  # noqa: BLE001 - contract: always emit JSON
-        _output(False, error_message=str(exc), metrics={"log_tail": log[-8:]})
+        msg = str(exc)
+        if _AGENT_FW_CACHE_UNAVAILABLE in msg:
+            msg = _AGENT_FW_CACHE_UNAVAILABLE
+        _output(False, error_message=msg, metrics={"log_tail": log[-8:]})
 
 
 if __name__ == "__main__":

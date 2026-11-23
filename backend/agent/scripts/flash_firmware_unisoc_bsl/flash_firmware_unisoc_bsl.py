@@ -8,15 +8,21 @@ Implements Scheme 2 flashing inside the STP agent script contract:
    bases, whitelist-filtered EraseFlash2 list, UserData, writable partitions).
 3. Enforce pre-flash safety gates: battery level (battery_min_level=5, skip_battery=false)
    and absence of any Unisoc download port (1782:4d00) on the host USB bus.
-4. Acquire host-wide serialization lock (/tmp/stp-flash-firmware.lock, shared with
+4. Ensure Agent L1 firmware cache (profile=unisoc_bsl) outside the host flash lock,
+   holding LOCK_SH for the flash lifetime; unsealed targets fail-closed with
+   firmware_unsealed_not_supported before any host lock or device state change.
+   Local images live at <cache>/images; trimmed super at images/bsl/super_trimmed.img.
+5. Acquire host-wide serialization lock (/tmp/stp-flash-firmware.lock, shared with
    flash_firmware and flash_firmware_unisoc), emitting stage=lock-wait PROGRESS stamps
    every 5s so queued devices are not killed by step stall detection.
-5. Prepare content-verified (SHA-256) isolated SSD cache and trimmed super.img, cleaning
-   up any staging files on failure.
 6. Switch device to BSL mode via `adb reboot autodloader` and execute `spd_dump` under a
    bounded total duration timeout, terminating and reaping the child on any failure.
 7. Verify positive reboot evidence and read back manifest.version_prop == manifest.version
    after cold boot, plus optional build_type / incremental / root checks.
+
+v1.0.9（2026-11-23 / #4086 U4 / ADR-0064 D4）：退役 /var/tmp/stp_flash 私有缓存与
+主机侧裁剪/锁内拷贝；统一接入 agent.firmware_cache；启动前 fail-closed 校验
+FIRMWARE_CACHE_API_VERSION==1。
 
 STP agent script contract:
     env  STP_DEVICE_SERIAL          target serial (required)
@@ -34,13 +40,10 @@ STP agent script contract:
 from __future__ import annotations
 
 import fcntl
-import hashlib
 import json
 import math
 import os
 import re
-import shutil
-import struct
 import subprocess
 import sys
 import threading
@@ -49,7 +52,6 @@ from typing import Dict, List, Optional, Tuple
 
 _PROGRESS_PREFIX = "PROGRESS "
 _HOST_LOCK_PATH = "/tmp/stp-flash-firmware.lock"
-_DEFAULT_CACHE_DIR = "/var/tmp/stp_flash"
 _DEFAULT_NFS_ROOT = "/mnt/stp-aee"
 _SYSFS_USB_BASE = "/sys/bus/usb/devices"
 _UNISOC_DOWNLOAD_VID = "1782"
@@ -129,6 +131,51 @@ def _bool(value, default: bool) -> bool:
     return str(value).strip().lower() not in ("0", "false", "no", "off")
 
 
+_AGENT_FW_CACHE_UNAVAILABLE = "agent_firmware_cache_unavailable"
+
+
+def _load_firmware_cache_api():
+    """① 零设备访问启动自检：导入 L1 并校验 API 版本（ADR-0064 D2/D4）。"""
+    try:
+        from agent.firmware_cache import (  # type: ignore
+            FIRMWARE_CACHE_API_VERSION,
+            FirmwareCacheError,
+            ensure_firmware,
+        )
+    except Exception:
+        try:
+            from backend.agent.firmware_cache import (  # type: ignore
+                FIRMWARE_CACHE_API_VERSION,
+                FirmwareCacheError,
+                ensure_firmware,
+            )
+        except Exception as exc:  # noqa: BLE001 - fail-closed structured error
+            return None, None, (
+                f"{_AGENT_FW_CACHE_UNAVAILABLE}: import failed ({type(exc).__name__})"
+            )
+    if FIRMWARE_CACHE_API_VERSION != 1:
+        return None, None, (
+            f"{_AGENT_FW_CACHE_UNAVAILABLE}: API version "
+            f"{FIRMWARE_CACHE_API_VERSION!r} != 1"
+        )
+    return ensure_firmware, FirmwareCacheError, None
+
+
+def _firmware_cache_metrics(fw_cache, elapsed_seconds: float) -> dict:
+    return {
+        "hit": bool(getattr(fw_cache, "hit", False)),
+        "elapsed_seconds": round(float(elapsed_seconds), 3),
+        "tier": getattr(fw_cache, "tier", None),
+        "sealed": bool(getattr(fw_cache, "sealed", False)),
+        "cache_key": getattr(fw_cache, "cache_key", None),
+        "fallback_reason": getattr(fw_cache, "fallback_reason", None),
+        "permit_degraded": bool(getattr(fw_cache, "permit_degraded", False)),
+    }
+
+
+_LAST_REBOOT_SENT_AT: Dict[str, Optional[float]] = {"value": None}
+
+
 def _norm_ident(value: str) -> str:
     return value.strip().replace("-", "_")
 
@@ -164,17 +211,6 @@ def is_protected_partition(part: str) -> bool:
             return True
     return False
 
-
-def resolve_firmware_cache_root(fw_dir: str, cache_dir: str) -> str:
-    """Return an isolated SSD cache subdirectory per firmware path to avoid cross-model collisions."""
-    norm = os.path.normpath(os.path.abspath(fw_dir))
-    label_src = os.path.basename(os.path.dirname(norm)) if os.path.basename(norm) == "images" else os.path.basename(norm)
-    safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label_src).strip("._-") or "fw"
-    digest = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:8]
-    return os.path.join(cache_dir, f"{safe_label[:48]}_{digest}")
-
-
-_LAST_REBOOT_SENT_AT: Dict[str, Optional[float]] = {"value": None}
 
 
 def _parse_positive_finite_float(
@@ -703,162 +739,6 @@ def resolve_device_usb_port(
     return port
 
 
-def get_sparse_trimmed_size(sparse_path: str) -> Optional[int]:
-    """Return byte offset where non-CHUNK_DONT_CARE data ends, aligned up to 16 MB."""
-    if not os.path.isfile(sparse_path):
-        return None
-    with open(sparse_path, "rb") as f:
-        hdr = f.read(28)
-        if len(hdr) < 28:
-            return None
-        magic, _, _, _, _, blk_sz, _, total_chunks, _ = struct.unpack("<IHHHHIIII", hdr)
-        if magic != 0xED26FF3A:
-            return None
-        off_blk = 0
-        last_data_end_blk = 0
-        for _ in range(total_chunks):
-            chdr = f.read(12)
-            if len(chdr) < 12:
-                break
-            ctype, _, cblks, csz = struct.unpack("<HHII", chdr)
-            f.seek(csz - 12, 1)
-            if ctype != 0xCAC3:  # not CHUNK_DONT_CARE
-                last_data_end_blk = off_blk + cblks
-            off_blk += cblks
-    align = 16 * 1024 * 1024
-    raw_bytes = last_data_end_blk * blk_sz
-    return ((raw_bytes + align - 1) // align) * align
-
-
-def _sha256_file(path: str, limit_bytes: Optional[int] = None) -> str:
-    h = hashlib.sha256()
-    remaining = limit_bytes
-    buf_sz = 8 * 1024 * 1024
-    with open(path, "rb") as fh:
-        while True:
-            to_read = buf_sz if remaining is None else min(buf_sz, remaining)
-            if to_read <= 0:
-                break
-            chunk = fh.read(to_read)
-            if not chunk:
-                break
-            h.update(chunk)
-            if remaining is not None:
-                remaining -= len(chunk)
-    return h.hexdigest()
-
-
-def _unlink_if_exists(path: str) -> None:
-    try:
-        if os.path.exists(path):
-            os.unlink(path)
-    except OSError:
-        pass
-
-
-def _copy_if_changed(src: str, dst: str, tmp_paths: Optional[List[str]] = None) -> bool:
-    if os.path.isfile(dst) and os.path.getsize(dst) == os.path.getsize(src):
-        if _sha256_file(dst) == _sha256_file(src):
-            return False
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    tmp_file = f"{dst}.tmp.{os.getpid()}"
-    if tmp_paths is not None:
-        tmp_paths.append(tmp_file)
-    try:
-        shutil.copyfile(src, tmp_file)
-        os.replace(tmp_file, dst)
-    except Exception:
-        _unlink_if_exists(tmp_file)
-        raise
-    return True
-
-
-def prepare_local_cache(
-    fw_dir: str,
-    cache_dir: str,
-    progress: Progress,
-    spec: Optional[Dict[str, object]] = None,
-) -> Tuple[str, str]:
-    """Cache firmware files and trimmed super image in an isolated SSD directory with SHA-256 verification."""
-    if spec is None:
-        spec = _load_flash_spec(fw_dir)
-    fw_cache_root = resolve_firmware_cache_root(fw_dir, cache_dir)
-    progress.stamp(stage="cache-prepare", cache_dir=fw_cache_root)
-    local_fw = os.path.join(fw_cache_root, "fw_cache")
-    os.makedirs(local_fw, exist_ok=True)
-
-    tmp_paths: List[str] = []
-    try:
-        copied = 0
-        plan_src = os.path.join(fw_dir, "plan.json")
-        if _copy_if_changed(plan_src, os.path.join(local_fw, "plan.json"), tmp_paths):
-            copied += 1
-
-        fdl1_rel, _ = spec["fdl1"]  # type: ignore[misc]
-        fdl2_rel, _ = spec["fdl2"]  # type: ignore[misc]
-        userdata_rel = str(spec["userdata_rel"])
-        rel_files = [fdl1_rel, fdl2_rel, userdata_rel] + [
-            rel for _, rel in spec["rel_parts"]  # type: ignore[attr-defined]
-        ]
-        seen_rel = set()
-        for rel in rel_files:
-            if not rel or rel in seen_rel:
-                continue
-            seen_rel.add(rel)
-            src = os.path.join(fw_dir, rel)
-            if not os.path.isfile(src):
-                raise RuntimeError(f"required firmware file missing: {src}")
-            if _copy_if_changed(src, os.path.join(local_fw, rel), tmp_paths):
-                copied += 1
-
-        if not spec["has_super"]:
-            progress.stamp(stage="cache-ready", copied_files=copied, super_mb=0.0)
-            return local_fw, ""
-
-        super_rel = str(spec.get("super_rel") or "").strip()
-        super_file = str(spec.get("super_file") or "").strip()
-        super_sparse = bool(spec.get("super_sparse"))
-        src_super = os.path.join(fw_dir, super_rel)
-        if not super_rel or not os.path.isfile(src_super):
-            raise RuntimeError(f"required super firmware file missing: {src_super}")
-
-        sparse_super = os.path.join(fw_dir, super_file) if (super_sparse and super_file) else ""
-        trimmed_size = (get_sparse_trimmed_size(sparse_super) if sparse_super else None) or os.path.getsize(src_super)
-        trimmed_size = min(trimmed_size, os.path.getsize(src_super))
-        cached_super = os.path.join(fw_cache_root, f"super_trimmed_{trimmed_size}.img")
-
-        need_rebuild = True
-        if os.path.isfile(cached_super) and os.path.getsize(cached_super) == trimmed_size:
-            if _sha256_file(cached_super) == _sha256_file(src_super, limit_bytes=trimmed_size):
-                need_rebuild = False
-
-        if need_rebuild:
-            progress.stamp(stage="cache-trim-super", target_mb=round(trimmed_size / (1024 * 1024), 1))
-            tmp_target = f"{cached_super}.tmp.{os.getpid()}"
-            tmp_paths.append(tmp_target)
-            remaining = trimmed_size
-            buf_sz = 16 * 1024 * 1024
-            with open(src_super, "rb") as fin, open(tmp_target, "wb") as fout:
-                while remaining > 0:
-                    chunk = fin.read(min(buf_sz, remaining))
-                    if not chunk:
-                        break
-                    fout.write(chunk)
-                    remaining -= len(chunk)
-                    if remaining % (256 * 1024 * 1024) == 0:
-                        progress.stamp(stage="cache-trim-super", remaining_mb=round(remaining / (1024 * 1024), 1))
-            actual = os.path.getsize(tmp_target)
-            if actual != trimmed_size:
-                raise RuntimeError(f"trimmed super.img size mismatch: got {actual}, expected {trimmed_size}")
-            os.replace(tmp_target, cached_super)
-
-        progress.stamp(stage="cache-ready", copied_files=copied, super_mb=round(trimmed_size / (1024 * 1024), 1))
-        return local_fw, cached_super
-    except Exception:
-        for tmp_path in tmp_paths:
-            _unlink_if_exists(tmp_path)
-        raise
-
 
 def acquire_host_lock(progress: Progress, timeout_seconds: int = 7200, lock_path: str = _HOST_LOCK_PATH) -> int:
     """Blocking flock(LOCK_EX) with 5s lock-wait PROGRESS stamps."""
@@ -1225,11 +1105,16 @@ def _verify_post_reboot_evidence(
 
 def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
     t0 = time.time()
+    # ① 零设备访问启动自检（任何 getprop / 主机锁之前）
+    ensure_firmware, FirmwareCacheError, api_err = _load_firmware_cache_api()
+    if api_err is not None:
+        raise FlashRejectedError(_AGENT_FW_CACHE_UNAVAILABLE)
+
     adb_bin = resolve_adb()
 
     route: Optional[dict] = None
     try:
-        _, fw_dir, manifest, route = resolve_firmware_target(args, adb_bin, serial)
+        version_dir, fw_dir, manifest, route = resolve_firmware_target(args, adb_bin, serial)
         # L2 (#4006 v1.3): 工具路径解析放在路由建立之后——找不到工具的拒绝结果必须带路由。
         spd_dump_bin = resolve_spd_dump(route)
         progress.stamp(stage="preflight", serial=serial, spd_dump=spd_dump_bin)
@@ -1265,7 +1150,6 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
             route=route,
         )
 
-        cache_dir = str(args.get("cache_dir") or _DEFAULT_CACHE_DIR).strip()
         pre_build_type = getprop(adb_bin, serial, "ro.build.type")
         pre_incremental = getprop(adb_bin, serial, "ro.build.version.incremental")
         target_build_type = str(
@@ -1286,10 +1170,14 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
             ],
         ]
         if spec["has_super"]:
-            partitions.append({"partition": "super", "image": str(spec["super_rel"])})
+            partitions.append({"partition": "super", "image": "bsl/super_trimmed.img"})
 
         if _bool(args.get("dry_run"), False):
-            dry_super = os.path.join(fw_dir, str(spec["super_rel"])) if spec["has_super"] else ""
+            dry_super = (
+                os.path.join(fw_dir, "bsl", "super_trimmed.img")
+                if spec["has_super"]
+                else ""
+            )
             cmd = build_spd_dump_args(spd_dump_bin, fw_dir, dry_super, spec=spec, usb_port=usb_port)
             return {
                 "metrics": {
@@ -1331,122 +1219,156 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                 },
             }
 
+        allow_nfs = _bool(args.get("allow_nfs_direct_fallback"), False)
+        allow_bypass = _bool(args.get("allow_permit_bypass"), False)
         lock_timeout = int(args.get("lock_timeout_seconds", 7200))
-        lock_fd = acquire_host_lock(progress, timeout_seconds=lock_timeout)
+        cache_t0 = time.time()
         try:
-            # Single parsed spec is reused for both cache preparation and command assembly (J10).
-            local_fw, cached_super = prepare_local_cache(fw_dir, cache_dir, progress, spec=spec)
-            live_usb_port = resolve_device_usb_port(
-                serial,
-                require_port_binding=require_port_binding,
-                route=route,
-            )
-            if live_usb_port != usb_port:
-                raise FlashRejectedError(
-                    f"target USB port changed while waiting for host lock: {usb_port!r} -> {live_usb_port!r}",
-                    route=route,
+            # ③ 锁外缓存准备与封包校验；未封包 BSL 在此 fail-closed
+            with ensure_firmware(
+                version_dir,
+                profile="unisoc_bsl",
+                progress_callback=progress.stamp,
+                allow_nfs_direct_fallback=allow_nfs,
+                allow_permit_bypass=allow_bypass,
+                label=str(route.get("version") or "") or None,
+            ) as fw_cache:
+                fc_metrics = _firmware_cache_metrics(fw_cache, time.time() - cache_t0)
+                local_images = os.path.join(str(fw_cache.local_dir), "images")
+                cached_super = ""
+                if spec["has_super"]:
+                    cached_super = os.path.join(local_images, "bsl", "super_trimmed.img")
+                    if not os.path.isfile(cached_super):
+                        raise FlashRejectedError(
+                            f"sealed BSL cache missing trimmed super: {cached_super}",
+                            route=route,
+                        )
+
+                # ④ 持 LOCK_SH 后再取主机刷机排他锁
+                lock_fd = acquire_host_lock(progress, timeout_seconds=lock_timeout)
+                try:
+                    live_usb_port = resolve_device_usb_port(
+                        serial,
+                        require_port_binding=require_port_binding,
+                        route=route,
+                    )
+                    if live_usb_port != usb_port:
+                        raise FlashRejectedError(
+                            f"target USB port changed while waiting for host lock: "
+                            f"{usb_port!r} -> {live_usb_port!r}",
+                            route=route,
+                        )
+                    cmd = build_spd_dump_args(
+                        spd_dump_bin, local_images, cached_super, spec=spec, usb_port=usb_port
+                    )
+                    pre_reboot = _capture_pre_reboot_evidence(adb_bin, serial)
+                    check_no_unisoc_download_port(route=route)
+                    reboot_anchor = time.monotonic()
+                    _LAST_REBOOT_SENT_AT["value"] = None
+                    flash_seconds = (
+                        run_spd_dump(
+                            cmd,
+                            adb_bin,
+                            serial,
+                            progress,
+                            log,
+                            timeout_seconds=spd_dump_timeout,
+                            expected_usb_port=usb_port,
+                        )
+                        if usb_port is not None
+                        else run_spd_dump(
+                            cmd,
+                            adb_bin,
+                            serial,
+                            progress,
+                            log,
+                            timeout_seconds=spd_dump_timeout,
+                        )
+                    )
+                    last_reboot_ts = _LAST_REBOOT_SENT_AT["value"]
+                    reboot_sent_at = (
+                        last_reboot_ts if last_reboot_ts is not None else reboot_anchor
+                    )
+                finally:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        os.close(lock_fd)
+                    except OSError:
+                        pass
+
+                boot_seconds = wait_boot_completed(
+                    adb_bin, serial, progress, int(args.get("verify_wait_seconds", 300))
                 )
-            cmd = build_spd_dump_args(spd_dump_bin, local_fw, cached_super, spec=spec, usb_port=usb_port)
-            pre_reboot = _capture_pre_reboot_evidence(adb_bin, serial)
-            # Final download-port gate after cache preparation and immediately before spd_dump (J7).
-            check_no_unisoc_download_port(route=route)
-            # J9 (#4006 v1.2): R and the fallback anchor use the host monotonic clock.
-            reboot_anchor = time.monotonic()
-            _LAST_REBOOT_SENT_AT["value"] = None
-            flash_seconds = (
-                run_spd_dump(
-                    cmd,
-                    adb_bin,
-                    serial,
-                    progress,
-                    log,
-                    timeout_seconds=spd_dump_timeout,
-                    expected_usb_port=usb_port,
+
+                progress.stamp(stage="verify")
+                reboot_evidence = _verify_post_reboot_evidence(
+                    adb_bin, serial, pre_reboot, reboot_sent_at=reboot_sent_at
                 )
-                if usb_port is not None
-                else run_spd_dump(
-                    cmd,
-                    adb_bin,
-                    serial,
-                    progress,
-                    log,
-                    timeout_seconds=spd_dump_timeout,
-                )
-            )
-            last_reboot_ts = _LAST_REBOOT_SENT_AT["value"]
-            reboot_sent_at = last_reboot_ts if last_reboot_ts is not None else reboot_anchor
-        finally:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                os.close(lock_fd)
-            except OSError:
-                pass
 
-        boot_seconds = wait_boot_completed(
-            adb_bin, serial, progress, int(args.get("verify_wait_seconds", 300))
-        )
+                post_version = getprop(adb_bin, serial, version_prop)
+                if post_version != expected_version:
+                    raise FlashRejectedError(
+                        f"post-flash {version_prop}={post_version!r} != "
+                        f"manifest.version={expected_version!r}",
+                        route=route,
+                    )
 
-        progress.stamp(stage="verify")
-        reboot_evidence = _verify_post_reboot_evidence(
-            adb_bin, serial, pre_reboot, reboot_sent_at=reboot_sent_at
-        )
+                post_build_type = getprop(adb_bin, serial, "ro.build.type")
+                post_incremental = getprop(adb_bin, serial, "ro.build.version.incremental")
+                if target_build_type and post_build_type != target_build_type:
+                    raise FlashRejectedError(
+                        f"post-flash ro.build.type={post_build_type!r} != {target_build_type!r}",
+                        route=route,
+                    )
+                if target_incremental and post_incremental != target_incremental:
+                    raise FlashRejectedError(
+                        f"post-flash incremental={post_incremental!r} != {target_incremental!r}",
+                        route=route,
+                    )
 
-        post_version = getprop(adb_bin, serial, version_prop)
-        if post_version != expected_version:
-            raise FlashRejectedError(
-                f"post-flash {version_prop}={post_version!r} != manifest.version={expected_version!r}",
-                route=route,
-            )
+                root_uid = ""
+                if _bool(args.get("verify_root"), True):
+                    run_adb(adb_bin, serial, ["root"], timeout=15)
+                    time.sleep(2.0)
+                    _, root_uid, _ = run_adb(adb_bin, serial, ["shell", "id"], timeout=15)
+                    if "uid=0(root)" not in root_uid:
+                        raise FlashRejectedError(
+                            f"post-flash adb root failed: {root_uid!r}", route=route
+                        )
 
-        post_build_type = getprop(adb_bin, serial, "ro.build.type")
-        post_incremental = getprop(adb_bin, serial, "ro.build.version.incremental")
-        if target_build_type and post_build_type != target_build_type:
-            raise FlashRejectedError(
-                f"post-flash ro.build.type={post_build_type!r} != {target_build_type!r}",
-                route=route,
-            )
-        if target_incremental and post_incremental != target_incremental:
-            raise FlashRejectedError(
-                f"post-flash incremental={post_incremental!r} != {target_incremental!r}",
-                route=route,
-            )
-
-        root_uid = ""
-        if _bool(args.get("verify_root"), True):
-            run_adb(adb_bin, serial, ["root"], timeout=15)
-            time.sleep(2.0)
-            _, root_uid, _ = run_adb(adb_bin, serial, ["shell", "id"], timeout=15)
-            if "uid=0(root)" not in root_uid:
-                raise FlashRejectedError(f"post-flash adb root failed: {root_uid!r}", route=route)
-
-        return {
-            "metrics": {
-                "firmware_dir": fw_dir,
-                "fdl": {
-                    "fdl1": {"file": fdl1_file, "base": fdl1_base},
-                    "fdl2": {"file": fdl2_file, "base": fdl2_base},
-                },
-                "erases": list(spec["erases"]),  # type: ignore[arg-type]
-                "skipped_erases": list(spec["skipped_erases"]),  # type: ignore[arg-type]
-                "partitions": partitions,
-                "route": route,
-                "usb_port": usb_port,
-                "require_port_binding": require_port_binding,
-                "battery_level": battery_level,
-                "pre_build_type": pre_build_type,
-                "pre_incremental": pre_incremental,
-                "post_build_type": post_build_type,
-                "post_incremental": post_incremental,
-                "version_prop": version_prop,
-                "expected_version": expected_version,
-                "post_version": post_version,
-                "reboot_evidence": reboot_evidence,
-                "root_uid": root_uid,
-                "flash_duration_seconds": flash_seconds,
-                "boot_duration_seconds": boot_seconds,
-                "duration_seconds": round(time.time() - t0, 1),
-            }
-        }
+                return {
+                    "metrics": {
+                        "firmware_dir": local_images,
+                        "source_firmware_dir": fw_dir,
+                        "fdl": {
+                            "fdl1": {"file": fdl1_file, "base": fdl1_base},
+                            "fdl2": {"file": fdl2_file, "base": fdl2_base},
+                        },
+                        "erases": list(spec["erases"]),  # type: ignore[arg-type]
+                        "skipped_erases": list(spec["skipped_erases"]),  # type: ignore[arg-type]
+                        "partitions": partitions,
+                        "route": route,
+                        "usb_port": usb_port,
+                        "require_port_binding": require_port_binding,
+                        "battery_level": battery_level,
+                        "pre_build_type": pre_build_type,
+                        "pre_incremental": pre_incremental,
+                        "post_build_type": post_build_type,
+                        "post_incremental": post_incremental,
+                        "version_prop": version_prop,
+                        "expected_version": expected_version,
+                        "post_version": post_version,
+                        "reboot_evidence": reboot_evidence,
+                        "root_uid": root_uid,
+                        "flash_duration_seconds": flash_seconds,
+                        "boot_duration_seconds": boot_seconds,
+                        "duration_seconds": round(time.time() - t0, 1),
+                        "firmware_cache": fc_metrics,
+                    }
+                }
+        except FirmwareCacheError as exc:
+            code = getattr(exc, "code", None) or str(exc)
+            raise FlashRejectedError(code, route=route) from exc
     except Exception as exc:
         if route is not None and not hasattr(exc, "route"):
             try:
@@ -1469,7 +1391,8 @@ def main() -> None:
             elif a == "--firmware-dir":
                 args["firmware_dir"] = sys.argv[i + 1]; i += 2
             elif a == "--cache-dir":
-                args["cache_dir"] = sys.argv[i + 1]; i += 2
+                # v1.0.7：私有 /var/tmp/stp_flash 已退役；保留 CLI 兼容但忽略。
+                i += 2
             elif a == "--dry-run":
                 args["dry_run"] = True; i += 1
             elif a == "--force":
@@ -1495,7 +1418,10 @@ def main() -> None:
         route = getattr(exc, "route", None)
         if route is not None:
             err_metrics["route"] = route
-        _output(False, error_message=str(exc), metrics=err_metrics)
+        msg = str(exc)
+        if _AGENT_FW_CACHE_UNAVAILABLE in msg:
+            msg = _AGENT_FW_CACHE_UNAVAILABLE
+        _output(False, error_message=msg, metrics=err_metrics)
 
 
 if __name__ == "__main__":

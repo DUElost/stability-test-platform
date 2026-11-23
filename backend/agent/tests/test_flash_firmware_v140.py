@@ -228,6 +228,11 @@ class Harness:
         monkeypatch.setattr(ff, "_usb_power", self._fake_power)
         _patch_advancing_clock(monkeypatch, ff)
         monkeypatch.setattr(ff, "_vbus_post_flash", self._fake_post_flash)
+        # B10 U4：既有 ADR-0063 用例不关心真实 L1 落盘，恒等 ensure 指向源目录。
+        from backend.agent.tests.firmware_cache_testkit import (
+            install_identity_firmware_cache,
+        )
+        install_identity_firmware_cache(monkeypatch, ff, arity=3)
         self.post_flash_ok = True
         self.echo_slot = {"hub_location": "1-5.1", "port": 3}
         # wrapper 查表得到的槽位；与脚本传的 --expect-slot 不一致时 wrapper 在切电前拒绝。
