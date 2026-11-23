@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from .active_job_bindings import ActiveJobOccupancy
 from .api_client import fetch_pending_jobs
+from .outbound_guard import bind_claim_capacity_reader
 from .usb_power_slots import vbus_claim_slots
 from .job_runner import _arrive_patrol_barrier_preengine
 from .recovery_executor import _make_local_worker_token, _rollback_failed_claim
@@ -111,14 +112,12 @@ def _run_claim_tick_body(
         except Exception:
             logger.debug("claim_tick_local_db_active_jobs_read_failed", exc_info=True)
 
-    # ADR-0026 Step 5b: claim capacity = free healthy devices only.
-    # MAX_CONCURRENT_TASKS no longer restricts concurrent RUNNING
-    # jobs — the OperationScheduler independently limits script
-    # execution concurrency. All admitted devices can be RUNNING.
-    available_slots = heartbeat_thread.effective_slots
     # #3892 / ADR-0063 D4 第 5 条：vbus 刷机站的设备常态关机，effective_slots
     # 恒为 0；映射文件存在时另申请 vbus 名额（控制面单独计数，不占 capacity）。
+    # 先取 vbus 名额再读普通槽位，并在实际发起 fetch_pending_jobs 前复核最新有效槽位，
+    # 防止 reload_config 切根已 ACK 归零后仍用旧容量发起普通认领（#4077）。
     vbus_slots = vbus_claim_slots()
+    available_slots = heartbeat_thread.effective_slots
 
     logger.info("main_loop_tick active=%d slots=%d vbus_slots=%d",
                 active_count, available_slots, vbus_slots)
@@ -126,12 +125,18 @@ def _run_claim_tick_body(
     if available_slots <= 0 and vbus_slots <= 0:
         return
 
-    normal_slots = max(available_slots, 0)
-    jobs = fetch_pending_jobs(
-        api_url, host_id, agent_instance_id, capacity=normal_slots,
-        vbus_slots=vbus_slots,
-        active_job_ids=sorted(active_job_ids),
-    )
+    normal_slots = max(min(available_slots, heartbeat_thread.effective_slots), 0)
+    if normal_slots <= 0 and vbus_slots <= 0:
+        return
+    with bind_claim_capacity_reader(
+        lambda: heartbeat_thread.effective_slots,
+        dispatch_gate=getattr(heartbeat_thread, "_dispatch_gate", None),
+    ):
+        jobs = fetch_pending_jobs(
+            api_url, host_id, agent_instance_id, capacity=normal_slots,
+            vbus_slots=vbus_slots,
+            active_job_ids=sorted(active_job_ids),
+        )
     jobs = jobs[:normal_slots + vbus_slots]
 
     if jobs:

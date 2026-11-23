@@ -270,6 +270,896 @@ def test_heartbeat_pacing_reload_takes_effect(heartbeat_env):
     assert thread._last_adb_repair_at == last_repair_at, "冷却窗口不因重载作废"
 
 
+def test_reload_from_settings_switches_shared_root_and_gates_capacity(heartbeat_env):
+    """#4077 B1: reload_config 切换 STP_AEE_NFS_ROOT 到未挂载新根后心跳立刻降槽为 0。"""
+    from backend.agent.capacity_reporter import compute_capacity
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    mountinfo_text = "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n"
+    probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _path: mountinfo_text,
+    )
+    thread._mount_health_probe = probe
+
+    before_status = probe.snapshot(thread._mount_points)
+    before_cap = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=2,
+        total_devices=2,
+        system_stats={"cpu_load": 1.0, "ram_usage": 10.0, "disk_usage": {"writable_percent": 10.0}},
+        mount_status=before_status,
+    )
+    assert before_cap["health"]["mount_ok"] is True
+    assert before_cap["capacity"]["effective_slots"] == 2
+
+    # 模拟 reload_config 将 STP_AEE_NFS_ROOT 切到未挂载的新根
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    thread.reload_from_settings()
+
+    assert thread._mount_points == ["/mnt/old", "/mnt/stp-log-new"]
+    after_status = probe.snapshot(thread._mount_points)
+    after_cap = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=2,
+        total_devices=2,
+        system_stats={"cpu_load": 1.0, "ram_usage": 10.0, "disk_usage": {"writable_percent": 10.0}},
+        mount_status=after_status,
+    )
+    assert after_status["/mnt/stp-log-new"]["ok"] is False
+    assert after_cap["health"]["mount_ok"] is False
+    assert after_cap["health"]["status"] == "UNSCHEDULABLE"
+    assert after_cap["capacity"]["effective_slots"] == 0
+
+
+def test_reload_config_inflight_tick_cannot_keep_slots_or_emit_stale_root(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R2 B1: reload 切到未挂新根后立即清零普通槽位，且在途旧 tick 不得回写旧槽位或上报旧根。"""
+    import threading
+    from types import SimpleNamespace
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+
+    mountinfo_text = "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n"
+    sent_payloads: list[dict] = []
+    pause_after_snapshot = False
+    snapshot_entered = threading.Event()
+    snapshot_release = threading.Event()
+
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.discover_devices",
+        lambda *_a: [
+            {"serial": "dev-1", "adb_state": "device"},
+            {"serial": "dev-2", "adb_state": "device"},
+        ],
+    )
+    monkeypatch.setattr(
+        HeartbeatThread,
+        "_collect_device_infos",
+        lambda _self, devs: [
+            {"adb_state": "device", "adb_connected": True} for _ in devs
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.list_adb_fork_servers",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.get_adb_server_port",
+        lambda: 5037,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_usb_devices_and_root_hubs",
+        lambda: (2, 1),
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_adb_interface_devices",
+        lambda: 2,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.read_usb_power_presence",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agent.system_monitor.collect_system_stats",
+        lambda: {
+            "cpu_load": 1.0,
+            "ram_usage": 10.0,
+            "disk_usage": {"writable_percent": 10.0},
+        },
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.send_heartbeat",
+        lambda *_a, **kwargs: sent_payloads.append(kwargs) or {"ok": True},
+    )
+
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _path: mountinfo_text,
+    )
+    orig_snapshot = probe.snapshot
+
+    def gated_snapshot(points):
+        res = orig_snapshot(points)
+        if pause_after_snapshot and points == ["/mnt/old"]:
+            snapshot_entered.set()
+            assert snapshot_release.wait(5.0)
+        return res
+
+    probe.snapshot = gated_snapshot  # type: ignore[method-assign]
+    thread._mount_health_probe = probe
+    thread._kernel_usb_watch = SimpleNamespace(
+        poll=lambda **_k: [],
+        channel_state=lambda: "ok",
+    )
+
+    # 第 1 拍建立普通槽位 2
+    thread._tick()
+    assert thread.effective_slots == 2
+    assert len(sent_payloads) == 1
+
+    # 第 2 拍在完成旧列表 snapshot() 后暂停，期间触发 reload 切到未挂新根
+    pause_after_snapshot = True
+    tick_thread = threading.Thread(target=thread._tick, daemon=True)
+    tick_thread.start()
+    assert snapshot_entered.wait(2.0)
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    thread.reload_from_settings()
+    # ACK 当刻普通槽位已立即归零（不待下一拍），不让在途认领按 capacity=2 发起
+    assert thread.effective_slots == 0
+
+    pause_after_snapshot = False
+    snapshot_release.set()
+    tick_thread.join(timeout=3.0)
+    assert not tick_thread.is_alive()
+
+    assert thread.effective_slots == 0
+    assert len(sent_payloads) == 2
+    latest = sent_payloads[-1]
+    assert "/mnt/stp-log-new" in latest["mount_status"]
+    assert latest["mount_status"]["/mnt/stp-log-new"]["ok"] is False
+    assert latest["health"]["mount_ok"] is False
+    assert latest["capacity"]["effective_slots"] == 0
+
+
+def test_reload_mount_points_succeeds_even_with_invalid_pacing_knob(
+    heartbeat_env, caplog,
+):
+    """#4077 R2 B1: 非法心跳节奏旋钮不得阻断挂载点刷新、探针 reset 与槽位清零。"""
+    import logging
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    with thread._capacity_lock:
+        thread._effective_slots = 2
+    before_min = thread._min_poll_interval
+
+    heartbeat_env.set("STP_HEARTBEAT_INTERVAL_MIN", "not-a-number")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    with caplog.at_level(logging.ERROR):
+        thread.reload_from_settings()
+
+    assert thread._min_poll_interval == before_min
+    assert any("heartbeat_pacing_reload_skipped" in r.message for r in caplog.records)
+    assert thread._mount_points == ["/mnt/old", "/mnt/stp-log-new"]
+    assert thread.effective_slots == 0
+
+
+def test_reload_from_settings_zeroes_slots_when_shared_root_switches_within_same_list(
+    heartbeat_env,
+):
+    """#4077 R3 B1: 监控列表不变仅切换 STP_AEE_NFS_ROOT 时，仍递增代际、reset 探针并归零槽位。"""
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old,/mnt/new")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old", "/mnt/new"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    with thread._capacity_lock:
+        thread._effective_slots = 2
+    before_gen = thread._mount_points_generation
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/new")
+    thread.reload_from_settings()
+
+    assert thread._mount_points == ["/mnt/old", "/mnt/new"]
+    assert thread._mount_points_generation == before_gen + 1
+    assert thread.effective_slots == 0
+
+
+def test_heartbeat_tick_rechecks_generation_after_artifact_digest_and_before_ws(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R3 B1: artifact_digest 回调期间若切根，HTTP 不得携带旧根 ok=true 且 WS 不推送旧根。"""
+    import threading
+    from types import SimpleNamespace
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+
+    sent_payloads: list[dict] = []
+    ws_payloads: list[dict] = []
+    digest_entered = threading.Event()
+    digest_release = threading.Event()
+    pause_on_digest = True
+
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.discover_devices",
+        lambda *_a: [
+            {"serial": "dev-1", "adb_state": "device"},
+            {"serial": "dev-2", "adb_state": "device"},
+        ],
+    )
+    monkeypatch.setattr(
+        HeartbeatThread,
+        "_collect_device_infos",
+        lambda _self, devs: [
+            {"adb_state": "device", "adb_connected": True} for _ in devs
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.list_adb_fork_servers",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.get_adb_server_port",
+        lambda: 5037,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_usb_devices_and_root_hubs",
+        lambda: (2, 1),
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_adb_interface_devices",
+        lambda: 2,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.read_usb_power_presence",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agent.system_monitor.collect_system_stats",
+        lambda: {
+            "cpu_load": 1.0,
+            "ram_usage": 10.0,
+            "disk_usage": {"writable_percent": 10.0},
+        },
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.send_heartbeat",
+        lambda *_a, **kwargs: sent_payloads.append(kwargs) or {"ok": True},
+    )
+
+    def digest_cb():
+        if pause_on_digest:
+            digest_entered.set()
+            assert digest_release.wait(5.0)
+        return "dig-1"
+
+    ws_client = SimpleNamespace(
+        connected=True,
+        send_heartbeat=lambda stats: ws_payloads.append(stats),
+    )
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        sio_client=ws_client,
+        agent_artifact_digest=digest_cb,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    thread._kernel_usb_watch = SimpleNamespace(
+        poll=lambda **_k: [],
+        channel_state=lambda: "ok",
+    )
+
+    t = threading.Thread(target=thread._tick, daemon=True)
+    t.start()
+    assert digest_entered.wait(2.0)
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    thread.reload_from_settings()
+    pause_on_digest = False
+    digest_release.set()
+    t.join(timeout=3.0)
+    assert not t.is_alive()
+
+    assert len(sent_payloads) == 1
+    assert sent_payloads[0]["mount_status"]["/mnt/stp-log-new"]["ok"] is False
+    assert sent_payloads[0]["health"]["mount_ok"] is False
+    assert sent_payloads[0]["capacity"]["effective_slots"] == 0
+    assert len(ws_payloads) == 1
+    assert "/mnt/stp-log-new" in ws_payloads[0]["mount_status"]
+    assert ws_payloads[0]["mount_status"]["/mnt/stp-log-new"]["ok"] is False
+
+
+def test_real_send_heartbeat_and_sio_emit_abort_when_reloaded_after_tick_gate(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R4 B1: 进入真实 send_heartbeat() 构建负载及等待 WS 发送锁期间切根，不得向传输层发出旧根 ok=true。"""
+    import threading
+    import time
+    from types import SimpleNamespace
+    import backend.agent.heartbeat as hb_payload_mod
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+    from backend.agent.socketio_client import AgentSocketIOClient
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+
+    posted_payloads: list[dict] = []
+    emitted_ws: list[tuple[str, dict]] = []
+    in_payload_build = threading.Event()
+    release_payload_build = threading.Event()
+    pause_in_send = True
+
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.discover_devices",
+        lambda *_a: [
+            {"serial": "dev-1", "adb_state": "device"},
+            {"serial": "dev-2", "adb_state": "device"},
+        ],
+    )
+    monkeypatch.setattr(
+        HeartbeatThread,
+        "_collect_device_infos",
+        lambda _self, devs: [
+            {"adb_state": "device", "adb_connected": True} for _ in devs
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.list_adb_fork_servers",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.get_adb_server_port",
+        lambda: 5037,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_usb_devices_and_root_hubs",
+        lambda: (2, 1),
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_adb_interface_devices",
+        lambda: 2,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.read_usb_power_presence",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agent.system_monitor.collect_system_stats",
+        lambda: {
+            "cpu_load": 1.0,
+            "ram_usage": 10.0,
+            "disk_usage": {"writable_percent": 10.0},
+        },
+    )
+
+    class _FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"ok": True}
+
+    def fake_post(_url: str, *, json: dict, **_kw):
+        posted_payloads.append(json)
+        return _FakeResp()
+
+    orig_getenv = hb_payload_mod.os.getenv
+
+    def pause_on_secret(key: str, default: str = ""):
+        if pause_in_send and key == "AGENT_SECRET":
+            in_payload_build.set()
+            assert release_payload_build.wait(5.0)
+        return orig_getenv(key, default)
+
+    monkeypatch.setattr("backend.agent.heartbeat.requests.post", fake_post)
+    monkeypatch.setattr("backend.agent.heartbeat.os.getenv", pause_on_secret)
+
+    # 1) 验证真实 send_heartbeat() 内切根后放弃旧 POST，改以新根重发
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    thread._kernel_usb_watch = SimpleNamespace(
+        poll=lambda **_k: [],
+        channel_state=lambda: "ok",
+    )
+
+    t1 = threading.Thread(target=thread._tick, daemon=True)
+    t1.start()
+    assert in_payload_build.wait(2.0)
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    thread.reload_from_settings()
+    pause_in_send = False
+    release_payload_build.set()
+    t1.join(timeout=3.0)
+    assert not t1.is_alive()
+
+    assert len(posted_payloads) == 1
+    assert "/mnt/stp-log-new" in posted_payloads[0]["mount_status"]
+    assert posted_payloads[0]["mount_status"]["/mnt/stp-log-new"]["ok"] is False
+    assert posted_payloads[0]["health"]["mount_ok"] is False
+    assert posted_payloads[0]["capacity"]["effective_slots"] == 0
+
+    # 2) 验证真实 AgentSocketIOClient._emit 在等待 _lock 期间切根，放行后不得 emit 旧根 ok=true
+    sio_client = AgentSocketIOClient("http://server", "host-1")
+    sio_client._connected = True
+    sio_client._sio = SimpleNamespace(
+        emit=lambda ev, data, namespace="/agent": emitted_ws.append((ev, data)),
+    )
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread.reload_from_settings()
+    thread._sio_client = sio_client
+
+    # 用发送锁挡住 WS 发送；等待线程阻塞在 sio_client._lock 上后再执行切根
+    sio_client._lock.acquire()
+    try:
+        t2 = threading.Thread(target=thread._tick, daemon=True)
+        t2.start()
+        deadline = time.monotonic() + 2.0
+        while not posted_payloads or len(posted_payloads) < 2:
+            assert time.monotonic() < deadline, "expected HTTP tick to reach WS stage"
+            time.sleep(0.01)
+        time.sleep(0.05)
+        heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+        thread.reload_from_settings()
+    finally:
+        sio_client._lock.release()
+    t2.join(timeout=3.0)
+    assert not t2.is_alive()
+    assert emitted_ws == [], f"stale WS emit must be suppressed under _lock: {emitted_ws}"
+
+
+def test_heartbeat_snapshot_after_list_copy_before_enter_snapshot_prevents_stale_gen(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R4 B1: 复制旧列表后、进入 snapshot() 前遭遇 reset()，不得以旧路径领取新代际。"""
+    import threading
+    from types import SimpleNamespace
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+
+    probed_points: list[str] = []
+    sent_payloads: list[dict] = []
+    entered_snapshot = threading.Event()
+    release_snapshot = threading.Event()
+    pause_before_snap = True
+
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.discover_devices",
+        lambda *_a: [],
+    )
+    monkeypatch.setattr(
+        HeartbeatThread,
+        "_collect_device_infos",
+        lambda _self, devs: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.list_adb_fork_servers",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.get_adb_server_port",
+        lambda: 5037,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_usb_devices_and_root_hubs",
+        lambda: (0, 1),
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_adb_interface_devices",
+        lambda: 0,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.read_usb_power_presence",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agent.system_monitor.collect_system_stats",
+        lambda: {"cpu_load": 1.0, "ram_usage": 10.0, "disk_usage": {"writable_percent": 10.0}},
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.send_heartbeat",
+        lambda *_a, **kwargs: sent_payloads.append(kwargs) or {"ok": True},
+    )
+
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    probe = MountHealthProbe(
+        interval_seconds=60.0,
+        stale_after_seconds=60.0,
+        probe_fn=lambda p: probed_points.append(p) or True,
+        mountinfo_reader=lambda _p: (
+            "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n"
+            "2 0 0:2 / /mnt/new rw - nfs4 srv:/new rw\n"
+        ),
+    )
+    orig_snapshot = probe.snapshot
+
+    def pause_before_orig(points):
+        nonlocal pause_before_snap
+        if pause_before_snap and points == ["/mnt/old"]:
+            pause_before_snap = False
+            entered_snapshot.set()
+            assert release_snapshot.wait(5.0)
+        return orig_snapshot(points)
+
+    probe.snapshot = pause_before_orig  # type: ignore[method-assign]
+    thread._mount_health_probe = probe
+    thread._kernel_usb_watch = SimpleNamespace(
+        poll=lambda **_k: [],
+        channel_state=lambda: "ok",
+    )
+
+    t = threading.Thread(target=thread._tick, daemon=True)
+    t.start()
+    assert entered_snapshot.wait(2.0)
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/new")
+    thread.reload_from_settings()
+    release_snapshot.set()
+    t.join(timeout=3.0)
+    assert not t.is_alive()
+
+    assert len(sent_payloads) == 1
+    new_entry = sent_payloads[0]["mount_status"]["/mnt/new"]
+    assert new_entry["reachable"] is None
+    assert new_entry["probed_at"] is None
+    assert new_entry["probe_stale"] is True
+    assert "/mnt/old" not in probed_points or "/mnt/new" in probed_points
+    # 关键断言：旧路径不得把仅旧根探索当作新代际的首次探针并把新根标为非 stale
+    assert not (probed_points == ["/mnt/old"] and new_entry["probe_stale"] is False)
+
+
+def test_reload_ack_drains_inflight_send_window_before_returning_and_rejects_post_bump_sends(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R5 B1: reload_from_settings() 必须排空已过守卫的在途发包窗口才可返回 ACK，且切根后新进入窗口不得发旧值。"""
+    import threading
+    import time
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from backend.agent.active_job_bindings import ActiveJobOccupancy
+    from backend.agent.claim_loop import process_claim_tick
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+    from backend.agent.outbound_guard import (
+        bind_heartbeat_stale_check,
+        enter_bound_heartbeat_send,
+        is_bound_heartbeat_stale,
+    )
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    with thread._capacity_lock:
+        thread._effective_slots = 2
+
+    # 1) 模拟已通过守卫、正在 send_window 内尚未结束的发包：reload_from_settings() 必须等待其完成才可返回 ACK
+    entered_window = threading.Event()
+    release_window = threading.Event()
+    ack_done = threading.Event()
+    events: list[str] = []
+
+    def inflight_sender():
+        with bind_heartbeat_stale_check(
+            lambda: False,
+            dispatch_gate=thread._dispatch_gate,
+        ):
+            with enter_bound_heartbeat_send():
+                assert is_bound_heartbeat_stale() is False
+                entered_window.set()
+                assert release_window.wait(5.0)
+                events.append("sender_finished")
+
+    def run_reload():
+        heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+        thread.reload_from_settings()
+        events.append("reload_ack")
+        ack_done.set()
+
+    t_send = threading.Thread(target=inflight_sender, daemon=True)
+    t_send.start()
+    assert entered_window.wait(2.0)
+
+    t_reload = threading.Thread(target=run_reload, daemon=True)
+    t_reload.start()
+    time.sleep(0.05)
+    # 关键时序断言：在途发包窗口尚未结束时，reload 不得提前返回 ACK
+    assert not ack_done.is_set()
+
+    release_window.set()
+    t_send.join(timeout=3.0)
+    t_reload.join(timeout=3.0)
+    assert not t_send.is_alive() and not t_reload.is_alive()
+    assert events == ["sender_finished", "reload_ack"]
+    assert thread.effective_slots == 0
+
+    # 2) 验证 ACK 之后进入真实 fetch_pending_jobs 的 claim 请求不会以旧槽位发出 POST
+    posted_claim: list[dict] = []
+
+    class _FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": []}
+
+    monkeypatch.setattr(
+        "backend.agent.api_client.requests.post",
+        lambda _url, *, json, **_kw: posted_claim.append(dict(json)) or _FakeResp(),
+    )
+    occ = ActiveJobOccupancy(
+        lock=threading.Lock(),
+        job_ids=set(),
+        device_ids=set(),
+        job_tokens={},
+        device_owner={},
+    )
+    with patch("backend.agent.claim_loop.vbus_claim_slots", return_value=1):
+        process_claim_tick(
+            api_url="http://server",
+            host_id="host-1",
+            agent_instance_id="inst",
+            occupancy=occ,
+            heartbeat_thread=thread,
+            register_active_job=lambda *_a, **_k: None,
+            deregister_active_job=lambda *_a, **_k: None,
+            lease_renewer=SimpleNamespace(),
+            local_db=SimpleNamespace(get_active_jobs=lambda: []),
+            coordinator=SimpleNamespace(),
+            executor=SimpleNamespace(),
+            adb=SimpleNamespace(),
+            job_runner_state=SimpleNamespace(),
+            mq_producer=SimpleNamespace(),
+            script_registry=SimpleNamespace(),
+            patrol_checkpoint_store=SimpleNamespace(),
+            operation_scheduler=SimpleNamespace(),
+            step_trace_uploader=SimpleNamespace(),
+            run_task_wrapper=lambda *_a, **_k: None,
+        )
+    assert len(posted_claim) == 1
+    assert posted_claim[0]["capacity"] == 0
+    assert posted_claim[0]["vbus_slots"] == 1
+
+
+def test_overlapping_same_config_reload_waits_for_inflight_drain_before_ack(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R6 B1: 同配置二次 reload 不得在首次切根排空完成前 ACK。
+
+    复现：R1 已发布新根并进入 advance_and_drain；R2 读到相同配置（changed=False）
+    若直接成功返回，则旧 claim 可在 R2 ACK 之后、R1 ACK 之前以 capacity=2 首次 POST。
+    """
+    import threading
+    import time
+
+    from backend.agent.api_client import fetch_pending_jobs
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+    from backend.agent.outbound_guard import (
+        bind_claim_capacity_reader,
+        resolve_bound_claim_capacity,
+    )
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    with thread._capacity_lock:
+        thread._effective_slots = 2
+
+    entered_window = threading.Event()
+    release_window = threading.Event()
+    r1_ack = threading.Event()
+    r2_ack = threading.Event()
+    events: list[str] = []
+    posted_bodies: list[dict] = []
+
+    class _FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": []}
+
+    def pausing_resolve(initial_capacity: int) -> int:
+        # 进入 claim send_window 后、POST 前暂停，模拟「已过守卫尚未传输」。
+        value = resolve_bound_claim_capacity(initial_capacity)
+        if value > 0 and not release_window.is_set():
+            entered_window.set()
+            assert release_window.wait(5.0)
+            return resolve_bound_claim_capacity(initial_capacity)
+        return value
+
+    def fake_post(_url: str, *, json: dict, **_kw):
+        posted_bodies.append(dict(json))
+        events.append(
+            f"post_capacity={json.get('capacity')}"
+            f"|r1={r1_ack.is_set()}|r2={r2_ack.is_set()}"
+        )
+        return _FakeResp()
+
+    monkeypatch.setattr(
+        "backend.agent.api_client.resolve_bound_claim_capacity", pausing_resolve,
+    )
+    monkeypatch.setattr("backend.agent.api_client.requests.post", fake_post)
+
+    def inflight_claim() -> None:
+        with bind_claim_capacity_reader(
+            lambda: thread.effective_slots,
+            dispatch_gate=thread._dispatch_gate,
+        ):
+            # 直接走真实 fetch，确保登记的是 claim send_window。
+            fetch_pending_jobs(
+                "http://x", "h1", "inst", capacity=2, vbus_slots=1, active_job_ids=[1],
+            )
+        events.append("claim_finished")
+
+    def run_r1() -> None:
+        heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+        thread.reload_from_settings()
+        events.append("ack_r1")
+        r1_ack.set()
+
+    def run_r2() -> None:
+        # 配置已是新根：第二次比较为无变化，但必须等待 R1 排空。
+        thread.reload_from_settings()
+        events.append("ack_r2")
+        r2_ack.set()
+
+    t_claim = threading.Thread(target=inflight_claim, daemon=True)
+    t_claim.start()
+    assert entered_window.wait(2.0)
+
+    t_r1 = threading.Thread(target=run_r1, daemon=True)
+    t_r1.start()
+    # 给 R1 时间发布切根并进入 advance_and_drain
+    deadline = time.monotonic() + 1.0
+    while thread.effective_slots != 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert thread.effective_slots == 0
+    assert not r1_ack.is_set()
+
+    t_r2 = threading.Thread(target=run_r2, daemon=True)
+    t_r2.start()
+    time.sleep(0.05)
+    # 关键：同配置 R2 不得在旧窗口 / R1 排空完成前 ACK
+    assert not r2_ack.is_set()
+    assert not r1_ack.is_set()
+    assert posted_bodies == []
+
+    release_window.set()
+    t_claim.join(timeout=3.0)
+    t_r1.join(timeout=3.0)
+    t_r2.join(timeout=3.0)
+    assert not t_claim.is_alive() and not t_r1.is_alive() and not t_r2.is_alive()
+    assert r1_ack.is_set() and r2_ack.is_set()
+    # 旧 claim 的 POST（若发生）必须在两次 ACK 之前；随后不得再出现 capacity=2。
+    assert "ack_r1" in events and "ack_r2" in events
+    ack_r1_idx = events.index("ack_r1")
+    ack_r2_idx = events.index("ack_r2")
+    assert ack_r1_idx < ack_r2_idx
+    for i, name in enumerate(events):
+        if name.startswith("post_capacity="):
+            assert i < ack_r1_idx, f"POST after ACK: {events}"
+    if posted_bodies:
+        # 临界区内完成的 POST 视为 ACK 前已在网上；ACK 后新认领另测。
+        assert all(body.get("vbus_slots") == 1 for body in posted_bodies)
+
+
 def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
     from backend.agent.coordinator import HostRunCoordinator
 

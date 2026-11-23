@@ -253,29 +253,76 @@ def _block_device(source: str | None) -> str | None:
     return re.sub(r"p?\d+$", "", Path(source).name)
 
 
-def _host_mount_summary(hosts: Iterable[Any]) -> dict[str, Any]:
-    """Aggregate per-Agent mount_status上报。Agent 心跳 mount_status 的 key 来自
-    各自 MOUNT_POINTS env，与控制面 STP_AEE_NFS_ROOT 路径**不保证同字符串**；
-    此处按"任一上报项 ok=True 即视为已挂"统计，避免 key 字串不匹配导致全员 unreported。
+def _normalize_mount_key(path: str) -> str:
+    """Normalize a mount key matching agent mountinfo semantics (strip trailing slashes only)."""
+    if not path:
+        return ""
+    stripped_slashes = path.rstrip("/")
+    if not stripped_slashes:
+        return "/" if path.startswith("/") else ""
+    return stripped_slashes
+
+
+def _resolve_host_mount_ok(raw_status: Any, authoritative_key: str) -> bool | None:
+    """Resolve a host's mount health from heartbeat ``mount_status``.
+
+    When ``authoritative_key`` (``STP_AEE_NFS_ROOT``) is present as a key in
+    ``raw_status``, only its ``ok`` boolean is authoritative (an invalid/missing
+    boolean returns ``None`` rather than falling back to legacy keys, #4077).
+    Trailing slashes are ignored during key matching, while literal whitespace
+    in path names is preserved so distinct paths cannot shadow the target.
     """
+    if not isinstance(raw_status, dict) or not raw_status:
+        return None
+    if authoritative_key:
+        matched = [
+            entry
+            for key, entry in raw_status.items()
+            if isinstance(key, str) and _normalize_mount_key(key) == authoritative_key
+        ]
+        if matched:
+            flags = [
+                bool(entry["ok"])
+                if isinstance(entry, dict) and isinstance(entry.get("ok"), bool)
+                else None
+                for entry in matched
+            ]
+            if any(flag is None for flag in flags):
+                return None
+            return all(flags)
+    ok_flags = [
+        bool(entry.get("ok"))
+        for entry in raw_status.values()
+        if isinstance(entry, dict) and isinstance(entry.get("ok"), bool)
+    ]
+    return any(ok_flags) if ok_flags else None
+
+
+def _host_mount_summary(
+    hosts: Iterable[Any],
+    *,
+    shared_root: str | None = None,
+) -> dict[str, Any]:
+    """Aggregate per-Agent mount_status上报。
+
+    当心跳 ``mount_status`` 中显式包含控制面当前 ``shared_root``（``STP_AEE_NFS_ROOT``）
+    键时，以该权威共享根的 ``ok`` 为准，避免旧 ``MOUNT_POINTS``（如 ``/mnt/stp-aee``）
+    仍为 True 时掩盖新中心存储（``/mnt/stp-log``）未挂载（#4077）；若该键未上报，
+    兼容回落到「任一上报项 ok=True」。
+    """
+    authoritative_key = _normalize_mount_key(shared_root or "")
     items: list[dict[str, Any]] = []
     mounted = 0
     failed = 0
     unreported = 0
     for host in hosts:
         raw_status = getattr(host, "mount_status", None) or {}
-        mounted_entries = (
-            entry for entry in raw_status.values() if isinstance(entry, dict)
-        )
-        ok_flags = [bool(entry.get("ok")) for entry in mounted_entries if isinstance(entry.get("ok"), bool)]
-        if ok_flags:
-            mount_ok = any(ok_flags)
-            if mount_ok:
-                mounted += 1
-            else:
-                failed += 1
+        mount_ok = _resolve_host_mount_ok(raw_status, authoritative_key)
+        if mount_ok is True:
+            mounted += 1
+        elif mount_ok is False:
+            failed += 1
         else:
-            mount_ok = None
             unreported += 1
         heartbeat = getattr(host, "last_heartbeat", None)
         items.append({
@@ -991,7 +1038,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         "monitoring": storage_monitoring,
     }
 
-    agents = _host_mount_summary(hosts)
+    agents = _host_mount_summary(hosts, shared_root=str(root))
     device_log_disks = _device_log_disk_summary(hosts)
     alerts: list[dict[str, str]] = []
     if not mount["mounted"]:
