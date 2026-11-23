@@ -52,7 +52,7 @@ export function InlineError({
   onRetry?: () => void;
 }) {
   return (
-    <div className="p-4 bg-destructive/10 text-destructive rounded-lg border border-destructive/20 flex items-start gap-3">
+    <div className="p-4 bg-destructive/10 text-destructive-text rounded-lg border border-destructive/20 flex items-start gap-3">
       <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
         <p className="text-sm">{message}</p>
