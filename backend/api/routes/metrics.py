@@ -17,6 +17,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from backend.agent.contracts.kernel_usb_faults import KERNEL_ERROR_COUNTER_KEYS
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.database import get_db
 from backend.core.metrics import (
@@ -24,6 +25,7 @@ from backend.core.metrics import (
     device_online,
     device_stale,
     get_metrics_response,
+    host_adb_interfaces,
     host_device_adb_state,
     host_device_intent,
     host_health_reason,
@@ -32,6 +34,10 @@ from backend.core.metrics import (
     host_script_packages_mode,
     host_script_presence,
     host_health_probe_strike,
+    host_usb_cascade_hubs,
+    host_usb_devices,
+    host_usb_kernel_errors_1h,
+    host_usb_unbound_hubs,
     is_prometheus_available,
     sweep_stale_host_gauge_children,
     record_db_lock_waiters,
@@ -288,6 +294,18 @@ _KERNEL_LOG_STATES = ("ok", "unavailable", "unknown")
 #: #2791 的教训就是这一条）。
 _reason_gauge_exposed_hosts: set[str] = set()
 _channel_gauge_exposed_hosts: set[str] = set()
+_usb_devices_exposed_hosts: set[str] = set()
+_adb_interfaces_exposed_hosts: set[str] = set()
+_usb_topology_exposed_hosts: set[str] = set()
+_usb_kernel_errors_exposed_hosts: set[str] = set()
+
+_UNBOUND_HUB_SCOPES = ("total", "idle_bus")
+
+
+def _nonneg_int(value: object) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 #: #2958：上一轮**已暴露过** label child 的 host（差集清理用，与其它两组各一份——
@@ -450,6 +468,10 @@ def _refresh_host_health_gauges(db: Session) -> None:
 
     live_reason: set[str] = set()
     live_channel: set[str] = set()
+    live_usb_devices: set[str] = set()
+    live_adb_interfaces: set[str] = set()
+    live_usb_topology: set[str] = set()
+    live_usb_kernel_errors: set[str] = set()
     try:
         for raw_host_id, extra in rows:
             host_id = str(raw_host_id)
@@ -473,15 +495,50 @@ def _refresh_host_health_gauges(db: Session) -> None:
             # 键缺失 = 老 agent / 从未扫成 → `unknown`，与 `unavailable`（明确读不到）分开：
             # 前者是覆盖缺口，后者是 #2900 判据恒不命中的直接原因。
             capacity = blob.get("capacity")
-            raw_channel = (
-                capacity.get("usb_kernel_log") if isinstance(capacity, dict) else None
-            )
+            cap = capacity if isinstance(capacity, dict) else {}
+            raw_channel = cap.get("usb_kernel_log")
             state = raw_channel if raw_channel in _KERNEL_LOG_STATES else "unknown"
             for candidate in _KERNEL_LOG_STATES:
                 host_kernel_log_channel.labels(host_id=host_id, state=candidate).set(
                     1 if candidate == state else 0
                 )
             live_channel.add(host_id)
+
+            # S1：USB / Hub 精细数值指标（未知不落 0）
+            usb_cnt = _nonneg_int(cap.get("usb_device_count"))
+            if usb_cnt is not None:
+                host_usb_devices.labels(host_id=host_id).set(usb_cnt)
+                live_usb_devices.add(host_id)
+
+            adb_if_cnt = _nonneg_int(cap.get("adb_interface_count"))
+            if adb_if_cnt is not None:
+                host_adb_interfaces.labels(host_id=host_id).set(adb_if_cnt)
+                live_adb_interfaces.add(host_id)
+
+            topo = cap.get("usb_hub_topology")
+            if isinstance(topo, dict):
+                cascade = _nonneg_int(topo.get("cascade_hubs"))
+                unbound = _nonneg_int(topo.get("unbound_hubs"))
+                unbound_idle = _nonneg_int(topo.get("unbound_idle_bus_hubs"))
+                if cascade is not None and unbound is not None and unbound_idle is not None:
+                    host_usb_cascade_hubs.labels(host_id=host_id).set(cascade)
+                    host_usb_unbound_hubs.labels(host_id=host_id, scope="total").set(unbound)
+                    host_usb_unbound_hubs.labels(host_id=host_id, scope="idle_bus").set(
+                        unbound_idle
+                    )
+                    live_usb_topology.add(host_id)
+
+            kerrs = cap.get("usb_kernel_errors_1h")
+            if isinstance(kerrs, dict):
+                parsed_kerrs = {
+                    k: _nonneg_int(kerrs.get(k)) for k in KERNEL_ERROR_COUNTER_KEYS
+                }
+                if all(v is not None for v in parsed_kerrs.values()):
+                    for kind, val in parsed_kerrs.items():
+                        host_usb_kernel_errors_1h.labels(host_id=host_id, kind=kind).set(
+                            int(val)  # type: ignore[arg-type]
+                        )
+                    live_usb_kernel_errors.add(host_id)
     except Exception:
         # 渲染中途出错：本轮不落新值，也不清旧 child（下轮自愈），但绝不 500 整次抓取。
         logger.warning("metrics_host_health_gauge_render_failed", exc_info=True)
@@ -493,10 +550,29 @@ def _refresh_host_health_gauges(db: Session) -> None:
     for host_id in _channel_gauge_exposed_hosts - live_channel:
         for state in _KERNEL_LOG_STATES:
             host_kernel_log_channel.remove(host_id, state)
+    for host_id in _usb_devices_exposed_hosts - live_usb_devices:
+        host_usb_devices.remove(host_id)
+    for host_id in _adb_interfaces_exposed_hosts - live_adb_interfaces:
+        host_adb_interfaces.remove(host_id)
+    for host_id in _usb_topology_exposed_hosts - live_usb_topology:
+        host_usb_cascade_hubs.remove(host_id)
+        for scope in _UNBOUND_HUB_SCOPES:
+            host_usb_unbound_hubs.remove(host_id, scope)
+    for host_id in _usb_kernel_errors_exposed_hosts - live_usb_kernel_errors:
+        for kind in KERNEL_ERROR_COUNTER_KEYS:
+            host_usb_kernel_errors_1h.remove(host_id, kind)
     _reason_gauge_exposed_hosts.clear()
     _reason_gauge_exposed_hosts.update(live_reason)
     _channel_gauge_exposed_hosts.clear()
     _channel_gauge_exposed_hosts.update(live_channel)
+    _usb_devices_exposed_hosts.clear()
+    _usb_devices_exposed_hosts.update(live_usb_devices)
+    _adb_interfaces_exposed_hosts.clear()
+    _adb_interfaces_exposed_hosts.update(live_adb_interfaces)
+    _usb_topology_exposed_hosts.clear()
+    _usb_topology_exposed_hosts.update(live_usb_topology)
+    _usb_kernel_errors_exposed_hosts.clear()
+    _usb_kernel_errors_exposed_hosts.update(live_usb_kernel_errors)
 
 
 _LOCK_WAIT_SQL = text(
