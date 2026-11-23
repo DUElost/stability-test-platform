@@ -1,4 +1,4 @@
-"""ADR-0051 v1.7 D7：脚本包声明的工具依赖（``capabilities.json`` 的 ``requires_tools``）。
+"""ADR-0051 v1.7 D7 / ADR-0064 D2：脚本包 ``capabilities.json`` 依赖声明。
 
 纯标准库、无包内相对导入——Agent 运行时（``script_packages``）与仓库门禁
 （``tools/dev/check_script_packages.py`` 按文件路径加载）共用同一份判据，
@@ -10,12 +10,17 @@
       "capabilities": ["progress_stamps"],
       "requires_tools": {
         "flashtool": {"version": "1.2444.00.100", "env": "STP_FLASH_TOOL_DIR"}
-      }
+      },
+      "requires_agent_capabilities": ["firmware_cache_v1"]
     }
 
-语义：引擎执行该脚本版本前，按 ``(name, version)`` 经 ``tools_cache`` 核验拉取 ``kind=tool``
-包，把**包根目录**注入本步子进程 env 的 ``env`` 键——不写主机 ``.env``、不新增主机 env 键
-（ADR-0033 §5.4 例外③）。工具版本随脚本版本内容寻址：换工具版本 = 发脚本新版本。
+``requires_tools``：引擎执行该脚本版本前，按 ``(name, version)`` 经 ``tools_cache``
+核验拉取 ``kind=tool`` 包，把**包根目录**注入本步子进程 env 的 ``env`` 键——不写主机
+``.env``、不新增主机 env 键（ADR-0033 §5.4 例外③）。工具版本随脚本版本内容寻址：
+换工具版本 = 发脚本新版本。
+
+``requires_agent_capabilities``（可选）：字符串列表；``verify_scripts`` 与步骤启动前
+校验当前 Agent ``AGENT_CAPABILITIES`` 包含所声明全部能力，缺失则 fail-closed。
 """
 from __future__ import annotations
 
@@ -26,6 +31,7 @@ from pathlib import Path
 
 CAPABILITIES_FILE = "capabilities.json"
 REQUIRES_KEY = "requires_tools"
+REQUIRES_AGENT_CAPABILITIES_KEY = "requires_agent_capabilities"
 
 #: 与 ``tool_manifest.json`` 族名同形（``tools_cache/<name>/<version>/`` 是路径段，必须保守）。
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -77,17 +83,56 @@ def parse_requirements(doc: object) -> list[ToolRequirement]:
     return out
 
 
+def _load_capabilities_doc(package_root: Path) -> object | None:
+    """读包根 ``capabilities.json``；缺失 → ``None``，存在但坏 → ``RequirementError``。"""
+    path = package_root / CAPABILITIES_FILE
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RequirementError(f"{CAPABILITIES_FILE} 不可读：{exc}") from exc
+
+
 def load_requirements(package_root: Path) -> list[ToolRequirement]:
     """读包根 / 族树根的 ``capabilities.json``；文件缺失 → ``[]``，存在但坏 → ``RequirementError``。
 
     与控制面 ``read_capabilities`` 的「坏文件当无能力」不同：依赖声明坏了就是**不可执行**，
     不能静默当成「无依赖」放行（否则脚本拿不到工具目录，失败点后移到工具调用处）。
     """
-    path = package_root / CAPABILITIES_FILE
-    if not path.is_file():
+    doc = _load_capabilities_doc(package_root)
+    if doc is None:
         return []
-    try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise RequirementError(f"{CAPABILITIES_FILE} 不可读：{exc}") from exc
     return parse_requirements(doc)
+
+
+def parse_agent_capability_requirements(doc: object) -> list[str]:
+    """已解析的 ``capabilities.json`` → ``requires_agent_capabilities`` 列表；无声明 → ``[]``。"""
+    if not isinstance(doc, dict) or REQUIRES_AGENT_CAPABILITIES_KEY not in doc:
+        return []
+    raw = doc[REQUIRES_AGENT_CAPABILITIES_KEY]
+    if not isinstance(raw, list):
+        raise RequirementError(
+            f"{REQUIRES_AGENT_CAPABILITIES_KEY} 必须是字符串列表"
+        )
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise RequirementError(
+                f"{REQUIRES_AGENT_CAPABILITIES_KEY} 条目必须是非空字符串，实为 {item!r}"
+            )
+        name = item.strip()
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def load_agent_capability_requirements(package_root: Path) -> list[str]:
+    """读包根 ``requires_agent_capabilities``；文件缺失 → ``[]``，存在但坏 → ``RequirementError``。"""
+    doc = _load_capabilities_doc(package_root)
+    if doc is None:
+        return []
+    return parse_agent_capability_requirements(doc)
