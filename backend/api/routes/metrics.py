@@ -34,6 +34,7 @@ from backend.core.metrics import (
     host_script_packages_mode,
     host_script_presence,
     host_health_probe_strike,
+    host_self_heal_fuse_open,
     host_usb_cascade_hubs,
     host_usb_devices,
     host_usb_kernel_errors_1h,
@@ -298,8 +299,10 @@ _usb_devices_exposed_hosts: set[str] = set()
 _adb_interfaces_exposed_hosts: set[str] = set()
 _usb_topology_exposed_hosts: set[str] = set()
 _usb_kernel_errors_exposed_hosts: set[str] = set()
+_self_heal_fuse_exposed_hosts: set[str] = set()
 
 _UNBOUND_HUB_SCOPES = ("total", "idle_bus")
+_SELF_HEAL_FUSE_STATES = ("hardware_suspect", "need_human")
 
 
 def _nonneg_int(value: object) -> Optional[int]:
@@ -472,6 +475,7 @@ def _refresh_host_health_gauges(db: Session) -> None:
     live_adb_interfaces: set[str] = set()
     live_usb_topology: set[str] = set()
     live_usb_kernel_errors: set[str] = set()
+    live_self_heal_fuse: set[str] = set()
     try:
         for raw_host_id, extra in rows:
             host_id = str(raw_host_id)
@@ -539,6 +543,16 @@ def _refresh_host_health_gauges(db: Session) -> None:
                             int(val)  # type: ignore[arg-type]
                         )
                     live_usb_kernel_errors.add(host_id)
+
+            self_heal = blob.get("self_heal")
+            if isinstance(self_heal, dict):
+                sh_state = self_heal.get("state")
+                sh_open = bool(self_heal.get("fuse_open"))
+                for candidate in _SELF_HEAL_FUSE_STATES:
+                    host_self_heal_fuse_open.labels(host_id=host_id, state=candidate).set(
+                        1 if (sh_open and sh_state == candidate) else 0
+                    )
+                live_self_heal_fuse.add(host_id)
     except Exception:
         # 渲染中途出错：本轮不落新值，也不清旧 child（下轮自愈），但绝不 500 整次抓取。
         logger.warning("metrics_host_health_gauge_render_failed", exc_info=True)
@@ -561,6 +575,9 @@ def _refresh_host_health_gauges(db: Session) -> None:
     for host_id in _usb_kernel_errors_exposed_hosts - live_usb_kernel_errors:
         for kind in KERNEL_ERROR_COUNTER_KEYS:
             host_usb_kernel_errors_1h.remove(host_id, kind)
+    for host_id in _self_heal_fuse_exposed_hosts - live_self_heal_fuse:
+        for state in _SELF_HEAL_FUSE_STATES:
+            host_self_heal_fuse_open.remove(host_id, state)
     _reason_gauge_exposed_hosts.clear()
     _reason_gauge_exposed_hosts.update(live_reason)
     _channel_gauge_exposed_hosts.clear()
@@ -573,6 +590,8 @@ def _refresh_host_health_gauges(db: Session) -> None:
     _usb_topology_exposed_hosts.update(live_usb_topology)
     _usb_kernel_errors_exposed_hosts.clear()
     _usb_kernel_errors_exposed_hosts.update(live_usb_kernel_errors)
+    _self_heal_fuse_exposed_hosts.clear()
+    _self_heal_fuse_exposed_hosts.update(live_self_heal_fuse)
 
 
 _LOCK_WAIT_SQL = text(

@@ -33,6 +33,7 @@ from .local_runtime import (
     replay_early_control_commands,
 )
 from .mq.producer import StepTraceWriter
+from .self_heal_coordinator import ClaimPauseGate
 from .startup_guards import (
     check_agent_version,
     enforce_single_instance,
@@ -93,6 +94,7 @@ class AgentApplication:
         self.active_job_tokens: Dict[int, str] = {}
         self.active_jobs_lock = threading.Lock()
         self.lock_renewal_stop_event = threading.Event()
+        self.claim_pause_gate = ClaimPauseGate()
 
     def _register_active_device(self, did: int) -> None:
         with self.active_jobs_lock:
@@ -200,6 +202,7 @@ class AgentApplication:
             active_job_ids=self.active_job_ids,
             active_device_ids=self.active_device_ids,
             recovery_actions_slot=ctx.recovery_actions_slot,
+            claim_pause_gate=self.claim_pause_gate,
         )
         heartbeat_thread.start()
         ctx.heartbeat_thread = heartbeat_thread
@@ -217,6 +220,7 @@ class AgentApplication:
             active_job_tokens=self.active_job_tokens,
             active_device_owner=self.active_device_owner,
             lock_renewal_stop_event=self.lock_renewal_stop_event,
+            claim_pause_gate=self.claim_pause_gate,
         )
 
     def register_handlers(self, ctx: _BootContext) -> None:
