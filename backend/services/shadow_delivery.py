@@ -155,9 +155,20 @@ def evaluate_delivery_status(
             if value not in _PUBLISH_STATUSES:
                 raise ValueError(f"publish status invalid: {value!r}")
 
+    selected = [
+        representative for representative in representatives
+        if representative.get("selection_status") == facts.SELECTION_SELECTED
+    ]
+    # 口径（#4079）：NOT_READY / SCOPE_ONLY 状态下同样透出已测得的覆盖/代表缺口
+    # （RETRYING 仍不计入缺口，D9 第 3 条），与 delivery_version.gaps 保持一致。
+    gaps = tuple(
+        _coverage_gaps(effective_coverage)
+        + _representative_gaps(selected, publish_status)
+    )
+
     final = next((row for row in rounds if row.get("kind") == facts.SCAN_ROUND_KIND_FINAL), None)
     if final is None or final.get("status") != facts.SCAN_ROUND_STATUS_CLOSED:
-        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_FINAL_ROUND_NOT_CLOSED)
+        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_FINAL_ROUND_NOT_CLOSED, gaps)
 
     basis = [
         row for row in rounds
@@ -167,35 +178,27 @@ def evaluate_delivery_status(
     latest = max(basis, key=lambda row: row.get("round_no", 0), default=None)
     merge_status = latest.get("merge_status") if latest is not None else None
     if merge_status in _FAILED_MERGE_STATUSES:
-        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_LATEST_MERGE_FAILED)
+        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_LATEST_MERGE_FAILED, gaps)
     if merge_status == "NO_INPUT":
-        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_LATEST_MERGE_NO_INPUT)
+        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_LATEST_MERGE_NO_INPUT, gaps)
     if merge_status not in _TERMINAL_MERGE_STATUSES:
-        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_LATEST_MERGE_PENDING)
+        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_LATEST_MERGE_PENDING, gaps)
 
     if not any(unit.get("covered") for unit in effective_coverage):
-        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_EFFECTIVE_COVERAGE_EMPTY)
+        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_EFFECTIVE_COVERAGE_EMPTY, gaps)
 
     if publish_status is None:
-        return DeliveryDecision(DELIVERY_STATUS_SCOPE_ONLY, REASON_PUBLISH_NOT_APPLICABLE)
+        return DeliveryDecision(DELIVERY_STATUS_SCOPE_ONLY, REASON_PUBLISH_NOT_APPLICABLE, gaps)
 
-    selected = [
-        representative for representative in representatives
-        if representative.get("selection_status") == facts.SELECTION_SELECTED
-    ]
     if any(
         publish_status.get(representative.get("signature_id")) == PUBLISH_RETRYING
         for representative in selected
     ):
-        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_REPRESENTATIVE_RETRYING)
+        return DeliveryDecision(DELIVERY_STATUS_NOT_READY, REASON_REPRESENTATIVE_RETRYING, gaps)
 
-    gaps = (
-        _coverage_gaps(effective_coverage)
-        + _representative_gaps(selected, publish_status)
-    )
     if gaps:
         return DeliveryDecision(
-            DELIVERY_STATUS_READY_WITH_GAPS, REASON_GAPS_PRESENT, tuple(gaps),
+            DELIVERY_STATUS_READY_WITH_GAPS, REASON_GAPS_PRESENT, gaps,
         )
     return DeliveryDecision(DELIVERY_STATUS_READY, REASON_ALL_CHECKS_PASSED)
 

@@ -583,6 +583,76 @@ def count_adb_interface_devices(
     return len(devices)
 
 
+_USB_HUB_DEVICE_CLASS = "09"
+
+
+def inspect_usb_hub_topology(
+    sysfs_root: str = _SYSFS_USB_DEVICES,
+) -> Optional[Dict[str, int]]:
+    """只读扫描 sysfs 识别外接级联 Hub 数量与半枚举（无驱动绑定）Hub（零提权）。
+
+    背景：近期多台主机出现 SuperSpeed Hub 半枚举（``lsusb -t`` 显示 ``Driver=[none]/0p``，
+    对应 ``<Bus.Port>:1.0/driver`` 链接缺失），拖慢 ``uhubctl`` 与 VBUS 切电刷机。
+    判据与 ``host-device-visibility-triage.md`` §5.1 / §5.4 一致：
+
+    - ``cascade_hubs``：``bDeviceClass == "09"`` 的非 root-hub 设备数（节点名含 ``-``、
+      不含 ``:``、不以 ``usb`` 开头）；
+    - ``unbound_hubs``：上述级联 Hub 中没有任何接口目录（``<dev>:*``）存在 ``driver`` 项的数量；
+    - ``unbound_idle_bus_hubs``：落在「当前承载 0 台非 Hub 外设」总线上的未绑定 Hub 数
+      （用于把无在用设备的 SS 失效分支与在用侧 Hub 异常区分开）。
+
+    目录不可读时返回 None（未知 ≠ 0）。
+    """
+    try:
+        entries = os.listdir(sysfs_root)
+    except OSError as exc:
+        logger.debug("sysfs_usb_topology_unreadable root=%s err=%s", sysfs_root, exc)
+        return None
+
+    interfaces_by_dev: Dict[str, List[str]] = {}
+    device_nodes: List[str] = []
+    for name in entries:
+        if ":" in name:
+            dev_name = name.split(":", 1)[0]
+            interfaces_by_dev.setdefault(dev_name, []).append(name)
+        elif "-" in name and not name.startswith("usb"):
+            device_nodes.append(name)
+
+    cascade_hubs: List[str] = []
+    active_peripheral_buses: set[str] = set()
+    for dev_name in device_nodes:
+        cls_path = os.path.join(sysfs_root, dev_name, "bDeviceClass")
+        try:
+            with open(cls_path, encoding="utf-8") as fh:
+                dev_cls = fh.read().strip().lower()
+        except OSError:
+            continue
+        if dev_cls == _USB_HUB_DEVICE_CLASS:
+            cascade_hubs.append(dev_name)
+        else:
+            active_peripheral_buses.add(dev_name.split("-", 1)[0])
+
+    unbound_hubs = 0
+    unbound_idle_bus_hubs = 0
+    for hub_dev in cascade_hubs:
+        ifaces = interfaces_by_dev.get(hub_dev, [])
+        has_bound_driver = any(
+            os.path.exists(os.path.join(sysfs_root, iface, "driver"))
+            for iface in ifaces
+        )
+        if not has_bound_driver:
+            unbound_hubs += 1
+            bus_num = hub_dev.split("-", 1)[0]
+            if bus_num not in active_peripheral_buses:
+                unbound_idle_bus_hubs += 1
+
+    return {
+        "cascade_hubs": len(cascade_hubs),
+        "unbound_hubs": unbound_hubs,
+        "unbound_idle_bus_hubs": unbound_idle_bus_hubs,
+    }
+
+
 def bucket_adb_states(devices: List[Dict[str, Any]]) -> Dict[str, int]:
     """按 `adb devices` 的 state 给设备分桶（纯函数，#2902）。
 
