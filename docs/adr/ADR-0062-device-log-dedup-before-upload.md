@@ -1,6 +1,6 @@
 # ADR-0062：设备日志先汇总去重、再按问题上传代表证据
 
-- 状态：**Accepted** v1.2（2026-11-16：Owner 收窄 B8 交付边界，见 §10.8。v1.0 于 2026-11-02 Accepted，同日 ADR-0053 转 Superseded。实施按 §9 走 ADR-0058 批次 B8）；**v2.0 Proposed**（2026-11-23：按 Owner 裁决增补 UNISOC 并入 `DEDUP_FIRST`、中心挂载守卫与全平台退出 `CURRENT` 旧链条款，见 §10.9）
+- 状态：**Proposed** v2.0（2026-11-23：按 Owner 裁决增补 UNISOC 并入 `DEDUP_FIRST`、中心挂载守卫与全平台退出 `CURRENT` 旧链条款，见 §10.9。v1.2 于 2026-11-16 Accepted：Owner 收窄 B8 交付边界，见 §10.8；v1.0 于 2026-11-02 Accepted，同日 ADR-0053 转 Superseded。实施按 §9 走 ADR-0058 批次 B8）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-10-29
