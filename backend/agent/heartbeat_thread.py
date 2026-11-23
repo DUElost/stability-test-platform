@@ -17,7 +17,7 @@ from .heartbeat import send_heartbeat
 from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
 from .mount_health_probe import MountHealthProbe, normalize_mount_point
-from .outbound_guard import bind_heartbeat_stale_check
+from .outbound_guard import OutboundDispatchGate, bind_heartbeat_stale_check
 from .usb_power_slots import read_usb_power_presence
 from .settings import get_heartbeat_settings
 from .startup_guards import single_instance_guard_degraded
@@ -132,6 +132,7 @@ class HeartbeatThread:
         self._mount_points_lock = threading.Lock()
         self._mount_points_generation: int = 0
         self._shared_storage_root: str = normalize_mount_point(resolve_shared_storage_root())
+        self._dispatch_gate = OutboundDispatchGate()
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
@@ -164,6 +165,10 @@ class HeartbeatThread:
                 # 防止 ACK 返回后、下一拍心跳完成前按旧配置继续发起普通认领。
                 with self._capacity_lock:
                     self._effective_slots = 0
+        if changed:
+            gate = getattr(self, "_dispatch_gate", None)
+            if isinstance(gate, OutboundDispatchGate):
+                gate.advance_and_drain()
 
     def _is_mount_generation_stale(self, mount_gen: int) -> bool:
         with self._mount_points_lock:
@@ -850,7 +855,8 @@ class HeartbeatThread:
             health_payload = cap_result.get("health")
             with self._phase("http"):
                 with bind_heartbeat_stale_check(
-                    lambda gen=mount_gen: self._is_mount_generation_stale(gen)
+                    lambda gen=mount_gen: self._is_mount_generation_stale(gen),
+                    dispatch_gate=getattr(self, "_dispatch_gate", None),
                 ):
                     with self._mount_points_lock:
                         if mount_gen != self._mount_points_generation:
@@ -956,7 +962,8 @@ class HeartbeatThread:
                 stats["devices"] = devices_list
                 stats["mount_status"] = mount_status
                 with bind_heartbeat_stale_check(
-                    lambda gen=mount_gen: self._is_mount_generation_stale(gen)
+                    lambda gen=mount_gen: self._is_mount_generation_stale(gen),
+                    dispatch_gate=getattr(self, "_dispatch_gate", None),
                 ):
                     with self._mount_points_lock:
                         ws_stale = mount_gen != self._mount_points_generation

@@ -6,7 +6,7 @@ import requests
 
 from .contracts.capabilities import AGENT_CAPABILITIES, normalize_capabilities
 from .mount_health_probe import check_mounts_presence
-from .outbound_guard import is_bound_heartbeat_stale
+from .outbound_guard import enter_bound_heartbeat_send, is_bound_heartbeat_stale
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +96,12 @@ def send_heartbeat(
         headers["x-agent-secret"] = agent_secret
 
     try:
-        if is_bound_heartbeat_stale():
-            return None
-        resp = requests.post(f"{api_url}/api/v1/heartbeat", json=payload, headers=headers, timeout=5)
+        with enter_bound_heartbeat_send():
+            if is_bound_heartbeat_stale():
+                return None
+            resp = requests.post(
+                f"{api_url}/api/v1/heartbeat", json=payload, headers=headers, timeout=5
+            )
         resp.raise_for_status()
         data = resp.json()
         logger.info(f"heartbeat_success: host_id={host_id}, devices_count={len(devices or [])}, response={data}")

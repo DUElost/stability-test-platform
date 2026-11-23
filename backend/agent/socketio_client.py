@@ -30,7 +30,7 @@ except ImportError:
     logger.warning("python-socketio not installed, SocketIO log streaming disabled")
 
 from .contracts.capabilities import AGENT_CAPABILITIES
-from .outbound_guard import is_bound_heartbeat_stale
+from .outbound_guard import enter_bound_heartbeat_send, is_bound_heartbeat_stale
 from .script_verifier import verify_scripts_payload
 
 
@@ -305,25 +305,28 @@ class AgentSocketIOClient:
             self._seq_counters[run_id] = seq
             return seq
 
+    def _emit_or_buffer_locked(self, event: str, data: dict) -> bool:
+        """Execute emit or buffer under ``self._lock``."""
+        if self._connected and self._sio:
+            try:
+                self._sio.emit(event, data, namespace="/agent")
+                return True
+            except Exception as e:
+                logger.warning("sio_emit_failed: %s", e)
+                self._connected = False
+        data["_event"] = event
+        self._append_locked(data)
+        return False
+
     def _emit(self, event: str, data: dict) -> bool:
         """Emit an event. Buffers if disconnected. Returns True if sent immediately."""
         with self._lock:
-            if event == "heartbeat" and is_bound_heartbeat_stale():
-                return False
-            if self._connected and self._sio:
-                try:
-                    self._sio.emit(event, data, namespace="/agent")
-                    return True
-                except Exception as e:
-                    logger.warning("sio_emit_failed: %s", e)
-                    self._connected = False
-                    data["_event"] = event
-                    self._append_locked(data)
-                    return False
-            else:
-                data["_event"] = event
-                self._append_locked(data)
-                return False
+            if event == "heartbeat":
+                with enter_bound_heartbeat_send():
+                    if is_bound_heartbeat_stale():
+                        return False
+                    return self._emit_or_buffer_locked(event, data)
+            return self._emit_or_buffer_locked(event, data)
 
     def _append_locked(self, data: dict) -> None:
         """Append to ``_buffer`` tail. 必须在持有 ``self._lock`` 时调用。

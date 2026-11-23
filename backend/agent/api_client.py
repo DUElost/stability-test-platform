@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from .outbound_guard import resolve_bound_claim_capacity
+from .outbound_guard import enter_bound_claim_send, resolve_bound_claim_capacity
 
 logger = logging.getLogger(__name__)
 
@@ -121,16 +121,17 @@ def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
     if active_job_ids is not None:
         body["active_job_ids"] = sorted({int(jid) for jid in active_job_ids})
 
-    effective_capacity = resolve_bound_claim_capacity(capacity)
-    if effective_capacity <= 0 and vbus_slots <= 0:
-        return []
-    body["capacity"] = effective_capacity
-    resp = requests.post(
-        f"{api_url}/api/v1/agent/jobs/claim",
-        json=body,
-        headers=headers,
-        timeout=(5, 20),
-    )
+    with enter_bound_claim_send():
+        effective_capacity = resolve_bound_claim_capacity(capacity)
+        if effective_capacity <= 0 and vbus_slots <= 0:
+            return []
+        body["capacity"] = effective_capacity
+        resp = requests.post(
+            f"{api_url}/api/v1/agent/jobs/claim",
+            json=body,
+            headers=headers,
+            timeout=(5, 20),
+        )
     resp.raise_for_status()
     payload = resp.json()
     if isinstance(payload, dict) and "data" in payload:

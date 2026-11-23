@@ -900,6 +900,130 @@ def test_heartbeat_snapshot_after_list_copy_before_enter_snapshot_prevents_stale
     assert not (probed_points == ["/mnt/old"] and new_entry["probe_stale"] is False)
 
 
+def test_reload_ack_drains_inflight_send_window_before_returning_and_rejects_post_bump_sends(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R5 B1: reload_from_settings() 必须排空已过守卫的在途发包窗口才可返回 ACK，且切根后新进入窗口不得发旧值。"""
+    import threading
+    import time
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from backend.agent.active_job_bindings import ActiveJobOccupancy
+    from backend.agent.claim_loop import process_claim_tick
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+    from backend.agent.outbound_guard import (
+        bind_heartbeat_stale_check,
+        enter_bound_heartbeat_send,
+        is_bound_heartbeat_stale,
+    )
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    with thread._capacity_lock:
+        thread._effective_slots = 2
+
+    # 1) 模拟已通过守卫、正在 send_window 内尚未结束的发包：reload_from_settings() 必须等待其完成才可返回 ACK
+    entered_window = threading.Event()
+    release_window = threading.Event()
+    ack_done = threading.Event()
+    events: list[str] = []
+
+    def inflight_sender():
+        with bind_heartbeat_stale_check(
+            lambda: False,
+            dispatch_gate=thread._dispatch_gate,
+        ):
+            with enter_bound_heartbeat_send():
+                assert is_bound_heartbeat_stale() is False
+                entered_window.set()
+                assert release_window.wait(5.0)
+                events.append("sender_finished")
+
+    def run_reload():
+        heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+        thread.reload_from_settings()
+        events.append("reload_ack")
+        ack_done.set()
+
+    t_send = threading.Thread(target=inflight_sender, daemon=True)
+    t_send.start()
+    assert entered_window.wait(2.0)
+
+    t_reload = threading.Thread(target=run_reload, daemon=True)
+    t_reload.start()
+    time.sleep(0.05)
+    # 关键时序断言：在途发包窗口尚未结束时，reload 不得提前返回 ACK
+    assert not ack_done.is_set()
+
+    release_window.set()
+    t_send.join(timeout=3.0)
+    t_reload.join(timeout=3.0)
+    assert not t_send.is_alive() and not t_reload.is_alive()
+    assert events == ["sender_finished", "reload_ack"]
+    assert thread.effective_slots == 0
+
+    # 2) 验证 ACK 之后进入真实 fetch_pending_jobs 的 claim 请求不会以旧槽位发出 POST
+    posted_claim: list[dict] = []
+
+    class _FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": []}
+
+    monkeypatch.setattr(
+        "backend.agent.api_client.requests.post",
+        lambda _url, *, json, **_kw: posted_claim.append(dict(json)) or _FakeResp(),
+    )
+    occ = ActiveJobOccupancy(
+        lock=threading.Lock(),
+        job_ids=set(),
+        device_ids=set(),
+        job_tokens={},
+        device_owner={},
+    )
+    with patch("backend.agent.claim_loop.vbus_claim_slots", return_value=1):
+        process_claim_tick(
+            api_url="http://server",
+            host_id="host-1",
+            agent_instance_id="inst",
+            occupancy=occ,
+            heartbeat_thread=thread,
+            register_active_job=lambda *_a, **_k: None,
+            deregister_active_job=lambda *_a, **_k: None,
+            lease_renewer=SimpleNamespace(),
+            local_db=SimpleNamespace(get_active_jobs=lambda: []),
+            coordinator=SimpleNamespace(),
+            executor=SimpleNamespace(),
+            adb=SimpleNamespace(),
+            job_runner_state=SimpleNamespace(),
+            mq_producer=SimpleNamespace(),
+            script_registry=SimpleNamespace(),
+            patrol_checkpoint_store=SimpleNamespace(),
+            operation_scheduler=SimpleNamespace(),
+            step_trace_uploader=SimpleNamespace(),
+            run_task_wrapper=lambda *_a, **_k: None,
+        )
+    assert len(posted_claim) == 1
+    assert posted_claim[0]["capacity"] == 0
+    assert posted_claim[0]["vbus_slots"] == 1
+
+
 def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
     from backend.agent.coordinator import HostRunCoordinator
 

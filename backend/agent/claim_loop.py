@@ -76,7 +76,10 @@ def process_claim_tick(
     normal_slots = max(min(available_slots, heartbeat_thread.effective_slots), 0)
     if normal_slots <= 0 and vbus_slots <= 0:
         return
-    with bind_claim_capacity_reader(lambda: heartbeat_thread.effective_slots):
+    with bind_claim_capacity_reader(
+        lambda: heartbeat_thread.effective_slots,
+        dispatch_gate=getattr(heartbeat_thread, "_dispatch_gate", None),
+    ):
         jobs = fetch_pending_jobs(
             api_url, host_id, agent_instance_id, capacity=normal_slots,
             vbus_slots=vbus_slots,
