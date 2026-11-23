@@ -502,13 +502,38 @@ def parse_lsusb_root_hubs(text: str) -> int:
     return count
 
 
-def count_usb_devices_and_root_hubs() -> Tuple[Optional[int], Optional[int]]:
-    """一次 `lsusb` 同时取「疑似 Android 设备数」与「root hub 数」（#2902）。
+def parse_lsusb_summary(text: str) -> Tuple[int, int, int]:
+    """一次解析 ``lsusb`` 输出返回 ``(target_devices, root_hubs, other_usb_nodes)``（纯函数）。
 
-    两次分别调用会各自 fork 一次 lsusb（心跳每拍一次），故合并为单次采集；
-    `count_usb_devices()` 保留为薄包装（历史调用方与测试不受影响）。
+    - ``target_devices``：疑似 Android/手机设备数（与 ``parse_lsusb_output`` 同口径）；
+    - ``root_hubs``：Linux Foundation root hub（``1d6b:``）条数；
+    - ``other_usb_nodes``：被 ``_NON_TARGET_USB_KEYWORDS`` 排除的非 root-hub 节点数
+      （外接 Hub / 存储 / 键鼠 / 网卡等，供 ``xhci_auto_rebind.is_usb_tree_verifiably_empty``
+      防误拔非目标外设）。
+    """
+    target_devices = 0
+    root_hubs = 0
+    other_nodes = 0
+    for line in text.splitlines():
+        match = _LSUSB_LINE_RE.match(line.strip())
+        if not match:
+            continue
+        vid, _pid, description = match.group(1).lower(), match.group(2), match.group(3)
+        if vid == _ROOT_HUB_VID:
+            root_hubs += 1
+            continue
+        lowered = description.lower()
+        if any(keyword in lowered for keyword in _NON_TARGET_USB_KEYWORDS):
+            other_nodes += 1
+            continue
+        target_devices += 1
+    return target_devices, root_hubs, other_nodes
 
-    Returns: (设备数, root hub 数)；两者同为 None 表示无法判定。
+
+def count_usb_lsusb_summary() -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    """一次 ``lsusb`` 同时取 ``(usb_device_count, usb_root_hub_count, other_usb_nodes)``。
+
+    失败返回 ``(None, None, None)``（未知 ≠ 0）。
     """
     try:
         result = subprocess.run(
@@ -519,20 +544,31 @@ def count_usb_devices_and_root_hubs() -> Tuple[Optional[int], Optional[int]]:
         )
     except FileNotFoundError:
         logger.debug("lsusb_not_found: skipping usb device count")
-        return None, None
+        return None, None, None
     except subprocess.TimeoutExpired:
         logger.warning("lsusb_timeout: %ss", _LSUSB_TIMEOUT_SECONDS)
-        return None, None
+        return None, None, None
     except Exception as e:
         logger.debug("lsusb_failed: %s", e)
-        return None, None
+        return None, None, None
 
     if result.returncode != 0:
         logger.debug("lsusb_nonzero_exit: rc=%s stderr=%s", result.returncode, result.stderr)
-        return None, None
+        return None, None, None
 
-    text = result.stdout or ""
-    return parse_lsusb_output(text), parse_lsusb_root_hubs(text)
+    return parse_lsusb_summary(result.stdout or "")
+
+
+def count_usb_devices_and_root_hubs() -> Tuple[Optional[int], Optional[int]]:
+    """一次 `lsusb` 同时取「疑似 Android 设备数」与「root hub 数」（#2902）。
+
+    两次分别调用会各自 fork 一次 lsusb（心跳每拍一次），故合并为单次采集；
+    `count_usb_devices()` 保留为薄包装（历史调用方与测试不受影响）。
+
+    Returns: (设备数, root hub 数)；两者同为 None 表示无法判定。
+    """
+    devices, root_hubs, _other = count_usb_lsusb_summary()
+    return devices, root_hubs
 
 
 # ── ADB 接口层计数（L2/L4 分辨，#2902）───────────────────────────────────────

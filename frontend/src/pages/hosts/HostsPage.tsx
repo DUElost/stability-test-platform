@@ -675,6 +675,27 @@ export default function HostsPage() {
             strike_need: typeof probeRaw.strike_need === 'number' ? probeRaw.strike_need : undefined,
           }
         : null;
+      const selfHealCandidate =
+        (host as { self_heal?: unknown }).self_heal ?? extra.self_heal;
+      const selfHealRaw =
+        selfHealCandidate && typeof selfHealCandidate === 'object'
+          ? (selfHealCandidate as Record<string, unknown>)
+          : null;
+      const selfHeal = selfHealRaw
+        ? {
+            state: typeof selfHealRaw.state === 'string' ? selfHealRaw.state : undefined,
+            fuse_open: typeof selfHealRaw.fuse_open === 'boolean' ? selfHealRaw.fuse_open : undefined,
+            fuse_reason: typeof selfHealRaw.fuse_reason === 'string' ? selfHealRaw.fuse_reason : null,
+            xhci:
+              selfHealRaw.xhci && typeof selfHealRaw.xhci === 'object'
+                ? (selfHealRaw.xhci as Host['self_heal'] extends infer T ? T extends { xhci?: infer X } ? X : never : never)
+                : undefined,
+            adb_reconnect:
+              selfHealRaw.adb_reconnect && typeof selfHealRaw.adb_reconnect === 'object'
+                ? (selfHealRaw.adb_reconnect as Host['self_heal'] extends infer T ? T extends { adb_reconnect?: infer A } ? A : never : never)
+                : undefined,
+          }
+        : null;
 
       return {
         id: host.id,
@@ -729,6 +750,7 @@ export default function HostsPage() {
         usb_hub_topology: usbHubTopology,
         usb_kernel_errors_1h: usbKernelErrors1h,
         health_probe: healthProbe,
+        self_heal: selfHeal,
         claim_hint: claimHint,
         active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
         health_status: host.health?.status,

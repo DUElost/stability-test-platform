@@ -514,6 +514,32 @@
       "version_range": {
         "min_inclusive": "1.4.0"
       }
+    },
+    {
+      "path": [
+        "allow_nfs_direct_fallback"
+      ],
+      "label": "L1 缓存空间不足时直读 NFS",
+      "meaning": "Agent L1 固件缓存本地空间不足时，是否允许直读 NFS 源目录继续刷机（逃生阀，默认关闭）。",
+      "unit": "布尔（缺省 false）",
+      "cautions": "开启后烧录仍可能跨 NFS 读大文件，抵消 L1 缓存收益；仅应急排障使用，生产默认保持 false。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.4"
+      }
+    },
+    {
+      "path": [
+        "allow_permit_bypass"
+      ],
+      "label": "跨源拷贝许可不可达时降级",
+      "meaning": "控制面 TransferPermit 不可达且等待超限时，是否允许绕过许可继续跨源拷贝（逃生阀，默认关闭）。",
+      "unit": "布尔（缺省 false）",
+      "cautions": "开启会削弱跨主机拷贝限流；仅许可服务故障排障时使用，生产默认保持 false。",
+      "sensitive": false,
+      "version_range": {
+        "min_inclusive": "1.4.4"
+      }
     }
   ]
 }

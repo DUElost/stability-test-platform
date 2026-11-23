@@ -8,13 +8,18 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import stat
+import tempfile
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional, Sequence
+
+from .identity import read_boot_id
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,9 @@ REASON_HOST_LEDGER_EMPTY = "host_ledger_empty"
 REASON_FUSE_BOOT = "fuse_boot_limit"
 REASON_FUSE_WINDOW = "fuse_48h_limit"
 REASON_FUSE_RETRY = "fuse_retry_exhausted"
+REASON_FUSE_PROBE_FAILED = "fuse_probe_failed"
+REASON_FUSE_CORRUPT = "fuse_state_corrupt"
+REASON_WRAPPER_UNAVAILABLE = "wrapper_unavailable"
 REASON_NO_PCI_IDS = "no_pci_ids"
 
 
@@ -188,9 +196,178 @@ class RebindFuse:
             return Action.STOP_HARDWARE_SUSPECT
         return Action.REBIND
 
+    def record_probe_failed(self) -> Action:
+        """重绑后无 BDF 链接或 enable==0（§6.1 probe -110）：立即熔断转疑似硬件。"""
+        self.open_reason = REASON_FUSE_PROBE_FAILED
+        return Action.STOP_HARDWARE_SUSPECT
+
     def record_recovered(self) -> None:
         """树回了：清 episode 失败计数（boot/48h 计数保留）。"""
         self.episode_failures = 0
+
+    def to_state_dict(self, boot_id: str) -> dict:
+        return {
+            "schema": 1,
+            "boot_id": str(boot_id or ""),
+            "boot_attempts": int(self.boot_attempts),
+            "window_attempts": [float(ts) for ts in self.window_attempts],
+            "episode_failures": int(self.episode_failures),
+            "open_reason": self.open_reason,
+        }
+
+
+_BOOT_SCOPED_OPEN_REASONS = frozenset({
+    REASON_FUSE_BOOT,
+    REASON_FUSE_RETRY,
+    REASON_FUSE_PROBE_FAILED,
+})
+
+
+class PersistentFuseStore:
+    """按 ``boot_id`` 原子持久化 ``RebindFuse`` 至本地状态文件（ADR-0037 D9.6）。
+
+    防热更/重启洗白红线：
+    - 状态文件必须位于热更新代码同步目录之外（由调用方传入 ``BASE_DIR / ...``）；
+    - 同 ``boot_id`` 加载时完整恢复计数与熔断；
+    - 跨 ``boot_id``（主机重启）清零 ``boot_attempts`` / ``episode_failures`` 与 boot 级熔断，
+      保留裁剪后未满 48h 的 ``window_attempts``；
+    - 状态文件损坏、不可读、是 symlink 或权限异常（group/other 可写）时 fail-closed，
+      返回 ``open_reason=REASON_FUSE_CORRUPT``（升级 ``need_human``），绝不重置为空状态。
+    """
+
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        boot_id_provider: Callable[[], str] = read_boot_id,
+    ) -> None:
+        self.path = Path(path)
+        self._boot_id_provider = boot_id_provider
+
+    def _current_boot_id(self) -> str:
+        try:
+            return str(self._boot_id_provider() or "").strip()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _corrupt_fuse() -> RebindFuse:
+        return RebindFuse(open_reason=REASON_FUSE_CORRUPT)
+
+    def load(self, *, now: Optional[float] = None) -> RebindFuse:
+        now_ts = time.time() if now is None else float(now)
+        try:
+            st = os.lstat(self.path)
+        except FileNotFoundError:
+            return RebindFuse()
+        except OSError as exc:
+            logger.error("self_heal_fuse_stat_failed path=%s err=%s", self.path, exc)
+            return self._corrupt_fuse()
+
+        if not stat.S_ISREG(st.st_mode):
+            logger.error("self_heal_fuse_not_regular path=%s", self.path)
+            return self._corrupt_fuse()
+        if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            logger.error("self_heal_fuse_bad_mode path=%s mode=%o", self.path, st.st_mode)
+            return self._corrupt_fuse()
+
+        try:
+            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            with os.fdopen(fd, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except Exception as exc:
+            logger.error("self_heal_fuse_read_failed path=%s err=%s", self.path, exc)
+            return self._corrupt_fuse()
+
+        if not isinstance(raw, dict) or raw.get("schema") != 1:
+            logger.error("self_heal_fuse_invalid_schema path=%s", self.path)
+            return self._corrupt_fuse()
+
+        stored_boot = raw.get("boot_id")
+        boot_attempts = raw.get("boot_attempts")
+        window_attempts = raw.get("window_attempts")
+        episode_failures = raw.get("episode_failures")
+        open_reason = raw.get("open_reason")
+
+        if (
+            not isinstance(stored_boot, str)
+            or isinstance(boot_attempts, bool)
+            or not isinstance(boot_attempts, int)
+            or boot_attempts < 0
+            or isinstance(episode_failures, bool)
+            or not isinstance(episode_failures, int)
+            or episode_failures < 0
+            or not isinstance(window_attempts, list)
+            or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in window_attempts)
+            or (open_reason is not None and not isinstance(open_reason, str))
+        ):
+            logger.error("self_heal_fuse_invalid_fields path=%s", self.path)
+            return self._corrupt_fuse()
+
+        pruned_window = [
+            float(ts) for ts in window_attempts if now_ts - float(ts) <= WINDOW_48H_SECONDS
+        ]
+        current_boot = self._current_boot_id()
+        if current_boot and stored_boot and stored_boot == current_boot:
+            fuse = RebindFuse(
+                boot_attempts=boot_attempts,
+                window_attempts=pruned_window,
+                episode_failures=episode_failures,
+                open_reason=open_reason,
+            )
+            fuse.prune(now_ts)
+            return fuse
+
+        # 主机已重启（boot_id 变化）：清零 boot/episode 计数，保留 48h 窗口计数。
+        next_open = open_reason
+        if next_open in _BOOT_SCOPED_OPEN_REASONS:
+            next_open = None
+        if len(pruned_window) >= MAX_AUTO_PER_48H:
+            next_open = REASON_FUSE_WINDOW
+        elif next_open == REASON_FUSE_WINDOW:
+            next_open = None
+        return RebindFuse(
+            boot_attempts=0,
+            window_attempts=pruned_window,
+            episode_failures=0,
+            open_reason=next_open,
+        )
+
+    def save(self, fuse: RebindFuse, *, now: Optional[float] = None) -> bool:
+        """原子写回状态文件（0600 + fsync + os.replace）；失败记错不静默。"""
+        boot_id = self._current_boot_id()
+        fuse.prune(now)
+        payload = json.dumps(fuse.to_state_dict(boot_id), separators=(",", ":"))
+        parent = self.path.parent
+        tmp_path: Optional[Path] = None
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{self.path.name}.", suffix=".tmp", dir=str(parent),
+            )
+            tmp_path = Path(tmp_name)
+            try:
+                os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(payload)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+            except Exception:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
+            os.replace(tmp_path, self.path)
+            return True
+        except Exception as exc:
+            logger.error("self_heal_fuse_save_failed path=%s err=%s", self.path, exc)
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return False
 
 
 def decide(
@@ -199,15 +376,15 @@ def decide(
     *,
     now: Optional[float] = None,
 ) -> tuple[Action, Optional[str]]:
-    """门控 ∧ 熔断 → 动作。熔断已开且原因为复发 → NEED_HUMAN。"""
+    """门控 ∧ 熔断 → 动作。熔断已开且原因为复发/损坏 → NEED_HUMAN；probe/重试耗尽 → HARDWARE_SUSPECT。"""
     if not gate.allowed:
         return Action.NOOP, gate.block_reason
     fuse_gate = fuse.check(now)
     if not fuse_gate.allowed:
         reason = fuse_gate.block_reason
-        if reason in (REASON_FUSE_BOOT, REASON_FUSE_WINDOW):
+        if reason in (REASON_FUSE_BOOT, REASON_FUSE_WINDOW, REASON_FUSE_CORRUPT):
             return Action.STOP_NEED_HUMAN, reason
-        if reason == REASON_FUSE_RETRY:
+        if reason in (REASON_FUSE_RETRY, REASON_FUSE_PROBE_FAILED):
             return Action.STOP_HARDWARE_SUSPECT, reason
         return Action.NOOP, reason
     return Action.REBIND, None

@@ -17,6 +17,7 @@ from .log_archiver import collect_archive_heartbeat_metrics
 from .pipeline_engine import PipelineEngine
 from .recovery_executor import trigger_recovery_sync_on_device_reconnect
 from .scan_runner import ScanRunner
+from .self_heal_coordinator import ClaimPauseGate, SelfHealCoordinator
 from .upload_manager import UploadManager
 
 try:
@@ -70,10 +71,30 @@ def build_heartbeat_thread(
     active_job_ids: Set[int],
     active_device_ids: Set[int],
     recovery_actions_slot: RecoveryActionsSlot,
+    claim_pause_gate: Optional[ClaimPauseGate] = None,
 ) -> HeartbeatThread:
     """Construct (unstarted) HeartbeatThread with outbox / recovery callbacks."""
     get_active_job_count, get_active_device_count = build_active_count_getters(
         active_jobs_lock, active_job_ids, active_device_ids
+    )
+
+    def _get_occupancy_counts() -> tuple[int, int]:
+        with active_jobs_lock:
+            return len(active_job_ids), len(active_device_ids)
+
+    def _get_local_db_active_count() -> int:
+        get_active = getattr(local_db, "get_active_jobs", None)
+        if not callable(get_active):
+            return 0
+        rows = get_active()
+        return len(rows) if isinstance(rows, (list, tuple, set)) else 0
+
+    self_heal_coordinator = SelfHealCoordinator(
+        host_id=host_id,
+        adb_path=adb_path,
+        claim_pause_gate=claim_pause_gate,
+        get_occupancy_counts=_get_occupancy_counts,
+        get_local_db_active_count=_get_local_db_active_count,
     )
 
     def _get_scheduler():
@@ -154,5 +175,6 @@ def build_heartbeat_thread(
         # ADR-0026 P2-2: apply server log_rate_limit hint to SocketIO batcher
         on_log_rate_limit=mq_producer.set_log_rate_limit,
         on_return_state=debt_consumer.receive,
+        self_heal_coordinator=self_heal_coordinator,
     )
     return heartbeat

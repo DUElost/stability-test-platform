@@ -1479,3 +1479,27 @@ tests:
             exp_annotations:
               summary: Device-return overrides exceeded 10 in 24h
               description: "过去 24 小时人工放行次数超过 10（ADR-0061 D7.2 / #3723 §3.0 第 7 条）。探针或自动清偿可能失效。"
+
+  # #2972 / ADR-0037 D9：主机 USB/ADB 自愈持久化熔断升级告警
+  - interval: 1m
+    input_series:
+      - series: 'stability_host_self_heal_fuse_open{host_id="192-0-2-88",state="hardware_suspect"}'
+        values: '1x10'
+      - series: 'stability_host_self_heal_fuse_open{host_id="192-0-2-88",state="need_human"}'
+        values: '0x10'
+      - series: 'stability_host_self_heal_fuse_open{host_id="192-0-2-89",state="need_human"}'
+        values: '0x1 1x1 0x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: StabilityHostSelfHealFuseTripped
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: StabilityHostSelfHealFuseTripped
+        exp_alerts:
+          - exp_labels:
+              host_id: 192-0-2-88
+              state: hardware_suspect
+              severity: critical
+            exp_annotations:
+              summary: Host USB/ADB self-heal fuse tripped (hardware_suspect)
+              description: "主机 192-0-2-88 的 USB/ADB 自动恢复已触发持久化熔断（state=hardware_suspect， ADR-0037 D9 / #2972），Agent 已停止继续自动尝试。请在 /hosts 页面查看该主机自愈诊断卡中的 fuse_reason 与最近标记；若为 hardware_suspect（如 probe -110 / 重试后树仍空）， 按 docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md §6.1 确认空闲后人工重启主机或检修 Hub/供电。"
