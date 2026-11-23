@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, X, ChevronRight } from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip, type PieSectorDataItem } from 'recharts';
@@ -14,6 +14,7 @@ import type {
 import { api } from '@/utils/api';
 import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
 import { InlineEmpty } from '@/components/ui/empty-state';
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { StateTabs } from '@/components/ui/state-tabs';
 import {
   ALERT_BANNER,
@@ -212,7 +213,6 @@ function PackageRankingDrawer({
   selectedPackageName: string | null;
   onSelectPackage: (pkg: string | null) => void;
 }) {
-  const drawerRef = useRef<HTMLElement>(null);
   const [drawerPage, setDrawerPage] = useState(0);
   const DRAWER_PAGE_SIZE = 20;
 
@@ -222,35 +222,27 @@ function PackageRankingDrawer({
     if (open) setDrawerPage(0);
   }
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    drawerRef.current?.focus();
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
   return (
-    <>
-      <div onClick={onClose} className={DRAWER.overlay} />
-      <aside
-        ref={drawerRef}
-        role="dialog"
-        aria-modal="true"
+    <Sheet
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+    >
+      <SheetContent
+        side="right"
+        size="sm"
+        hideCloseButton
         aria-label="包名榜完整列表"
-        tabIndex={-1}
-        className={DRAWER.panel}
       >
         <header className="flex items-center justify-between border-b px-4 py-3">
           <div className="min-w-0">
-            <p className={cn('truncate text-xs', TEXT.subtitle)}>当前范围</p>
-            <h2 className={cn('truncate text-base font-semibold', TEXT.heading)}>
+            <SheetDescription className={cn('truncate text-xs', TEXT.subtitle)}>
+              当前范围
+            </SheetDescription>
+            <SheetTitle className={cn('truncate text-base font-semibold', TEXT.heading)}>
               包名榜 · 全部 ({rankings.length})
-            </h2>
+            </SheetTitle>
           </div>
           <button type="button" onClick={onClose} className={DRAWER.closeBtn} aria-label="关闭包名榜">
             <X className="h-4 w-4" />
@@ -359,8 +351,8 @@ function PackageRankingDrawer({
             </div>
           )}
         </div>
-      </aside>
-    </>
+      </SheetContent>
+    </Sheet>
   );
 }
 
