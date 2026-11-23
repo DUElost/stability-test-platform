@@ -122,30 +122,38 @@ export default function RunReportPage() {
       <PageHeader
         title={`Job 运行报告 #${report.run.id}`}
         subtitle={`计划: ${report.task.name} (${report.task.type})`}
-        breadcrumbs={[{ label: '测试结果', path: '/results' }, { label: `Job #${report.run.id}` }]}
+        breadcrumbs={
+          planRunId != null
+            ? [
+                { label: '执行历史', path: '/execution' },
+                { label: `PlanRun #${planRunId}`, path: `/execution/plan-runs/${planRunId}` },
+                { label: `Job #${report.run.id}` },
+              ]
+            : [{ label: '测试结果', path: '/results' }, { label: `Job #${report.run.id}` }]
+        }
         action={
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => navigate(-1)} aria-label="返回">
               <ArrowLeft className="h-4 w-4" />
             </Button>
-            <a
-              href={`/api/v1/runs/${jobId}/report/export?format=markdown`}
-              download
-            >
-              <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" asChild>
+              <a
+                href={`/api/v1/runs/${jobId}/report/export?format=markdown`}
+                download
+              >
                 <Download className="mr-2 h-4 w-4" />
                 Markdown
-              </Button>
-            </a>
-            <a
-              href={`/api/v1/runs/${jobId}/report/export?format=json`}
-              download
-            >
-              <Button variant="outline" size="sm">
+              </a>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a
+                href={`/api/v1/runs/${jobId}/report/export?format=json`}
+                download
+              >
                 <Download className="mr-2 h-4 w-4" />
                 JSON
-              </Button>
-            </a>
+              </a>
+            </Button>
           </div>
         }
       />

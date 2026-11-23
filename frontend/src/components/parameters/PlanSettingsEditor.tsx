@@ -1,4 +1,5 @@
 import { useId, useMemo, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import type {
   ParameterItem,
   ParameterProjection,
@@ -34,6 +35,10 @@ export interface PlanSettingsEditorProps {
   unavailable?: boolean;
   isDraft?: boolean;
   readOnly?: boolean;
+  /** 默认折叠高级设置区（PlanCanvas 场景启用，让 Init/Patrol/Teardown 步骤首屏直达） */
+  defaultCollapsed?: boolean;
+  /** 隐藏巡检间隔与巡检时长（已在 PlanHeader 展示，避免同屏重复输入） */
+  hideTimingInputs?: boolean;
   /** 路径分类被清空时的提示（按分类回落代码默认）。 */
   pathFallbackHints?: Partial<Record<WatcherPathCategory, boolean>>;
 }
@@ -177,8 +182,11 @@ export function PlanSettingsEditor({
   unavailable,
   isDraft,
   readOnly,
+  defaultCollapsed = false,
+  hideTimingInputs = false,
   pathFallbackHints,
 }: PlanSettingsEditorProps) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const editable = watcherEditableSlice(values.watcherPolicy);
 
   const patch = (partial: Partial<PlanSettingsValues>) => onChange({ ...values, ...partial });
@@ -255,42 +263,72 @@ export function PlanSettingsEditor({
     };
   }, [projection]);
 
+  const configuredSummary = [
+    values.barrierTimeoutSeconds != null ? `同步预算 ${values.barrierTimeoutSeconds}s` : null,
+    values.barrierMaxWaitSeconds != null ? `硬顶 ${values.barrierMaxWaitSeconds}s` : null,
+    values.autoArchiveIntervalSeconds != null ? `自动归档 ${values.autoArchiveIntervalSeconds}s` : null,
+    values.watcherPolicy && Object.keys(values.watcherPolicy).length > 0 ? '已配置 Watcher' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return (
     <section
       className="rounded-md border bg-card"
       aria-label="计划设置编辑区"
       data-testid="plan-settings-editor"
     >
-      <div className="px-3 py-2 text-xs font-medium border-b border-border">
-        计划设置 · {isDraft ? 'L1草稿，未保存' : 'L1 已保存计划基线'}
-        {unavailable ? ' · 投影说明暂不可用' : ''}
+      <div className={cn('flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium', !collapsed && 'border-b border-border')}>
+        <div className="min-w-0 truncate">
+          计划设置 · {isDraft ? 'L1草稿，未保存' : 'L1 已保存计划基线'}
+          {unavailable ? ' · 投影说明暂不可用' : ''}
+          {collapsed && configuredSummary ? (
+            <span className={cn('ml-2 font-normal', TEXT.subtitle)}>{configuredSummary}</span>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          data-testid="plan-settings-toggle"
+          onClick={() => setCollapsed((prev) => !prev)}
+          className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <span>{collapsed ? '展开高级设置' : '收起'}</span>
+          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', collapsed && '-rotate-90')} />
+        </button>
       </div>
 
-      <div className="p-3 grid gap-3 sm:grid-cols-2">
-        <NumberSettingField
-          testId="plan-setting-patrol-interval"
-          label={patrolMeta?.label ?? '巡检间隔'}
-          meaning={patrolMeta?.meaning}
-          fallback={patrolMeta?.fallback_chain ?? undefined}
-          stateItem={patrolMeta}
-          unit={patrolMeta?.unit ?? '秒'}
-          value={values.patrolIntervalSeconds}
-          placeholder="未设则无巡检"
-          readOnly={readOnly}
-          onCommit={(next) => patch({ patrolIntervalSeconds: next })}
-        />
-        <NumberSettingField
-          testId="plan-setting-timeout"
-          label={timeoutMeta?.label ?? '巡检时长'}
-          meaning={timeoutMeta?.meaning}
-          fallback={timeoutMeta?.fallback_chain ?? undefined}
-          stateItem={timeoutMeta}
-          unit={timeoutMeta?.unit ?? '秒'}
-          value={values.timeoutSeconds}
-          placeholder="未设则不限"
-          readOnly={readOnly}
-          onCommit={(next) => patch({ timeoutSeconds: next })}
-        />
+      {!collapsed && (
+        <>
+          <div className="p-3 grid gap-3 sm:grid-cols-2">
+            {!hideTimingInputs && (
+              <>
+                <NumberSettingField
+                  testId="plan-setting-patrol-interval"
+                  label={patrolMeta?.label ?? '巡检间隔'}
+                  meaning={patrolMeta?.meaning}
+                  fallback={patrolMeta?.fallback_chain ?? undefined}
+                  stateItem={patrolMeta}
+                  unit={patrolMeta?.unit ?? '秒'}
+                  value={values.patrolIntervalSeconds}
+                  placeholder="未设则无巡检"
+                  readOnly={readOnly}
+                  onCommit={(next) => patch({ patrolIntervalSeconds: next })}
+                />
+                <NumberSettingField
+                  testId="plan-setting-timeout"
+                  label={timeoutMeta?.label ?? '巡检时长'}
+                  meaning={timeoutMeta?.meaning}
+                  fallback={timeoutMeta?.fallback_chain ?? undefined}
+                  stateItem={timeoutMeta}
+                  unit={timeoutMeta?.unit ?? '秒'}
+                  value={values.timeoutSeconds}
+                  placeholder="未设则不限"
+                  readOnly={readOnly}
+                  onCommit={(next) => patch({ timeoutSeconds: next })}
+                />
+              </>
+            )}
         <NumberSettingField
           testId="plan-setting-barrier-timeout"
           label={barrierMeta?.label ?? '初始化同步等待预算'}
@@ -570,6 +608,8 @@ export function PlanSettingsEditor({
           </div>
         )}
       </div>
+        </>
+      )}
     </section>
   );
 }

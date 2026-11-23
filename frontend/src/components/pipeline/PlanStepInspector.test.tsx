@@ -199,7 +199,8 @@ describe('PlanStepInspector', () => {
           ]}
         />,
       );
-      const options = within(fieldOf('脚本名'))
+      fireEvent.click(within(fieldOf('脚本名')).getByRole('combobox'));
+      const options = within(screen.getByRole('listbox', { name: '脚本名' }))
         .getAllByRole('option')
         .map((o) => o.textContent);
       expect(options).toEqual(['— 选择脚本 —', 'install_apk', 'reboot_device']);
@@ -232,9 +233,8 @@ describe('PlanStepInspector', () => {
         <Harness step={makeStep({ params: { package: 'com.a' } })} onUpdateStep={onUpdateStep} />,
       );
 
-      fireEvent.change(within(fieldOf('脚本名')).getByRole('combobox'), {
-        target: { value: 'reboot_device' },
-      });
+      fireEvent.click(within(fieldOf('脚本名')).getByRole('combobox'));
+      fireEvent.click(screen.getByRole('option', { name: 'reboot_device' }));
 
       expect(lastStep(onUpdateStep)).toMatchObject({
         action: 'script:reboot_device',
@@ -271,9 +271,8 @@ describe('PlanStepInspector', () => {
         />,
       );
 
-      fireEvent.change(within(fieldOf('脚本名')).getByRole('combobox'), {
-        target: { value: 'legacy' },
-      });
+      fireEvent.click(within(fieldOf('脚本名')).getByRole('combobox'));
+      fireEvent.click(screen.getByRole('option', { name: 'legacy (未匹配)' }));
 
       expect(lastStep(onUpdateStep).version).toBe('');
     });

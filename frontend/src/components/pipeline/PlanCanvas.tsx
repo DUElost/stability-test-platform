@@ -224,6 +224,8 @@ export default function PlanCanvas({
             unavailable={projectionUnavailable}
             isDraft={projectionIsDraft}
             readOnly={readOnly}
+            defaultCollapsed
+            hideTimingInputs
           />
         ) : null}
         {(['init', 'patrol', 'teardown'] as PipelinePhase[]).map(phase => {

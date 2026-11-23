@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -21,6 +22,7 @@ import {
   YAxis,
 } from 'recharts';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { FilterSearchInput } from '@/components/ui/filter-bar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -594,7 +596,23 @@ function AgentStatusSection({
   agents: FileServerOverview['agents'];
   disks: FileServerOverview['device_log_disks'];
 }) {
-  const diskByHost = new Map(disks.items.map((item) => [item.host_id, item]));
+  const [hostSearch, setHostSearch] = useState('');
+  const diskByHost = useMemo(
+    () => new Map(disks.items.map((item) => [item.host_id, item])),
+    [disks.items],
+  );
+  const filteredAgents = useMemo(() => {
+    const q = hostSearch.trim().toLowerCase();
+    if (!q) return agents.items;
+    return agents.items.filter((host) => {
+      const disk = diskByHost.get(host.host_id);
+      return (
+        host.host_id.toLowerCase().includes(q) ||
+        (host.ip ?? '').toLowerCase().includes(q) ||
+        (disk?.path ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [agents.items, diskByHost, hostSearch]);
   const warningCount = disks.warning + disks.critical;
   return (
     <section className="rounded-xl border" aria-labelledby="agent-status-title">
@@ -607,6 +625,15 @@ function AgentStatusSection({
             {` · 告警 ${warningCount}`}
           </p>
         </div>
+        {agents.items.length > 0 && (
+          <FilterSearchInput
+            value={hostSearch}
+            onChange={setHostSearch}
+            placeholder="过滤主机 IP / ID / 路径..."
+            ariaLabel="过滤 Agent 主机"
+            className="w-56"
+          />
+        )}
       </div>
       <Table>
         <TableHeader>
@@ -621,13 +648,23 @@ function AgentStatusSection({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {agents.items.length === 0 ? (
-            <TableEmptyRow colSpan={7}>暂无在线 host</TableEmptyRow>
-          ) : agents.items.map((host) => {
+          {filteredAgents.length === 0 ? (
+            <TableEmptyRow colSpan={7}>
+              {agents.items.length === 0 ? '暂无在线 host' : '无匹配的主机'}
+            </TableEmptyRow>
+          ) : filteredAgents.map((host) => {
             const disk = diskByHost.get(host.host_id);
+            const hostLabel = host.ip ?? host.host_id;
             return (
               <TableRow key={host.host_id}>
-                <TableCell className="font-mono text-xs">{host.ip ?? host.host_id}</TableCell>
+                <TableCell className="font-mono text-xs">
+                  <Link
+                    to={`/hosts?q=${encodeURIComponent(hostLabel)}`}
+                    className="text-primary hover:underline"
+                  >
+                    {hostLabel}
+                  </Link>
+                </TableCell>
                 <TableCell><Badge variant={host.status === 'ONLINE' ? 'success' : 'secondary'}>{host.status}</Badge></TableCell>
                 <TableCell>
                   {host.mounted === true ? (
