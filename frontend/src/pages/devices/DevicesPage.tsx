@@ -60,6 +60,8 @@ export default function DevicesPage() {
   const searchQuery = getString('q', '');
   const taggedOnly = getBool('tagged');
   const currentPage = getPositiveInt('page', 1);
+  const rawDrawerParam = getString('drawer');
+  const drawerDeviceId = rawDrawerParam ? getPositiveInt('drawer', 0) || null : null;
   const [retireDialog, setRetireDialog] = useState<{ open: boolean; mode: DeviceRetireMode }>(
     { open: false, mode: 'retire' },
   );
@@ -530,7 +532,7 @@ export default function DevicesPage() {
   }
 
   return (
-    <PageContainer width="wide" className="py-4">
+    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
       <PageHeader
         title="物理设备"
         subtitle="管理和监控测试设备 · 点击设备行查看详情，勾选后可批量处理"
@@ -609,6 +611,10 @@ export default function DevicesPage() {
           }
           onNavigateToHost={(hostName) =>
             navigate(`/hosts?q=${encodeURIComponent(hostName)}`)
+          }
+          drawerDeviceId={drawerDeviceId}
+          onDrawerDeviceIdChange={(nextId) =>
+            updateParams({ drawer: nextId ?? undefined })
           }
         />
       </div>

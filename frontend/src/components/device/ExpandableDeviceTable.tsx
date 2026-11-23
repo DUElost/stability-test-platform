@@ -1,8 +1,10 @@
 import { deviceProductText } from '@/utils/deviceProduct';
 import type { DeviceUsbPresence } from '@/utils/api/types';
-import { useState, useMemo, useEffect, useRef, Fragment, type ReactNode } from 'react';
+import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '@/lib/utils';
 import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
+import { ClickableRow } from '@/components/ui/clickable-row';
 import {
   FilterSearchInput,
   FilterWorkbench,
@@ -22,27 +24,25 @@ import {
 import { Progress } from '@/components/ui/progress';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
-  ChevronDown,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ChevronLeft,
   ChevronRight,
   Smartphone,
   Server,
-  Battery,
-  Thermometer,
   Wifi,
   WifiOff,
   AlertTriangle,
   CheckCircle2,
   Zap,
   Tag,
-  Pencil,
-  HardDrive,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { ALERT_BOX, resourceUsageBgClass, resourceUsageTextClass } from '@/design-system/tokens';
 import { formatBytes, formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { DeviceReturnPanel } from './DeviceReturnPanel';
+import { DeviceDetailDrawer } from './DeviceDetailDrawer';
 import type { ReturnStateEntry } from './deviceReturn';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
@@ -169,7 +169,20 @@ interface ExpandableDeviceTableProps {
   onClearQuickView?: () => void;
   onResetAllFilters?: () => void;
   onNavigateToHost?: (hostName: string) => void;
+  /** 可选受控右侧详情抽屉设备 ID（由 DevicesPage 同步至 URL ?drawer=） */
+  drawerDeviceId?: number | null;
+  onDrawerDeviceIdChange?: (deviceId: number | null) => void;
 }
+
+type SortKey = 'serial' | 'status' | 'battery_level' | 'temperature' | 'host_name' | 'last_seen';
+type SortDir = 'asc' | 'desc';
+
+const STATUS_SORT_RANK: Record<DeviceStatus, number> = {
+  error: 0,
+  offline: 1,
+  testing: 2,
+  idle: 3,
+};
 
 function matchesStatusFilter(status: DeviceStatus, filter: string): boolean {
   if (filter === 'all') return true;
@@ -216,8 +229,11 @@ export function ExpandableDeviceTable({
   onClearQuickView,
   onResetAllFilters,
   onNavigateToHost,
+  drawerDeviceId: controlledDrawerDeviceId,
+  onDrawerDeviceIdChange,
 }: ExpandableDeviceTableProps) {
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const [localDrawerDeviceId, setLocalDrawerDeviceId] = useState<number | null>(null);
+  const [sortConfig, setSortConfig] = useState<{ key: SortKey; dir: SortDir } | null>(null);
   const [localStatusFilter, setLocalStatusFilter] = useState<string>('all');
   const [localModelFilter, setLocalModelFilter] = useState('all');
   const [localProductFilter, setLocalProductFilter] = useState('all');
@@ -226,6 +242,10 @@ export function ExpandableDeviceTable({
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [localTaggedOnly, setLocalTaggedOnly] = useState(false);
   const [localCurrentPage, setLocalCurrentPage] = useState(1);
+
+  const drawerDeviceId =
+    controlledDrawerDeviceId !== undefined ? controlledDrawerDeviceId : localDrawerDeviceId;
+  const setDrawerDeviceId = onDrawerDeviceIdChange ?? setLocalDrawerDeviceId;
 
   const statusFilter = controlledStatusFilter ?? localStatusFilter;
   const setStatusFilter = onStatusFilterChange ?? setLocalStatusFilter;
@@ -343,14 +363,12 @@ export function ExpandableDeviceTable({
     if (versionFilter !== effectiveVersionFilter) setVersionFilter('all');
   }, [versionFilter, effectiveVersionFilter, setVersionFilter]);
 
-  const toggleRow = (id: number) => {
-    const newExpanded = new Set(expandedRows);
-    if (newExpanded.has(id)) {
-      newExpanded.delete(id);
-    } else {
-      newExpanded.add(id);
-    }
-    setExpandedRows(newExpanded);
+  const toggleSort = (key: SortKey) => {
+    setSortConfig((prev) => {
+      if (!prev || prev.key !== key) return { key, dir: key === 'last_seen' ? 'desc' : 'asc' };
+      if (prev.dir === 'asc') return { key, dir: 'desc' };
+      return null;
+    });
   };
 
   const filteredDevices = useMemo(() => {
@@ -385,6 +403,47 @@ export function ExpandableDeviceTable({
     debouncedSearch,
   ]);
 
+  const sortedDevices = useMemo(() => {
+    if (!sortConfig) return filteredDevices;
+    const { key, dir } = sortConfig;
+    const factor = dir === 'asc' ? 1 : -1;
+    return [...filteredDevices].sort((a, b) => {
+      switch (key) {
+        case 'serial':
+          return a.serial.localeCompare(b.serial) * factor;
+        case 'status':
+          return (STATUS_SORT_RANK[a.status] - STATUS_SORT_RANK[b.status]) * factor;
+        case 'battery_level': {
+          const av = a.battery_level ?? -1;
+          const bv = b.battery_level ?? -1;
+          return (av - bv) * factor;
+        }
+        case 'temperature': {
+          const av = a.temperature ?? -999;
+          const bv = b.temperature ?? -999;
+          return (av - bv) * factor;
+        }
+        case 'host_name':
+          return (a.host_name ?? '').localeCompare(b.host_name ?? '', 'zh-CN') * factor;
+        case 'last_seen': {
+          const at = a.last_seen ? Date.parse(a.last_seen) || 0 : 0;
+          const bt = b.last_seen ? Date.parse(b.last_seen) || 0 : 0;
+          return (at - bt) * factor;
+        }
+      }
+    });
+  }, [filteredDevices, sortConfig]);
+
+  const activeDrawerIndex = useMemo(
+    () => (drawerDeviceId == null ? -1 : sortedDevices.findIndex((d) => d.id === drawerDeviceId)),
+    [drawerDeviceId, sortedDevices],
+  );
+  const activeDrawerDevice = useMemo(() => {
+    if (drawerDeviceId == null) return null;
+    if (activeDrawerIndex >= 0) return sortedDevices[activeDrawerIndex];
+    return devices.find((d) => d.id === drawerDeviceId) ?? null;
+  }, [activeDrawerIndex, devices, drawerDeviceId, sortedDevices]);
+
   // Reset to page 1 when filter or search changes (in effect, never during render)
   const pageResetKey = JSON.stringify([
     statusFilter,
@@ -403,17 +462,54 @@ export function ExpandableDeviceTable({
     }
   }, [pageResetKey, currentPage, setCurrentPage]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredDevices.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(sortedDevices.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   useEffect(() => {
     if (safeCurrentPage !== currentPage) {
       setCurrentPage(safeCurrentPage);
     }
   }, [safeCurrentPage, currentPage, setCurrentPage]);
-  const paginatedDevices = filteredDevices.slice(
-    (safeCurrentPage - 1) * pageSize,
-    safeCurrentPage * pageSize
+  const paginatedDevices = useMemo(
+    () => sortedDevices.slice((safeCurrentPage - 1) * pageSize, safeCurrentPage * pageSize),
+    [sortedDevices, safeCurrentPage, pageSize],
   );
+
+  // D5 Phase 1 虚拟化：在固定高度滚动容器内按需渲染可见行，降低 DOM 节点数
+  const rowVirtualizer = useVirtualizer({
+    count: paginatedDevices.length,
+    getScrollElement: () =>
+      tableContainerRef.current?.querySelector<HTMLDivElement>('[data-slot="table-scroll-container"]') ??
+      null,
+    estimateSize: () => 56,
+    overscan: 10,
+    initialRect: { width: 1200, height: 640 },
+    observeElementRect: (instance, cb) => {
+      const el = instance.scrollElement;
+      if (!el) return;
+      const measure = () => {
+        const rect = el.getBoundingClientRect();
+        if (rect.height > 0) {
+          cb({ width: rect.width, height: rect.height });
+        } else {
+          cb({ width: 1200, height: 640 });
+        }
+      };
+      measure();
+      if (typeof ResizeObserver === 'undefined') return;
+      const ro = new ResizeObserver(measure);
+      ro.observe(el);
+      return () => ro.disconnect();
+    },
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const virtualPaddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const virtualPaddingBottom =
+    virtualRows.length > 0
+      ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+      : 0;
+  const visibleColumnCount =
+    (selectable ? 1 : 0) + 8 + (hasDiskData ? 1 : 0) + (hasNetworkData ? 1 : 0);
+
   const pageDeviceIds = useMemo(() => paginatedDevices.map((device) => device.id), [paginatedDevices]);
   const allPageSelected = pageDeviceIds.length > 0 && pageDeviceIds.every((id) => selectedIds?.has(id));
   const somePageSelected = pageDeviceIds.some((id) => selectedIds?.has(id));
@@ -464,7 +560,7 @@ export function ExpandableDeviceTable({
   };
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-2">
       {/* #3131：列表不完整时必须说出来——下方状态统计与搜索/筛选都只作用于已加载
           部分，静默截断会让「搜不到」被读成「不存在」 */}
       {truncated && (
@@ -805,11 +901,11 @@ export function ExpandableDeviceTable({
         );
       })()}
 
-      {/* Table */}
+      {/* Table（固定视口滚容器 + sticky top-0 表头 + 虚拟化数据行 + ClickableRow） */}
       <div ref={tableContainerRef} className="rounded-xl border border-border bg-card">
-        <Table>
+        <Table containerClassName="max-h-[calc(100vh-225px)] min-h-[280px]">
           <TableHeader>
-            <TableRow className="sticky top-0 z-20 bg-muted/95 hover:bg-muted/95">
+            <TableRow className="sticky top-0 z-20 bg-muted/95 hover:bg-muted/95 [&>th]:h-9">
               {selectable && (
                 <TableHead className="sticky left-0 z-30 w-9 min-w-[36px] bg-muted px-2.5 py-2">
                   <input
@@ -824,114 +920,271 @@ export function ExpandableDeviceTable({
                 </TableHead>
               )}
               <TableHead
+                aria-sort={
+                  sortConfig?.key === 'serial'
+                    ? sortConfig.dir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                }
                 className={cn(
-                  'sticky z-30 w-8 min-w-[32px] bg-muted px-2',
+                  'sticky z-30 min-w-[160px] max-w-[240px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
                   selectable ? 'left-9' : 'left-0',
                 )}
-              ></TableHead>
-              <TableHead
-                className={cn(
-                  'sticky z-30 min-w-[140px] max-w-[220px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
-                  selectable ? 'left-[68px]' : 'left-8',
-                )}
               >
-                设备
+                <button
+                  type="button"
+                  onClick={() => toggleSort('serial')}
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                >
+                  <span>设备</span>
+                  {sortConfig?.key === 'serial' ? (
+                    sortConfig.dir === 'asc' ? (
+                      <ArrowUp className="h-3 w-3 text-primary" />
+                    ) : (
+                      <ArrowDown className="h-3 w-3 text-primary" />
+                    )
+                  ) : (
+                    <ArrowUpDown className="h-3 w-3 opacity-40" />
+                  )}
+                </button>
               </TableHead>
               <TableHead className="min-w-[64px] font-medium">版本</TableHead>
-              <TableHead className="min-w-[112px] font-medium">状态</TableHead>
-              <TableHead className="min-w-[76px] font-medium">电量</TableHead>
-              <TableHead className="min-w-[60px] font-medium">温度</TableHead>
+              <TableHead
+                aria-sort={
+                  sortConfig?.key === 'status'
+                    ? sortConfig.dir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                }
+                className="min-w-[112px] font-medium"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleSort('status')}
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                >
+                  <span>状态</span>
+                  {sortConfig?.key === 'status' ? (
+                    sortConfig.dir === 'asc' ? (
+                      <ArrowUp className="h-3 w-3 text-primary" />
+                    ) : (
+                      <ArrowDown className="h-3 w-3 text-primary" />
+                    )
+                  ) : (
+                    <ArrowUpDown className="h-3 w-3 opacity-40" />
+                  )}
+                </button>
+              </TableHead>
+              <TableHead
+                aria-sort={
+                  sortConfig?.key === 'battery_level'
+                    ? sortConfig.dir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                }
+                className="min-w-[76px] font-medium"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleSort('battery_level')}
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                >
+                  <span>电量</span>
+                  {sortConfig?.key === 'battery_level' ? (
+                    sortConfig.dir === 'asc' ? (
+                      <ArrowUp className="h-3 w-3 text-primary" />
+                    ) : (
+                      <ArrowDown className="h-3 w-3 text-primary" />
+                    )
+                  ) : (
+                    <ArrowUpDown className="h-3 w-3 opacity-40" />
+                  )}
+                </button>
+              </TableHead>
+              <TableHead
+                aria-sort={
+                  sortConfig?.key === 'temperature'
+                    ? sortConfig.dir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                }
+                className="min-w-[60px] font-medium"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleSort('temperature')}
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                >
+                  <span>温度</span>
+                  {sortConfig?.key === 'temperature' ? (
+                    sortConfig.dir === 'asc' ? (
+                      <ArrowUp className="h-3 w-3 text-primary" />
+                    ) : (
+                      <ArrowDown className="h-3 w-3 text-primary" />
+                    )
+                  ) : (
+                    <ArrowUpDown className="h-3 w-3 opacity-40" />
+                  )}
+                </button>
+              </TableHead>
               {hasDiskData && <TableHead className="min-w-[88px] font-medium">存储</TableHead>}
               {hasNetworkData && <TableHead className="min-w-[60px] font-medium">网络</TableHead>}
               <TableHead className="min-w-[84px] font-medium">标签</TableHead>
-              <TableHead className="min-w-[88px] font-medium">所属主机</TableHead>
-              <TableHead className="min-w-[96px] font-medium text-right">最后活跃</TableHead>
+              <TableHead
+                aria-sort={
+                  sortConfig?.key === 'host_name'
+                    ? sortConfig.dir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                }
+                className="min-w-[88px] font-medium"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleSort('host_name')}
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                >
+                  <span>所属主机</span>
+                  {sortConfig?.key === 'host_name' ? (
+                    sortConfig.dir === 'asc' ? (
+                      <ArrowUp className="h-3 w-3 text-primary" />
+                    ) : (
+                      <ArrowDown className="h-3 w-3 text-primary" />
+                    )
+                  ) : (
+                    <ArrowUpDown className="h-3 w-3 opacity-40" />
+                  )}
+                </button>
+              </TableHead>
+              <TableHead
+                aria-sort={
+                  sortConfig?.key === 'last_seen'
+                    ? sortConfig.dir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                }
+                className="min-w-[96px] font-medium text-right"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleSort('last_seen')}
+                  className="ml-auto inline-flex items-center gap-1 hover:text-foreground"
+                >
+                  <span>最后活跃</span>
+                  {sortConfig?.key === 'last_seen' ? (
+                    sortConfig.dir === 'asc' ? (
+                      <ArrowUp className="h-3 w-3 text-primary" />
+                    ) : (
+                      <ArrowDown className="h-3 w-3 text-primary" />
+                    )
+                  ) : (
+                    <ArrowUpDown className="h-3 w-3 opacity-40" />
+                  )}
+                </button>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {paginatedDevices.map((device) => {
-              const isExpanded = expandedRows.has(device.id);
+            {virtualPaddingTop > 0 && (
+              <TableRow aria-hidden="true" className="border-0 hover:bg-transparent">
+                <TableCell
+                  colSpan={visibleColumnCount}
+                  className="border-0 p-0"
+                  style={{ height: virtualPaddingTop }}
+                />
+              </TableRow>
+            )}
+            {virtualRows.map((virtualRow) => {
+              const device = paginatedDevices[virtualRow.index];
+              if (!device) return null;
+              const isActive = drawerDeviceId === device.id;
+              const isSelected = Boolean(selectedIds?.has(device.id));
               const disk = diskSummary(device);
+              const stickyCellBg = isSelected
+                ? 'bg-primary/5 group-hover:bg-primary/10'
+                : isActive
+                  ? 'bg-accent/60'
+                  : 'bg-card group-hover:bg-muted/50';
 
               return (
-                <Fragment key={device.id}>
-                  <TableRow
-                    key={device.id}
-                    className={cn(
-                      'cursor-pointer hover:bg-muted/50 transition-colors',
-                      isExpanded && 'bg-muted/50',
-                      selectedIds?.has(device.id) && 'bg-primary/5 hover:bg-primary/10',
-                    )}
-                    data-state={selectedIds?.has(device.id) ? 'selected' : undefined}
-                    onClick={() => toggleRow(device.id)}
-                  >
-                    {selectable && (
-                      <TableCell className="sticky left-0 z-10 w-9 min-w-[36px] bg-card px-2.5 py-1.5">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds?.has(device.id) ?? false}
-                          onClick={(event) => toggleDeviceSelection(device.id, event)}
-                          onChange={() => {}}
-                          aria-label={`选择设备 ${device.serial}`}
-                          className="h-4 w-4 rounded border-border accent-primary"
-                        />
-                      </TableCell>
-                    )}
+                <ClickableRow
+                  key={device.id}
+                  role="button"
+                  aria-label={`查看设备 ${device.serial} 详情`}
+                  className={cn(
+                    'group transition-colors',
+                    isActive && 'bg-accent/60 hover:bg-accent/70',
+                    isSelected && 'bg-primary/5 hover:bg-primary/10',
+                  )}
+                  data-state={isSelected ? 'selected' : undefined}
+                  onClick={() => setDrawerDeviceId(device.id)}
+                >
+                  {selectable && (
                     <TableCell
                       className={cn(
-                        'sticky z-10 w-8 min-w-[32px] bg-card px-2 py-1.5',
-                        selectable ? 'left-9' : 'left-0',
+                        'sticky left-0 z-10 w-9 min-w-[36px] px-2.5 py-1.5 transition-colors',
+                        stickyCellBg,
                       )}
                     >
-                      <ChevronDown
-                        className={cn(
-                          'w-4 h-4 text-muted-foreground transition-transform',
-                          !isExpanded && '-rotate-90'
-                        )}
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onClick={(event) => toggleDeviceSelection(device.id, event)}
+                        onChange={() => {}}
+                        aria-label={`选择设备 ${device.serial}`}
+                        className="h-4 w-4 rounded border-border accent-primary"
                       />
                     </TableCell>
-                    <TableCell
-                      className={cn(
-                        'sticky z-10 min-w-[140px] max-w-[220px] bg-card px-3 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
-                        selectable ? 'left-[68px]' : 'left-8',
-                      )}
-                    >
-                      <div className="truncate font-mono text-sm text-foreground" title={device.serial}>
-                        {device.serial}
-                      </div>
-                      <div className="mt-0.5 flex items-center gap-1.5">
-                        <span className="truncate text-xs text-muted-foreground" title={device.model ?? ''}>
-                          {device.model}
+                  )}
+                  <TableCell
+                    className={cn(
+                      'sticky z-10 min-w-[160px] max-w-[240px] px-3 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] transition-colors',
+                      stickyCellBg,
+                      selectable ? 'left-9' : 'left-0',
+                    )}
+                  >
+                    <div className="truncate font-mono text-sm text-foreground" title={device.serial}>
+                      {device.serial}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-1.5">
+                      <span className="truncate text-xs text-muted-foreground" title={device.model ?? ''}>
+                        {device.model}
+                      </span>
+                      {device.adb_state === 'unauthorized' ? (
+                        <span
+                          className="shrink-0 rounded-full bg-destructive/10 px-1.5 py-0.5 text-[11px] text-destructive-text"
+                          title="USB 调试未授权：请在设备上允许授权，否则无法采集型号/平台"
+                        >
+                          未授权
                         </span>
-                        {device.adb_state === 'unauthorized' ? (
-                          <span
-                            className="shrink-0 rounded-full bg-destructive/10 px-1.5 py-0.5 text-[11px] text-destructive"
-                            title="USB 调试未授权：请在设备上允许授权，否则无法采集型号/平台"
-                          >
-                            未授权
-                          </span>
-                        ) : null}
-                        {device.project_key ? (
-                          <span
-                            className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
-                            title={`归属项目 ${device.project_key}`}
-                          >
-                            {device.project_key}
-                          </span>
-                        ) : null}
-                        {device.attribution_source === 'mapped' ? null : (
-                          <span
-                            className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
-                            title="型号未映射：在 /projects 添加型号成员"
-                          >
-                            未映射
-                          </span>
-                        )}
-                      </div>
-                      <div className="max-w-xs truncate font-mono text-xs text-muted-foreground" title={deviceProductText(device.model, device.product)}>
-                        Product: {deviceProductText(device.model, device.product)}
-                      </div>
-                    </TableCell>
+                      ) : null}
+                      {device.project_key ? (
+                        <span
+                          className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                          title={`归属项目 ${device.project_key}`}
+                        >
+                          {device.project_key}
+                        </span>
+                      ) : null}
+                      {device.attribution_source === 'mapped' ? null : (
+                        <span
+                          className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                          title="型号未映射：在 /projects 添加型号成员"
+                        >
+                          未映射
+                        </span>
+                      )}
+                    </div>
+                    <div className="max-w-xs truncate font-mono text-xs text-muted-foreground" title={deviceProductText(device.model, device.product)}>
+                      Product: {deviceProductText(device.model, device.product)}
+                    </div>
+                  </TableCell>
                     <TableCell className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
                       {device.build_display_id || '-'}
                     </TableCell>
@@ -1097,184 +1350,18 @@ export function ExpandableDeviceTable({
                         ? formatDateTimeFull(device.last_seen)
                         : '-'}
                     </TableCell>
-                  </TableRow>
-
-                  {/* Expanded Details */}
-                  {isExpanded && (
-                    <TableRow className="bg-muted/40 hover:bg-muted/40">
-                      <TableCell colSpan={selectable ? 12 : 11} className="p-4">
-                        <div className="mb-3">
-                          <DeviceReturnPanel
-                            deviceId={device.id}
-                            returnState={device.return_state}
-                            isAdmin={isAdmin}
-                          />
-                        </div>
-                        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-3 xl:grid-cols-6">
-                          {/* Device Info */}
-                          <div className="bg-card rounded-lg border border-border p-3">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Smartphone className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm font-medium text-foreground">设备信息</span>
-                            </div>
-                            <div className="space-y-1 text-xs">
-                              <div className="flex justify-between">
-                                <span className="text-muted-foreground">设备ID</span>
-                                <span className="font-mono text-foreground">{device.id}</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-muted-foreground">序列号</span>
-                                <span className="font-mono text-foreground">{device.serial}</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-muted-foreground">Product</span>
-                                <span className="max-w-[65%] break-all text-right font-mono text-foreground">{deviceProductText(device.model, device.product)}</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-muted-foreground">型号</span>
-                                <span className="text-foreground">{device.model}</span>
-                              </div>
-                              <div className="flex justify-between gap-2">
-                                <span className="text-muted-foreground">版本</span>
-                                <span className="max-w-[65%] truncate font-mono text-foreground" title={device.build_display_id ?? undefined}>
-                                  {device.build_display_id || '—'}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="flex items-center gap-1 text-muted-foreground">
-                                  <Tag className="h-3 w-3" />标签
-                                </span>
-                                {onEditDeviceTags ? (
-                                  <button
-                                    type="button"
-                                    data-testid={`device-detail-edit-tags-${device.id}`}
-                                    onClick={() => onEditDeviceTags(device)}
-                                    className="inline-flex max-w-[65%] items-center gap-1 truncate rounded px-1 py-0.5 text-right text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                    title={device.tags?.length ? `编辑标签：${device.tags.join(', ')}` : '点击添加标签'}
-                                  >
-                                    <span className={cn('truncate', !device.tags?.length && 'text-muted-foreground')}>
-                                      {device.tags?.length ? device.tags.join(', ') : '点击添加标签'}
-                                    </span>
-                                    <Pencil className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                  </button>
-                                ) : (
-                                  <span
-                                    className="max-w-[65%] truncate text-right text-foreground"
-                                    title={device.tags?.join(', ') || undefined}
-                                  >
-                                    {device.tags?.length ? device.tags.join(', ') : '—'}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Battery */}
-                          <div className="bg-card rounded-lg border border-border p-3">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Battery className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm font-medium text-foreground">电量</span>
-                            </div>
-                            <div className="space-y-2">
-                              <div className="flex justify-between text-xs mb-1">
-                                <span className="text-muted-foreground">当前电量</span>
-                                <span className={cn(
-                                  'font-mono font-medium',
-                                  resourceUsageTextClass(100 - (device.battery_level ?? 0)),
-                                )}>
-                                  {device.battery_level ?? 0}%
-                                </span>
-                              </div>
-                              <Progress
-                                value={device.battery_level ?? 0}
-                                className="h-2"
-                                indicatorClassName={resourceUsageBgClass(100 - (device.battery_level ?? 0))}
-                              />
-                            </div>
-                          </div>
-
-                          {/* Temperature */}
-                          <div className="bg-card rounded-lg border border-border p-3">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Thermometer className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm font-medium text-foreground">温度</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className={cn(
-                                'text-2xl font-semibold font-mono',
-                                device.temperature != null ? temperatureTextClass(device.temperature) : 'text-foreground'
-                              )}>
-                                {device.temperature ?? '-'}
-                              </span>
-                              {device.temperature != null && <span className="text-sm text-muted-foreground">°C</span>}
-                            </div>
-                          </div>
-
-                          {/* Storage（/data 分区，心跳 df 上报） */}
-                          <div className="bg-card rounded-lg border border-border p-3">
-                            <div className="flex items-center gap-2 mb-2">
-                              <HardDrive className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm font-medium text-foreground">存储空间</span>
-                            </div>
-                            {disk ? (
-                              <div className="space-y-2">
-                                <div className="flex justify-between text-xs mb-1">
-                                  <span className="text-muted-foreground">已用 {formatBytes(disk.used)}</span>
-                                  <span className={cn('font-mono font-medium', resourceUsageTextClass(disk.pct))}>
-                                    {disk.pct.toFixed(0)}%
-                                  </span>
-                                </div>
-                                <Progress
-                                  value={disk.pct}
-                                  className="h-2"
-                                  indicatorClassName={resourceUsageBgClass(disk.pct)}
-                                />
-                                <div className="flex justify-between text-xs">
-                                  <span className="text-muted-foreground">可用</span>
-                                  <span className="font-mono text-foreground">{formatBytes(disk.free)}</span>
-                                </div>
-                                <div className="flex justify-between text-xs">
-                                  <span className="text-muted-foreground">总容量 (/data)</span>
-                                  <span className="font-mono text-foreground">{formatBytes(disk.total)}</span>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="text-xs text-muted-foreground/60">未上报（等待设备容量采样）</div>
-                            )}
-                          </div>
-
-                          {/* Network */}
-                          <div className="bg-card rounded-lg border border-border p-3">
-                            <div className="flex items-center gap-2 mb-2">
-                              {device.network_latency != null ? (
-                                <Wifi className="w-4 h-4 text-success" />
-                              ) : (
-                                <WifiOff className="w-4 h-4 text-muted-foreground" />
-                              )}
-                              <span className="text-sm font-medium text-foreground">网络延迟</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-2xl font-semibold font-mono text-foreground">
-                                {device.network_latency != null ? device.network_latency : '-'}
-                              </span>
-                              {device.network_latency != null && <span className="text-sm text-muted-foreground">ms</span>}
-                            </div>
-                          </div>
-
-                          {/* #786：删去「当前任务」展示——后端 DeviceOut 全仓零产出
-                              `current_task`，该行恒显「无任务」，对 BUSY 设备同样误导。 */}
-                          <div className="bg-card rounded-lg border border-border p-3">
-                            <div className="text-xs text-muted-foreground">
-                              最后活跃：{device.last_seen ? formatDateTimeFull(device.last_seen) : '—'}
-                            </div>
-                          </div>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </Fragment>
+                </ClickableRow>
               );
             })}
+            {virtualPaddingBottom > 0 && (
+              <TableRow aria-hidden="true" className="border-0 hover:bg-transparent">
+                <TableCell
+                  colSpan={visibleColumnCount}
+                  className="border-0 p-0"
+                  style={{ height: virtualPaddingBottom }}
+                />
+              </TableRow>
+            )}
             {filteredDevices.length === 0 && (
               <TableEmptyRow colSpan={20}>未找到匹配条件的设备</TableEmptyRow>
             )}
@@ -1282,11 +1369,11 @@ export function ExpandableDeviceTable({
         </Table>
 
         {/* Pagination */}
-        {filteredDevices.length > pageSize && (
+        {sortedDevices.length > pageSize && (
           <div className="p-3 border-t border-border flex items-center justify-between">
             <div className="text-xs text-muted-foreground">
-              显示第 {(safeCurrentPage - 1) * pageSize + 1} - {Math.min(safeCurrentPage * pageSize, filteredDevices.length)} 条，
-              共 {filteredDevices.length} 条设备
+              显示第 {(safeCurrentPage - 1) * pageSize + 1} - {Math.min(safeCurrentPage * pageSize, sortedDevices.length)} 条，
+              共 {sortedDevices.length} 条设备
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -1319,6 +1406,27 @@ export function ExpandableDeviceTable({
       {selectable && (selectedIds?.size ?? 0) > 0 && (
         <BulkBarSpacer testId="device-table-selection-spacer" />
       )}
+
+      {/* 右侧标准设备详情抽屉（D2 / #465 / #4117 U2-1b） */}
+      <DeviceDetailDrawer
+        device={activeDrawerDevice}
+        onClose={() => setDrawerDeviceId(null)}
+        isAdmin={isAdmin}
+        onEditDeviceTags={onEditDeviceTags}
+        onNavigateToHost={onNavigateToHost}
+        currentIndex={activeDrawerIndex >= 0 ? activeDrawerIndex : undefined}
+        totalCount={sortedDevices.length}
+        onPrev={
+          activeDrawerIndex > 0
+            ? () => setDrawerDeviceId(sortedDevices[activeDrawerIndex - 1].id)
+            : undefined
+        }
+        onNext={
+          activeDrawerIndex >= 0 && activeDrawerIndex < sortedDevices.length - 1
+            ? () => setDrawerDeviceId(sortedDevices[activeDrawerIndex + 1].id)
+            : undefined
+        }
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode } from 'react';
+import { type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 
@@ -8,23 +8,30 @@ interface ClickableRowProps {
   className?: string;
   /** 无障碍语义：默认 link（跳转），可改 button */
   role?: 'link' | 'button';
+  'aria-label'?: string;
   'data-testid'?: string;
+  'data-state'?: string;
+  style?: CSSProperties;
 }
 
 /**
  * 可点击表格行（C3 收敛点）。
  *
  * Enter / Space 触发点击 + role/tabIndex + 焦点样式，
- * 解决"整行 onClick 但键盘不可达"的问题。用于 Results 表格行 / 运行记录行等。
+ * 解决"整行 onClick 但键盘不可达"的问题。用于 Results 表格行 / 运行记录行 / 设备行等。
  */
 export function ClickableRow({
   onClick,
   children,
   className,
   role = 'link',
+  'aria-label': ariaLabel,
   'data-testid': testId,
+  'data-state': dataState,
+  style,
 }: ClickableRowProps) {
   const handleKeyDown = (e: KeyboardEvent<HTMLTableRowElement>) => {
+    if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       onClick();
@@ -41,7 +48,10 @@ export function ClickableRow({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role={role}
+      aria-label={ariaLabel}
       data-testid={testId}
+      data-state={dataState}
+      style={style}
     >
       {children}
     </TableRow>
