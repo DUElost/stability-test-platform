@@ -1,6 +1,6 @@
 # ADR-0062：设备日志先汇总去重、再按问题上传代表证据
 
-- 状态：**Proposed** v2.0（2026-11-23 起草，经第 4 轮独立复核修订：拟议增补中心存储实时可写门控、UNISOC 并入 `DEDUP_FIRST` 与阶段 D 退出旧链，见 §10.9；**v2.0 转 Accepted 并随对应批次激活前，[v1.2 Accepted 全文基线](https://github.com/DUElost/stability-test-platform/blob/71b7ee51682ce1b0bdd11044e78253ba1adc5f4c/docs/adr/ADR-0062-device-log-dedup-before-upload.md)与 B8 MTK 交付权威不变**。v1.2 于 2026-11-16 Accepted：Owner 收窄 B8 交付边界，见 §10.8；v1.0 于 2026-11-02 Accepted，同日 ADR-0053 转 Superseded。实施按 §9 走 ADR-0058 批次）
+- 状态：**Proposed** v2.0（2026-11-23 起草，经第 5 轮独立复核修订：拟议增补中心存储实时可写门控、UNISOC 并入 `DEDUP_FIRST` 与阶段 D 退出旧链，见 §10.9；**v2.0 转 Accepted 并随对应批次激活前，[v1.2 Accepted 全文基线](https://github.com/DUElost/stability-test-platform/blob/71b7ee51682ce1b0bdd11044e78253ba1adc5f4c/docs/adr/ADR-0062-device-log-dedup-before-upload.md)与 B8 MTK 交付权威不变**。v1.2 于 2026-11-16 Accepted：Owner 收窄 B8 交付边界，见 §10.8；v1.0 于 2026-11-02 Accepted，同日 ADR-0053 转 Superseded。实施按 §9 走 ADR-0058 批次）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-10-29
@@ -37,7 +37,7 @@
   - v1.0 2026-11-02 第 6 轮轻量复核（PR #3833 评论 6568551177）结论「可转 Accepted」，B3 闭合，裁定落点无矛盾。Proposed → Accepted；ADR-0053 同日改为 Superseded（§7）。政策与 v0.10 相同。
   - v1.1 2026-11-04 写入 Owner 两项裁定（§10.7）：问题归并规则只由自研扫描工具维护，平台只读工具输出；工具按版本发布后才可部署。修订 D4（新增第 7、8 条）与 D6 第 1 条，D12 第 3 条不变。
   - v1.2 2026-11-16：按 Owner 裁定将 B8 的交付出口收窄到已登记的日志证据、统计和缺口，调整 D10、D14–D16 与阶段二验收（§10.8）。
-  - v2.0 2026-11-23（Proposed，经第 1–4 轮独立复核修订）：固定引用 [v1.2 Accepted 全文基线](https://github.com/DUElost/stability-test-platform/blob/71b7ee51682ce1b0bdd11044e78253ba1adc5f4c/docs/adr/ADR-0062-device-log-dedup-before-upload.md)；按 2026-11-22~23 现网测绘与 Owner 三项裁决（§10.9），拟议增补中心存储统一拒陈旧可写守卫（D2.4）、UNISOC 唯一 ADB 采集与基线隔离/完整空证明/命名固化/不可变缓冲/离线扫描（D2.5、D4.8–9、D6.1、D8.2、D9.6）、条件性解除「仅限 MTK」限定与分阶段验收及阶段 D 统一旧链入口冻结+真实写入者排空屏障（§2、§5、D3.1、D11、D12.1、D13.3/6、§9、§11，并对齐 §11.15 影子期 `NOT_READY` 先于 `SCOPE_ONLY` 与 ADR-0059 单规则句拆分）。未转 Accepted 并随对应批次激活前，v1.2 条款继续作为现行权威执行。
+  - v2.0 2026-11-23（Proposed，经第 1–5 轮独立复核修订）：固定引用 [v1.2 Accepted 全文基线](https://github.com/DUElost/stability-test-platform/blob/71b7ee51682ce1b0bdd11044e78253ba1adc5f4c/docs/adr/ADR-0062-device-log-dedup-before-upload.md)；按 2026-11-22~23 现网测绘与 Owner 三项裁决（§10.9），拟议增补中心存储统一拒陈旧可写守卫（D2.4）、UNISOC 唯一 ADB 采集与基线隔离/完整空证明/命名固化/不可变缓冲/离线扫描（D2.5、D4.8–9、D6.1、D8.2、D9.6）、条件性解除「仅限 MTK」限定与分阶段验收及阶段 D 统一旧链入口冻结+真实写入者排空屏障（§2、§5、D3.1、D11、D12.1、D13.3/6、§9、§11，并对齐 §11.15 影子期 `NOT_READY` 先于 `SCOPE_ONLY` 与 ADR-0059 单规则句拆分）。未转 Accepted 并随对应批次激活前，v1.2 条款继续作为现行权威执行。
 
 ## 1. 背景与证据
 
@@ -172,7 +172,8 @@ merge 的结果影响下游报表。已经写入 `devices/` 的字节仍保留�
    - Agent 必须在每个 `(实际 PlanRun, 平台, Agent host)` 记录真实的采集成功、失败或未完成事实，供 S4/S5 区分正常零事件与采集失败。
    - 控制面不得仅因作业进入终态就视同采集已完成。
    - 在展锐 `DEDUP_FIRST` 分区的 S4 扫描阶段，Agent 不得调用 ADB 命令再次抓取设备日志。
-   - Agent 必须在 S4 按 `实际 PlanRun × 平台 × Agent host` 冻结本轮本地不可变发生目录集合并回接 I2 溢出副本快照。
+   - Agent 必须在 S4 按 `实际 PlanRun × 平台 × Agent host` 冻结本轮本地不可变发生目录集合。
+   - Agent 必须在 S4 将本分区在中心已校验的 I2 溢出副本快照回接进本轮扫描输入。
    - Agent 不得跨不同发生拼凑三件证据。
    - 控制面不得跨不同发生拼凑三件证据。
 
@@ -202,7 +203,8 @@ merge 的结果影响下游报表。已经写入 `devices/` 的字节仍保留�
    - 工具维护者必须通过不可变版本 tag `scan-result-gt/vX.Y.Z` 加有效 `release.json` 发布展锐扫描工具（`Scan-Result-GT`），且不得原地修改已发布版本。
    - Agent 与控制面仅在 `Scan-Result-GT` 已按 `scan-result-gt/vX.Y.Z` 发布且 `release.json` 校验通过时才可以运行该工具，不得运行未发布或清单校验失败的版本。
    - Agent 必须在 S4 仅向 `Scan-Result-GT` 提供按 `实际 PlanRun × 平台 × Agent host` 冻结的本地不可变输入快照及已回接 I2 溢出副本。
-   - `Scan-Result-GT` 必须纯离线扫描上述冻结快照并在单次扫描完成后正常退出（不得依赖超时强杀）。
+   - `Scan-Result-GT` 必须纯离线扫描上述冻结快照。
+   - `Scan-Result-GT` 必须在单次扫描完成后正常退出，不得依赖超时强杀。
    - `Scan-Result-GT` 不得遍历或读取未列入当前实际 PlanRun 的 Agent host 其他设备。
    - 当冻结快照存在事件时，`Scan-Result-GT` 必须输出格式不变（D12 第 3 条）的 `*_org.xls`、符合 `stp.scan_membership` 1.x 契约的成员关系文件，以及确定性映射回本地 `DLE`、`occurrence_key`、随发生固化的 D9 第 6 条命名输入或已计算的规范主文件夹名、以及三件源材料状态（`dblog`/`mobilelog`/`bugreport`）的原始行伴随映射。
    - 当个别事件的命名输入与规范主文件夹名均缺失时，Agent 与控制面仍必须按 I1 照常登记发生并保留报表行，只在 S8/S9 登记可解释的发布缺口；Agent 与控制面均不得因此丢弃报表行或重查已换版设备。
