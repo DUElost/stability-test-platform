@@ -227,6 +227,33 @@ def test_terminal_merge_failure_is_not_ready(merge_status, reason):
     assert decision.reason == reason
 
 
+def test_not_ready_no_input_preserves_coverage_gaps_matching_snapshot(
+    db_session, sample_host, tmp_path,
+):
+    """#4079: NO_INPUT/NOT_READY 下 decision.gaps 必须与 delivery_version.gaps 一致。"""
+    _plan_run(db_session)
+    _round(
+        db_session,
+        42,
+        1,
+        "FINAL",
+        [_unit(sample_host.id, "MISSING")],
+        merge="NO_INPUT",
+    )
+    db_session.commit()
+
+    row = _register(db_session, tmp_path)
+    db_session.commit()
+    decision = _delivery().current_delivery_decision(
+        db_session, plan_run_id=42, platform="mtk",
+    )
+    assert decision.status == "NOT_READY"
+    assert decision.reason == "latest_merge_no_input"
+    assert list(decision.gaps) == list(row.gaps) == [
+        {"kind": "coverage_missing", "host_id": sample_host.id, "platform": "mtk"},
+    ]
+
+
 def test_incomplete_representative_is_a_gap(db_session, sample_host, tmp_path):
     _plan_run(db_session)
     _round(db_session, 42, 1, "FINAL", [_unit(sample_host.id, "RECEIVED")])
