@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { Settings, Database, Globe, Bell } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Settings, Database, Globe, Bell, Sparkles, ArrowRight } from 'lucide-react';
 import { api } from '@/utils/api';
+import { useAuthSession } from '@/hooks/useAuthSession';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { Button } from '@/components/ui/button';
 import { InlineError } from '@/components/ui/error-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { PANEL, TEXT } from '@/design-system';
@@ -16,6 +19,8 @@ function databaseTypeLabel(raw: string): string {
 }
 
 export default function SettingsPage() {
+  const sessionQ = useAuthSession();
+  const isAdmin = sessionQ.data?.role === 'admin';
   const { data: s, isLoading, isError, refetch } = useQuery({
     queryKey: ['settings'],
     queryFn: () => api.settings.get(),
@@ -23,7 +28,21 @@ export default function SettingsPage() {
 
   return (
     <PageContainer width="form">
-      <PageHeader title="系统设置" subtitle="平台运行配置一览（当前为只读视图）" />
+      <PageHeader
+        title="系统设置"
+        subtitle="平台运行配置一览（当前为只读视图）"
+        action={
+          isAdmin ? (
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/settings/ai-assistant">
+                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                AI 助手设置
+                <ArrowRight className="ml-1 h-3.5 w-3.5" />
+              </Link>
+            </Button>
+          ) : undefined
+        }
+      />
 
       {isLoading ? (
         <div className="grid gap-4">

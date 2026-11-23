@@ -19,17 +19,7 @@ import {
 import { SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { LogPanel } from './LogPanel';
-
-/** 工具名 → 运维语义标签（与后端工具注册表对齐）。 */
-const TOOL_LABELS: Record<string, string> = {
-  run_quality_gate: '运行质量门禁',
-  run_agent_tests: '运行 Agent 测试',
-  run_gov_checks: '运行治理检查',
-  scan_script_catalog: '脚本目录扫描',
-  test_notification_channel: '通知通道测试发送',
-  reload_agent_config: 'Agent 配置重载',
-  dispatch_plan_run: '发起 Plan 执行',
-};
+import { AI_TOOL_LABELS as TOOL_LABELS } from '../toolLabels';
 
 const STATUS_BADGE: Record<AiActionStatus, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' }> = {
   proposed: { label: '待审批', variant: 'secondary' },
@@ -162,7 +152,7 @@ export function ActionCard({ actionId, className }: ActionCardProps) {
   if (actionQ.isError || !actionQ.data) {
     return (
       <Card className={cn('border-destructive/40', className)}>
-        <CardContent className="py-4 text-sm text-destructive">操作卡加载失败</CardContent>
+        <CardContent className="py-4 text-sm text-destructive-text">操作卡加载失败</CardContent>
       </Card>
     );
   }

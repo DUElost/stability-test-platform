@@ -122,6 +122,7 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
                 fill={CHART_COLORS.success}
                 radius={[0, 0, 0, 0]}
                 maxBarSize={40}
+                isAnimationActive={false}
               />
               <Bar
                 dataKey="failed"
@@ -130,6 +131,7 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
                 fill={CHART_COLORS.error}
                 radius={[4, 4, 0, 0]}
                 maxBarSize={40}
+                isAnimationActive={false}
               />
             </BarChart>
           </ResponsiveContainer>

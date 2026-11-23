@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Send, Settings } from 'lucide-react';
 import { api, toApiError } from '@/utils/api';
@@ -11,7 +11,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
-import { ErrorState } from '@/components/ui/error-state';
+import { ErrorState, InlineError } from '@/components/ui/error-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { BORDER, FORM, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
@@ -28,10 +28,23 @@ export default function AssistantPage() {
   const qc = useQueryClient();
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialPrompt = searchParams.get('prompt');
 
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(() => initialPrompt ?? '');
   const [showNotConfigured, setShowNotConfigured] = useState(false);
+
+  // 支持从设备/主机详情抽屉经 `?prompt=...` 预填问题，读取后清除 query 参数避免刷新覆盖用户输入。
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!initialPrompt) return;
+    setDraft(initialPrompt);
+    const next = new URLSearchParams(searchParams);
+    next.delete('prompt');
+    setSearchParams(next, { replace: true });
+  }, [initialPrompt, searchParams, setSearchParams]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const sessionsQ = useQuery({
     queryKey: aiAssistantKeys.sessions(),
@@ -154,7 +167,7 @@ export default function AssistantPage() {
   const showBanner = configDisabled || showNotConfigured;
 
   return (
-    <PageContainer>
+    <PageContainer width="wide" scrollable={false} className="flex flex-col overflow-hidden">
       <PageHeader
         title="AI 助手"
         subtitle="对话式查询平台状态、运行测试门禁与日常运维（有副作用的操作需按风险分级审批）"
@@ -220,7 +233,7 @@ export default function AssistantPage() {
         </Button>
       </div>
 
-      <div className="flex h-[calc(100vh-14rem)] min-h-[480px] gap-4">
+      <div className="flex min-h-0 flex-1 gap-4">
         <SessionList
           sessions={sessions}
           activeId={activeId}
@@ -261,6 +274,12 @@ export default function AssistantPage() {
           ) : (
             <>
               <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
+                {messagesQ.isError && (
+                  <InlineError
+                    message={`消息加载失败：${toApiError(messagesQ.error).message || '请稍后重试'}`}
+                    onRetry={() => void messagesQ.refetch()}
+                  />
+                )}
                 {messages.map((message) => (
                   <div key={message.id} className="space-y-2">
                     <MessageBubble message={message} />
