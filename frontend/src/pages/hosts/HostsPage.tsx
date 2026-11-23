@@ -7,8 +7,14 @@ import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useHostOperations } from '@/hooks/useHostOperations';
-import { ExpandableHostTable, type HostTableData } from '@/components/network/ExpandableHostTable';
+import {
+  ExpandableHostTable,
+  type HostHealthFilter,
+  type HostSyncFilter,
+  type HostTableData,
+} from '@/components/network/ExpandableHostTable';
 import { AddHostModal } from './components/AddHostModal';
+import { RetireHostDialog, type HostRetireMode } from './components/RetireHostDialog';
 import HostHotUpdateConfirmDialog from '@/components/host/HostHotUpdateConfirmDialog';
 import HostBulkActionBar from '@/components/host/HostBulkActionBar';
 import HostOperationPanel from '@/components/host/HostOperationPanel';
@@ -66,18 +72,22 @@ export default function HostsPage() {
       : 'all';
   const searchQuery = getString('q', '');
   const rawHealth = getString('health', 'all');
-  const healthFilter: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE' =
-    rawHealth === 'HEALTHY' || rawHealth === 'DEGRADED' || rawHealth === 'UNSCHEDULABLE'
+  const healthFilter: HostHealthFilter =
+    rawHealth === 'HEALTHY' ||
+    rawHealth === 'DEGRADED' ||
+    rawHealth === 'UNSCHEDULABLE' ||
+    rawHealth === 'unhealthy'
       ? rawHealth
       : 'all';
   const rawSync = getString('sync', 'all');
-  const syncFilter: 'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault' =
+  const syncFilter: HostSyncFilter =
     rawSync === 'drift' ||
     rawSync === 'matched' ||
     rawSync === 'mount_error' ||
     rawSync === 'usb_fault'
       ? rawSync
       : 'all';
+  const drawerHostId = getString('drawer', '') || null;
   const { data: hostsData, isLoading, error } = useQuery({
     queryKey: showRetired ? hostKeys.retiredList() : hostKeys.list(),
     // #3152：全量列表按服务端 total 翻页——单次 `list(0,200)` 在第 201 台起会让主机
@@ -178,13 +188,19 @@ export default function HostsPage() {
     },
   });
 
-  // ADR-0038 D2：退役 / 解除退役（admin；原因必填，写入审计 who/when/reason）
+  // ADR-0038 D2：退役 / 解除退役（admin；通过标准 RetireHostDialog 收集必填原因，写入审计）
+  const [retireDialog, setRetireDialog] = useState<{
+    host: HostTableData;
+    mode: HostRetireMode;
+  } | null>(null);
+
   const retireMutation = useMutation({
     mutationFn: ({ hostId, reason }: { hostId: string | number; reason: string }) =>
       api.hosts.retire(hostId, reason),
     onSuccess: (host) => {
       void queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       void queryClient.invalidateQueries({ queryKey: hostKeys.retiredList() });
+      setRetireDialog(null);
       toast.success(`主机 ${host.id} 已退役`);
     },
     onError: (error: unknown) => {
@@ -198,6 +214,7 @@ export default function HostsPage() {
     onSuccess: (host) => {
       void queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       void queryClient.invalidateQueries({ queryKey: hostKeys.retiredList() });
+      setRetireDialog(null);
       toast.success(`主机 ${host.id} 已解除退役`);
     },
     onError: (error: unknown) => {
@@ -205,25 +222,21 @@ export default function HostsPage() {
     },
   });
 
-  const askRetireReason = (action: '退役' | '解除退役', label: string): string | null => {
-    const raw = window.prompt(`${action} ${label} 的原因（必填，写入审计）`);
-    if (raw === null) return null;
-    const reason = raw.trim();
-    if (!reason) {
-      toast.error(`${action}原因不能为空`);
-      return null;
-    }
-    return reason;
-  };
-
   const handleRetire = (host: HostTableData) => {
-    const reason = askRetireReason('退役', host.name || String(host.id));
-    if (reason) retireMutation.mutate({ hostId: host.id, reason });
+    setRetireDialog({ host, mode: 'retire' });
   };
 
   const handleUnretire = (host: HostTableData) => {
-    const reason = askRetireReason('解除退役', host.name || String(host.id));
-    if (reason) unretireMutation.mutate({ hostId: host.id, reason });
+    setRetireDialog({ host, mode: 'unretire' });
+  };
+
+  const handleRetireSubmit = (mode: HostRetireMode, reason: string) => {
+    if (!retireDialog) return;
+    if (mode === 'retire') {
+      retireMutation.mutate({ hostId: retireDialog.host.id, reason });
+    } else {
+      unretireMutation.mutate({ hostId: retireDialog.host.id, reason });
+    }
   };
 
   const [watcherAdminUpdatingHostId, setWatcherAdminUpdatingHostId] = useState<
@@ -255,6 +268,13 @@ export default function HostsPage() {
         if (ev.ok) {
           toast.success(`主机 ${ev.label} 刷机前置已补齐`);
           queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+        } else if (ev.status === 'CANCELED') {
+          // #3193：与 install 批次（#2255）同口径——取消 / 运行记录丢失 ≠ 失败，不得报红
+          toast.info(
+            ev.error
+              ? `主机 ${ev.label} 的刷机前置已中止：${ev.error}`
+              : `主机 ${ev.label} 的刷机前置已取消（取消不是失败，可随时复跑）`,
+          );
         } else {
           toast.error(`主机 ${ev.label} 刷机前置失败：${ev.error || ev.status}`);
         }
@@ -958,6 +978,18 @@ export default function HostsPage() {
         onSubmit={handleEditSubmit}
         isSubmitting={updateMutation.isPending}
       />
+      <RetireHostDialog
+        isOpen={retireDialog != null}
+        mode={retireDialog?.mode ?? 'retire'}
+        hostLabel={retireDialog ? (retireDialog.host.name || String(retireDialog.host.id)) : ''}
+        isSubmitting={retireMutation.isPending || unretireMutation.isPending}
+        onClose={() => {
+          if (!retireMutation.isPending && !unretireMutation.isPending) {
+            setRetireDialog(null);
+          }
+        }}
+        onSubmit={handleRetireSubmit}
+      />
     </>
   );
 
@@ -977,10 +1009,38 @@ export default function HostsPage() {
     </label>
   );
 
+  const pageHeaderActions = (
+    <div className="flex items-center gap-2">
+      {!opPanelOpen && hostOps.length > 0 && (
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="host-op-panel-reopen"
+          onClick={() => setOpPanelOpen(true)}
+        >
+          {hostOps.some((o) => o.kind === 'flash_prereqs')
+            ? '刷机前置进度'
+            : hotUpdatePanelOps
+              ? '热更新进度'
+              : '安装进度'}
+          {installPending || hotUpdateOpPending || flashPrereqsPending
+            ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
+            : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
+        </Button>
+      )}
+      {isAdmin && (
+        <Button size="sm" data-testid="host-add-button" onClick={() => setIsModalOpen(true)}>
+          <Plus className="h-3.5 w-3.5" />
+          添加主机
+        </Button>
+      )}
+    </div>
+  );
+
   if (isLoading) {
     return (
-      <PageContainer width="wide">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
+      <PageContainer width="wide" className="py-2.5 lg:py-2.5">
+        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
         <PageSkeleton>
           <PageSkeleton.Stats count={4} />
           <PageSkeleton.Block size="lg" />
@@ -996,8 +1056,8 @@ export default function HostsPage() {
     const apiError = toApiError(error);
     const unreachable = apiError.status == null;
     return (
-      <PageContainer width="wide">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
+      <PageContainer width="wide" className="py-2.5 lg:py-2.5">
+        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
         <ErrorState
           title={unreachable ? '无法连接后端服务' : `加载主机失败（${apiError.status}）`}
           description={unreachable ? '请检查后端服务连接与网络。' : apiError.message}
@@ -1023,8 +1083,8 @@ export default function HostsPage() {
 
   if (tableData.length === 0) {
     return (
-      <PageContainer width="wide">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
+      <PageContainer width="wide" className="py-2.5 lg:py-2.5">
+        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
         {/* #2051：空态也要给「显示已退役」开关，否则全退役后无法解除退役 */}
         <div className="flex items-center justify-end gap-2 py-2">{retiredToggle}</div>
         <EmptyState
@@ -1045,42 +1105,15 @@ export default function HostsPage() {
     );
   }
 
-  const hostHeaderActions = (
-    <div className="flex items-center gap-2">
-      {!opPanelOpen && hostOps.length > 0 && (
-        <Button
-          variant="outline"
-          size="sm"
-          data-testid="host-op-panel-reopen"
-          onClick={() => setOpPanelOpen(true)}
-        >
-          {hostOps.some((o) => o.kind === 'flash_prereqs')
-            ? '刷机前置进度'
-            : hotUpdatePanelOps
-              ? '热更新进度'
-              : '安装进度'}
-          {installPending || hotUpdateOpPending
-            ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
-            : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
-        </Button>
-      )}
-      {isAdmin && (
-        <Button size="sm" onClick={() => setIsModalOpen(true)}>
-          <Plus className="w-4 h-4" />
-          添加主机
-        </Button>
-      )}
-    </div>
-  );
-
   return (
-    <PageContainer width="wide">
+    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
       <PageHeader
         title="主机集群"
-        subtitle="管理和监控测试执行节点"
+        subtitle="管理和监控测试执行节点 · 点击主机行查看详情，勾选后可批量运维"
+        action={pageHeaderActions}
       />
 
-      {/* Host Table —— tableData 为空的分支在 :567 已提前 return，此处无需再判 */}
+      {/* Host Table */}
       <ExpandableHostTable
         hosts={tableData}
         statusFilter={statusFilter}
@@ -1091,6 +1124,8 @@ export default function HostsPage() {
         onHealthFilterChange={(val) => updateParams({ health: val === 'all' ? undefined : val })}
         syncFilter={syncFilter}
         onSyncFilterChange={(val) => updateParams({ sync: val === 'all' ? undefined : val })}
+        activeDrawerHostId={drawerHostId}
+        onActiveDrawerHostIdChange={(val) => updateParams({ drawer: val || undefined })}
         showRetired={showRetired}
         onShowRetiredChange={setShowRetired}
         onClearQuickView={() => updateParams({ status: undefined, health: undefined, sync: undefined })}
@@ -1129,7 +1164,6 @@ export default function HostsPage() {
         selectedIds={visibleSelectedHostIds}
         onSelectionChange={setSelectedHostIds}
         onFilteredHostsChange={handleFilteredHostsChange}
-        extraHeaderRight={hostHeaderActions}
         onLoadHostScriptPresence={loadHostScriptPresence}
         onRefreshHostScriptPresence={refreshHostScriptPresence}
       />

@@ -817,9 +817,9 @@ export function ExpandableDeviceTable({
                 id="device-search"
                 value={searchQuery}
                 onChange={setSearchQuery}
-                placeholder="搜索序列号 / 型号 / product / 版本 / 主机 / 标签..."
+                placeholder="搜索序列号 / 型号 / 版本 / 主机 / 标签..."
                 ariaLabel="搜索设备"
-                className="flex-1 min-w-[200px] sm:max-w-[280px]"
+                className="flex-1 min-w-[220px] sm:max-w-[320px]"
               />
               {extraToolbarControls}
               <SearchableSelect

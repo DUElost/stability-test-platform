@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { mergeDraftParameters } from '@/components/parameters/draftParameterMerge';
 import { MeaningHelpTooltip } from '@/components/parameters/MeaningHelpTooltip';
 import { ParameterProjectionList } from '@/components/parameters/ParameterProjectionList';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
 
 /* ── param_schema field descriptor ───────────────────────────────────────── */
@@ -200,6 +201,13 @@ function ScriptInfoCard({
     : <>当前脚本 <code className="font-mono">{scriptName}@{step.version || '?'}</code> 未在已激活脚本中找到，请重新选择。</>;
 
   const selectCls = cn('max-w-[60%] h-7 px-1.5', PIPELINE_EDITOR.inputInline, 'text-[12px]');
+  const scriptOptions = useMemo(() => {
+    const opts = knownNames.map((n) => ({ value: n, label: n }));
+    if (scriptName && !knownNames.includes(scriptName)) {
+      opts.push({ value: scriptName, label: `${scriptName} (未匹配)` });
+    }
+    return opts;
+  }, [knownNames, scriptName]);
 
   return (
     <Card>
@@ -220,27 +228,22 @@ function ScriptInfoCard({
         )}
 
         <Row label="脚本名">
-          <select
+          <SearchableSelect
             disabled={readOnly}
             value={scriptName}
-            onChange={e => {
-              const newName = e.target.value;
+            onChange={(newName) => {
               const firstVersion = scripts.find(s => s.name === newName && s.is_active);
               if (firstVersion) onPickScript(newName, firstVersion.version);
               else onPickScript(newName, '');
             }}
-            className={selectCls}
-          >
-            <option value="">— 选择脚本 —</option>
-            {knownNames.map(n => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-            {scriptName && !knownNames.includes(scriptName) && (
-              <option value={scriptName}>{scriptName} (未匹配)</option>
-            )}
-          </select>
+            options={scriptOptions}
+            allValue=""
+            allLabel="— 选择脚本 —"
+            searchPlaceholder="搜索脚本名..."
+            ariaLabel="脚本名"
+            className="w-[60%] max-w-[60%]"
+            triggerClassName="h-7 px-2 text-[12px] sm:text-[12px]"
+          />
         </Row>
 
         <Row label="版本">

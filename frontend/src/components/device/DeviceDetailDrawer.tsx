@@ -204,7 +204,7 @@ export function DeviceDetailDrawer({
               </SheetDescription>
 
               <div className="flex flex-wrap items-center gap-2">
-                <SheetTitle className="truncate font-mono text-base font-semibold">
+                <SheetTitle className="break-all font-mono text-base font-semibold">
                   {device.serial}
                 </SheetTitle>
                 <button
@@ -293,33 +293,27 @@ export function DeviceDetailDrawer({
                 <h3 className="text-sm font-medium text-foreground">设备信息与归属</h3>
               </div>
               <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>型号</dt>
-                  <dd className="min-w-0 truncate text-right font-medium text-foreground" title={device.model}>
+                  <dd className="min-w-0 break-words whitespace-normal text-right font-medium text-foreground">
                     {device.model}
                   </dd>
                 </div>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>Product</dt>
-                  <dd
-                    className="min-w-0 truncate text-right font-mono text-foreground"
-                    title={deviceProductText(device.model, device.product)}
-                  >
+                  <dd className="min-w-0 break-words whitespace-normal text-right font-mono text-foreground">
                     {deviceProductText(device.model, device.product)}
                   </dd>
                 </div>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>系统版本</dt>
-                  <dd
-                    className="min-w-0 truncate text-right font-mono text-foreground"
-                    title={device.build_display_id ?? undefined}
-                  >
+                  <dd className="min-w-0 break-all whitespace-normal text-right font-mono text-foreground">
                     {device.build_display_id || '—'}
                   </dd>
                 </div>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>归属项目</dt>
-                  <dd className="min-w-0 truncate text-right font-mono text-foreground">
+                  <dd className="min-w-0 break-words whitespace-normal text-right font-mono text-foreground">
                     {device.project_key ? (
                       inRouter ? (
                         <Link
@@ -327,7 +321,7 @@ export function DeviceDetailDrawer({
                           className="inline-flex items-center gap-1 text-primary hover:underline"
                         >
                           {device.project_key}
-                          <ExternalLink className="h-3 w-3" />
+                          <ExternalLink className="h-3 w-3 shrink-0" />
                         </Link>
                       ) : (
                         device.project_key
@@ -337,9 +331,9 @@ export function DeviceDetailDrawer({
                     )}
                   </dd>
                 </div>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>所属主机</dt>
-                  <dd className="min-w-0 truncate text-right text-foreground">
+                  <dd className="min-w-0 break-words whitespace-normal text-right text-foreground">
                     {device.host_name && onNavigateToHost ? (
                       <button
                         type="button"
@@ -347,24 +341,26 @@ export function DeviceDetailDrawer({
                         className="inline-flex items-center gap-1 text-primary hover:underline"
                       >
                         {device.host_name}
-                        <ExternalLink className="h-3 w-3" />
+                        <ExternalLink className="h-3 w-3 shrink-0" />
                       </button>
                     ) : (
                       device.host_name || '—'
                     )}
                   </dd>
                 </div>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>ADB 状态</dt>
-                  <dd className="min-w-0 truncate font-mono text-foreground">{device.adb_state || '—'}</dd>
+                  <dd className="min-w-0 break-words whitespace-normal text-right font-mono text-foreground">
+                    {device.adb_state || '—'}
+                  </dd>
                 </div>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <dt className={cn('shrink-0 whitespace-nowrap', TEXT.subtitle)}>最后活跃</dt>
-                  <dd className="min-w-0 truncate font-mono text-foreground">
+                  <dd className="min-w-0 break-words whitespace-normal text-right font-mono text-foreground">
                     {device.last_seen ? formatDateTimeFull(device.last_seen) : '—'}
                   </dd>
                 </div>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-start justify-between gap-2">
                   <dt className={cn('flex shrink-0 items-center gap-1 whitespace-nowrap', TEXT.subtitle)}>
                     <Tag className="h-3 w-3" />
                     标签
@@ -375,19 +371,16 @@ export function DeviceDetailDrawer({
                         type="button"
                         data-testid={`device-detail-edit-tags-${device.id}`}
                         onClick={() => onEditDeviceTags(device)}
-                        className="inline-flex max-w-full items-center gap-1 truncate rounded px-1.5 py-0.5 text-right text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="inline-flex max-w-full items-start gap-1 rounded px-1.5 py-0.5 text-right text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         title={device.tags?.length ? `编辑标签：${device.tags.join(', ')}` : '点击添加标签'}
                       >
-                        <span className={cn('truncate', !device.tags?.length && 'text-muted-foreground')}>
+                        <span className={cn('break-words whitespace-normal', !device.tags?.length && 'text-muted-foreground')}>
                           {device.tags?.length ? device.tags.join(', ') : '点击添加标签'}
                         </span>
-                        <Pencil className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        <Pencil className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
                       </button>
                     ) : (
-                      <span
-                        className="truncate text-right text-foreground"
-                        title={device.tags?.join(', ') || undefined}
-                      >
+                      <span className="break-words whitespace-normal text-right text-foreground">
                         {device.tags?.length ? device.tags.join(', ') : '—'}
                       </span>
                     )}
