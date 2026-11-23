@@ -37,6 +37,20 @@ HC_NOT_RESPONDING_MARKER = "xhci host controller not responding"
 CABLE_SUSPECT_MARKER = "maybe the usb cable is bad"
 # 慢性链路劣化：-71(EPROTO) / -110(ETIMEDOUT)。.102 死亡前两周每日 400~3700 行。
 LINK_ERROR_MARKERS = ("error -71", "error -110")
+# 刷机/测试期高频重枚举、总线复位与 Hub 端口级错误签名（仅数值观测，不改既有告警阈值）：
+DISCONNECT_MARKER = "usb disconnect"
+ENUM_ERROR_MARKERS = ("error -32", "error -22")
+HUB_PORT_ERROR_MARKERS = ("hub_ext_port_status failed", "disabled by hub")
+
+#: 1 小时滑动窗内核 USB 错误数值指标的封闭键集（Agent 上报 ↔ 控制面 Prometheus Gauge 共用）。
+KERNEL_ERROR_COUNTER_KEYS = (
+    "link_errors",
+    "cable_suspect",
+    "disconnects",
+    "resets",
+    "enum_errors",
+    "hub_port_errors",
+)
 
 #: 慢性劣化的统计窗与阈值（窗口内事件数）。阈值取「明显高于正常热插拔抖动」的量级：
 #: .102 的风暴 400~3700 行/天 ≈ 17~154 行/小时，20/小时可提前定位，而单次插拔的
@@ -69,6 +83,10 @@ class KernelUsbFaults:
     link_errors: int = 0
     cable_suspect: int = 0
     lines: int = 0
+    disconnects: int = 0
+    resets: int = 0
+    enum_errors: int = 0
+    hub_port_errors: int = 0
 
     @property
     def hc_dead_seen(self) -> bool:
@@ -82,6 +100,7 @@ class KernelUsbFaults:
 def parse_kernel_usb_faults(lines: Iterable[str]) -> KernelUsbFaults:
     """纯函数：内核日志行 → 计数（供扫描与离线回放共用）。"""
     hc_dead = not_responding = link_errors = cable_suspect = total = 0
+    disconnects = resets = enum_errors = hub_port_errors = 0
     for raw in lines:
         line = (raw or "").strip().lower()
         if not line:
@@ -95,12 +114,24 @@ def parse_kernel_usb_faults(lines: Iterable[str]) -> KernelUsbFaults:
             cable_suspect += 1
         if any(marker in line for marker in LINK_ERROR_MARKERS):
             link_errors += 1
+        if DISCONNECT_MARKER in line:
+            disconnects += 1
+        if "reset " in line and "usb device" in line:
+            resets += 1
+        if any(marker in line for marker in ENUM_ERROR_MARKERS):
+            enum_errors += 1
+        if any(marker in line for marker in HUB_PORT_ERROR_MARKERS):
+            hub_port_errors += 1
     return KernelUsbFaults(
         hc_dead=hc_dead,
         not_responding=not_responding,
         link_errors=link_errors,
         cable_suspect=cable_suspect,
         lines=total,
+        disconnects=disconnects,
+        resets=resets,
+        enum_errors=enum_errors,
+        hub_port_errors=hub_port_errors,
     )
 
 

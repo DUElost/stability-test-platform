@@ -14,6 +14,7 @@ import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from typing import Any, Dict
+from urllib.parse import quote
 from uuid import uuid4
 
 import requests
@@ -818,6 +819,14 @@ def _resolve_alert_link(labels: Dict[str, Any], annotations: Dict[str, Any]) -> 
 
         from backend.models.host import Host
 
+        raw_host_id = labels.get("host_id")
+        if isinstance(raw_host_id, str) and raw_host_id.strip():
+            ident = raw_host_id.strip()
+            with SessionLocal() as db:
+                host = db.query(Host).filter(Host.id == ident).first()
+            if host is not None:
+                return f"/hosts?q={quote(str(host.id), safe='')}"
+
         candidates = [
             labels.get("host"),
             labels.get("hostname"),
@@ -843,16 +852,43 @@ def _resolve_alert_link(labels: Dict[str, Any], annotations: Dict[str, Any]) -> 
         return None
 
 
+def _alert_dedup_target(labels: Dict[str, Any]) -> str:
+    """提取告警的对象维度标识，用于同主机同告警的重复 firing 折叠。"""
+    for key in ("host_id", "host", "hostname", "instance"):
+        val = labels.get(key)
+        if isinstance(val, str) and val.strip():
+            return f"{key}={val.strip()}"
+    return ""
+
+
 def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
-    """Process an alertmanager webhook payload and log it."""
+    """Process an alertmanager webhook payload and log it.
+
+    S3 减噪与折叠契约：
+    - ``labels.notify_surface == "hosts_only"`` 的慢性待办类告警留在 Prometheus 与
+      ``/hosts`` 工作台，不灌入 ``/notifications?tab=logs``；
+    - 同一 ``(alertname, target)`` 在前一条记录仍为 ``firing`` 时，重复到来的
+      ``firing``（如 Alertmanager ``repeat_interval``）就地折叠更新
+      ``repeat_count`` 与 ``last_seen_at``，不再每 3 小时新增未读日志。
+    """
     try:
-        status = alert_data.get("status", "firing")
+        top_status = alert_data.get("status", "firing")
         alerts = alert_data.get("alerts", [])
+        now_iso = datetime.now(timezone.utc).isoformat()
         for alert in alerts:
             labels = alert.get("labels", {})
             annotations = alert.get("annotations", {})
+            status = alert.get("status") or top_status
             alertname = labels.get("alertname", "UnknownAlert")
             severity = labels.get("severity", "warning")
+
+            if str(labels.get("notify_surface") or "").strip().lower() == "hosts_only":
+                logger.debug(
+                    "alertmanager_alert_routed_hosts_only alertname=%s target=%s",
+                    alertname,
+                    _alert_dedup_target(labels),
+                )
+                continue
 
             sev = NotificationSeverity.CRITICAL if severity == "critical" else (
                 NotificationSeverity.WARNING if severity == "warning" else NotificationSeverity.INFO
@@ -864,13 +900,61 @@ def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
             # #625：可跳转上下文——解析得到 link 才写入（前端盲拼，无 link
             # 维持原 context 形状，消费方兼容）
             link = _resolve_alert_link(labels, annotations)
+            target_key = _alert_dedup_target(labels)
             context: Dict[str, Any] = {
-                "labels": labels, "annotations": annotations, "status": status,
+                "labels": labels,
+                "annotations": annotations,
+                "status": status,
+                "repeat_count": 1,
+                "last_seen_at": now_iso,
             }
             if link:
                 context["link"] = link
 
+            folded = False
             with SessionLocal() as db:
+                if status == "firing":
+                    recent_rows = (
+                        db.query(NotificationLog)
+                        .filter(
+                            NotificationLog.source == NotificationSource.ALERTMANAGER,
+                            NotificationLog.event_type == alertname,
+                        )
+                        .order_by(NotificationLog.id.desc())
+                        .limit(50)
+                        .all()
+                    )
+                    for prev in recent_rows:
+                        prev_ctx = prev.context if isinstance(prev.context, dict) else {}
+                        prev_labels = prev_ctx.get("labels") if isinstance(prev_ctx.get("labels"), dict) else {}
+                        if _alert_dedup_target(prev_labels) != target_key:
+                            continue
+                        if prev_ctx.get("status") == "firing":
+                            prev_repeats = prev_ctx.get("repeat_count")
+                            next_repeats = (prev_repeats if isinstance(prev_repeats, int) and prev_repeats >= 1 else 1) + 1
+                            updated_ctx = dict(prev_ctx)
+                            updated_ctx.update(
+                                {
+                                    "labels": labels,
+                                    "annotations": annotations,
+                                    "status": status,
+                                    "repeat_count": next_repeats,
+                                    "last_seen_at": now_iso,
+                                }
+                            )
+                            if link:
+                                updated_ctx["link"] = link
+                            prev.severity = sev
+                            prev.message = message
+                            prev.context = updated_ctx
+                            db.add(prev)
+                            db.commit()
+                            folded = True
+                        break
+
+                if folded:
+                    continue
+
                 log = NotificationLog(
                     source=NotificationSource.ALERTMANAGER,
                     event_type=alertname,

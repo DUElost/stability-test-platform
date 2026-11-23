@@ -75,5 +75,5 @@ def test_agent_socketio_handshake_declares_shadow_scan_capability(monkeypatch):
         "host_id": "host-1",
         # #4044：握手能力与心跳能力同源；实例 id 让发送守卫把证据绑到当前连接。
         "agent_instance_id": "inst-1",
-        "capabilities": ["scan_round_v1"],
+        "capabilities": ["scan_round_v1", "firmware_cache_v1"],
     }

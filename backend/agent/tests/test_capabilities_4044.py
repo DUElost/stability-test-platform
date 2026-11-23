@@ -108,4 +108,6 @@ def test_normalize_trims_so_both_channels_agree():
 
 def test_capability_source_is_a_build_level_constant():
     """Agent 侧只有一份能力名单：改名即两条通道同时改变，不会只改一边。"""
-    assert AGENT_CAPABILITIES == (SCAN_ROUND_V1,)
+    from backend.agent.contracts.capabilities import FIRMWARE_CACHE_V1
+
+    assert AGENT_CAPABILITIES == (SCAN_ROUND_V1, FIRMWARE_CACHE_V1)

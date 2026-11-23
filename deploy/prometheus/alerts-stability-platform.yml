@@ -849,6 +849,7 @@ groups:
         for: 30m
         labels:
           severity: warning
+          notify_surface: hosts_only
         annotations:
           summary: Host has USB devices but zero ADB interfaces (L4 — device-side only)
           description: >-

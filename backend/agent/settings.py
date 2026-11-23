@@ -303,6 +303,73 @@ class RegistrationSettings(BaseSettings):
         return self.auto_register_host.lower() == "true"
 
 
+class FirmwareCacheSettings(BaseSettings):
+    """固件本地缓存域旋钮（ADR-0064 D2 #3，全部 9 个 ``STP_FIRMWARE_*`` Agent 键）。
+
+    路径类缺省为空串：运行时由 ``firmware_cache`` 派生
+    ``{AGENT_INSTALL_DIR}/firmware_cache`` 与 AEE 同级 ``stp_firmware_cache``。
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=None,
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    stp_firmware_cache_dir: str = ""
+    stp_firmware_cache_fallback_dir: str = ""
+    stp_firmware_cache_reserve_gb: float = 20.0
+    stp_firmware_cache_max_gb: float = 60.0
+    stp_firmware_cache_max_pct: float = 30.0
+    stp_firmware_cache_ttl_days: float = 14.0
+    stp_firmware_cache_cleanup_interval_seconds: float = 21600.0
+    stp_firmware_transfer_permit_wait_timeout_seconds: float = 3600.0
+    stp_firmware_transfer_unreachable_timeout_seconds: float = 300.0
+
+    @field_validator("stp_firmware_cache_reserve_gb", mode="before")
+    @classmethod
+    def _v_reserve_gb(cls, value: object) -> float:
+        return _tolerant_seconds(value, 20.0, "STP_FIRMWARE_CACHE_RESERVE_GB")
+
+    @field_validator("stp_firmware_cache_max_gb", mode="before")
+    @classmethod
+    def _v_max_gb(cls, value: object) -> float:
+        return _tolerant_seconds(value, 60.0, "STP_FIRMWARE_CACHE_MAX_GB")
+
+    @field_validator("stp_firmware_cache_max_pct", mode="before")
+    @classmethod
+    def _v_max_pct(cls, value: object) -> float:
+        return _tolerant_pct(value, 30.0, "STP_FIRMWARE_CACHE_MAX_PCT")
+
+    @field_validator("stp_firmware_cache_ttl_days", mode="before")
+    @classmethod
+    def _v_ttl_days(cls, value: object) -> float:
+        return _tolerant_seconds(value, 14.0, "STP_FIRMWARE_CACHE_TTL_DAYS")
+
+    @field_validator("stp_firmware_cache_cleanup_interval_seconds", mode="before")
+    @classmethod
+    def _v_cleanup_interval(cls, value: object) -> object:
+        return _clamp_positive_seconds(
+            value, "STP_FIRMWARE_CACHE_CLEANUP_INTERVAL_SECONDS", floor=60.0
+        )
+
+    @field_validator("stp_firmware_transfer_permit_wait_timeout_seconds", mode="before")
+    @classmethod
+    def _v_permit_wait(cls, value: object) -> object:
+        return _clamp_positive_seconds(
+            value, "STP_FIRMWARE_TRANSFER_PERMIT_WAIT_TIMEOUT_SECONDS"
+        )
+
+    @field_validator(
+        "stp_firmware_transfer_unreachable_timeout_seconds", mode="before"
+    )
+    @classmethod
+    def _v_permit_unreachable(cls, value: object) -> object:
+        return _clamp_positive_seconds(
+            value, "STP_FIRMWARE_TRANSFER_UNREACHABLE_TIMEOUT_SECONDS"
+        )
+
+
 @lru_cache(maxsize=1)
 def get_lease_settings() -> LeaseSettings:
     """取租约域 Settings（惰性 + 缓存；不读 `.env` 文件）。"""
@@ -327,6 +394,12 @@ def get_registration_settings() -> RegistrationSettings:
     return RegistrationSettings()
 
 
+@lru_cache(maxsize=1)
+def get_firmware_cache_settings() -> FirmwareCacheSettings:
+    """取固件本地缓存域 Settings（惰性 + 缓存；不读 `.env` 文件）。"""
+    return FirmwareCacheSettings()
+
+
 def reset_agent_settings_caches() -> None:
     """清 Agent 侧**全部** Settings 缓存（ADR-0042 P1 Note 预告的多域扩展）。
 
@@ -337,3 +410,4 @@ def reset_agent_settings_caches() -> None:
     get_disk_archive_settings.cache_clear()
     get_heartbeat_settings.cache_clear()
     get_registration_settings.cache_clear()
+    get_firmware_cache_settings.cache_clear()
