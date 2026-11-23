@@ -20,6 +20,8 @@ interface SearchableSelectProps {
   icon?: ReactNode;
   ariaLabel?: string;
   className?: string;
+  triggerClassName?: string;
+  disabled?: boolean;
   testId?: string;
 }
 
@@ -50,6 +52,8 @@ export function SearchableSelect({
   icon,
   ariaLabel,
   className,
+  triggerClassName,
+  disabled = false,
   testId,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
@@ -165,6 +169,7 @@ export function SearchableSelect({
   }, [open, searchable]);
 
   const handleNavigationKey = (event: React.KeyboardEvent) => {
+    if (disabled) return;
     if (!open) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
@@ -305,12 +310,14 @@ export function SearchableSelect({
         ref={triggerRef}
         type="button"
         role="combobox"
+        disabled={disabled}
         aria-label={ariaLabel}
         aria-expanded={open}
         aria-haspopup="listbox"
         data-testid={testId}
         onKeyDown={handleNavigationKey}
         onClick={() => {
+          if (disabled) return;
           const next = !open;
           if (next) {
             setQuery('');
@@ -322,9 +329,11 @@ export function SearchableSelect({
         className={cn(
           'flex h-9 w-full items-center justify-between gap-1.5 rounded-lg border px-2.5 text-xs sm:text-sm transition-all',
           'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25',
+          'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-background',
           isFiltered
             ? 'border-primary/40 bg-primary/5 font-medium text-primary'
             : 'border-input bg-background text-foreground',
+          triggerClassName,
         )}
       >
         <span className="flex min-w-0 items-center gap-1.5">
@@ -341,7 +350,7 @@ export function SearchableSelect({
           <span className="truncate text-left">{displayLabel}</span>
         </span>
         <span className="flex shrink-0 items-center gap-0.5 text-muted-foreground">
-          {isFiltered && (
+          {isFiltered && !disabled && (
             <span
               role="button"
               tabIndex={-1}

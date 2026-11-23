@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { ConfirmProvider } from '@/hooks/useConfirm';
 import PlanListPage from './PlanListPage';
@@ -50,17 +51,19 @@ vi.mock('@/hooks/useToast', () => ({
   }),
 }));
 
-function renderPage() {
+function renderPage(initialEntry = '/orchestration/plans') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
 
   return render(
-    <QueryClientProvider client={queryClient}>
-      <ConfirmProvider>
-        <PlanListPage />
-      </ConfirmProvider>
-    </QueryClientProvider>,
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <QueryClientProvider client={queryClient}>
+        <ConfirmProvider>
+          <PlanListPage />
+        </ConfirmProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -166,6 +169,38 @@ describe('PlanListPage', () => {
     expect(screen.getByText('创建者: alice')).toBeInTheDocument();
     // 无 created_by 的 Plan 不渲染占位行（全表仅 1 处「创建者:」）
     expect(screen.getAllByText(/创建者: /)).toHaveLength(1);
+  });
+
+  it('hydrates project, specialty and search filters from URL query params', async () => {
+    mocks.listProjects.mockResolvedValue([
+      { id: 1, key: 'V552AA', name: 'V552AA', status: 'ACTIVE', created_at: '', updated_at: '' },
+    ]);
+    mocks.listPlans.mockResolvedValue([
+      {
+        id: 1,
+        name: 'MTBF-TARGET',
+        steps: [],
+        project_key: 'V552AA',
+        specialty_key: 'mtbf',
+        created_at: '2026-08-26T00:00:00Z',
+        updated_at: '2026-08-26T00:00:00Z',
+      },
+      {
+        id: 2,
+        name: 'MTBF-OTHER',
+        steps: [],
+        project_key: 'V552AA',
+        specialty_key: 'mtbf',
+        created_at: '2026-08-26T00:00:00Z',
+        updated_at: '2026-08-26T00:00:00Z',
+      },
+    ]);
+
+    renderPage('/orchestration/plans?project=V552AA&specialty=mtbf&q=TARGET');
+
+    expect(await screen.findByText('MTBF-TARGET')).toBeInTheDocument();
+    expect(screen.queryByText('MTBF-OTHER')).not.toBeInTheDocument();
+    expect(mocks.listPlans).toHaveBeenCalledWith(0, 200, 'V552AA', 'mtbf');
   });
 });
 

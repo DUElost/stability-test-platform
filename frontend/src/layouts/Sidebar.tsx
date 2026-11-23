@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
+import { QueryClientContext, useQuery } from '@tanstack/react-query';
 import {
   ChevronLeft,
   ChevronRight,
@@ -10,6 +11,8 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { api } from '@/utils/api';
+import { aiAssistantKeys } from '@/utils/api/queryKeys';
 import { BrandLogo } from '@/components/brand/BrandLogo';
 import {
   SIDEBAR,
@@ -18,6 +21,30 @@ import {
 } from '@/design-system/tokens';
 
 import { navGroups, type NavItem } from './navItems';
+
+function PendingApprovalsBadge({ collapsed }: { collapsed: boolean }) {
+  const pendingQ = useQuery({
+    queryKey: aiAssistantKeys.pendingActions(),
+    queryFn: api.aiAssistant.listPendingActions,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const count = pendingQ.data?.length ?? 0;
+  if (count <= 0) return null;
+  return (
+    <span
+      data-testid="sidebar-assistant-pending-badge"
+      aria-label={`${count} 条待审批`}
+      className={cn(
+        'inline-flex shrink-0 items-center justify-center rounded-full bg-warning text-[10px] font-semibold leading-none text-warning-foreground tabular-nums',
+        collapsed ? 'absolute right-1 top-1 h-4 min-w-4 px-1' : 'ml-auto h-5 min-w-5 px-1.5',
+      )}
+    >
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
 
 // FRONTEND_NAV_IA_REDESIGN v1.3（2026-08-28 二次反馈：按使用频率分层，非组内重排）：
 // 一级=高频常驻（工作区/分析报告）；二级=中频折叠组（资源）；三级=低频收角落
@@ -42,6 +69,7 @@ export default function Sidebar({
   onCloseMobile,
 }: SidebarProps) {
   const location = useLocation();
+  const queryClient = useContext(QueryClientContext);
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
   const assistantActive = location.pathname.startsWith('/assistant');
@@ -138,7 +166,7 @@ export default function Sidebar({
           aria-label="AI 助手"
           title={collapsed && !isMobile ? 'AI 助手' : undefined}
           className={cn(
-            'flex items-center gap-3 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200',
+            'relative flex items-center gap-3 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200',
             assistantActive
               ? 'border-primary/60 bg-primary/10 text-primary'
               : 'border-primary/25 bg-primary/5 text-primary hover:bg-primary/10',
@@ -154,6 +182,9 @@ export default function Sidebar({
           >
             AI 助手
           </span>
+          {isAdmin && queryClient && (
+            <PendingApprovalsBadge collapsed={collapsed && !isMobile} />
+          )}
         </NavLink>
       </div>
 
