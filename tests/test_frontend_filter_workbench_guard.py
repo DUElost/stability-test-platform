@@ -89,25 +89,12 @@ _RE_HARDCODED_PALETTE = re.compile(
     r"|stone|emerald|rose|orange|indigo|violet|purple|sky|cyan|teal|pink)-\d{2,3}\b"
 )
 
-# 以下 allowlist 均为 Wave 3 / Wave 4 待治理存量清单，只减不增；
-# 每完成一页治理必须同步从对应集合中移除该文件。
-# U4-2（#4117）已将全部原生弹窗收敛至 AlertDialog / useConfirm，存量基线为 0。
+# 以下 6 项只减不增静态守卫白名单已在 Wave 1–4（#4117）全部清零；
+# 任何新增违规都将由对应守卫直接阻断。
 _NATIVE_DIALOG_ALLOWLIST: frozenset[str] = frozenset()
-_RAW_TABLE_ALLOWLIST = frozenset(
-    {
-        "components/plan-run/LogEventsCard.tsx",
-        "components/plan-run/TestCaseResultsCard.tsx",
-    }
-)
-_CLICKABLE_TR_ALLOWLIST = frozenset(
-    {
-        "components/execution/plan-execute/DeviceTablePanel.tsx",
-        "components/plan-run/DeviceOverview.tsx",
-    }
-)
-# U1-1（#4122）已将全部 3 处旧手写抽屉收敛至 ui/sheet.tsx，存量基线为 0。
+_RAW_TABLE_ALLOWLIST: frozenset[str] = frozenset()
+_CLICKABLE_TR_ALLOWLIST: frozenset[str] = frozenset()
 _BESPOKE_ARIA_MODAL_ALLOWLIST: frozenset[str] = frozenset()
-# U4-2（#4117）已将全部硬编码调色板收敛至语义 token，存量基线为 0。
 _HARDCODED_PALETTE_ALLOWLIST: frozenset[str] = frozenset()
 _PAGE_CONTAINER_EXEMPT = frozenset(
     {
@@ -115,11 +102,7 @@ _PAGE_CONTAINER_EXEMPT = frozenset(
         "pages/auth/RegisterPage.tsx",
     }
 )
-_MISSING_PAGE_CONTAINER_ALLOWLIST = frozenset(
-    {
-        "pages/execution/PlanRunDetailPage.tsx",
-    }
-)
+_MISSING_PAGE_CONTAINER_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def _iter_prod_tsx_files() -> list[Path]:

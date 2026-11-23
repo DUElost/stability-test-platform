@@ -1,6 +1,7 @@
 import { deviceProductText } from '@/utils/deviceProduct';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { ClickableRow } from '@/components/ui/clickable-row';
 import {
   Table,
   TableBody,
@@ -140,6 +141,7 @@ export function DeviceTablePanel({
             </TableRow>
           </TableHeader>
           <TableBody>
+            <TooltipProvider delayDuration={200}>
             {devices.map((device) => {
               const disabled = !isSchedulable(device);
               const row =
@@ -150,11 +152,12 @@ export function DeviceTablePanel({
               const label = hostLabel(host, hostId);
               const versionText = device.build_display_id || '—';
               return (
-                <TableRow
+                <ClickableRow
                   key={device.id}
+                  role="row"
                   data-device-row-id={device.id}
                   className={cn(
-                    disabled ? 'opacity-50' : 'cursor-pointer hover:bg-accent/50',
+                    disabled ? 'opacity-50' : 'hover:bg-accent/50',
                     selectedIds.has(device.id) && 'bg-primary/10',
                     highlightId === device.id &&
                       'animate-pulse bg-primary/10 ring-1 ring-inset ring-primary',
@@ -179,18 +182,16 @@ export function DeviceTablePanel({
                     </div>
                   </TableCell>
                   <TableCell className="max-w-[10rem] px-3 py-2">
-                    <TooltipProvider delayDuration={200}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="block truncate font-mono text-xs" title={versionText}>
-                            {versionText}
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-sm break-all font-mono text-xs">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="block truncate font-mono text-xs" title={versionText}>
                           {versionText}
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-sm break-all font-mono text-xs">
+                        {versionText}
+                      </TooltipContent>
+                    </Tooltip>
                   </TableCell>
                   <TableCell className="px-3 py-2">
                     <StatusBadge kind="device" status={device.status} size="sm" />
@@ -221,9 +222,10 @@ export function DeviceTablePanel({
                       '选择后检查'
                     )}
                   </TableCell>
-                </TableRow>
+                </ClickableRow>
               );
             })}
+            </TooltipProvider>
           </TableBody>
         </Table>
       </div>

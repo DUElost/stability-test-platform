@@ -11,6 +11,7 @@ import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useToast } from '@/hooks/useToast';
+import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 import { neutralizeSpreadsheetCellText } from '@/utils/spreadsheet';
 
@@ -61,24 +62,37 @@ function eventRowKey(e: PlanRunEvent): string {
   ]);
 }
 
+const VALID_STAGES = new Set<string>(['all', 'trigger', 'init', 'patrol', 'teardown', 'system']);
+const VALID_SEVERITIES = new Set<string>(['all', 'err', 'warn', 'info', 'ok']);
+
 /** 巡检日志页面 — 阶段/严重度过滤 + 关键字搜索 + 分页事件流(多源融合) + CSV 导出。 */
 export default function PlanRunLogsPage() {
   const { runId } = useParams<{ runId: string }>();
   const id = Number(runId);
   const qc = useQueryClient();
+  const { getString, getPositiveInt, updateParams } = useUrlFilterParams();
 
-  const [stageFilter, setStageFilter] = useState<EventStage | 'all'>('all');
-  const [severityFilter, setSeverityFilter] = useState<EventSeverity | 'all'>('all');
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState(''); // 防抖后的实际查询关键字
-  const [page, setPage] = useState(0); // 0-based,与 PlanRunEventStream 对齐
+  const initialStage = getString('stage', 'all');
+  const initialSeverity = getString('severity', 'all');
+  const initialQ = getString('q', '');
+  const initialPage = Math.max(0, getPositiveInt('page', 1) - 1);
+
+  const [stageFilter, setStageFilter] = useState<EventStage | 'all'>(
+    VALID_STAGES.has(initialStage) ? (initialStage as EventStage | 'all') : 'all',
+  );
+  const [severityFilter, setSeverityFilter] = useState<EventSeverity | 'all'>(
+    VALID_SEVERITIES.has(initialSeverity) ? (initialSeverity as EventSeverity | 'all') : 'all',
+  );
+  const [searchInput, setSearchInput] = useState(initialQ);
+  const [search, setSearch] = useState(initialQ); // 防抖后的实际查询关键字
+  const [page, setPage] = useState(initialPage); // 0-based,与 PlanRunEventStream 对齐
   const [isExporting, setIsExporting] = useState(false);
   const toast = useToast();
 
   // 300ms 防抖：输入即时回显，查询按稳定值发起
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 已生效的搜索值（#2087：只有它真的变了才复位分页）。 */
-  const appliedSearch = useRef('');
+  const appliedSearch = useRef(initialQ);
   useEffect(() => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
@@ -88,11 +102,12 @@ export default function PlanRunLogsPage() {
       appliedSearch.current = searchInput;
       setSearch(searchInput);
       setPage(0);
+      updateParams({ q: searchInput.trim() ? searchInput : null }, { resetPage: true });
     }, SEARCH_DEBOUNCE_MS);
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-  }, [searchInput]);
+  }, [searchInput, updateParams]);
 
   // #2623：本页只读 `status`（终态判定）与 `plan_name`（标题）两个标量，
   // 因此取聚合端点而不是 detail——detail 内嵌该 run 的**全部 job**
@@ -150,15 +165,22 @@ export default function PlanRunLogsPage() {
         : 'Plan Run 日志',
   );
 
-  const handleStageChange = useCallback((s: EventStage | 'all') => {
+  const handleStageChange = (s: EventStage | 'all') => {
     setStageFilter(s);
     setPage(0);
-  }, []);
+    updateParams({ stage: s === 'all' ? null : s }, { resetPage: true });
+  };
 
-  const handleSeverityChange = useCallback((s: EventSeverity | 'all') => {
+  const handleSeverityChange = (s: EventSeverity | 'all') => {
     setSeverityFilter(s);
     setPage(0);
-  }, []);
+    updateParams({ severity: s === 'all' ? null : s }, { resetPage: true });
+  };
+
+  const handlePageChange = (nextPage: number) => {
+    setPage(nextPage);
+    updateParams({ page: nextPage > 0 ? nextPage + 1 : null });
+  };
 
   const handleExportCsv = useCallback(async () => {
     if (!id || isExporting) return;
@@ -267,7 +289,7 @@ export default function PlanRunLogsPage() {
         error={eventsQ.error}
         page={page}
         pageSize={PAGE_SIZE}
-        onPageChange={setPage}
+        onPageChange={handlePageChange}
       />
     </PageContainer>
   );
