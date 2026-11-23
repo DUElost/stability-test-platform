@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, PlugZap, Save } from 'lucide-react';
+import { ArrowLeft, Loader2, PlugZap, Save } from 'lucide-react';
 import { api, toApiError } from '@/utils/api';
 import type { AiAssistantConfig, AiAssistantConfigUpdate } from '@/utils/api/types';
 import { aiAssistantKeys } from '@/utils/api/queryKeys';
@@ -167,7 +168,7 @@ export default function AiAssistantSettingsPage() {
     saveMutation.mutate(payload);
   };
 
-  if (configQ.isLoading) {
+  if (configQ.isLoading || (!configQ.isError && configQ.data && !form)) {
     return (
       <PageContainer>
         <PageHeader title="AI 助手设置" subtitle="配置 OpenAI 兼容的 LLM 接入与自治边界" />
@@ -244,7 +245,18 @@ export default function AiAssistantSettingsPage() {
 
   return (
     <PageContainer>
-      <PageHeader title="AI 助手设置" subtitle="配置 OpenAI 兼容的 LLM 接入与自治边界（变更写入审计）" />
+      <PageHeader
+        title="AI 助手设置"
+        subtitle="配置 OpenAI 兼容的 LLM 接入与自治边界（变更写入审计）"
+        action={
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/settings">
+              <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
+              系统设置
+            </Link>
+          </Button>
+        }
+      />
 
       <div className="max-w-3xl space-y-4">
         <Card>

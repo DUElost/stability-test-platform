@@ -142,7 +142,7 @@ export default function JiraRunHistory({ planRunId, title }: Props = {}) {
                         )}
                       </div>
                       {run.error && (
-                        <div className={cn('mt-1 truncate text-xs text-destructive', TEXT.caption)}>
+                        <div className="mt-1 truncate text-xs text-destructive-text">
                           {run.error}
                         </div>
                       )}

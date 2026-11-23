@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, fetchAllPlans, toApiError, type TaskSchedule, type TaskScheduleCreatePayload } from '@/utils/api';
 import { fetchAllPages } from '@/utils/api/paginate';
@@ -53,16 +53,19 @@ export default function SchedulesPage() {
   const nameInputRef = useRef<HTMLInputElement>(null);
   const actionInFlight = useRef(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [busyScheduleId, setBusyScheduleId] = useState<number | null>(null);
 
-  const runGuarded = async (fn: () => Promise<void>) => {
+  const runGuarded = async (fn: () => Promise<void>, scheduleId?: number) => {
     if (actionInFlight.current) return;
     actionInFlight.current = true;
     setActionBusy(true);
+    if (scheduleId != null) setBusyScheduleId(scheduleId);
     try {
       await fn();
     } finally {
       actionInFlight.current = false;
       setActionBusy(false);
+      setBusyScheduleId(null);
     }
   };
 
@@ -80,7 +83,8 @@ export default function SchedulesPage() {
     queryFn: () => fetchAllPlans(),
   });
   const schedules = schedulesQ.data ?? [];
-  const plans = plansQ.data ?? [];
+  const plans = useMemo(() => plansQ.data ?? [], [plansQ.data]);
+  const planNameById = useMemo(() => new Map(plans.map((p) => [p.id, p.name])), [plans]);
   const loading = schedulesQ.isLoading || plansQ.isLoading;
   const loadError = schedulesQ.isError
     ? (schedulesQ.error as Error)?.message ?? '加载失败'
@@ -149,7 +153,7 @@ export default function SchedulesPage() {
       } catch (err: unknown) {
         toast.error(toApiError(err).message);
       }
-    });
+    }, id);
   };
 
   const handleToggle = async (id: number) => {
@@ -160,7 +164,7 @@ export default function SchedulesPage() {
       } catch (err: unknown) {
         toast.error(toApiError(err).message);
       }
-    });
+    }, id);
   };
 
   const handleRunNow = async (id: number) => {
@@ -176,7 +180,7 @@ export default function SchedulesPage() {
       } catch (err: unknown) {
         toast.error(toApiError(err).message);
       }
-    });
+    }, id);
   };
 
   const openEdit = (s: TaskSchedule) => {
@@ -364,12 +368,15 @@ export default function SchedulesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {schedules.map((s) => (
+              {schedules.map((s) => {
+                const rowBusy = busyScheduleId === s.id;
+                const planLabel = planNameById.get(s.plan_id) ?? `Plan #${s.plan_id}`;
+                return (
                 <TableRow key={s.id} className="border-b hover:bg-muted/30">
                   <TableCell className={cn('px-4 py-3 font-medium', TEXT.heading)}>{s.name}</TableCell>
                   <TableCell className={cn('px-4 py-3 font-mono', TEXT.subtitle)}>{s.cron_expr}</TableCell>
                   <TableCell className={cn('px-4 py-3', TEXT.subtitle)}>
-                    Plan #{s.plan_id}（{(s.device_ids || []).length} 台设备）
+                    {planLabel}（{(s.device_ids || []).length} 台设备）
                   </TableCell>
                   <TableCell className="px-4 py-3">
                     <span className={cn(
@@ -384,22 +391,23 @@ export default function SchedulesPage() {
                   </TableCell>
                   <TableCell className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => handleRunNow(s.id)} disabled={actionBusy} title="立即执行" aria-label="立即执行" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary', actionBusy && 'opacity-50 pointer-events-none')}>
+                      <button onClick={() => handleRunNow(s.id)} disabled={rowBusy} title="立即执行" aria-label="立即执行" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary', rowBusy && 'opacity-50 pointer-events-none')}>
                         <Play className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleToggle(s.id)} disabled={actionBusy} title="切换状态" aria-label="切换状态" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-warning', actionBusy && 'opacity-50 pointer-events-none')}>
+                      <button onClick={() => handleToggle(s.id)} disabled={rowBusy} title="切换状态" aria-label="切换状态" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-warning', rowBusy && 'opacity-50 pointer-events-none')}>
                         <Power className="w-4 h-4" />
                       </button>
                       <button onClick={() => openEdit(s)} title="编辑" aria-label="编辑" className={cn('p-1.5 rounded', INTERACTIVE.iconButton)}>
                         <Edit2 className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleDelete(s.id)} disabled={actionBusy} title="删除" aria-label="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconDanger, actionBusy && 'opacity-50 pointer-events-none')}>
+                      <button onClick={() => handleDelete(s.id)} disabled={rowBusy} title="删除" aria-label="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconDanger, rowBusy && 'opacity-50 pointer-events-none')}>
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -29,6 +29,12 @@ type TabKey = 'form' | 'drafts' | 'history';
 
 export default function IssueTrackerPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const rawPlanRunId = searchParams.get('planRunId');
+  const initialPlanRunId =
+    rawPlanRunId && Number.isInteger(Number(rawPlanRunId)) && Number(rawPlanRunId) > 0
+      ? Number(rawPlanRunId)
+      : undefined;
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [tab, setTab] = useState<TabKey>('form');
 
@@ -86,7 +92,7 @@ export default function IssueTrackerPage() {
 
       {tab === 'form' && (
         <div className="rounded-lg border border-border p-4">
-          <JiraSubmitPanel />
+          <JiraSubmitPanel initialPlanRunId={initialPlanRunId} />
         </div>
       )}
 

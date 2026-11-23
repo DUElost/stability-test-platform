@@ -25,14 +25,18 @@ interface ScanArtifact {
 
 type Source = 'upload' | 'plan_run';
 
-export default function JiraSubmitPanel() {
+interface JiraSubmitPanelProps {
+  initialPlanRunId?: number;
+}
+
+export default function JiraSubmitPanel({ initialPlanRunId }: JiraSubmitPanelProps = {}) {
   const [vendor, setVendor] = useState<JiraVendor>('transsion');
   const [stage, setStage] = useState<JiraStage>('upload_list');
   const [dryRun, setDryRun] = useState(true);
   const [reporter, setReporter] = useState('');
-  const [source, setSource] = useState<Source>('upload');
+  const [source, setSource] = useState<Source>(initialPlanRunId ? 'plan_run' : 'upload');
   const [file, setFile] = useState<File | null>(null);
-  const [planRunId, setPlanRunId] = useState<number | ''>('');
+  const [planRunId, setPlanRunId] = useState<number | ''>(initialPlanRunId ?? '');
   const [artifactId, setArtifactId] = useState<number | ''>('');
   const [consoleRunId, setConsoleRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('');
@@ -50,7 +54,7 @@ export default function JiraSubmitPanel() {
   useEffect(() => {
     if (source !== 'plan_run') return;
     let cancelled = false;
-    api.planRuns.list(0, 10).then(rs => { if (!cancelled) setPlanRuns(rs); }).catch(() => {});
+    api.planRuns.list(0, 50).then(rs => { if (!cancelled) setPlanRuns(rs); }).catch(() => {});
     return () => { cancelled = true; };
   }, [source]);
 
@@ -283,8 +287,11 @@ export default function JiraSubmitPanel() {
                   #{r.id} {r.ended_at ? `· ${formatLocalDateTime(r.ended_at)}` : ''}
                 </option>
               ))}
+              {planRunId !== '' && !planRuns.some((r) => r.id === Number(planRunId)) && (
+                <option value={planRunId}>#{planRunId}</option>
+              )}
             </select>
-            <p className={FORM.hint}>列出最近 10 个 PlanRun</p>
+            <p className={FORM.hint}>列出最近 50 个 PlanRun</p>
           </div>
           <div>
             <label htmlFor="jira-artifact" className={FORM.label}>去重产物</label>
