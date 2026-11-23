@@ -71,8 +71,11 @@ export default function HostsPage() {
       ? rawHealth
       : 'all';
   const rawSync = getString('sync', 'all');
-  const syncFilter: 'all' | 'drift' | 'matched' | 'mount_error' =
-    rawSync === 'drift' || rawSync === 'matched' || rawSync === 'mount_error'
+  const syncFilter: 'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault' =
+    rawSync === 'drift' ||
+    rawSync === 'matched' ||
+    rawSync === 'mount_error' ||
+    rawSync === 'usb_fault'
       ? rawSync
       : 'all';
   const { data: hostsData, isLoading, error } = useQuery({
@@ -308,6 +311,64 @@ export default function HostsPage() {
     },
   });
 
+  const [deviceIntentUpdatingHostId, setDeviceIntentUpdatingHostId] = useState<
+    string | number | null
+  >(null);
+
+  const setDeviceIntentMutation = useMutation({
+    mutationFn: (vars: { hostId: string | number; reason: string }) =>
+      api.hosts.setDeviceIntent(vars.hostId, vars.reason),
+    onSuccess: (_data, vars) => {
+      toast.success(`主机 ${vars.hostId} 已标记为「设备面已处置」`);
+      setDeviceIntentUpdatingHostId(null);
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
+    },
+    onError: (error: unknown, vars) => {
+      toast.error(
+        `标记设备面已处置失败: ${toApiError(error).message || `host ${vars.hostId}`}`,
+      );
+      setDeviceIntentUpdatingHostId(null);
+    },
+  });
+
+  const clearDeviceIntentMutation = useMutation({
+    mutationFn: (hostId: string | number) => api.hosts.clearDeviceIntent(hostId),
+    onSuccess: (_data, hostId) => {
+      toast.success(`主机 ${hostId} 已解除「设备面已处置」标记`);
+      setDeviceIntentUpdatingHostId(null);
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      queryClient.invalidateQueries({ queryKey: ['host-detail', hostId] });
+    },
+    onError: (error: unknown, hostId) => {
+      toast.error(
+        `解除设备面已处置失败: ${toApiError(error).message || `host ${hostId}`}`,
+      );
+      setDeviceIntentUpdatingHostId(null);
+    },
+  });
+
+  const handleSetDeviceIntent = async (host: HostTableData) => {
+    const ok = await confirmDialog({
+      description: `确认将主机「${host.name ?? host.id}」标记为「设备面已处置（空置/撤机）」？标记后该主机的 UsbBlind 与批量 offline 告警将被豁免，直到人工解除。`,
+    });
+    if (!ok) return;
+    setDeviceIntentUpdatingHostId(host.id);
+    setDeviceIntentMutation.mutate({
+      hostId: host.id,
+      reason: '人工确认空置或设备已清空（Hosts 工作台标记）',
+    });
+  };
+
+  const handleClearDeviceIntent = async (host: HostTableData) => {
+    const ok = await confirmDialog({
+      description: `确认解除主机「${host.name ?? host.id}」的「设备面已处置」标记？解除后设备面告警将立即恢复生效。`,
+    });
+    if (!ok) return;
+    setDeviceIntentUpdatingHostId(host.id);
+    clearDeviceIntentMutation.mutate(host.id);
+  };
+
   const handleHotUpdate = (hostId: number | string) => {
     if (bulkHotUpdateProgress) {
       toast.info('安全批量热更新正在执行，请等待完成');
@@ -536,6 +597,85 @@ export default function HostsPage() {
         claimHint = parts.join(' · ');
       }
 
+      const capRaw =
+        host.capacity && typeof host.capacity === 'object'
+          ? (host.capacity as Record<string, unknown>)
+          : {};
+      const topoRaw =
+        capRaw.usb_hub_topology && typeof capRaw.usb_hub_topology === 'object'
+          ? (capRaw.usb_hub_topology as Record<string, unknown>)
+          : null;
+      const usbHubTopology =
+        topoRaw &&
+        typeof topoRaw.cascade_hubs === 'number' &&
+        typeof topoRaw.unbound_hubs === 'number' &&
+        typeof topoRaw.unbound_idle_bus_hubs === 'number'
+          ? {
+              cascade_hubs: topoRaw.cascade_hubs,
+              unbound_hubs: topoRaw.unbound_hubs,
+              unbound_idle_bus_hubs: topoRaw.unbound_idle_bus_hubs,
+            }
+          : null;
+      const kerrRaw =
+        capRaw.usb_kernel_errors_1h && typeof capRaw.usb_kernel_errors_1h === 'object'
+          ? (capRaw.usb_kernel_errors_1h as Record<string, unknown>)
+          : null;
+      const usbKernelErrors1h =
+        kerrRaw &&
+        typeof kerrRaw.link_errors === 'number' &&
+        typeof kerrRaw.cable_suspect === 'number' &&
+        typeof kerrRaw.disconnects === 'number' &&
+        typeof kerrRaw.resets === 'number' &&
+        typeof kerrRaw.enum_errors === 'number' &&
+        typeof kerrRaw.hub_port_errors === 'number'
+          ? {
+              link_errors: kerrRaw.link_errors,
+              cable_suspect: kerrRaw.cable_suspect,
+              disconnects: kerrRaw.disconnects,
+              resets: kerrRaw.resets,
+              enum_errors: kerrRaw.enum_errors,
+              hub_port_errors: kerrRaw.hub_port_errors,
+            }
+          : null;
+      const adbStatesRaw =
+        capRaw.adb_state_counts && typeof capRaw.adb_state_counts === 'object'
+          ? (capRaw.adb_state_counts as Record<string, unknown>)
+          : null;
+      const adbStateCounts = adbStatesRaw
+        ? {
+            device: optionalNumber(adbStatesRaw.device),
+            offline: optionalNumber(adbStatesRaw.offline),
+            unauthorized: optionalNumber(adbStatesRaw.unauthorized),
+            other: optionalNumber(adbStatesRaw.other),
+          }
+        : null;
+      const rawKernelLog = capRaw.usb_kernel_log;
+      const usbKernelLog =
+        rawKernelLog === 'ok' || rawKernelLog === 'unavailable' || rawKernelLog === 'unknown'
+          ? rawKernelLog
+          : null;
+      const probeCandidate =
+        (host as { health_probe?: unknown }).health_probe ?? extra.health_probe;
+      const probeRaw =
+        probeCandidate && typeof probeCandidate === 'object'
+          ? (probeCandidate as Record<string, unknown>)
+          : null;
+      const healthProbe = probeRaw
+        ? {
+            checked_at: typeof probeRaw.checked_at === 'string' ? probeRaw.checked_at : undefined,
+            verdict: typeof probeRaw.verdict === 'string' ? probeRaw.verdict : undefined,
+            signals: Array.isArray(probeRaw.signals)
+              ? probeRaw.signals.filter((s): s is string => typeof s === 'string')
+              : undefined,
+            topology: typeof probeRaw.topology === 'string' ? probeRaw.topology : undefined,
+            recent_verdicts: Array.isArray(probeRaw.recent_verdicts)
+              ? probeRaw.recent_verdicts.filter((s): s is string => typeof s === 'string')
+              : undefined,
+            strike_open: typeof probeRaw.strike_open === 'boolean' ? probeRaw.strike_open : undefined,
+            strike_need: typeof probeRaw.strike_need === 'number' ? probeRaw.strike_need : undefined,
+          }
+        : null;
+
       return {
         id: host.id,
         name: host.name ?? '',
@@ -583,6 +723,12 @@ export default function HostsPage() {
           : [],
         device_count: onlineDevices,
         usb_device_count: optionalNumber(host.capacity?.usb_device_count) ?? null,
+        adb_interface_count: optionalNumber(capRaw.adb_interface_count) ?? null,
+        adb_state_counts: adbStateCounts,
+        usb_kernel_log: usbKernelLog,
+        usb_hub_topology: usbHubTopology,
+        usb_kernel_errors_1h: usbKernelErrors1h,
+        health_probe: healthProbe,
         claim_hint: claimHint,
         active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
         health_status: host.health?.status,
@@ -945,6 +1091,12 @@ export default function HostsPage() {
         onDelete={isAdmin ? handleDelete : undefined}
         onRetire={isAdmin ? handleRetire : undefined}
         onUnretire={isAdmin ? handleUnretire : undefined}
+        onSetDeviceIntent={isAdmin ? handleSetDeviceIntent : undefined}
+        onClearDeviceIntent={isAdmin ? handleClearDeviceIntent : undefined}
+        isDeviceIntentUpdating={(hostId: string | number) =>
+          (setDeviceIntentMutation.isPending || clearDeviceIntentMutation.isPending) &&
+          deviceIntentUpdatingHostId === hostId
+        }
         isDeleting={(hostId: string | number) => deleteMutation.isPending && deleteMutation.variables === hostId}
         onWatcherAdminStateChange={handleWatcherAdminStateChange}
         isWatcherAdminStateUpdating={(hostId: string | number) =>
