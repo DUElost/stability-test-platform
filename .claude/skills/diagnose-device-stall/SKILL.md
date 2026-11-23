@@ -44,8 +44,8 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
 > `-71` / `-110`。
 
 10. 如果 L1 判据**当前**成立，执行 xHCI unbind/rebind，不需要重启主机。L1 判据要同时满足：
-    当前 `lsusb -t` 只剩 root hub、看不到 Hub 树与手机；`sudo dmesg -T` 有对应的 `HC died` 或
-    `not responding` 主控死亡记录。判据与命令见
+    当前 `lsusb -t` 只剩 root hub、看不到 Hub 树与手机（且 `usb1-port*` / `usb2-port*` 的 `disable` 为 `1`）；`sudo -n /usr/local/sbin/stp-agent-priv read-kernel-log --boot --lines 5000`（或 `sudo dmesg -T`）有对应的 `HC died` 或
+    `not responding` 主控死亡记录（注意：Agent 重启或热更新后控制面 `usb_kernel_log` 会恢复为 `"ok"`，执行者必须以本次启动至今的内核日志与 `lsusb -t` 为准；另 `NOPASSWD` 不包含写 `/sys/bus/pci/drivers/xhci_hcd/{unbind,bind}`，执行者必须使用带密码的 `sudo` 或 root 权限执行 unbind/bind）。判据与命令见
     `docs/operations/incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md` §2、§3.1。
     预期：`lsusb` 能看到 Hub 树与手机，而不只是 root hub。2026-09-20 两台主机验证：控制器死亡
     不会自愈，rebind 可以重复使用。
@@ -92,3 +92,6 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
 - `stp-agent-priv read-kernel-log` 的输出**不含时间戳**（`journalctl -k -o cat`）。执行者要定位
   「噪声何时停止」只能用 `--since-epoch` 做窗口夹逼（3/5/10/15/20 分钟逐级取首次归零的窗口），
   不得凭「现在没有新行」推断停止时刻。另注意该面 `--lines` 上限为 5000，超限直接 rc=2。
+- 执行者不得对 `/sys/bus/usb/devices` 运行 `find -L`（`peer` 符号链接存在环路，会导致命令卡死超时）；执行者查端口禁用态必须使用非递归通配（`/sys/bus/usb/devices/*/*/*-port*/disable` 与 `/sys/bus/usb/devices/*/*-port*/disable`），且在 `usb_link_degraded` 的 Agent host 上执行 `lsusb`、`uhubctl` 或 `adb` 时执行者建议加 `timeout 5` 限流。
+- 控制面 `/hosts` 的 `ONLINE` 状态由 Agent 主动上报心跳维护，与控制面入向 SSH 连通性无关；通过 `hosts.ini` 批量 SSH 时，执行者必须按 `[android:vars]` 节（或对应主机行）解析凭据，不得抓取文件首个无关分组的密码。
+- 以 `android` 用户直接运行 `adb devices` 只会查询 `android` 用户自己的 5037 端口；执行者核对平台真实识别到的 ADB 设备数必须以控制面 `GET /api/v1/hosts` 的 `capacity.adb_state_counts` 为准。
