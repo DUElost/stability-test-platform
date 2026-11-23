@@ -25,6 +25,7 @@ import { LAYOUT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { useConfirm } from '@/hooks/useConfirm';
 import { useToast } from '@/hooks/useToast';
 import { api, toApiError } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
@@ -109,6 +110,7 @@ export default function ProjectDetailPage() {
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
   const toast = useToast();
+  const confirmDialog = useConfirm();
   const queryClient = useQueryClient();
   const [editOpen, setEditOpen] = useState(false);
   // #1708：字段更新与 key 重命名必须**串行**提交。此前 onSubmit/onRename 在同一
@@ -180,10 +182,14 @@ export default function ProjectDetailPage() {
     },
   });
 
-  const handleRemoveRule = (model: string) => {
-    if (!window.confirm(`移除型号 ${model} 的归属规则？设备归属不动，心跳按新规则状态收敛。`)) {
-      return;
-    }
+  const handleRemoveRule = async (model: string) => {
+    const ok = await confirmDialog({
+      title: '移除归属规则',
+      description: `移除型号 ${model} 的归属规则？设备归属不动，心跳按新规则状态收敛。`,
+      variant: 'destructive',
+      confirmText: '确认移除',
+    });
+    if (!ok) return;
     removeRuleMutation.mutate({ model });
   };
 
@@ -200,10 +206,14 @@ export default function ProjectDetailPage() {
     },
   });
 
-  const handleArchive = () => {
-    if (!window.confirm('归档此项目？归档后从活跃列表消失（历史 Run 与设备归属保留），可在列表用状态筛选查看。')) {
-      return;
-    }
+  const handleArchive = async () => {
+    const ok = await confirmDialog({
+      title: '归档项目',
+      description: '归档此项目？归档后从活跃列表消失（历史 Run 与设备归属保留），可在列表用状态筛选查看。',
+      variant: 'destructive',
+      confirmText: '确认归档',
+    });
+    if (!ok) return;
     archiveMutation.mutate();
   };
 
@@ -534,7 +544,7 @@ export default function ProjectDetailPage() {
               <TruncationNote
                 count={devicesTotal}
                 unit="台"
-                to="/devices"
+                to={`/devices?project=${encodeURIComponent(projectKey)}`}
                 label="在设备页筛选查看"
               />
             )}
@@ -593,7 +603,7 @@ export default function ProjectDetailPage() {
               <TruncationNote
                 count={plansTotal}
                 unit="个"
-                to="/orchestration/plans"
+                to={`/orchestration/plans?project=${encodeURIComponent(projectKey)}`}
                 label="在 Plan 管理页筛选查看"
               />
             )}

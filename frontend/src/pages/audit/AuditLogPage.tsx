@@ -1,8 +1,9 @@
 import { useState, Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/utils/api';
-import { Shield, ChevronRight } from 'lucide-react';
+import { Shield, ChevronRight, RotateCcw } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { Button } from '@/components/ui/button';
 import { InlineError } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
@@ -113,6 +114,34 @@ export default function AuditLogPage() {
     const next = value.trim();
     setTextDraft((draft) => ({ ...draft, [key]: next }));
     setFilters((prev) => (prev[key] === next ? prev : { ...prev, [key]: next }));
+    setPage(0);
+  };
+
+  const hasActiveFilters =
+    filters.resource_type !== 'all' ||
+    filters.action !== '' ||
+    filters.username !== '' ||
+    filters.ip_address !== '' ||
+    filters.resource_id !== '' ||
+    filters.start_time !== '' ||
+    filters.end_time !== '';
+
+  const resetAllFilters = () => {
+    setFilters({
+      resource_type: 'all',
+      action: '',
+      username: '',
+      ip_address: '',
+      resource_id: '',
+      start_time: '',
+      end_time: '',
+    });
+    setTextDraft({
+      username: '',
+      ip_address: '',
+      resource_id: '',
+      action: '',
+    });
     setPage(0);
   };
 
@@ -285,6 +314,19 @@ export default function AuditLogPage() {
             data-testid="audit-resource-id-filter"
           />
         </label>
+        {hasActiveFilters && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={resetAllFilters}
+            data-testid="audit-reset-filters"
+            className="gap-1.5 text-muted-foreground hover:text-foreground"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            重置筛选
+          </Button>
+        )}
       </div>
 
       {invalidRange ? (

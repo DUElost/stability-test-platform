@@ -104,19 +104,19 @@ export default function MapModelsDialog({
             <div className="rounded-md border px-3 py-2 text-sm" data-testid="map-preview">
               <p>将归入 {preview.will_assign} 台 · 已在目标项目 {preview.already_in_target} 台</p>
               {preview.will_assign > 0 && (
-                <p className="mt-1 text-amber-700 dark:text-warning">
+                <p className="mt-1 text-warning">
                   将改归属 {preview.will_assign} 台设备；当前属 SEED / LEGACY 项目的设备不视为冲突，会直接迁入且不出现在冲突列表。
                 </p>
               )}
               {preview.conflicts.length > 0 ? (
-                <p className="mt-1 text-amber-700">
+                <p className="mt-1 text-warning">
                   冲突 {preview.conflicts.length} 台
                   （{preview.conflicts.map((item) => item.serial).slice(0, 5).join('、')}
                   {preview.conflicts.length > 5 ? '…' : ''}）
                 </p>
               ) : null}
               {preview.unknown_models.length > 0 ? (
-                <p className="mt-1 text-amber-700 dark:text-warning" data-testid="map-unknown-models">
+                <p className="mt-1 text-warning" data-testid="map-unknown-models">
                   应用会把 {preview.unknown_models.length} 个当前 fleet 未见过的型号写入该项目的 match_models（不会被阻断）：{preview.unknown_models.join('、')}
                 </p>
               ) : null}

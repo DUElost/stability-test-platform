@@ -35,7 +35,7 @@ export default function CaseEditDialog({
   const [error, setError] = useState('');
 
   const [prevKey, setPrevKey] = useState<string | null>(null);
-  const dialogKey = initial ? `edit-${initial.id}` : 'create';
+  const dialogKey = `${isOpen}:${initial ? `edit-${initial.id}` : 'create'}`;
   if (prevKey !== dialogKey) {
     setPrevKey(dialogKey);
     if (isOpen) {

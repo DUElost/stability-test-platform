@@ -25,6 +25,12 @@ const SCRIPTS: ScriptEntry[] = [
   },
 ];
 
+const authMock = vi.hoisted(() => ({ role: 'admin' }));
+
+vi.mock('@/hooks/useAuthSession', () => ({
+  useAuthSession: () => ({ data: { role: authMock.role } }),
+}));
+
 vi.mock('@/utils/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/api')>();
   return {

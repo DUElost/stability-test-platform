@@ -117,8 +117,9 @@ export default function EditProjectDialog({
             编辑项目
           </DialogTitle>
           <DialogDescription>
-            项目标识不可修改。字段变更逐项落审计（仅管理员可操作），JIRA 项目键
-            将在 plan_run 源提单时自动带出。
+            {canRename
+              ? '字段变更与标识改名逐项落审计（仅管理员可操作），JIRA 项目键将在 plan_run 源提单时自动带出。'
+              : '项目标识不可修改。字段变更逐项落审计（仅管理员可操作），JIRA 项目键将在 plan_run 源提单时自动带出。'}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">

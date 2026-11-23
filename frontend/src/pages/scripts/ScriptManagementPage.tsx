@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useAuthSession } from '@/hooks/useAuthSession';
 import { useToast } from '@/hooks/useToast';
 import { api, toApiError, type ScriptEntry } from '@/utils/api';
 import { Search, FileCode, Code2, Tag, RefreshCw } from 'lucide-react';
@@ -96,6 +97,8 @@ function UsageSection({ script }: { script: ScriptEntry }) {
 export default function ScriptManagementPage() {
   const queryClient = useQueryClient();
   const toast = useToast();
+  const sessionQ = useAuthSession();
+  const isAdmin = sessionQ.data?.role === 'admin';
   const [searchParams] = useSearchParams();
   // #3350（ADR-0023 D3）：`?name=&version=` 深链——初始值直接取自 URL（useState 初始化器，
   // 不用 effect：mount 后用户改搜索框不被 URL 覆盖；URL 保留便于分享）。
@@ -169,16 +172,18 @@ export default function ScriptManagementPage() {
             data-testid="script-search"
           />
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={scanMut.isPending}
-          onClick={() => scanMut.mutate()}
-          className="shrink-0"
-        >
-          <RefreshCw className={`w-4 h-4 mr-1.5 ${scanMut.isPending ? 'animate-spin' : ''}`} />
-          {scanMut.isPending ? '扫描中…' : '扫描脚本目录'}
-        </Button>
+        {isAdmin && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={scanMut.isPending}
+            onClick={() => scanMut.mutate()}
+            className="shrink-0"
+          >
+            <RefreshCw className={`w-4 h-4 mr-1.5 ${scanMut.isPending ? 'animate-spin' : ''}`} />
+            {scanMut.isPending ? '扫描中…' : '扫描脚本目录'}
+          </Button>
+        )}
       </div>
 
       {isLoading ? (
@@ -265,15 +270,17 @@ export default function ScriptManagementPage() {
                           >
                             <Code2 className="w-4 h-4" />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => { setVersionTarget(script); setShowVersionDialog(true); }}
-                            title="新建版本"
-                            aria-label="新建版本"
-                            className={cn('p-1.5 rounded-md', INTERACTIVE.iconButton)}
-                          >
-                            <Tag className="w-4 h-4" />
-                          </button>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => { setVersionTarget(script); setShowVersionDialog(true); }}
+                              title="新建版本"
+                              aria-label="新建版本"
+                              className={cn('p-1.5 rounded-md', INTERACTIVE.iconButton)}
+                            >
+                              <Tag className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>

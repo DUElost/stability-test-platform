@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { ConfirmProvider } from '@/hooks/useConfirm';
 import TestSuiteDetailPage from './TestSuiteDetailPage';
 
 const mocks = vi.hoisted(() => ({
@@ -51,11 +52,13 @@ function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/test-suites/7']}>
-        <Routes>
-          <Route path="/test-suites/:suiteId" element={<TestSuiteDetailPage />} />
-        </Routes>
-      </MemoryRouter>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/test-suites/7']}>
+          <Routes>
+            <Route path="/test-suites/:suiteId" element={<TestSuiteDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>
     </QueryClientProvider>,
   );
 }

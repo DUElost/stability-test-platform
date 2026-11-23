@@ -89,36 +89,19 @@ _RE_HARDCODED_PALETTE = re.compile(
     r"|stone|emerald|rose|orange|indigo|violet|purple|sky|cyan|teal|pink)-\d{2,3}\b"
 )
 
-# 以下 allowlist 均为 Wave 3 / Wave 4 待治理存量清单，只减不增；
-# 每完成一页治理必须同步从对应集合中移除该文件。
-_NATIVE_DIALOG_ALLOWLIST = frozenset(
-    {
-        "pages/projects/ProjectDetailPage.tsx",
-        "pages/projects/ProjectsPage.tsx",
-        "pages/suites/TestSuiteDetailPage.tsx",
-    }
-)
-_RAW_TABLE_ALLOWLIST = frozenset(
-    {
-        "pages/suites/TestSuiteDetailPage.tsx",
-    }
-)
-# U4-1ab（#4117）已将全部可点击行收敛至 ClickableRow，存量基线为 0。
+# 以下 6 项只减不增静态守卫白名单已在 Wave 1–4（#4117）全部清零；
+# 任何新增违规都将由对应守卫直接阻断。
+_NATIVE_DIALOG_ALLOWLIST: frozenset[str] = frozenset()
+_RAW_TABLE_ALLOWLIST: frozenset[str] = frozenset()
 _CLICKABLE_TR_ALLOWLIST: frozenset[str] = frozenset()
-# U1-1（#4122）已将全部 3 处旧手写抽屉收敛至 ui/sheet.tsx，存量基线为 0。
 _BESPOKE_ARIA_MODAL_ALLOWLIST: frozenset[str] = frozenset()
-_HARDCODED_PALETTE_ALLOWLIST = frozenset(
-    {
-        "pages/projects/components/MapModelsDialog.tsx",
-    }
-)
+_HARDCODED_PALETTE_ALLOWLIST: frozenset[str] = frozenset()
 _PAGE_CONTAINER_EXEMPT = frozenset(
     {
         "pages/auth/LoginPage.tsx",
         "pages/auth/RegisterPage.tsx",
     }
 )
-# U4-1ab（#4117）已将 PlanRunDetailPage 纳入 PageContainer，存量基线为 0。
 _MISSING_PAGE_CONTAINER_ALLOWLIST: frozenset[str] = frozenset()
 
 

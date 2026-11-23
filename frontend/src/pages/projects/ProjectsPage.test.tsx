@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { ConfirmProvider } from '@/hooks/useConfirm';
 import ProjectsPage from './ProjectsPage';
 
 const mocks = vi.hoisted(() => ({
@@ -104,9 +105,11 @@ function renderPage() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <ProjectsPage />
-      </MemoryRouter>
+      <ConfirmProvider>
+        <MemoryRouter>
+          <ProjectsPage />
+        </MemoryRouter>
+      </ConfirmProvider>
     </QueryClientProvider>,
   );
 }
@@ -388,8 +391,6 @@ describe('ProjectsPage', () => {
       device_count: 20,
       running_run_count: 0,
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     renderPage();
     expect(await screen.findByTestId('seed-queue')).toBeInTheDocument();
     expect(screen.getByText('荣耀 ELA')).toBeInTheDocument();
@@ -401,10 +402,9 @@ describe('ProjectsPage', () => {
     expect(screen.getByTestId('seed-abandon-LEGACY')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('seed-promote-HONOR-ELA'));
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(mocks.promoteSeed).toHaveBeenCalledWith('HONOR-ELA');
+    await user.click(await screen.findByRole('button', { name: '确认转正' }));
+    await waitFor(() => expect(mocks.promoteSeed).toHaveBeenCalledWith('HONOR-ELA'));
     await waitFor(() => expect(mocks.toast.success).toHaveBeenCalled());
-    confirmSpy.mockRestore();
   });
 
   it('skips promote when confirm is dismissed', async () => {
@@ -420,13 +420,12 @@ describe('ProjectsPage', () => {
         running_run_count: 0,
       },
     ]);
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     renderPage();
     await screen.findByTestId('seed-queue');
     await user.click(screen.getByTestId('seed-promote-HONOR-ELA'));
+    await user.click(await screen.findByRole('button', { name: '取消' }));
     expect(mocks.promoteSeed).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
   it('abandons a seed label with confirm on admin', async () => {
@@ -451,15 +450,13 @@ describe('ProjectsPage', () => {
       device_count: 20,
       running_run_count: 0,
     });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderPage();
     await screen.findByTestId('seed-queue');
     await user.click(screen.getByTestId('seed-abandon-HONOR-ELA'));
+    await user.click(await screen.findByRole('button', { name: '确认放弃' }));
 
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(mocks.archiveSeed).toHaveBeenCalledWith('HONOR-ELA');
+    await waitFor(() => expect(mocks.archiveSeed).toHaveBeenCalledWith('HONOR-ELA'));
     await waitFor(() => expect(mocks.toast.success).toHaveBeenCalled());
-    confirmSpy.mockRestore();
   });
 });
