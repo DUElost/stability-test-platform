@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import DeviceBulkActionBar from './DeviceBulkActionBar';
 
@@ -53,7 +54,8 @@ describe('DeviceBulkActionBar', () => {
     expect(screen.queryByTestId('device-select-all-filtered')).not.toBeInTheDocument();
   });
 
-  it('shows contextual actions and all-filtered selection', () => {
+  it('shows contextual actions and all-filtered selection', async () => {
+    const user = userEvent.setup();
     const onSelectAllFiltered = vi.fn();
     render(
       <DeviceBulkActionBar
@@ -71,13 +73,16 @@ describe('DeviceBulkActionBar', () => {
     expect(screen.getByTestId('device-bulk-action-bar')).toHaveClass('fixed', 'bottom-4');
     expect(screen.getByText('空闲 1 · 离线 1')).toBeInTheDocument();
     expect(screen.getByTestId('device-bulk-tags')).toBeInTheDocument();
-    expect(screen.getByTestId('device-bulk-swipe-trail-on')).toBeInTheDocument();
-    expect(screen.getByTestId('device-bulk-swipe-trail-off')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('device-select-all-filtered'));
     expect(onSelectAllFiltered).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByTestId('device-bulk-more'));
+    expect(screen.getByTestId('device-bulk-swipe-trail-on')).toBeInTheDocument();
+    expect(screen.getByTestId('device-bulk-swipe-trail-off')).toBeInTheDocument();
   });
 
-  it('invokes swipe-trail callbacks for admin buttons', () => {
+  it('invokes swipe-trail callbacks for admin buttons inside more menu', async () => {
+    const user = userEvent.setup();
     const onSwipeTrailOn = vi.fn();
     const onSwipeTrailOff = vi.fn();
     render(
@@ -91,13 +96,16 @@ describe('DeviceBulkActionBar', () => {
         onSwipeTrailOff={onSwipeTrailOff}
       />,
     );
-    fireEvent.click(screen.getByTestId('device-bulk-swipe-trail-on'));
-    fireEvent.click(screen.getByTestId('device-bulk-swipe-trail-off'));
+    await user.click(screen.getByTestId('device-bulk-more'));
+    await user.click(screen.getByTestId('device-bulk-swipe-trail-on'));
+    await user.click(screen.getByTestId('device-bulk-more'));
+    await user.click(screen.getByTestId('device-bulk-swipe-trail-off'));
     expect(onSwipeTrailOn).toHaveBeenCalledOnce();
     expect(onSwipeTrailOff).toHaveBeenCalledOnce();
   });
 
-  it('hides swipe-trail buttons without canSwipeTrail', () => {
+  it('hides swipe-trail buttons without canSwipeTrail', async () => {
+    const user = userEvent.setup();
     render(
       <DeviceBulkActionBar
         selectedCount={1}
@@ -106,6 +114,7 @@ describe('DeviceBulkActionBar', () => {
         {...handlers}
       />,
     );
+    await user.click(screen.getByTestId('device-bulk-more'));
     expect(screen.queryByTestId('device-bulk-swipe-trail-on')).not.toBeInTheDocument();
     expect(screen.queryByTestId('device-bulk-swipe-trail-off')).not.toBeInTheDocument();
   });

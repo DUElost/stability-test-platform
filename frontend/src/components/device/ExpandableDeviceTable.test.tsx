@@ -449,26 +449,27 @@ it('scopes version, model, product, and host filter options to active status and
   // 切换到「空闲」快捷视图
   fireEvent.click(screen.getByRole('button', { name: /空闲/ }));
 
-  // 版本下拉应只包含 V-IDLE，不应包含 V-OFFLINE
-  fireEvent.click(screen.getByRole('combobox', { name: '按版本筛选' }));
-  expect(screen.getByRole('option', { name: 'V-IDLE' })).toBeInTheDocument();
-  expect(screen.queryByRole('option', { name: 'V-OFFLINE' })).not.toBeInTheDocument();
-  fireEvent.keyDown(document, { key: 'Escape' });
-
   // 型号下拉应只包含 M-IDLE
   fireEvent.click(screen.getByRole('combobox', { name: '按型号筛选' }));
   expect(screen.getByRole('option', { name: 'M-IDLE' })).toBeInTheDocument();
   expect(screen.queryByRole('option', { name: 'M-OFFLINE' })).not.toBeInTheDocument();
   fireEvent.keyDown(document, { key: 'Escape' });
 
-  // Product 下拉应只包含 P-IDLE
-  fireEvent.click(screen.getByTestId('device-product-filter'));
-  expect(screen.getByRole('option', { name: 'P-IDLE' })).toBeInTheDocument();
-  expect(screen.queryByRole('option', { name: 'P-OFFLINE' })).not.toBeInTheDocument();
-  fireEvent.keyDown(document, { key: 'Escape' });
-
   // 主机下拉应只包含 Host-Idle
   fireEvent.click(screen.getByRole('combobox', { name: '按所属主机筛选' }));
   expect(screen.getByRole('option', { name: 'Host-Idle' })).toBeInTheDocument();
   expect(screen.queryByRole('option', { name: 'Host-Offline' })).not.toBeInTheDocument();
+  fireEvent.keyDown(document, { key: 'Escape' });
+
+  // Product 与版本收拢在「更多筛选」中，选项同样受活跃状态作用域约束
+  fireEvent.click(screen.getByTestId('devices-more-filters'));
+  fireEvent.click(screen.getByRole('combobox', { name: '按版本筛选' }));
+  expect(screen.getByRole('option', { name: 'V-IDLE' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'V-OFFLINE' })).not.toBeInTheDocument();
+  fireEvent.keyDown(document, { key: 'Escape' });
+
+  fireEvent.click(screen.getByTestId('device-product-filter'));
+  expect(screen.getByRole('option', { name: 'P-IDLE' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'P-OFFLINE' })).not.toBeInTheDocument();
+  fireEvent.keyDown(document, { key: 'Escape' });
 });
