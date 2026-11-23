@@ -42,3 +42,6 @@ Class: feature
 - U4 三大刷机族接入 `ensure_firmware` 与 `requires_agent_capabilities` 声明。
 - 若运维需要 Agent 优雅停机时显式 join 清理线程，再把 `stop()` 挂入
   `graceful_shutdown`（另开单元扩 scope）。
+- 第 1 轮独立复核 M1–M8 已在同 PR 返修：稳定 `.locks/<key>.lock`、冷拉降级重入、
+  staging 保护与越界守卫、串行区水位复核、拓扑拒绝顺序、错误语义分离、主机级
+  host-transfer 锁与等待打戳、真实 `_run_script_action` 双路径回归。
