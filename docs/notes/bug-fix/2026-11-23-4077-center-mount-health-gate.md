@@ -24,5 +24,5 @@ Class: bug-fix
 
 ## Revisit
 
-- **部署前提**：全队最新盘点（`#4077` Ansible 复核）确认 **13 台缺挂载 `/mnt/stp-log`、1 台（`172.21.15.9`）待复核**；须先补齐挂载、复核未知主机并在 Agent 用户下逐台验证可读写后再热更新/重启（未挂载即上线新门控会使该主机普通 `effective_slots` 压为 0，`UNSCHEDULABLE` 为健康状态字段，不等于 Host 离线）。
+- **部署前提**：全队最新盘点（`#4077` Ansible 复核）确认 **13 台缺挂载 `/mnt/stp-log`、1 台（`172.21.x.x`）待复核**；须先补齐挂载、复核未知主机并在 Agent 用户下逐台验证可读写后再热更新/重启（未挂载即上线新门控会使该主机普通 `effective_slots` 压为 0，`UNSCHEDULABLE` 为健康状态字段，不等于 Host 离线）。
 - 混部旧版 Agent 缺报 `/mnt/stp-log` 键时的 `/storage` 告警与 UI 标签口径见 `#4109`。
