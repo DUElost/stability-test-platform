@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { ClickableRow } from '@/components/ui/clickable-row';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { PANEL, SEGMENTED, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
@@ -323,22 +324,15 @@ function DeviceTable({
                 : '—';
             const isHighlight = highlightJobId === d.job_id;
             return (
-              <TableRow
+              <ClickableRow
                 key={d.job_id}
                 ref={setRowRef(d.job_id)}
                 data-testid={`device-row-${d.job_id}`}
                 onClick={() => onSelect?.(d)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onSelect?.(d);
-                  }
-                }}
                 role="button"
-                tabIndex={0}
                 aria-label={`${d.device_serial || `Device #${d.device_id}`} 详情`}
                 className={cn(
-                  'cursor-pointer border-t transition-colors hover:bg-primary/5',
+                  'border-t transition-colors hover:bg-primary/5',
                   isHighlight && 'bg-primary/10 ring-1 ring-primary/30',
                 )}
               >
@@ -413,7 +407,7 @@ function DeviceTable({
                     '—'
                   )}
                 </TableCell>
-              </TableRow>
+              </ClickableRow>
             );
           })}
           {padBottomPx > 0 ? <tr aria-hidden="true" style={{ height: `${padBottomPx}px` }} /> : null}

@@ -16,6 +16,14 @@ import { PANEL, SEGMENTED, STATUS_CHIP, TEXT } from '@/design-system';
 import { InlineEmpty } from '@/components/ui/empty-state';
 import { InlineError } from '@/components/ui/error-state';
 import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
 import { SLOW_REFETCH_MS } from '@/hooks/plan-run/planRunDetailUtils';
@@ -186,41 +194,41 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
       ) : (
         <>
           <div className="max-h-[360px] overflow-y-auto">
-            <table className="w-full text-[11px]">
-              <thead className="sticky top-0 bg-muted/95">
-                <tr className={cn('text-left', TEXT.subtitle)}>
-                  <th className="px-4 py-1.5 font-medium">序列号</th>
-                  <th className="px-2 py-1.5 font-medium">平台</th>
-                  <th className="px-2 py-1.5 font-medium">类型</th>
-                  <th className="px-2 py-1.5 font-medium">状态</th>
-                  <th className="px-2 py-1.5 font-medium">路径</th>
-                  <th className="px-2 py-1.5 font-medium">操作</th>
-                  <th className="px-4 py-1.5 font-medium text-right">检测时间</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table className="text-[11px]">
+              <TableHeader className="sticky top-0 bg-muted/95">
+                <TableRow className={cn('text-left', TEXT.subtitle)}>
+                  <TableHead className="h-auto px-4 py-1.5 font-medium">序列号</TableHead>
+                  <TableHead className="h-auto px-2 py-1.5 font-medium">平台</TableHead>
+                  <TableHead className="h-auto px-2 py-1.5 font-medium">类型</TableHead>
+                  <TableHead className="h-auto px-2 py-1.5 font-medium">状态</TableHead>
+                  <TableHead className="h-auto px-2 py-1.5 font-medium">路径</TableHead>
+                  <TableHead className="h-auto px-2 py-1.5 font-medium">操作</TableHead>
+                  <TableHead className="h-auto px-4 py-1.5 font-medium text-right">检测时间</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {q.data.items.map((ev) => (
-                  <tr key={ev.id} className="border-t border-border/50">
-                    <td className="px-4 py-1.5 font-mono">{ev.serial}</td>
-                    <td className="px-2 py-1.5 font-mono" data-testid="log-event-platform">
+                  <TableRow key={ev.id} className="border-t border-border/50">
+                    <TableCell className="px-4 py-1.5 font-mono">{ev.serial}</TableCell>
+                    <TableCell className="px-2 py-1.5 font-mono" data-testid="log-event-platform">
                       {ev.platform}
-                    </td>
-                    <td className="px-2 py-1.5 font-mono">
+                    </TableCell>
+                    <TableCell className="px-2 py-1.5 font-mono">
                       {ev.event_type}
                       {ev.event_subtype ? ` · ${ev.event_subtype}` : ''}
-                    </td>
-                    <td className="px-2 py-1.5" title={STATE_HINT[ev.state]}>
+                    </TableCell>
+                    <TableCell className="px-2 py-1.5" title={STATE_HINT[ev.state]}>
                       <span className={cn(
                         'inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold',
                         STATE_CHIP[ev.state] ?? STATUS_CHIP.muted,
                       )}>
                         {ev.state}
                       </span>
-                    </td>
-                    <td className="px-2 py-1.5 font-mono max-w-[260px] truncate" title={displayPath(ev)}>
+                    </TableCell>
+                    <TableCell className="px-2 py-1.5 font-mono max-w-[260px] truncate" title={displayPath(ev)}>
                       {displayPath(ev)}
-                    </td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-2 py-1.5 whitespace-nowrap">
                       {ev.delivery_evidence ||
                       (ev.remote_path && (ev.state === 'REMOTE' || ev.state === 'ARCHIVED')) ? (
                         <a
@@ -233,14 +241,14 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
                       ) : (
                         <span className={TEXT.caption}>—</span>
                       )}
-                    </td>
-                    <td className="px-4 py-1.5 text-right whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="px-4 py-1.5 text-right whitespace-nowrap">
                       {formatLocalDateTime(ev.detected_at)}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
           {hasMore && !atLimitCap && (
             <div className="border-t border-border/50 p-1.5 text-center">

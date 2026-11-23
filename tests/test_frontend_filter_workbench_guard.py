@@ -100,17 +100,11 @@ _NATIVE_DIALOG_ALLOWLIST = frozenset(
 )
 _RAW_TABLE_ALLOWLIST = frozenset(
     {
-        "components/plan-run/LogEventsCard.tsx",
-        "components/plan-run/TestCaseResultsCard.tsx",
         "pages/suites/TestSuiteDetailPage.tsx",
     }
 )
-_CLICKABLE_TR_ALLOWLIST = frozenset(
-    {
-        "components/execution/plan-execute/DeviceTablePanel.tsx",
-        "components/plan-run/DeviceOverview.tsx",
-    }
-)
+# U4-1ab（#4117）已将全部可点击行收敛至 ClickableRow，存量基线为 0。
+_CLICKABLE_TR_ALLOWLIST: frozenset[str] = frozenset()
 # U1-1（#4122）已将全部 3 处旧手写抽屉收敛至 ui/sheet.tsx，存量基线为 0。
 _BESPOKE_ARIA_MODAL_ALLOWLIST: frozenset[str] = frozenset()
 _HARDCODED_PALETTE_ALLOWLIST = frozenset(
@@ -124,11 +118,8 @@ _PAGE_CONTAINER_EXEMPT = frozenset(
         "pages/auth/RegisterPage.tsx",
     }
 )
-_MISSING_PAGE_CONTAINER_ALLOWLIST = frozenset(
-    {
-        "pages/execution/PlanRunDetailPage.tsx",
-    }
-)
+# U4-1ab（#4117）已将 PlanRunDetailPage 纳入 PageContainer，存量基线为 0。
+_MISSING_PAGE_CONTAINER_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def _iter_prod_tsx_files() -> list[Path]:
