@@ -1024,6 +1024,142 @@ def test_reload_ack_drains_inflight_send_window_before_returning_and_rejects_pos
     assert posted_claim[0]["vbus_slots"] == 1
 
 
+def test_overlapping_same_config_reload_waits_for_inflight_drain_before_ack(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R6 B1: 同配置二次 reload 不得在首次切根排空完成前 ACK。
+
+    复现：R1 已发布新根并进入 advance_and_drain；R2 读到相同配置（changed=False）
+    若直接成功返回，则旧 claim 可在 R2 ACK 之后、R1 ACK 之前以 capacity=2 首次 POST。
+    """
+    import threading
+    import time
+
+    from backend.agent.api_client import fetch_pending_jobs
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+    from backend.agent.outbound_guard import (
+        bind_claim_capacity_reader,
+        resolve_bound_claim_capacity,
+    )
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    with thread._capacity_lock:
+        thread._effective_slots = 2
+
+    entered_window = threading.Event()
+    release_window = threading.Event()
+    r1_ack = threading.Event()
+    r2_ack = threading.Event()
+    events: list[str] = []
+    posted_bodies: list[dict] = []
+
+    class _FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": []}
+
+    def pausing_resolve(initial_capacity: int) -> int:
+        # 进入 claim send_window 后、POST 前暂停，模拟「已过守卫尚未传输」。
+        value = resolve_bound_claim_capacity(initial_capacity)
+        if value > 0 and not release_window.is_set():
+            entered_window.set()
+            assert release_window.wait(5.0)
+            return resolve_bound_claim_capacity(initial_capacity)
+        return value
+
+    def fake_post(_url: str, *, json: dict, **_kw):
+        posted_bodies.append(dict(json))
+        events.append(
+            f"post_capacity={json.get('capacity')}"
+            f"|r1={r1_ack.is_set()}|r2={r2_ack.is_set()}"
+        )
+        return _FakeResp()
+
+    monkeypatch.setattr(
+        "backend.agent.api_client.resolve_bound_claim_capacity", pausing_resolve,
+    )
+    monkeypatch.setattr("backend.agent.api_client.requests.post", fake_post)
+
+    def inflight_claim() -> None:
+        with bind_claim_capacity_reader(
+            lambda: thread.effective_slots,
+            dispatch_gate=thread._dispatch_gate,
+        ):
+            # 直接走真实 fetch，确保登记的是 claim send_window。
+            fetch_pending_jobs(
+                "http://x", "h1", "inst", capacity=2, vbus_slots=1, active_job_ids=[1],
+            )
+        events.append("claim_finished")
+
+    def run_r1() -> None:
+        heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+        thread.reload_from_settings()
+        events.append("ack_r1")
+        r1_ack.set()
+
+    def run_r2() -> None:
+        # 配置已是新根：第二次比较为无变化，但必须等待 R1 排空。
+        thread.reload_from_settings()
+        events.append("ack_r2")
+        r2_ack.set()
+
+    t_claim = threading.Thread(target=inflight_claim, daemon=True)
+    t_claim.start()
+    assert entered_window.wait(2.0)
+
+    t_r1 = threading.Thread(target=run_r1, daemon=True)
+    t_r1.start()
+    # 给 R1 时间发布切根并进入 advance_and_drain
+    deadline = time.monotonic() + 1.0
+    while thread.effective_slots != 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert thread.effective_slots == 0
+    assert not r1_ack.is_set()
+
+    t_r2 = threading.Thread(target=run_r2, daemon=True)
+    t_r2.start()
+    time.sleep(0.05)
+    # 关键：同配置 R2 不得在旧窗口 / R1 排空完成前 ACK
+    assert not r2_ack.is_set()
+    assert not r1_ack.is_set()
+    assert posted_bodies == []
+
+    release_window.set()
+    t_claim.join(timeout=3.0)
+    t_r1.join(timeout=3.0)
+    t_r2.join(timeout=3.0)
+    assert not t_claim.is_alive() and not t_r1.is_alive() and not t_r2.is_alive()
+    assert r1_ack.is_set() and r2_ack.is_set()
+    # 旧 claim 的 POST（若发生）必须在两次 ACK 之前；随后不得再出现 capacity=2。
+    assert "ack_r1" in events and "ack_r2" in events
+    ack_r1_idx = events.index("ack_r1")
+    ack_r2_idx = events.index("ack_r2")
+    assert ack_r1_idx < ack_r2_idx
+    for i, name in enumerate(events):
+        if name.startswith("post_capacity="):
+            assert i < ack_r1_idx, f"POST after ACK: {events}"
+    if posted_bodies:
+        # 临界区内完成的 POST 视为 ACK 前已在网上；ACK 后新认领另测。
+        assert all(body.get("vbus_slots") == 1 for body in posted_bodies)
+
+
 def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
     from backend.agent.coordinator import HostRunCoordinator
 

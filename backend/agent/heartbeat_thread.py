@@ -130,6 +130,9 @@ class HeartbeatThread:
         # ADR-0064 D5 / #4054：挂载可达性后台探测；主循环只读非阻塞快照。
         self._mount_health_probe = MountHealthProbe()
         self._mount_points_lock = threading.Lock()
+        # #4077 R6：串行化「发布切根 + advance_and_drain」——同配置二次 reload
+        # 不得在首次排空完成前抢先 ACK。
+        self._reload_publish_lock = threading.Lock()
         self._mount_points_generation: int = 0
         self._shared_storage_root: str = normalize_mount_point(resolve_shared_storage_root())
         self._dispatch_gate = OutboundDispatchGate()
@@ -150,25 +153,28 @@ class HeartbeatThread:
             return
         updated_mounts = resolve_monitored_mount_points()
         updated_shared_root = normalize_mount_point(resolve_shared_storage_root())
-        with self._mount_points_lock:
-            prev_shared_root = getattr(self, "_shared_storage_root", "")
-            changed = (
-                list(self._mount_points) != updated_mounts
-                or prev_shared_root != updated_shared_root
-            )
+        # 发布与排空必须在同一把 `_reload_publish_lock` 下完成：若 R1 已发布切根并
+        # 正在 `advance_and_drain`，同配置的 R2 不得因 `changed=False` 提前 ACK（#4077 R6）。
+        with self._reload_publish_lock:
+            with self._mount_points_lock:
+                prev_shared_root = getattr(self, "_shared_storage_root", "")
+                changed = (
+                    list(self._mount_points) != updated_mounts
+                    or prev_shared_root != updated_shared_root
+                )
+                if changed:
+                    self._mount_points_generation += 1
+                    self._mount_points = updated_mounts
+                    self._shared_storage_root = updated_shared_root
+                    self._mount_health_probe.reset()
+                    # 切根后立即归零普通有效槽位（VBUS 名额由 vbus_claim_slots 独立控制），
+                    # 防止 ACK 返回后、下一拍心跳完成前按旧配置继续发起普通认领。
+                    with self._capacity_lock:
+                        self._effective_slots = 0
             if changed:
-                self._mount_points_generation += 1
-                self._mount_points = updated_mounts
-                self._shared_storage_root = updated_shared_root
-                self._mount_health_probe.reset()
-                # 切根后立即归零普通有效槽位（VBUS 名额由 vbus_claim_slots 独立控制），
-                # 防止 ACK 返回后、下一拍心跳完成前按旧配置继续发起普通认领。
-                with self._capacity_lock:
-                    self._effective_slots = 0
-        if changed:
-            gate = getattr(self, "_dispatch_gate", None)
-            if isinstance(gate, OutboundDispatchGate):
-                gate.advance_and_drain()
+                gate = getattr(self, "_dispatch_gate", None)
+                if isinstance(gate, OutboundDispatchGate):
+                    gate.advance_and_drain()
 
     def _is_mount_generation_stale(self, mount_gen: int) -> bool:
         with self._mount_points_lock:
