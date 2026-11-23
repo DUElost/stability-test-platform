@@ -22,17 +22,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** 将 auth 相关 HTTP 失败分为「真拒绝」与「瞬时不可达」。 */
+/** 将 auth 相关 HTTP 失败分为「真拒绝」与「瞬时不可达」（兼容裸 axios 与 ApiError 形状，#3531）。 */
 export function classifyAuthFailure(error: unknown): 'rejected' | 'transient' {
   const source = isRecord(error) ? error : undefined;
   const isTimeout =
     source?.code === 'ECONNABORTED' ||
     source?.code === 'ETIMEDOUT' ||
+    source?.code === 'TIMEOUT' ||
     (typeof source?.message === 'string' && /timeout/i.test(source.message));
   if (isTimeout) return 'transient';
 
   const response = isRecord(source?.response) ? source.response : undefined;
-  const status = typeof response?.status === 'number' ? response.status : undefined;
+  const status =
+    typeof response?.status === 'number'
+      ? response.status
+      : typeof source?.status === 'number'
+        ? source.status
+        : undefined;
   if (status === 401 || status === 403) return 'rejected';
   // 无响应（断网）、5xx、429：控制面过载 / QueuePool 打满时常见 —— 非会话终态
   return 'transient';
