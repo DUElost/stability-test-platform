@@ -260,9 +260,16 @@ def test_u4_unisoc_fastboot_profile_and_progress(monkeypatch, tmp_path):
     )
     (images / "boot.img").write_bytes(b"boot")
 
+    # §4 U4 #2：local_dir 必须与源目录可区分，否则旁路 flash_partitions(fw_dir) 会静绿
+    local_root = tmp_path / "cache_local_unisoc"
+    local_root.mkdir()
+    assert local_root.resolve() != fw.resolve()
+
     stamps: list[dict] = []
     events: list[Any] = []
     order: list[str] = []
+    flash_dirs: list[str] = []
+    spl_dirs: list[str] = []
 
     class P:
         def stamp(self, **fields):
@@ -271,8 +278,11 @@ def test_u4_unisoc_fastboot_profile_and_progress(monkeypatch, tmp_path):
     def load_ok():
         def ensure(source_dir, profile, **kw):
             assert profile == "unisoc_fastboot"
+            assert Path(source_dir).resolve() == fw.resolve()
             order.append("ensure")
-            return _tracking_ensure(source_dir, profile, events=events, **kw)
+            return _tracking_ensure(
+                source_dir, profile, events=events, local_dir=local_root, **kw
+            )
 
         return ensure, FirmwareCacheError, 1, None
 
@@ -289,9 +299,18 @@ def test_u4_unisoc_fastboot_profile_and_progress(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "load_plan", lambda *a, **k: [{"id": "BOOT", "file": "boot.img", "partitions": ["boot_a"]}])
     monkeypatch.setattr(mod, "getprop", lambda *a, **k: "other")
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress: order.append("lock") or 3)
-    monkeypatch.setattr(mod, "spl_decision", lambda *a, **k: {"mode": "never", "action": "skip"})
+
+    def fake_spl(fw_dir, *a, **k):
+        spl_dirs.append(fw_dir)
+        return {"mode": "never", "action": "skip"}
+
+    def fake_flash(fw_dir, *a, **k):
+        flash_dirs.append(fw_dir)
+        return {"partitions": 0, "flash_seconds": 0.1, "fw": fw_dir}
+
+    monkeypatch.setattr(mod, "spl_decision", fake_spl)
     monkeypatch.setattr(mod, "write_spl", lambda *a, **k: {"mode": "never", "action": "skip"})
-    monkeypatch.setattr(mod, "flash_partitions", lambda fw_dir, *a, **k: {"partitions": 0, "flash_seconds": 0.1, "fw": fw_dir})
+    monkeypatch.setattr(mod, "flash_partitions", fake_flash)
     monkeypatch.setattr(mod, "wipe", lambda *a, **k: {"erases": []})
     monkeypatch.setattr(mod, "reboot_out_of_fastboot", lambda *a, **k: None)
     monkeypatch.setattr(mod, "wait_boot", lambda *a, **k: {"boot_completed": True})
@@ -315,7 +334,12 @@ def test_u4_unisoc_fastboot_profile_and_progress(monkeypatch, tmp_path):
         [],
     )
     assert order == ["ensure", "lock"]
-    assert res["metrics"]["firmware_dir"] == str(fw)
+    assert flash_dirs, "flash_partitions must be invoked"
+    assert Path(flash_dirs[0]).resolve() == local_root.resolve()
+    assert Path(flash_dirs[0]).resolve() != fw.resolve()
+    assert spl_dirs and Path(spl_dirs[0]).resolve() == local_root.resolve()
+    assert Path(res["metrics"]["firmware_dir"]).resolve() == local_root.resolve()
+    assert Path(res["metrics"]["source_firmware_dir"]).resolve() == fw.resolve()
     assert _fc_metrics_keys() <= set(res["metrics"]["firmware_cache"])
     stages = [s.get("stage") for s in stamps]
     assert "firmware-stage-wait" in stages
@@ -508,6 +532,169 @@ def test_u4_bsl_no_stp_flash_writes_and_unsealed_before_lock(monkeypatch, tmp_pa
     with pytest.raises(RuntimeError, match="stop-after-lock"):
         mod.run({"firmware_dir": str(sealed), "verify_root": False}, "SN1", mod.Progress(), [])
     assert "lock" in lock_hits
+
+
+def test_u4_bsl_family_latest_routes_sealed_vs_unsealed_by_identity(monkeypatch, tmp_path):
+    """#4086 §4 U4 #4：同一 family + latest.json，两种只读 getprop 身份分别路由到已/未封包目录。"""
+    import shutil
+
+    mod = _load(_BSL, "flash_firmware_b10_u4_bsl_family_latest")
+    from backend.agent.tests.test_flash_firmware_unisoc_bsl import (
+        _create_firmware_dir,
+        _install_fake_adb,
+        _make_fake_sysfs,
+        _patch_advancing_clock,
+    )
+
+    fw_root = tmp_path / "firmware"
+    sealed = _create_firmware_dir(
+        fw_root, family="P525AA", version="sealed_v1", models=["MLY-LX2"]
+    )
+    unsealed = _create_firmware_dir(
+        fw_root, family="P525AA", version="unsealed_v1", models=["MLY-LX2-CA"]
+    )
+    (sealed / "staging_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "profiles": {
+                    "unisoc_bsl": {
+                        "content_digest": "sha256:" + ("22" * 32),
+                        "total_bytes": 1,
+                        "files": [],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (fw_root / "P525AA" / "latest.json").write_text(
+        json.dumps(
+            {
+                "versions": {
+                    "MLY-LX2": "sealed_v1",
+                    "MLY-LX2-CA": "unsealed_v1",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    local_sealed = tmp_path / "cache_local_sealed"
+    shutil.copytree(sealed, local_sealed)
+    assert local_sealed.resolve() != sealed.resolve()
+
+    sysfs = _make_fake_sysfs(tmp_path)
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/usr/bin/spd_dump")
+    monkeypatch.setenv("STP_FLASH_FIRMWARE_ROOT", str(fw_root))
+    monkeypatch.delenv("STP_FLASH_FIRMWARE_VERSION", raising=False)
+
+    ensure_sources: list[str] = []
+    lock_hits: list[str] = []
+    state_changes: list[str] = []
+    adb_calls: list[list[str]] = []
+    stp_flash_writes: list[str] = []
+
+    def load_by_source():
+        def ensure(source_dir, profile, **kw):
+            assert profile == "unisoc_bsl"
+            src = Path(source_dir).resolve()
+            ensure_sources.append(str(src))
+            if src == unsealed.resolve():
+                raise FirmwareCacheError(
+                    "firmware_unsealed_not_supported",
+                    "firmware_unsealed_not_supported",
+                )
+            if src == sealed.resolve():
+                return _tracking_ensure(
+                    source_dir, profile, local_dir=local_sealed, sealed=True, **kw
+                )
+            raise AssertionError(f"unexpected ensure source_dir={src}")
+
+        return ensure, FirmwareCacheError, None
+
+    monkeypatch.setattr(mod, "_load_firmware_cache_api", load_by_source)
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda *a, **k: lock_hits.append("lock")
+        or os.open(tmp_path / f"lock-{len(lock_hits)}", os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    def fake_spd(cmd, *a, **k):
+        state_changes.append("spd")
+        joined = " ".join(str(x) for x in cmd)
+        if "/var/tmp/stp_flash" in joined:
+            stp_flash_writes.append(joined)
+        raise RuntimeError("stop-after-lock")
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_spd)
+
+    family_args = {
+        "family": "P525AA",
+        "verify_root": False,
+        "skip_battery": True,
+        "require_port_binding": False,
+    }
+
+    # 未封包身份：latest 路由到 unsealed_v1 → 取锁 / 状态变更前 fail-closed
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={
+            "ro.product.model": "MLY-LX2-CA",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2-CA",
+            "ro.build.type": "userdebug",
+            "ro.build.version.incremental": "x",
+        },
+        adb_calls=adb_calls,
+        clock=clock,
+    )
+    with pytest.raises(Exception) as ei_unsealed:
+        mod.run(family_args, "SN1", mod.Progress(), [])
+    assert "firmware_unsealed_not_supported" in str(ei_unsealed.value)
+    assert ensure_sources and Path(ensure_sources[-1]).resolve() == unsealed.resolve()
+    assert lock_hits == []
+    assert state_changes == []
+    assert ["reboot", "autodloader"] not in adb_calls
+
+    # 已封包身份：latest 路由到 sealed_v1 → 走本地缓存，零 /var/tmp/stp_flash 写入
+    ensure_sources.clear()
+    adb_calls.clear()
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.version.incremental": "x",
+            "ro.build.sw_internal_version": "old",
+        },
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.version.incremental": "x",
+            "ro.build.sw_internal_version": "sealed_v1",
+        },
+        adb_calls=adb_calls,
+        clock=clock,
+    )
+    with pytest.raises(RuntimeError, match="stop-after-lock"):
+        mod.run(family_args, "SN1", mod.Progress(), [])
+    assert ensure_sources and Path(ensure_sources[-1]).resolve() == sealed.resolve()
+    assert "lock" in lock_hits
+    assert state_changes == ["spd"]
+    assert stp_flash_writes == []
+    assert not any("/var/tmp/stp_flash" in " ".join(c) for c in adb_calls)
+
 
 def test_u4_bsl_source_has_no_var_tmp_stp_flash_writes():
     from tools.dev.source_anchor import SourceGuard
