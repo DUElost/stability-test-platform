@@ -201,6 +201,7 @@ def _host_to_out(
     out.extra = extra
     out.capacity = extra.get("capacity")
     out.health = extra.get("health")
+    out.health_probe = extra.get("health_probe") if isinstance(extra.get("health_probe"), dict) else None
     out.host_key_trust = host_key_trust
     installed, installed_at = _derive_agent_installed(h)
     out.agent_installed = installed

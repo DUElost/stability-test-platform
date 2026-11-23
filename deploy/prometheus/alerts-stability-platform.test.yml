@@ -1032,6 +1032,7 @@ tests:
       exp_alerts:
       - exp_labels:
           severity: warning
+          notify_surface: hosts_only
           host_id: 192-0-2-65
           reason: adb_interfaces_missing
         exp_annotations:

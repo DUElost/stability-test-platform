@@ -659,3 +659,103 @@ describe('脚本在位（#2958 第五道闸）', () => {
     expect(screen.queryByText('脚本在位')).not.toBeInTheDocument();
   });
 });
+
+describe('S2：USB / Hub 故障工作台（快捷视图、主行外显、异常置顶与展开诊断）', () => {
+  const healthyHost: HostTableData = {
+    ...host,
+    id: 'host-ok',
+    name: 'Host-Healthy',
+    ip: '10.0.0.10',
+    health_status: 'HEALTHY',
+    health_reasons: [],
+  };
+
+  const degradedHubHost: HostTableData = {
+    ...host,
+    id: 'host-hub-bad',
+    name: 'Host-Hub-Bad',
+    ip: '10.0.0.12',
+    health_status: 'DEGRADED',
+    health_reasons: ['usb_link_degraded'],
+    usb_device_count: 16,
+    adb_interface_count: 16,
+    usb_kernel_log: 'ok',
+    usb_hub_topology: { cascade_hubs: 5, unbound_hubs: 1, unbound_idle_bus_hubs: 1 },
+    usb_kernel_errors_1h: {
+      link_errors: 73,
+      cable_suspect: 0,
+      disconnects: 2,
+      resets: 0,
+      enum_errors: 0,
+      hub_port_errors: 68,
+    },
+    health_probe: {
+      verdict: 'agent_mute',
+      topology: 'hub_present_phones_zero',
+      strike_open: true,
+    },
+  };
+
+  const emptiedEmptyTreeHost: HostTableData = {
+    ...host,
+    id: 'host-emptied',
+    name: 'Host-Emptied',
+    ip: '10.0.0.91',
+    health_status: 'DEGRADED',
+    health_reasons: ['usb_tree_empty'],
+    emptied_at: '2026-11-23T00:00:00Z',
+    emptied_by: 'admin',
+  };
+
+  it('USB / Hub 异常快捷视图支持互斥过滤与往返切回全部主机，并排除已处置空树主机', () => {
+    render(
+      <ExpandableHostTable
+        hosts={[healthyHost, degradedHubHost, emptiedEmptyTreeHost]}
+      />,
+    );
+
+    // 异常主机应自动置顶到健康主机之前
+    const rows = screen.getAllByRole('row');
+    expect(rows[1]).toHaveTextContent('Host-Hub-Bad');
+
+    // 主行直接外显故障芯片，无需 hover tooltip
+    const inlineFaults = screen.getByTestId('host-inline-faults-host-hub-bad');
+    expect(inlineFaults).toHaveTextContent('USB 链路劣化');
+    expect(inlineFaults).toHaveTextContent('SS Hub 半枚举(1)');
+
+    // 切换到「USB / Hub 异常」：仅保留 degradedHubHost（emptied 空树不算异常）
+    fireEvent.click(screen.getByText(/USB \/ Hub 异常/));
+    expect(screen.getByText('Host-Hub-Bad')).toBeInTheDocument();
+    expect(screen.queryByText('Host-Healthy')).not.toBeInTheDocument();
+    expect(screen.queryByText('Host-Emptied')).not.toBeInTheDocument();
+
+    // 往返切回「全部主机」
+    fireEvent.click(screen.getByText(/全部主机/));
+    expect(screen.getByText('Host-Healthy')).toBeInTheDocument();
+    expect(screen.getByText('Host-Emptied')).toBeInTheDocument();
+  });
+
+  it('展开行展示 USB / Hub 与对账诊断卡片，并支持管理员触发设备面已处置操作', () => {
+    const onSetDeviceIntent = vi.fn();
+    render(
+      <ExpandableHostTable
+        hosts={[degradedHubHost]}
+        isAdmin
+        onSetDeviceIntent={onSetDeviceIntent}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Host-Hub-Bad'));
+
+    const card = screen.getByTestId('host-usb-diagnostics-host-hub-bad');
+    expect(within(card).getByText('USB / Hub 与对账诊断')).toBeInTheDocument();
+    expect(within(card).getByText('5 / 1')).toBeInTheDocument();
+    expect(within(card).getByText(/-71\/-110 传输错: 73/)).toBeInTheDocument();
+    expect(within(card).getByText(/Hub 端口错: 68/)).toBeInTheDocument();
+    expect(within(card).getByText(/级联 Hub 在树但无终端/)).toBeInTheDocument();
+    expect(within(card).getByText('已触发（需核查）')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('host-set-emptied-host-hub-bad'));
+    expect(onSetDeviceIntent).toHaveBeenCalledWith(degradedHubHost);
+  });
+});

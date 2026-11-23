@@ -28,7 +28,7 @@ import {
 } from '@/components/ui/filter-bar';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { FORM, resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
-import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw, ClipboardCheck, RefreshCw, ShieldAlert } from 'lucide-react';
+import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw, ClipboardCheck, RefreshCw, ShieldAlert, Usb } from 'lucide-react';
 import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
 import type {
   HostScriptPresence,
@@ -90,6 +90,42 @@ export interface HostTableData {
    * 并排对照）。null / undefined = 未采集到，渲染为「—」而非 0。
    */
   usb_device_count?: number | null;
+  /** sysfs 暴露 ADB 接口（ff:42）的设备数（L2/L4 分诊） */
+  adb_interface_count?: number | null;
+  /** adb devices 按 state 分桶计数（L3 分诊） */
+  adb_state_counts?: {
+    device?: number;
+    offline?: number;
+    unauthorized?: number;
+    other?: number;
+  } | null;
+  /** 内核 USB 日志通道可读性 */
+  usb_kernel_log?: 'ok' | 'unavailable' | 'unknown' | null;
+  /** S1：零权限 sysfs 级联 Hub 拓扑与半枚举 Hub 计数 */
+  usb_hub_topology?: {
+    cascade_hubs: number;
+    unbound_hubs: number;
+    unbound_idle_bus_hubs: number;
+  } | null;
+  /** S1：最近 1 小时滑动窗内的内核 USB 错误数值计数 */
+  usb_kernel_errors_1h?: {
+    link_errors: number;
+    cable_suspect: number;
+    disconnects: number;
+    resets: number;
+    enum_errors: number;
+    hub_port_errors: number;
+  } | null;
+  /** #2983：控制面 SSH 拓扑对账探针摘要 */
+  health_probe?: {
+    checked_at?: string;
+    verdict?: string;
+    signals?: string[];
+    topology?: string;
+    recent_verdicts?: string[];
+    strike_open?: boolean;
+    strike_need?: number;
+  } | null;
   /** Tooltip: adb/lease exclusions from device list (frontend-derived). */
   claim_hint?: string | null;
   active_tasks?: number;
@@ -140,8 +176,12 @@ interface ExpandableHostTableProps {
   onSearchQueryChange?: (value: string) => void;
   healthFilter?: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
   onHealthFilterChange?: (value: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE') => void;
-  syncFilter?: 'all' | 'drift' | 'matched' | 'mount_error';
-  onSyncFilterChange?: (value: 'all' | 'drift' | 'matched' | 'mount_error') => void;
+  syncFilter?: 'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault';
+  onSyncFilterChange?: (value: 'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault') => void;
+  /** ADR-0038 v0.3 D9：快捷标记/清除「设备面已处置（emptied）」 */
+  onSetDeviceIntent?: (host: HostTableData) => void;
+  onClearDeviceIntent?: (host: HostTableData) => void;
+  isDeviceIntentUpdating?: (hostId: string | number) => boolean;
   showRetired?: boolean;
   onShowRetiredChange?: (value: boolean) => void;
   onResetAllFilters?: () => void;
@@ -186,6 +226,130 @@ const REASON_LABELS: Record<string, string> = {
   // 2026-07-27 coordinator 心跳互拒 3 天事故的入口形态。
   single_instance_guard_degraded: '单实例守卫降级（双实例风险）',
 };
+
+const USB_KERNEL_ERROR_LABELS: Record<string, string> = {
+  link_errors: '-71/-110 传输错',
+  hub_port_errors: 'Hub 端口错',
+  disconnects: 'USB 断连',
+  resets: '总线复位',
+  enum_errors: '-32/-22 枚举错',
+  cable_suspect: '线缆异常',
+};
+
+const PROBE_TOPOLOGY_LABELS: Record<string, string> = {
+  ok: '正常',
+  hub_present_phones_zero: '级联 Hub 在树但无终端',
+  root_hub_only: '仅 root hub（空柜）',
+  unknown: '未知',
+};
+
+const PROBE_VERDICT_LABELS: Record<string, string> = {
+  aligned: '一致',
+  agent_mute: 'Agent 漏报',
+  probe_quiet: '探针未复现',
+  topology_mismatch: '拓扑不一致',
+  probe_error: '探针采集失败',
+};
+
+interface InlineFaultChip {
+  key: string;
+  label: string;
+  tone: 'danger' | 'warning' | 'muted';
+  title?: string;
+}
+
+/** 计算主机 USB/Hub/对账故障优先级（3=严重需人工 2=劣化/未豁免空树 1=待办/闲置半枚举 0=正常）。 */
+function hostUsbFaultPriority(host: HostTableData): number {
+  if (host.retired_at) return 0;
+  const reasons = new Set(host.health_reasons ?? []);
+  const topo = host.usb_hub_topology;
+  const activeUnboundHubs = topo
+    ? Math.max(0, topo.unbound_hubs - topo.unbound_idle_bus_hubs)
+    : 0;
+  if (
+    reasons.has('usb_host_controller_dead') ||
+    host.health_probe?.strike_open === true ||
+    activeUnboundHubs > 0
+  ) {
+    return 3;
+  }
+  if (
+    reasons.has('usb_link_degraded') ||
+    (reasons.has('usb_tree_empty') && !host.emptied_at) ||
+    reasons.has('adb_multiple_servers')
+  ) {
+    return 2;
+  }
+  if (
+    reasons.has('adb_interfaces_missing') ||
+    (topo != null && topo.unbound_hubs > 0)
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
+/** 主行外显的紧凑故障芯片（不再把具体原因藏在「降级」hover tooltip 里）。 */
+function buildInlineFaultChips(host: HostTableData): InlineFaultChip[] {
+  const chips: InlineFaultChip[] = [];
+  const reasons = host.health_reasons ?? [];
+  for (const reason of reasons) {
+    const label = REASON_LABELS[reason] || reason;
+    if (reason === 'usb_host_controller_dead') {
+      chips.push({ key: reason, label: 'USB 主控失联', tone: 'danger', title: label });
+    } else if (reason === 'usb_link_degraded') {
+      chips.push({ key: reason, label: 'USB 链路劣化', tone: 'warning', title: label });
+    } else if (reason === 'usb_tree_empty') {
+      chips.push({
+        key: reason,
+        label: host.emptied_at ? 'USB 空树(已处置)' : 'USB 空树',
+        tone: host.emptied_at ? 'muted' : 'danger',
+        title: label,
+      });
+    } else if (reason === 'adb_interfaces_missing') {
+      chips.push({ key: reason, label: '无 ADB 接口', tone: 'warning', title: label });
+    } else if (reason === 'adb_multiple_servers') {
+      chips.push({ key: reason, label: 'ADB 多 server', tone: 'warning', title: label });
+    } else if (
+      reason === 'mount_failed' ||
+      reason === 'disk_high' ||
+      reason === 'cpu_high' ||
+      reason === 'ram_high' ||
+      reason === 'adb_low_healthy_devices' ||
+      reason === 'single_instance_guard_degraded'
+    ) {
+      chips.push({
+        key: reason,
+        label,
+        tone: reason === 'mount_failed' || reason === 'disk_high' ? 'danger' : 'warning',
+        title: label,
+      });
+    }
+  }
+  const topo = host.usb_hub_topology;
+  if (topo && topo.unbound_hubs > 0) {
+    const idleOnly = topo.unbound_idle_bus_hubs >= topo.unbound_hubs;
+    chips.push({
+      key: 'unbound_hubs',
+      label: idleOnly
+        ? `SS Hub 半枚举(${topo.unbound_hubs})`
+        : `在用 Hub 半枚举(${topo.unbound_hubs})`,
+      tone: idleOnly ? 'warning' : 'danger',
+      title: idleOnly
+        ? '未绑定驱动的 Hub 落在无在用设备总线（SuperSpeed 退化分支）'
+        : '存在未绑定驱动的 Hub 落在承载在用设备的总线上，需现场核查',
+    });
+  }
+  if (host.health_probe?.strike_open) {
+    chips.push({
+      key: 'probe_strike',
+      label: '探针对账异常',
+      tone: 'danger',
+      title: `控制面 SSH 探针连续异常：${PROBE_VERDICT_LABELS[host.health_probe.verdict ?? ''] ?? host.health_probe.verdict ?? '未知'}`,
+    });
+  }
+  return chips;
+}
 
 const AGENT_SYNC_LABELS: Record<AgentCodeSyncStatus, string> = {
   matched: '已对齐',
@@ -314,6 +478,9 @@ export function ExpandableHostTable({
   onHealthFilterChange,
   syncFilter: controlledSyncFilter,
   onSyncFilterChange,
+  onSetDeviceIntent,
+  onClearDeviceIntent,
+  isDeviceIntentUpdating,
   showRetired,
   onShowRetiredChange,
   onResetAllFilters,
@@ -326,7 +493,7 @@ export function ExpandableHostTable({
   const [localStatusFilter, setLocalStatusFilter] = useState<'all' | HostTableData['status']>('all');
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [localHealthFilter, setLocalHealthFilter] = useState<'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE'>('all');
-  const [localSyncFilter, setLocalSyncFilter] = useState<'all' | 'drift' | 'matched' | 'mount_error'>('all');
+  const [localSyncFilter, setLocalSyncFilter] = useState<'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault'>('all');
 
   const statusFilter = controlledStatusFilter ?? localStatusFilter;
   const setStatusFilter = onStatusFilterChange ?? setLocalStatusFilter;
@@ -392,7 +559,7 @@ export function ExpandableHostTable({
   const filteredHosts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
-    return hosts.filter((host) => {
+    const matched = hosts.filter((host) => {
       if (statusFilter !== 'all' && host.status !== statusFilter) return false;
       if (healthFilter !== 'all') {
         const effectiveHealth = host.health_status ?? 'HEALTHY';
@@ -401,14 +568,20 @@ export function ExpandableHostTable({
       if (syncFilter === 'drift' && host.agent_code_sync_status !== 'drift') return false;
       if (syncFilter === 'matched' && host.agent_code_sync_status !== 'matched') return false;
       if (syncFilter === 'mount_error' && !hasMountIssue(host)) return false;
+      if (syncFilter === 'usb_fault' && hostUsbFaultPriority(host) === 0) return false;
       if (tokens.length > 0) {
+        const reasonText = (host.health_reasons ?? [])
+          .map((r) => `${r} ${REASON_LABELS[r] || ''}`)
+          .join(' ');
         const haystack = [
+          String(host.id),
           host.name,
           host.ip,
           host.agent_code_revision,
           host.agent_code_deployed,
           host.agent_protocol_version,
           host.status,
+          reasonText,
         ]
           .filter(Boolean)
           .join(' ')
@@ -417,6 +590,8 @@ export function ExpandableHostTable({
       }
       return true;
     });
+    // 严重 USB/Hub/探针异常自动置顶，同档保持原始相对顺序（ES2019 稳定排序）
+    return [...matched].sort((a, b) => hostUsbFaultPriority(b) - hostUsbFaultPriority(a));
   }, [hosts, statusFilter, healthFilter, syncFilter, searchQuery]);
 
   const filteredIds = useMemo(() => filteredHosts.map((host) => host.id), [filteredHosts]);
@@ -481,6 +656,7 @@ export function ExpandableHostTable({
       agentDrift: onlineHosts.filter((h) => h.agent_code_sync_status === 'drift').length,
       agentTrackable: onlineHosts.length,
       mountErrorCount: hosts.filter((h) => h.mount_status?.some((m) => !m.mounted)).length,
+      usbFaultCount: hosts.filter((h) => hostUsbFaultPriority(h) > 0).length,
       unhealthyCount: hosts.filter(
         (h) => h.health_status === 'DEGRADED' || h.health_status === 'UNSCHEDULABLE',
       ).length,
@@ -766,6 +942,14 @@ export function ExpandableHostTable({
               },
             },
             {
+              key: 'usb_fault',
+              label: 'USB / Hub 异常',
+              count: stats.usbFaultCount,
+              active: syncFilter === 'usb_fault',
+              tone: 'danger',
+              onClick: () => setSyncFilter(syncFilter === 'usb_fault' ? 'all' : 'usb_fault'),
+            },
+            {
               key: 'drift',
               label: '待热更新',
               count: stats.agentDrift,
@@ -991,6 +1175,43 @@ export function ExpandableHostTable({
                               </span>
                             )}
                           </div>
+                          {(() => {
+                            const faultChips = buildInlineFaultChips(host);
+                            if (faultChips.length === 0) return null;
+                            const visible = faultChips.slice(0, 2);
+                            const rest = faultChips.slice(2);
+                            return (
+                              <div
+                                className="flex flex-wrap items-center gap-1"
+                                data-testid={`host-inline-faults-${host.id}`}
+                              >
+                                {visible.map((chip) => (
+                                  <span
+                                    key={chip.key}
+                                    title={chip.title}
+                                    className={cn(
+                                      'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight',
+                                      chip.tone === 'danger'
+                                        ? 'bg-destructive/10 text-destructive'
+                                        : chip.tone === 'warning'
+                                          ? 'bg-warning/10 text-warning'
+                                          : 'bg-muted text-muted-foreground',
+                                    )}
+                                  >
+                                    {chip.label}
+                                  </span>
+                                ))}
+                                {rest.length > 0 && (
+                                  <span
+                                    className="inline-flex items-center rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground cursor-help"
+                                    title={rest.map((c) => c.title || c.label).join('；')}
+                                  >
+                                    +{rest.length}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <div
                             className={cn(
                               'flex items-center gap-1 text-[11px]',
@@ -1550,6 +1771,160 @@ export function ExpandableHostTable({
                                       </div>
                                     )}
                                   </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* S2：USB / Hub 与对账诊断卡片 */}
+                          <div
+                            data-testid={`host-usb-diagnostics-${host.id}`}
+                            className="mt-4 rounded-lg border border-border bg-card p-3"
+                          >
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              <Usb className="h-4 w-4 text-muted-foreground" />
+                              <span className="text-sm font-medium text-foreground">USB / Hub 与对账诊断</span>
+                              {host.usb_kernel_log && (
+                                <span
+                                  className={cn(
+                                    'rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                                    host.usb_kernel_log === 'ok'
+                                      ? 'bg-success/10 text-success'
+                                      : host.usb_kernel_log === 'unavailable'
+                                        ? 'bg-destructive/10 text-destructive'
+                                        : 'bg-muted text-muted-foreground',
+                                  )}
+                                >
+                                  内核日志通道：{host.usb_kernel_log === 'ok' ? '正常' : host.usb_kernel_log === 'unavailable' ? '不可读' : '未知'}
+                                </span>
+                              )}
+                              {isAdmin && !host.retired_at && (onSetDeviceIntent || onClearDeviceIntent) && (
+                                <div className="ml-auto flex items-center gap-1.5">
+                                  {host.emptied_at ? (
+                                    onClearDeviceIntent && (
+                                      <button
+                                        type="button"
+                                        disabled={isDeviceIntentUpdating?.(host.id)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onClearDeviceIntent(host);
+                                        }}
+                                        data-testid={`host-clear-emptied-${host.id}`}
+                                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/80 disabled:opacity-50"
+                                      >
+                                        解除设备面已处置
+                                      </button>
+                                    )
+                                  ) : (
+                                    onSetDeviceIntent && (
+                                      <button
+                                        type="button"
+                                        disabled={isDeviceIntentUpdating?.(host.id)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onSetDeviceIntent(host);
+                                        }}
+                                        data-testid={`host-set-emptied-${host.id}`}
+                                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground disabled:opacity-50"
+                                      >
+                                        标记设备面已处置（空置）
+                                      </button>
+                                    )
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4 text-xs">
+                              <div className="space-y-1">
+                                <div className="text-muted-foreground font-medium">设备可见性（L1–L4）</div>
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">USB 枚举 / ADB 接口 / 在线</span>
+                                  <span className="font-mono text-foreground">
+                                    {host.usb_device_count ?? '—'} / {host.adb_interface_count ?? '—'} / {host.device_count ?? 0}
+                                  </span>
+                                </div>
+                                {host.adb_state_counts && (
+                                  <div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                                    <span>device {host.adb_state_counts.device ?? 0}</span>
+                                    <span className={(host.adb_state_counts.offline ?? 0) > 0 ? 'text-warning font-medium' : undefined}>
+                                      offline {host.adb_state_counts.offline ?? 0}
+                                    </span>
+                                    <span className={(host.adb_state_counts.unauthorized ?? 0) > 0 ? 'text-warning font-medium' : undefined}>
+                                      unauth {host.adb_state_counts.unauthorized ?? 0}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <div className="text-muted-foreground font-medium">外接 Hub 拓扑（sysfs）</div>
+                                {host.usb_hub_topology ? (
+                                  <>
+                                    <div className="flex justify-between">
+                                      <span className="text-muted-foreground">级联 Hub / 无驱动半枚举</span>
+                                      <span className={cn('font-mono', host.usb_hub_topology.unbound_hubs > 0 ? 'text-warning font-semibold' : 'text-foreground')}>
+                                        {host.usb_hub_topology.cascade_hubs} / {host.usb_hub_topology.unbound_hubs}
+                                      </span>
+                                    </div>
+                                    {host.usb_hub_topology.unbound_hubs > 0 && (
+                                      <div className="text-[11px] text-muted-foreground">
+                                        {host.usb_hub_topology.unbound_idle_bus_hubs >= host.usb_hub_topology.unbound_hubs
+                                          ? '仅落在无在用设备的闲置总线（SS 退化分支）'
+                                          : `含 ${host.usb_hub_topology.unbound_hubs - host.usb_hub_topology.unbound_idle_bus_hubs} 只在用总线 Hub 未绑定驱动`}
+                                      </div>
+                                    )}
+                                  </>
+                                ) : (
+                                  <div className="text-muted-foreground">待 Agent 升级后上报</div>
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <div className="text-muted-foreground font-medium">近 1 小时内核 USB 错误</div>
+                                {host.usb_kernel_errors_1h ? (
+                                  (() => {
+                                    const nonZero = Object.entries(host.usb_kernel_errors_1h).filter(
+                                      ([, v]) => typeof v === 'number' && v > 0,
+                                    );
+                                    if (nonZero.length === 0) {
+                                      return <div className="text-success">0 条错误</div>;
+                                    }
+                                    return (
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {nonZero.map(([k, v]) => (
+                                          <span
+                                            key={k}
+                                            className="rounded bg-warning/10 px-1.5 py-0.5 font-mono text-[11px] text-warning"
+                                          >
+                                            {USB_KERNEL_ERROR_LABELS[k] || k}: {v}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    );
+                                  })()
+                                ) : (
+                                  <div className="text-muted-foreground">无计数数据</div>
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <div className="text-muted-foreground font-medium">SSH 拓扑对账探针</div>
+                                {host.health_probe ? (
+                                  <>
+                                    <div className="flex justify-between gap-2">
+                                      <span className="text-muted-foreground">拓扑 / 结论</span>
+                                      <span className={cn('font-medium', host.health_probe.strike_open ? 'text-destructive' : 'text-foreground')}>
+                                        {PROBE_TOPOLOGY_LABELS[host.health_probe.topology ?? ''] ?? host.health_probe.topology ?? '—'}
+                                        {' · '}
+                                        {PROBE_VERDICT_LABELS[host.health_probe.verdict ?? ''] ?? host.health_probe.verdict ?? '—'}
+                                      </span>
+                                    </div>
+                                    <div className="flex justify-between gap-2 text-[11px] text-muted-foreground">
+                                      <span>连续异常窗口</span>
+                                      <span className={host.health_probe.strike_open ? 'text-destructive font-medium' : undefined}>
+                                        {host.health_probe.strike_open ? '已触发（需核查）' : '正常'}
+                                      </span>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="text-muted-foreground">暂无探针记录</div>
                                 )}
                               </div>
                             </div>

@@ -31,7 +31,12 @@ from pathlib import Path
 from typing import Mapping, MutableMapping, Optional
 
 from . import tool_cache
-from .tool_requirements import RequirementError, load_requirements
+from .contracts.capabilities import AGENT_CAPABILITIES
+from .tool_requirements import (
+    RequirementError,
+    load_agent_capability_requirements,
+    load_requirements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +120,31 @@ def verify_package(entry: Mapping[str, object], env: Optional[Mapping[str, str]]
     tool_err = _resolve_required_tools(Path(pkg_dir), environ, None)
     if tool_err:
         return False, tool_err
+    # ADR-0064 D2：requires_agent_capabilities 在 verify_scripts 阶段同样 fail-closed。
+    cap_err = _resolve_required_agent_capabilities(Path(pkg_dir))
+    if cap_err:
+        return False, cap_err
     return True, None
+
+
+def _resolve_required_agent_capabilities(package_root: Path) -> Optional[str]:
+    """校验包声明的 Agent 能力均在本机构建 ``AGENT_CAPABILITIES`` 中；成功返回 None。"""
+    try:
+        required = load_agent_capability_requirements(package_root)
+    except RequirementError as exc:
+        return f"required_agent_capabilities_invalid: {exc}"
+    if not required:
+        return None
+    have = set(AGENT_CAPABILITIES)
+    missing = [name for name in required if name not in have]
+    if missing:
+        logger.error(
+            "required_agent_capability_missing missing=%s package_root=%s",
+            missing,
+            package_root,
+        )
+        return f"required_agent_capability_missing: {','.join(missing)}"
+    return None
 
 
 def _resolve_required_tools(
@@ -138,9 +167,13 @@ def _resolve_required_tools(
 
 
 def inject_required_tools(package_root: Path, env: MutableMapping[str, str]) -> Optional[str]:
-    """ADR-0051 v1.7 D7：把脚本包声明的工具依赖核验拉取后注入**本步** env；失败返回错误串。
+    """ADR-0051 v1.7 D7 / ADR-0064 D2：核验工具依赖并注入本步 env，同时校验 Agent 能力声明。
 
-    fail-closed：声明坏 / 工具包缺失 / sha 不符都让步骤 exit 2（环境/工具错误，ADR-0033），
-    **不**回退主机 env 里同名键——回退会让「包面坏了」被旧的主机路径掩盖，恰是本机制要消灭的形态。
+    fail-closed：声明坏 / 工具包缺失 / sha 不符 / Agent 能力缺失都让步骤 exit 2
+    （环境/工具错误，ADR-0033），**不**回退主机 env 里同名键——回退会让「包面坏了」
+    被旧的主机路径掩盖，恰是本机制要消灭的形态。
     """
-    return _resolve_required_tools(package_root, env, env)
+    tool_err = _resolve_required_tools(package_root, env, env)
+    if tool_err:
+        return tool_err
+    return _resolve_required_agent_capabilities(package_root)

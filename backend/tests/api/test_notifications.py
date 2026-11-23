@@ -328,3 +328,102 @@ class TestAlertmanagerLinkContext:
         assert resp.status_code == 200
         ctx = self._latest_context("NoIdentity")
         assert "link" not in ctx
+
+    def test_host_id_label_resolves_to_filtered_hosts_link(self, client, monkeypatch, db_session):
+        from backend.models.enums import HostStatus
+        from backend.models.host import Host
+
+        db_session.add(Host(
+            id="172-21-15-12", hostname="host-12",
+            status=HostStatus.ONLINE.value, ip="172.21.15.12",
+        ))
+        db_session.commit()
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {
+                "alertname": "StabilityHostUsbLinkDegraded",
+                "severity": "warning",
+                "host_id": "172-21-15-12",
+            },
+            "annotations": {"summary": "usb link degraded"},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("StabilityHostUsbLinkDegraded")
+        assert ctx["link"] == "/hosts?q=172-21-15-12"
+
+    def test_hosts_only_notify_surface_skipped_from_notification_logs(self, client, monkeypatch):
+        from backend.core.database import SessionLocal
+        from backend.models.notification import NotificationLog
+
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {
+                "alertname": "StabilityHostAdbInterfacesMissing",
+                "severity": "warning",
+                "notify_surface": "hosts_only",
+                "host_id": "172-21-15-2",
+            },
+            "annotations": {"summary": "L4 todo"},
+        })
+        assert resp.status_code == 200
+        with SessionLocal() as db:
+            count = (
+                db.query(NotificationLog)
+                .filter(NotificationLog.event_type == "StabilityHostAdbInterfacesMissing")
+                .count()
+            )
+        assert count == 0
+
+    def test_repeat_firing_folds_in_place_and_new_episode_creates_new_row(self, client, monkeypatch):
+        from backend.core.database import SessionLocal
+        from backend.models.notification import NotificationLog
+
+        alert_firing = {
+            "status": "firing",
+            "labels": {
+                "alertname": "FoldTestUsbBlind",
+                "severity": "critical",
+                "host_id": "172-21-15-35",
+            },
+            "annotations": {"summary": "usb blind"},
+        }
+        assert self._post_alert(client, monkeypatch, alert_firing).status_code == 200
+        assert self._post_alert(client, monkeypatch, alert_firing).status_code == 200
+
+        with SessionLocal() as db:
+            rows = (
+                db.query(NotificationLog)
+                .filter(NotificationLog.event_type == "FoldTestUsbBlind")
+                .order_by(NotificationLog.id.asc())
+                .all()
+            )
+        assert len(rows) == 1
+        assert rows[0].context["repeat_count"] == 2
+
+        # 不同 host_id 不互相折叠
+        other_host = {
+            "status": "firing",
+            "labels": {
+                "alertname": "FoldTestUsbBlind",
+                "severity": "critical",
+                "host_id": "172-21-15-91",
+            },
+            "annotations": {"summary": "usb blind"},
+        }
+        assert self._post_alert(client, monkeypatch, other_host).status_code == 200
+
+        # 原主机 resolved 后再新发 firing，应建新行（新事件轮次）
+        alert_resolved = {**alert_firing, "status": "resolved"}
+        assert self._post_alert(client, monkeypatch, alert_resolved).status_code == 200
+        assert self._post_alert(client, monkeypatch, alert_firing).status_code == 200
+
+        with SessionLocal() as db:
+            rows_after = (
+                db.query(NotificationLog)
+                .filter(NotificationLog.event_type == "FoldTestUsbBlind")
+                .order_by(NotificationLog.id.asc())
+                .all()
+            )
+        # 4 rows: .35 firing(x2), .91 firing(x1), .35 resolved, .35 new firing(x1)
+        assert len(rows_after) == 4
+        assert rows_after[-1].context["repeat_count"] == 1

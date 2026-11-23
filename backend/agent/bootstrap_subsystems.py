@@ -22,6 +22,7 @@ from .artifact_uploader import ArtifactUploader
 from .config import BASE_DIR
 from .event_uploader import EventUploader
 from .evidence_uploader import EvidenceUploader
+from .firmware_cache import FirmwareCacheManager
 from .local_disk_monitor import LocalDiskMonitor
 from .log_archiver import LogArchiver
 from .scan_runner import ScanRunner
@@ -105,6 +106,9 @@ def start_disk_and_watcher_subsystems(
         logger.info("hdd_spill_monitor=started hdd=%s cifs=%s", hdd_root, cifs_root)
     else:
         logger.info("hdd_spill_monitor_skipped cifs_root_empty")
+
+    # ADR-0064 D2：固件缓存 TTL/水位清理——与 disk 栈同作用域，不绑 watcher 开关。
+    FirmwareCacheManager.instance().configure().start()
 
     # Device Log Watcher 子系统（全局或 Plan 默认开启时 configure）
     log_signal_drainer: Optional[OutboxDrainer] = None
