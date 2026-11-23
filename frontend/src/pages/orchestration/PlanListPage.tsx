@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 import { Button } from '@/components/ui/button';
 import { FilterSearchInput, FilterWorkbench } from '@/components/ui/filter-bar';
 import { SearchableSelect } from '@/components/ui/searchable-select';
@@ -65,10 +66,14 @@ export default function PlanListPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
-  // ADR-0029：页面级项目/专项筛选（无全局选择器/跨页跟随）
-  const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
-  const [specialtyKey, setSpecialtyKey] = useState<string | undefined>(undefined);
+  const { getString, updateParams, clearParams } = useUrlFilterParams();
+  // ADR-0029 / D4：页面级筛选与 URL 双向同步（?q= / ?project= / ?specialty=），刷新与跨页深链不丢
+  const search = getString('q', '');
+  const setSearch = (next: string) => updateParams({ q: next || undefined });
+  const projectKey = getString('project', '') || undefined;
+  const setProjectKey = (next: string | undefined) => updateParams({ project: next || undefined });
+  const specialtyKey = getString('specialty', '') || undefined;
+  const setSpecialtyKey = (next: string | undefined) => updateParams({ specialty: next || undefined });
 
   // #3195（批次 B2 G3，规划单 #3497 §3）：固定单页取数（`list(0, 100)`）把「已取到的
   // 子集」当全集渲染，计划数越过上限后尾部静默消失。改为按服务端 `total` 翻页取全量，
@@ -150,10 +155,15 @@ export default function PlanListPage() {
   }, [filtered]);
 
   return (
-    <PageContainer width="wide" className={LAYOUT.pageGap}>
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title="Plan 编排"
         subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"
+        action={
+          <Button size="sm" onClick={() => navigate('/orchestration/plans/new')} className="shrink-0">
+            <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
+          </Button>
+        }
       />
 
       <div className="grid grid-cols-3 gap-4">
@@ -168,17 +178,8 @@ export default function PlanListPage() {
             共 {filtered.length} 个 Plan
           </span>
         }
-        headerRight={
-          <Button size="sm" onClick={() => navigate('/orchestration/plans/new')} className="shrink-0">
-            <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
-          </Button>
-        }
         hasAnyActiveFilter={Boolean(search || projectKey || specialtyKey)}
-        onResetAll={() => {
-          setSearch('');
-          setProjectKey(undefined);
-          setSpecialtyKey(undefined);
-        }}
+        onResetAll={() => clearParams(['q', 'project', 'specialty'])}
       >
         <div className="flex flex-wrap items-center gap-2.5">
           <FilterSearchInput
