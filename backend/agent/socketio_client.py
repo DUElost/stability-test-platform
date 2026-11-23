@@ -30,6 +30,7 @@ except ImportError:
     logger.warning("python-socketio not installed, SocketIO log streaming disabled")
 
 from .contracts.capabilities import AGENT_CAPABILITIES
+from .outbound_guard import is_bound_heartbeat_stale
 from .script_verifier import verify_scripts_payload
 
 
@@ -306,8 +307,6 @@ class AgentSocketIOClient:
 
     def _emit(self, event: str, data: dict) -> bool:
         """Emit an event. Buffers if disconnected. Returns True if sent immediately."""
-        from .outbound_guard import is_bound_heartbeat_stale
-
         with self._lock:
             if event == "heartbeat" and is_bound_heartbeat_stale():
                 return False

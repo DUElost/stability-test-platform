@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from .outbound_guard import resolve_bound_claim_capacity
+
 logger = logging.getLogger(__name__)
 
 RUN_TERMINAL_STATUS_MAP = {
@@ -118,7 +120,6 @@ def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
         body["vbus_slots"] = vbus_slots
     if active_job_ids is not None:
         body["active_job_ids"] = sorted({int(jid) for jid in active_job_ids})
-    from .outbound_guard import resolve_bound_claim_capacity
 
     effective_capacity = resolve_bound_claim_capacity(capacity)
     if effective_capacity <= 0 and vbus_slots <= 0:

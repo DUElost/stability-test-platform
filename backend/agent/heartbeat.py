@@ -6,6 +6,7 @@ import requests
 
 from .contracts.capabilities import AGENT_CAPABILITIES, normalize_capabilities
 from .mount_health_probe import check_mounts_presence
+from .outbound_guard import is_bound_heartbeat_stale
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +94,6 @@ def send_heartbeat(
     headers = {}
     if agent_secret:
         headers["x-agent-secret"] = agent_secret
-
-    from .outbound_guard import is_bound_heartbeat_stale
 
     try:
         if is_bound_heartbeat_stale():
