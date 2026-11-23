@@ -1,6 +1,6 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
-v1.4.5（2026-11-23 / #4086 U4 / ADR-0064 D4）：接入 Agent L1 `ensure_firmware`
+v1.4.4（2026-11-23 / #4086 U4 / ADR-0064 D4）：接入 Agent L1 `ensure_firmware`
 （profile=`mtk`）。四段次序：① 零设备访问启动自检 `FIRMWARE_CACHE_API_VERSION==1`；
 ② 保留固件目标解析、V5/V6、`skip_if_current`、取锁前遗留门控恢复（不改 ADR-0063
 D1–D7）；③ 主机锁外完成缓存并持 `LOCK_SH`；④ 再取 `/tmp/stp-flash-firmware.lock`

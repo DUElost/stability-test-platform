@@ -298,7 +298,9 @@ def test_u4_unisoc_fastboot_profile_and_progress(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "boot_slot", lambda *a, **k: "a")
     monkeypatch.setattr(mod, "wait_fastboot", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(mod, "adb", lambda *a, **k: fake_dev)
-    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+    from backend.agent.tests.test_flash_firmware_unisoc import _patch_advancing_clock
+
+    _patch_advancing_clock(monkeypatch, mod)
 
     res = mod.run(
         {
@@ -411,10 +413,6 @@ def test_u4_bsl_profile_points_at_images_and_trimmed_super(monkeypatch, tmp_path
 
 def test_u4_bsl_no_stp_flash_writes_and_unsealed_before_lock(monkeypatch, tmp_path):
     mod = _load(_BSL, "flash_firmware_b10_u4_bsl_unsealed")
-    src = Path(mod.__file__).read_text(encoding="utf-8") if False else _BSL.read_text(encoding="utf-8")
-    assert "/var/tmp/stp_flash" not in src or "退役" in src
-    assert "prepare_local_cache" not in src
-    assert "def prepare_local_cache" not in src
 
     from backend.agent.tests.test_flash_firmware_unisoc_bsl import (
         _create_firmware_dir,
@@ -512,26 +510,51 @@ def test_u4_bsl_no_stp_flash_writes_and_unsealed_before_lock(monkeypatch, tmp_pa
     assert "lock" in lock_hits
 
 def test_u4_bsl_source_has_no_var_tmp_stp_flash_writes():
-    src = _BSL.read_text(encoding="utf-8")
-    assert "prepare_local_cache" not in src
-    assert "_copy_if_changed" not in src
-    # historical mention only in changelog comment is OK; no default path constant
-    assert '_DEFAULT_CACHE_DIR = "/var/tmp/stp_flash"' not in src
-    assert '"/var/tmp/stp_flash"' not in src
+    from tools.dev.source_anchor import SourceGuard
+
+    # 正锚点：L1 缓存接入仍在本文件；否定断言防私有缓存/锁内拷贝回潮（#2639）。
+    guard = (
+        SourceGuard.of_repo_path("backend/agent/scripts/flash_firmware_unisoc_bsl/flash_firmware_unisoc_bsl.py")
+        .anchored('profile="unisoc_bsl"')
+        .anchored("firmware_unsealed_not_supported")
+    )
+    guard.assert_absent(
+        "def prepare_local_cache",
+        why="#4086 U4 / ADR-0064 D4：BSL 私有 prepare_local_cache 已退役，不得回潮",
+    )
+    guard.assert_absent(
+        "_copy_if_changed",
+        why="#4086 U4：锁内/私有 _copy_if_changed 已删除，不得回潮",
+    )
+    guard.assert_absent(
+        '_DEFAULT_CACHE_DIR = "/var/tmp/stp_flash"',
+        why="#4086 U4：不得恢复 /var/tmp/stp_flash 默认缓存目录常量",
+    )
+    guard.assert_absent(
+        '"/var/tmp/stp_flash"',
+        why="#4086 U4：不得在代码字面量中写入 /var/tmp/stp_flash 路径（changelog 无引号形式除外）",
+    )
 
 
 # ── 5. pipeline_engine 零新增 script_name 分支 ───────────────────────────
 
 
 def test_u4_pipeline_engine_no_new_script_name_branches():
-    engine = (_REPO / "backend" / "agent" / "pipeline_engine.py").read_text(encoding="utf-8")
+    from tools.dev.source_anchor import SourceGuard
+
     # 相对合入前：不得新增三刷机族字面量特判（U2 已保证双路径 PYTHONPATH，无 script_name 分支）
-    for name in ("flash_firmware_unisoc_bsl", "flash_firmware_unisoc"):
-        # 允许出现在注释以外的通用列表则需人工审；此处断言无 if/== 特判形态
-        assert f'script_name == "{name}"' not in engine
-        assert f"script_name == '{name}'" not in engine
-    assert 'script_name == "flash_firmware"' not in engine
-    assert "script_name == 'flash_firmware'" not in engine
+    guard = SourceGuard.of_repo_path("backend/agent/pipeline_engine.py").anchored(
+        "class PipelineEngine:"
+    )
+    for name in ("flash_firmware_unisoc_bsl", "flash_firmware_unisoc", "flash_firmware"):
+        guard.assert_absent(
+            f'script_name == "{name}"',
+            why="#4086 §6 / #3779：不得向 pipeline_engine 新增刷机族 script_name 特判",
+        )
+        guard.assert_absent(
+            f"script_name == '{name}'",
+            why="#4086 §6 / #3779：不得向 pipeline_engine 新增刷机族 script_name 特判",
+        )
 
 
 def test_u4_capabilities_declare_firmware_cache_v1():

@@ -20,7 +20,7 @@ Implements Scheme 2 flashing inside the STP agent script contract:
 7. Verify positive reboot evidence and read back manifest.version_prop == manifest.version
    after cold boot, plus optional build_type / incremental / root checks.
 
-v1.0.9（2026-11-23 / #4086 U4 / ADR-0064 D4）：退役 /var/tmp/stp_flash 私有缓存与
+v1.0.7（2026-11-23 / #4086 U4 / ADR-0064 D4）：退役 /var/tmp/stp_flash 私有缓存与
 主机侧裁剪/锁内拷贝；统一接入 agent.firmware_cache；启动前 fail-closed 校验
 FIRMWARE_CACHE_API_VERSION==1。
 

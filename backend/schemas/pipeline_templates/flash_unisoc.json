@@ -25,7 +25,7 @@
       {
         "step_id": "flash_firmware_unisoc",
         "action": "script:flash_firmware_unisoc",
-        "version": "1.0.8",
+        "version": "1.0.7",
         "timeout_seconds": 3600,
         "retry": 0,
         "params": {

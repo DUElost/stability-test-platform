@@ -25,16 +25,15 @@ Class: feature
 4. `flash_firmware_unisoc_bsl` 删除 `/var/tmp/stp_flash` 私有拷贝与主机侧裁剪；
    本地目录为 `fw_cache.local_dir/images`，super 固定
    `images/bsl/super_trimmed.img`；未封包在取锁前 `firmware_unsealed_not_supported`。
-5. 新版本登记（方案目标号被中间迭代占用后顺延）：`flash_firmware@1.4.5`、
-   `flash_firmware_unisoc@1.0.8`、`flash_firmware_unisoc_bsl@1.0.9`；模板 pin 同步；
-   不 `--publish` / 不 scan；`pipeline_engine.py` 零改动。
+5. 新版本登记（相对 `origin/main` 最新未退役条目仅追加最终三版）：
+   `flash_firmware@1.4.4`、`flash_firmware_unisoc@1.0.7`、
+   `flash_firmware_unisoc_bsl@1.0.7`；模板 pin 同步；不 `--publish` / 不 scan；
+   `pipeline_engine.py` 零改动。
 
 ## Alternatives
 
 - 在 `pipeline_engine` 按 `script_name` 预拉固件：违背 #3779 与 ADR-0064 §3，否决。
 - 保留 BSL 私有 `/var/tmp/stp_flash` 与 L1 并存：无法闭环 #4006 §8，否决。
-- 版本号坚持方案字面 `1.4.4`/`1.0.7`：append-only 下中间登记已占用且 sha 漂移，
-  只能顺延（见 PR「偏离说明」）。
 
 ## Verification
 
@@ -43,6 +42,7 @@ Class: feature
 - `./scripts/project_python.sh tools/dev/check_tool_manifest.py --base origin/main`
 - `./scripts/project_python.sh scripts/run_gates.py check:quick`
 - `./scripts/project_python.sh scripts/run_pytest.py backend/agent/tests/test_flash_firmware*.py backend/agent/tests/test_device_flash_scripts.py tests/test_inner_import_ratchet.py -q`
+- `./scripts/project_python.sh scripts/run_pytest.py tests/test_agent_clock_stub_guard_3202.py tests/test_source_scan_anchor_ratchet.py backend/tests/services/test_param_docs_content.py -q`
 
 ## Revisit
 

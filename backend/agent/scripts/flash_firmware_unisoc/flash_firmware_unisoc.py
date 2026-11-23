@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Flash one Unisoc (SPRD) device to a firmware version prepared from a .pac.
 
-v1.0.8（2026-11-23 / #4086 U4 / ADR-0064 D4）：接入 Agent L1 `ensure_firmware`
+v1.0.7（2026-11-23 / #4086 U4 / ADR-0064 D4）：接入 Agent L1 `ensure_firmware`
 （profile=`unisoc_fastboot`）。四段次序：① 零设备访问启动自检
 `FIRMWARE_CACHE_API_VERSION == 1`；② 保留 `ensure_root` / `resolve_firmware` /
 `skip_if_current`；③ 主机刷机锁外完成缓存准备并持 `LOCK_SH`；④ 再取
