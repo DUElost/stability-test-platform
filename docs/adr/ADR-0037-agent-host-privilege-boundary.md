@@ -1,13 +1,13 @@
 # ADR-0037：Agent 主机提权边界（Privilege Boundary Wrapper）
 
 - 状态：**Accepted（v0.8）**
-- 版本记录：v0.8（2026-11-23 草案，待 Owner 裁定：§2 新增 D9——xHCI 主控自动恢复窄子命令 `xhci-rebind`、sysfs 写面语义、退出码、`boot_id` 持久化熔断与 `claim_loop` 互斥边界，#2972；§4 不变量以草案待生效占位同步登记，§5 Revisit 同步登记裁定与灰度前置，生效前不改既有 v0.7 边界）；v0.7（2026-11-10：§2 D8 USB 切电子命令 `usb-power` 随 [ADR-0063](./ADR-0063-vbus-cycle-flash-without-adb.md) 转 Accepted 一并生效（#3892；阶段 A、B 真机验收通过），§4 不变量第 2、3 条同批补上该子命令的强控制与测试文件）；v0.6（2026-09-26：§2 新增 D7——内核日志只读子命令 `read-kernel-log`（#2957：Agent 侧内核 USB 判据的提权读面，两个整数参数 + 固定 argv + 输出上限/超时/截断非零退出），§4 强控制与测试清单同步）；v0.5（2026-09-16：§2 D2 事实勘误——`selftest` 只证 wrapper **自洽**，不证它具备热更新脚本将要调用的子命令；脚本头改为「selftest + 能力集合比对」双前置判据，wrapper 新增 `capabilities` 子命令，#2319）；v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
+- 版本记录：v0.8（2026-11-23 生效，Owner 裁定采纳、PR #4114 独立复核通过、PR #4120 落地实施与强控制测试：§2 新增 D9——xHCI 主控自动恢复窄子命令 `xhci-rebind`、sysfs 写面语义、退出码、`boot_id` 持久化熔断、`claim_loop` 互斥与 L3 `adb offline` 同构边界，#2972；§4 不变量第 2、3 条同批转正强控制与测试清单，§5 Revisit 登记生产灰度前置）；v0.7（2026-11-10：§2 D8 USB 切电子命令 `usb-power` 随 [ADR-0063](./ADR-0063-vbus-cycle-flash-without-adb.md) 转 Accepted 一并生效（#3892；阶段 A、B 真机验收通过），§4 不变量第 2、3 条同批补上该子命令的强控制与测试文件）；v0.6（2026-09-26：§2 新增 D7——内核日志只读子命令 `read-kernel-log`（#2957：Agent 侧内核 USB 判据的提权读面，两个整数参数 + 固定 argv + 输出上限/超时/截断非零退出），§4 强控制与测试清单同步）；v0.5（2026-09-16：§2 D2 事实勘误——`selftest` 只证 wrapper **自洽**，不证它具备热更新脚本将要调用的子命令；脚本头改为「selftest + 能力集合比对」双前置判据，wrapper 新增 `capabilities` 子命令，#2319）；v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
 - 优先级：P1
 - 目标里程碑：M7
-- 日期：2026-09-11（v0.2 / v0.3 修订 2026-09-15；v0.4 修订 2026-09-15；v0.5 勘误 2026-09-16；v0.6 增补 2026-09-26；v0.7 增补 2026-11-10；v0.8 草案 2026-11-23）
-- 决策者：平台研发组（R02 安全联审；2026-09-15 依据评审一稿裁决转 Accepted；v0.6 的 D7 由 owner 于 #2957 裁决，实施规格含评审材料与逐项核验；v0.7 的 D8 由 Owner 随 ADR-0063 于 #3892 裁决）
+- 日期：2026-09-11（v0.2 / v0.3 修订 2026-09-15；v0.4 修订 2026-09-15；v0.5 勘误 2026-09-16；v0.6 增补 2026-09-26；v0.7 增补 2026-11-10；v0.8 增补并生效 2026-11-23）
+- 决策者：平台研发组（R02 安全联审；2026-09-15 依据评审一稿裁决转 Accepted；v0.6 的 D7 由 owner 于 #2957 裁决，实施规格含评审材料与逐项核验；v0.7 的 D8 由 Owner 随 ADR-0063 于 #3892 裁决；v0.8 的 D9 由 Owner 于 2026-11-23 依据独立安全复核结论于 #2972（PR #4114 / #4120）裁决生效）
 - 标签：安全, 提权, sudoers, 热更新, Agent 主机
-- 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）；[#2180](https://github.com/DUElost/stability-test-platform/issues/2180)（legacy 分支与哨兵删除，v0.3）；[#2957](https://github.com/DUElost/stability-test-platform/issues/2957)（内核日志只读通道，v0.6 新增）
+- 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）；[#2180](https://github.com/DUElost/stability-test-platform/issues/2180)（legacy 分支与哨兵删除，v0.3）；[#2957](https://github.com/DUElost/stability-test-platform/issues/2957)（内核日志只读通道，v0.6 新增）；[#2972](https://github.com/DUElost/stability-test-platform/issues/2972)（xHCI 主控门控自动恢复与熔断，v0.8 新增）
 
 ## 1. 背景
 
@@ -142,7 +142,7 @@
   `/etc/stp-agent/usb-power-slots.json` 按 serial 查得，wrapper 不得接受用来指定切电目标的 Hub 位置或端口参数（`--expect-slot` 只用于切电前比对，不一致即拒绝）；固定 argv 调用
   `/usr/sbin/uhubctl`，不经 shell，环境清空，60s 超时，成功时回显实际槽位。安装链不得新增或修改 sudoers 行（D6）。
   §4 不变量第 2、3 条已同批补上该子命令的强控制与测试文件（v0.7）。
-- **D9 xHCI 主控自动恢复通道（v0.8 草案，#2972；待 Owner 裁定后生效）**：
+- **D9 xHCI 主控自动恢复通道（v0.8 生效，#2972；Owner 2026-11-23 裁定，PR #4120 落地）**：
   1. **窄子命令接口**：wrapper 必须仅提供无目标参数子命令 `xhci-rebind`。wrapper 必须在参数解析层启用 `allow_abbrev=False`。wrapper 不得接受调用方传入的路径或 PCI 设备号参数。
   2. **sysfs 枚举与写面语义**：wrapper 必须逐级以 `O_NOFOLLOW | O_DIRECTORY` 打开固定驱动目录 `/sys/bus/pci/drivers/xhci_hcd`。wrapper 必须只在该驱动目录下枚举名称匹配 PCI BDF 正则（`^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]\Z`）的符号链接条目。wrapper 必须校验每个枚举条目经 `realpath` 解析后的目标位于 `/sys/devices/` 之下且末段文件名等于该 BDF（内核 PCI 项为符号链接，与 D5 `usb-authorized` 同形）。wrapper 必须只以 `O_WRONLY | O_NOFOLLOW` 打开该驱动目录下的普通属性文件 `unbind` 与 `bind`。wrapper 必须对每个通过校验的 BDF 按「向 `unbind` 写入该 BDF 名、等待固定间隔、再向 `bind` 写入该 BDF 名」的顺序执行。
   3. **进程隔离、超时与爆炸半径**：wrapper 不得经 shell 执行外部命令。wrapper 必须校验调用进程为 root，并在非 root 时以退出码 2 拒绝。wrapper 必须为单次 `xhci-rebind` 执行设置总超时上限，且超时预算覆盖枚举、间隔等待以及内核同步 `unbind`/`bind` probe 阻塞。单次执行超过总超时上限时，wrapper 必须中止后续目标并以退出码 3 返回。门控通过后，wrapper 会全量枚举并重绑该驱动下的全部已绑定 BDF，其运行期防误伤依赖整树门控（含 `other_usb_nodes == 0`）。运维人员在灰度选型时必须排除连接关键非目标 USB 外设的主机。
@@ -180,15 +180,20 @@
      ≤ 64 KiB、父目录为 root 属主的真实目录且 group/other 不可写、schema / 字段 / `port` 1–16 合法、serial 与槽位无重复）、按 serial 查槽位且不接受
      指定切电目标的位置或端口参数、`--expect-slot` 在调用 `uhubctl` 之前比对（不一致即拒绝）、`--delay` 只用于 `cycle` 且有上限、
      `allow_abbrev=False`、`uhubctl` 为固定路径且 root 属主非 group/other 可写、`hub_location` 必须在内核 sysfs 树内，
-     以及子进程收口（固定 argv / 环境只留 `LC_ALL` 与 `PATH` / 60s 超时 / 非 root 拒绝 / 成功回显实际槽位）（v0.7 / D8）。
-     **〔v0.8 草案待生效占位 / D9〕**：以下项在 Owner 裁定前不改既有 v0.7 生效面；Owner 裁定生效时，实施者必须同批补齐 `xhci-rebind` 强控制（无目标参数 + `allow_abbrev=False`、固定驱动目录 `/sys/bus/pci/drivers/xhci_hcd` 逐级 `O_NOFOLLOW | O_DIRECTORY`、BDF 正则与 `realpath` 落 `/sys/devices/` 校验、属性文件 `unbind`/`bind` 以 `O_WRONLY | O_NOFOLLOW` 写入 BDF 名、不经 shell、总超时上限、非 root 退出码 2、失败/部分失败/`probe` 失败退出码 3 + `STP_XHCI_REBIND_*` 摘要）与 Agent 侧 `RebindFuse` 按 `boot_id` 持久化及 `claim_loop` 暂停互斥；
+     以及子进程收口（固定 argv / 环境只留 `LC_ALL` 与 `PATH` / 60s 超时 / 非 root 拒绝 / 成功回显实际槽位）（v0.7 / D8）、
+     `xhci-rebind` 的无目标参数与 `allow_abbrev=False`、固定驱动目录 `/sys/bus/pci/drivers/xhci_hcd` 逐级 `O_NOFOLLOW | O_DIRECTORY`、
+     BDF 正则与 `realpath` 落 `/sys/devices/` 校验、属性文件 `unbind`/`bind` 以 `O_WRONLY | O_NOFOLLOW` + `S_ISREG` 写入 BDF 名
+     （`unbind→bind` 间隔 `2s`、单次总超时 `30s` 含 `SIGALRM` 覆盖同步 probe 阻塞、不经 shell、非 root 退出码 2）、
+     重绑后驱动目录 BDF 链接与真实 PCI 目录下 `enable != 0`（`O_RDONLY | O_NOFOLLOW`）核验、
+     失败/部分失败/超时/`probe` 失败退出码 3 + 五词标记（`STP_XHCI_REBIND_NO_PCI_IDS` / `STP_XHCI_REBIND_WRITE_FAILED` / `STP_XHCI_REBIND_PARTIAL` / `STP_XHCI_REBIND_TIMEOUT` / `STP_XHCI_REBIND_PROBE_FAILED`）逐 BDF 摘要，
+     以及 Agent 侧 `RebindFuse` 按 `boot_id` 原子持久化至热更新同步目录之外的 `BASE_DIR` `0600` 文件（先 `record_attempt` 落盘再调用动作、损坏/symlink/权限异常 fail-closed）与 `ClaimPauseGate` 暂停 `claim_loop`（覆盖 `effective_slots` 与 `vbus_slots`、持续至 `15s` 重枚举冷却结束）（v0.8 / D9，PR #4120）；
   3. **测试是不变量的一部分**：上述控制由
      `tests/test_agent_priv_parser_contract.py`、`tests/test_agent_priv_boundary.py`、
      `tests/test_agent_priv_read_kernel_log.py`、`tests/test_agent_priv_usb_power.py`（v0.7）、
+     `tests/test_agent_priv_xhci_rebind.py` 与 `backend/agent/tests/test_self_heal_coordinator_s4.py`（v0.8 / D9）、
      `tests/test_agent_priv_apply_code_protection.py`、
      `tests/test_remote_script_privilege_paths.py`
-     锁定；修改这些控制必须同步这些测试（回归时不得无声削弱）。
-     **〔v0.8 草案待生效占位 / D9〕**：Owner 裁定 D9 生效时，实施者必须同批新增 `tests/test_agent_priv_xhci_rebind.py` 并同步 `tests/test_agent_priv_parser_contract.py` 锁定上述强控制；
+     锁定；修改这些控制必须同步这些测试（回归时不得无声削弱）；
   4. **信任边界**（v0.4 / O1）：bootstrap 的可调用主体不构成信任边界——conf 冻结（锚点不可变）才是。
 - **迁移期实测偏差（2026-09-15）**：`/etc/sudoers.d/android` 宽规则仍存于
   48/48 台（含全部 wrapper 主机）——目标态不变量在清除动作完成前不成立；
@@ -241,8 +246,9 @@
      「agent 重启前已死且结果层未覆盖」的形态，评估给首扫加一次**有界**的 boot
      摘要路径（届时须同时保留截断→不可用判据）；C 方案实施 PR 未含独立安全评审，
      若团队要求，评审意见与本 ADR 冲突时以评审意见为准并回写 #2957。
-  6. **D9 裁决与灰度验收（v0.8 草案 / #2972）**：本条为待裁决草案，在 Owner 正式裁定
-     D9 并完成配套测试（`tests/test_agent_priv_xhci_rebind.py` 与 `test_agent_priv_parser_contract.py`
-     同步）前，实施者不得向 `stp-agent-priv` 合入 `xhci-rebind` 或开启生产白名单；
-     裁定落地后按 `update_agent.yml` 逐台下发 wrapper，并以 `STP_XHCI_AUTO_REBIND_HOSTS`
-     执行 1 → 5 → 全量灰度。
+  6. **D9 裁决落地与生产灰度验收（v0.8 / #2972）**：Owner 已于 2026-11-23 裁定采纳 D9
+     （PR #4114 独立复核通过），PR #4120 已合入 `xhci-rebind` 子命令、`boot_id` 持久化熔断、
+     `ClaimPauseGate`、L3 `adb offline` 同构自愈及配套测试（默认开关 `STP_XHCI_AUTO_REBIND=0`，
+     合入不改变现网行为）。运维人员开启生产自动恢复前，必须先经 `update_agent.yml` 逐台下发新版
+     `stp-agent-priv`。运维人员启用自动恢复时，必须以 `STP_XHCI_AUTO_REBIND_HOSTS` 执行
+     1 → 5 → 全量灰度。
