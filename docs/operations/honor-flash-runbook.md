@@ -179,10 +179,11 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
 
 - 按 host 分批（先 1 台/host，再 1/3 机队，最后全量），串行刷机下每 host
   同时只有 1 台在刷，host 内排队自动进行。
+- 在使用 V6 等 6–9 GB 大固件包且无本地 SSD 缓存时，操作者建议分批限制同时从控制面 NFS 拉包的 Agent host 数量，并将单轮 `timeout_seconds` 从默认 `1200` 调高至 `2400`，避免千兆网卡拥塞触发半程下载超时强杀。
 - 关注 `saq`/Agent 日志中的 `lock-wait` 戳占比：等待时间是正常的（串行），
   但如果 lock-wait 时间远超单台刷机时长，说明该 host 排队过深，考虑分批错峰。
 - 中止：`POST /api/v1/plan-runs/{run_id}/abort`（RUNNING 中的刷机会被杀进程树，
-  该设备本轮标 ABORTED；设备处于 BROM 中途被断的，重新触发会从头刷）。
+  该设备本轮标 ABORTED；在非 `vbus_cycle` 模式下，如果设备已进入 `0e8d:2000` BROM/Preloader 态，`SIGTERM` 清理不会也无法经 ADB 重启设备，设备会滞留 `0e8d:2000` 导致后续 ADB 刷机无法自动重触发，操作者必须通过现场手动开机或硬件断电恢复）。
 
 ## 6. 已知边界
 
@@ -591,15 +592,17 @@ journalctl -k --since "10 minutes ago" --no-pager | grep -E "idProduct=2000|0e8d
 1. 在已无待刷设备的每台 Agent host 上检查是否存在残留 `0000 off` 端口：
 
    ```bash
-   sudo -n uhubctl | awk '/Current status for hub/{h=$5} /0000 off/{print h ":" $2}'
+   /usr/sbin/uhubctl | awk '/Current status for hub/{h=$5} /0000 off/{print h ":" $2}'
    ```
 
    预期：记录所有输出的 `<hub_location>:<port>`；若无任何输出，直接结束本流程。
-2. 对第 1 步列出的每个非待排查 `0000 off` 端口恢复供电：
+2. 对已登记在 `/etc/stp-agent/usb-power-slots.json` 的非待排查 `0000 off` 端口，经免密窄面恢复供电：
 
    ```bash
-   sudo -n uhubctl -l <hub_location> -p <port> -a on
+   sudo -n /usr/local/sbin/stp-agent-priv usb-power --serial <serial> --expect-slot <hub_location>:<port> --action on
    ```
 
-   预期：端口状态恢复为 `0100 power`（若接有开机设备则恢复为 `0503 power ...`），且再次执行第 1 步
-   检查命令输出为空。
+   （若端口未登记在槽位映射内，操作者才可以使用带密码的 `sudo /usr/sbin/uhubctl -l <hub_location> -p <port> -a on`。）
+   预期：命令输出 `STP_USB_POWER_OK ... action=on`。
+3. 复跑第 1 步检查。
+   预期：端口状态恢复为 `0100 power`（若接有开机设备则恢复为 `0503 power ...`），且第 1 步输出为空。

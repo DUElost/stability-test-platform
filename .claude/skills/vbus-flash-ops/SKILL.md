@@ -67,8 +67,12 @@ description: >-
 ## 四、收尾恢复 `0000 off` 端口供电
 
 1. 检查已无待刷设备的每台 Agent host 是否存在残留 `0000 off` 端口：
-   `sudo -n uhubctl | awk '/Current status for hub/{h=$5} /0000 off/{print h ":" $2}'`
+   `/usr/sbin/uhubctl | awk '/Current status for hub/{h=$5} /0000 off/{print h ":" $2}'`
+   （如果主机未安装 `/usr/sbin/uhubctl`，执行非递归 sysfs 检查：`grep -H '^1$' /sys/bus/usb/devices/*/*/*-port*/disable /sys/bus/usb/devices/*/*-port*/disable 2>/dev/null`；操作者不得对 `/sys/bus/usb/devices` 使用 `find -L`，避免环形 `peer` 符号链接导致超时）。
    预期：列出所有需要恢复供电的端口；无输出则结束本流程。
-2. 对每个非待排查 `0000 off` 端口恢复供电并复查：
-   `sudo -n uhubctl -l <hub_location> -p <port> -a on`
-   预期：端口变为 `0100 power`（或在线设备 `0503 power`），再次执行第 1 步输出为空。
+2. 对已登记在 `/etc/stp-agent/usb-power-slots.json` 的非待排查 `0000 off` 端口，经免密窄面恢复供电：
+   `sudo -n /usr/local/sbin/stp-agent-priv usb-power --serial <serial> --expect-slot <hub_location>:<port> --action on`
+   （普通 `uhubctl` 未配置 `NOPASSWD`，`sudo -n uhubctl` 会因密码提示失败；仅当端口不在槽位映射内时，操作者才可以使用带密码的 `sudo /usr/sbin/uhubctl -l <hub_location> -p <port> -a on`）。
+   预期：命令输出 `STP_USB_POWER_OK ... action=on`。
+3. 复跑第 1 步检查。
+   预期：端口变为 `0100 power`（或在线设备 `0503 power`），第 1 步输出为空。
