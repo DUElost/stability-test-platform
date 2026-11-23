@@ -26,6 +26,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
                     #2957：给 Agent 一条可读内核 USB 日志的最小提权面）
     usb-power        按 serial 查 root 属主槽位映射，固定 argv 调 uhubctl 切电
                     （#3892 / ADR-0063 D2 / ADR-0037 D8：调用方不能指定 Hub 或端口）
+    xhci-rebind      无目标参数枚举 /sys/bus/pci/drivers/xhci_hcd 下已绑定 BDF 并执行
+                    unbind→等待→bind 与重绑校验（#2972 / ADR-0037 D9）
 
 不变量：
 - 所有写路径固定或经前缀校验，永不接受任意目标路径；
@@ -36,13 +38,16 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
 
 Python 3.6+（主机系统 python3，不使用第三方依赖）。exit code：0 成功、
 1 selftest 失败、2 拒绝（STP_AGENT_PRIV_ERROR）、3 read-kernel-log 读取失败
-（journalctl 非零退出 / 超时 / 输出截断；stderr 带 ``STP_READ_KERNEL_LOG_*`` 标记）
-或 usb-power 执行失败（uhubctl 非零退出 / 超时；stderr 带 ``STP_USB_POWER_*`` 标记）。
+（journalctl 非零退出 / 超时 / 输出截断；stderr 带 ``STP_READ_KERNEL_LOG_*`` 标记）、
+usb-power 执行失败（uhubctl 非零退出 / 超时；stderr 带 ``STP_USB_POWER_*`` 标记）
+或 xhci-rebind 执行失败（无有效 BDF / 写入失败 / 部分成功 / 超时 / probe 失败；
+stderr 带 ``STP_XHCI_REBIND_*`` 标记）。
 """
 
 import argparse
 import base64
 from contextlib import contextmanager, redirect_stderr
+import errno
 import grp
 import io
 import json
@@ -51,6 +56,7 @@ import pwd
 import re
 import select
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -97,6 +103,20 @@ USB_POWER_MAX_DELAY = 30
 USB_POWER_ACTIONS = ("on", "off", "cycle")
 USB_POWER_ENV = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
 _USB_POWER_SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}\Z")
+
+# ── xhci-rebind 窄面（#2972 / ADR-0037 D9）────────────────────────────────────
+# 无目标参数子命令：只枚举固定驱动目录 /sys/bus/pci/drivers/xhci_hcd 下已绑定的
+# PCI BDF 符号链接（realpath 须落于 /sys/devices/ 下且末段等于该 BDF），仅以
+# O_WRONLY | O_NOFOLLOW 向驱动目录下的普通属性文件 unbind/bind 写入 BDF 字符串。
+XHCI_SYSFS_BASE = "/sys/bus/pci/drivers/xhci_hcd"
+XHCI_REBIND_DELAY_SECONDS = 2.0
+XHCI_REBIND_TIMEOUT_SECONDS = 30.0
+_PCI_BDF_RE = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]\Z")
+XHCI_MARKER_NO_PCI_IDS = "STP_XHCI_REBIND_NO_PCI_IDS"
+XHCI_MARKER_WRITE_FAILED = "STP_XHCI_REBIND_WRITE_FAILED"
+XHCI_MARKER_PARTIAL = "STP_XHCI_REBIND_PARTIAL"
+XHCI_MARKER_TIMEOUT = "STP_XHCI_REBIND_TIMEOUT"
+XHCI_MARKER_PROBE_FAILED = "STP_XHCI_REBIND_PROBE_FAILED"
 
 # ── flash 链窄面（ADR-0037 D5 / #2133；#2284 最小权限；#2353 判据改成员资格）──
 # udev 规则：固定路径 + **两个固定形态之一**（与 flash_preflight 最新版本的
@@ -1367,6 +1387,232 @@ def cmd_usb_power(args, conf):
     return 0
 
 
+class _XhciRebindTimeout(Exception):
+    """单次 xhci-rebind 超过总超时上限（含内核同步 probe 阻塞）。"""
+
+
+def is_kernel_pci_device_path(resolved, bdf):
+    """校验 BDF 符号链接的 realpath 位于 ``_SYSFS_DEVICES_ROOT`` 下且末段等于该 BDF。"""
+    if not _PCI_BDF_RE.match(bdf):
+        return False
+    root = os.path.realpath(_SYSFS_DEVICES_ROOT).rstrip("/")
+    prefix = root + "/"
+    return (
+        resolved.startswith(prefix)
+        and os.path.basename(resolved) == bdf
+        and os.path.isdir(resolved)
+    )
+
+
+def _write_sysfs_attr_at(directory_fd, name, payload):
+    """以 O_WRONLY | O_NOFOLLOW 打开驱动目录下普通属性文件并写入单次 payload。"""
+    try:
+        target = os.open(
+            name, os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+    except OSError as exc:
+        # ELOOP 表示目标属性文件被替换成符号链接，属安全边界拒绝（exit 2）。
+        if exc.errno == errno.ELOOP:
+            _fail("sysfs attribute %s must not be a symlink: %s" % (name, exc))
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(target).st_mode):
+            _fail("sysfs attribute %s must be a regular file" % name)
+        os.write(target, payload.encode("ascii"))
+    finally:
+        os.close(target)
+
+
+def _enumerate_xhci_bdfs(driver_fd, base_path):
+    """枚举 ``xhci_hcd`` 驱动目录下已绑定 BDF 符号链接并校验 realpath 落于 /sys/devices/。"""
+    targets = []
+    for name in sorted(os.listdir(driver_fd)):
+        if not _PCI_BDF_RE.match(name):
+            continue
+        try:
+            meta = os.lstat(name, dir_fd=driver_fd)
+        except OSError as exc:
+            _fail("cannot lstat xhci entry %s: %s" % (name, exc))
+        if not stat.S_ISLNK(meta.st_mode):
+            _fail("xhci BDF entry %s must be a kernel symlink" % name)
+        resolved = os.path.realpath(os.path.join(base_path, name))
+        if not is_kernel_pci_device_path(resolved, name):
+            _fail(
+                "xhci BDF %s does not resolve under %s (got %s)"
+                % (name, _SYSFS_DEVICES_ROOT, resolved)
+            )
+        targets.append((name, resolved))
+    return targets
+
+
+def _verify_xhci_rebound(driver_fd, bdf, real_pci_dir):
+    """核验重绑后驱动目录重现 BDF 链接且已校验真实 PCI 目录下 enable != 0（§6.1 判据）。"""
+    try:
+        meta = os.lstat(bdf, dir_fd=driver_fd)
+    except OSError as exc:
+        return False, "driver_link_missing:%s" % exc
+    if not stat.S_ISLNK(meta.st_mode):
+        return False, "driver_entry_not_symlink"
+    try:
+        pci_fd = _open_directory(real_pci_dir)
+    except (PrivError, OSError) as exc:
+        return False, "pci_dir_open_failed:%s" % exc
+    try:
+        enable_text = _read_sysfs_attr(pci_fd, "enable", 32).strip()
+    except (PrivError, OSError) as exc:
+        return False, "enable_read_failed:%s" % exc
+    finally:
+        os.close(pci_fd)
+    if enable_text == "0":
+        return False, "enable_is_0"
+    return True, "ok"
+
+
+@contextmanager
+def _xhci_alarm_budget(timeout_seconds):
+    """用 SIGALRM 兜住同步内核 unbind/bind probe 阻塞，避免总超时失效。"""
+    if timeout_seconds <= 0:
+        raise _XhciRebindTimeout("timeout budget exhausted")
+    use_alarm = hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")
+    prev_handler = None
+    if use_alarm:
+        def _on_alarm(signum, frame):
+            raise _XhciRebindTimeout("xhci-rebind exceeded %.1fs" % timeout_seconds)
+        try:
+            prev_handler = signal.signal(signal.SIGALRM, _on_alarm)
+            signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+        except ValueError:
+            # 非主线程测试场景不支持 signal.signal，降级靠 monotonic deadline 判定。
+            use_alarm = False
+    try:
+        yield
+    finally:
+        if use_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, prev_handler)
+
+
+def cmd_xhci_rebind(args, conf):
+    """无目标参数 xHCI 主控 unbind→bind 恢复通道（#2972 / ADR-0037 D9）。
+
+    - exit 0：至少 1 个有效 BDF，全部 unbind/bind 完成且驱动链接重现、enable != 0；
+    - exit 2：非 root、固定驱动目录或属性文件 O_NOFOLLOW / realpath 校验失败；
+    - exit 3：无有效 BDF / 写入失败 / 部分成功 / 总超时 / probe 失败（§6.1 -110 态），
+      stderr 输出 ``STP_XHCI_REBIND_*`` 标记与逐 BDF 结构化摘要。
+    """
+    _require_root()
+    try:
+        driver_fd = _open_directory(XHCI_SYSFS_BASE)
+    except OSError as exc:
+        _fail("cannot open xhci driver dir %s: %s" % (XHCI_SYSFS_BASE, exc))
+    try:
+        # 校验驱动目录下 unbind/bind 均存在且非 symlink（在任何写动作之前）
+        for attr in ("unbind", "bind"):
+            try:
+                attr_meta = os.lstat(attr, dir_fd=driver_fd)
+            except OSError as exc:
+                _fail("missing xhci driver attribute %s: %s" % (attr, exc))
+            if not stat.S_ISREG(attr_meta.st_mode):
+                _fail("xhci driver attribute %s must be a regular file" % attr)
+
+        targets = _enumerate_xhci_bdfs(driver_fd, XHCI_SYSFS_BASE)
+        if not targets:
+            print(
+                "%s summary=%s" % (XHCI_MARKER_NO_PCI_IDS, json.dumps([], separators=(",", ":"))),
+                file=sys.stderr,
+            )
+            return 3
+
+        deadline = time.monotonic() + float(XHCI_REBIND_TIMEOUT_SECONDS)
+        results = []
+        timed_out = False
+
+        try:
+            with _xhci_alarm_budget(float(XHCI_REBIND_TIMEOUT_SECONDS)):
+                for idx, (bdf, real_pci_dir) in enumerate(targets):
+                    if time.monotonic() >= deadline:
+                        timed_out = True
+                        for rem_bdf, _ in targets[idx:]:
+                            results.append({"bdf": rem_bdf, "status": "timeout", "detail": "budget_exhausted"})
+                        break
+                    try:
+                        _write_sysfs_attr_at(driver_fd, "unbind", bdf)
+                    except OSError as exc:
+                        results.append({"bdf": bdf, "status": "write_failed", "detail": "unbind:%s" % exc})
+                        continue
+
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        results.append({"bdf": bdf, "status": "timeout", "detail": "after_unbind"})
+                        for rem_bdf, _ in targets[idx + 1:]:
+                            results.append({"bdf": rem_bdf, "status": "timeout", "detail": "budget_exhausted"})
+                        break
+                    if XHCI_REBIND_DELAY_SECONDS > 0:
+                        sleep_s = min(float(XHCI_REBIND_DELAY_SECONDS), remaining)
+                        time.sleep(sleep_s)
+                        if time.monotonic() >= deadline:
+                            timed_out = True
+                            results.append({"bdf": bdf, "status": "timeout", "detail": "during_delay"})
+                            for rem_bdf, _ in targets[idx + 1:]:
+                                results.append({"bdf": rem_bdf, "status": "timeout", "detail": "budget_exhausted"})
+                            break
+
+                    try:
+                        _write_sysfs_attr_at(driver_fd, "bind", bdf)
+                    except OSError as exc:
+                        # bind 报错时检查是否落入 §6.1 probe 失败态（无链接或 enable==0）
+                        ok_after, detail_after = _verify_xhci_rebound(driver_fd, bdf, real_pci_dir)
+                        if not ok_after and (
+                            detail_after == "enable_is_0"
+                            or "driver_link_missing" in detail_after
+                        ):
+                            results.append({
+                                "bdf": bdf,
+                                "status": "probe_failed",
+                                "detail": "bind:%s;%s" % (exc, detail_after),
+                            })
+                        else:
+                            results.append({"bdf": bdf, "status": "write_failed", "detail": "bind:%s" % exc})
+                        continue
+
+                    ok_after, detail_after = _verify_xhci_rebound(driver_fd, bdf, real_pci_dir)
+                    if not ok_after:
+                        results.append({"bdf": bdf, "status": "probe_failed", "detail": detail_after})
+                    else:
+                        results.append({"bdf": bdf, "status": "ok", "detail": "ok"})
+        except _XhciRebindTimeout as exc:
+            timed_out = True
+            seen_bdfs = {item["bdf"] for item in results}
+            for rem_bdf, _ in targets:
+                if rem_bdf not in seen_bdfs:
+                    results.append({"bdf": rem_bdf, "status": "timeout", "detail": str(exc)})
+    finally:
+        os.close(driver_fd)
+
+    statuses = [item["status"] for item in results]
+    if results and all(st == "ok" for st in statuses):
+        bdfs = ",".join(item["bdf"] for item in results)
+        print("STP_XHCI_REBIND_OK count=%d bdfs=%s" % (len(results), bdfs))
+        return 0
+
+    if timed_out or "timeout" in statuses:
+        marker = XHCI_MARKER_TIMEOUT
+    elif "probe_failed" in statuses:
+        marker = XHCI_MARKER_PROBE_FAILED
+    elif "ok" in statuses:
+        marker = XHCI_MARKER_PARTIAL
+    else:
+        marker = XHCI_MARKER_WRITE_FAILED
+
+    print(
+        "%s summary=%s" % (marker, json.dumps(results, separators=(",", ":"))),
+        file=sys.stderr,
+    )
+    return 3
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1404,6 +1650,8 @@ _SUBCOMMAND_CONTRACT = {
     # #3892：USB 切电（D8）。契约 argv 走 cycle + delay 形态（覆盖全部四个参数）。
     "usb-power": ["--serial", "ABC123", "--expect-slot", "1-1.4:3",
                   "--action", "cycle", "--delay", "12"],
+    # #2972：xHCI 主控自动恢复（D9）。无目标参数子命令。
+    "xhci-rebind": [],
 }
 
 # #3356：参数级能力标记（capabilities 在子命令行之外逐行输出）。旧 wrapper 只报
@@ -1551,6 +1799,13 @@ def _build_parser():
         "--delay", type=int, default=None,
         help="off time for cycle, 1..%d seconds" % USB_POWER_MAX_DELAY,
     )
+
+    # ADR-0037 D9（#2972）：xHCI 主控自动恢复无目标参数窄面。
+    sub.add_parser(
+        "xhci-rebind",
+        help="unbind and rebind bound xhci_hcd PCI controllers without target args (ADR-0037 D9)",
+        allow_abbrev=False,
+    )
     return parser
 
 
@@ -1588,6 +1843,7 @@ def main(argv=None):
         "usb-authorized": cmd_usb_authorized,
         "read-kernel-log": cmd_read_kernel_log,
         "usb-power": cmd_usb_power,
+        "xhci-rebind": cmd_xhci_rebind,
     }
     try:
         return handlers[args.command](args, conf)

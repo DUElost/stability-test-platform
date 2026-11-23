@@ -147,3 +147,29 @@ def heartbeat_env(monkeypatch):
     yield _Env
     reset_agent_settings_caches()
 
+
+@pytest.fixture(autouse=True)
+def _flash_script_identity_firmware_cache(monkeypatch, request):
+    """B10 U4：刷机脚本单测默认恒等 ``ensure_firmware``，避免真实 L1 落盘缺盘失败。
+
+    仅作用于 ``test_flash_firmware*`` 模块；``no_identity_fw_cache`` 标记可关闭。
+    U4 必测通过覆盖 ``_load_firmware_cache_api`` 自行注入。
+    """
+    modname = getattr(request.module, "__name__", "") or ""
+    if "test_flash_firmware" not in modname:
+        return
+    if request.node.get_closest_marker("no_identity_fw_cache"):
+        return
+    from backend.agent.tests.firmware_cache_testkit import identity_ensure_firmware
+
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.ensure_firmware",
+        identity_ensure_firmware,
+    )
+    try:
+        import agent.firmware_cache as _afc  # type: ignore
+
+        monkeypatch.setattr(_afc, "ensure_firmware", identity_ensure_firmware)
+    except Exception:
+        pass
+

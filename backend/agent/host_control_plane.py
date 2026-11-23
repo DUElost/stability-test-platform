@@ -51,6 +51,7 @@ def start_host_control_plane(
     active_job_tokens: Dict[int, str],
     active_device_owner: Dict[int, int],
     lock_renewal_stop_event: threading.Event,
+    claim_pause_gate: Any = None,
 ) -> HostControlPlane:
     """Wire and start scheduler, coordinator, and lease renewer."""
     # ADR-0026 Step 5b: create host-global scheduler + coordinator BEFORE
@@ -80,6 +81,7 @@ def start_host_control_plane(
         device_ids=active_device_ids,
         job_tokens=active_job_tokens,
         device_owner=active_device_owner,
+        claim_pause_gate=claim_pause_gate,
     )
     job_runner_slot = JobRunnerStateSlot()
     # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，

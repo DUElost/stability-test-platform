@@ -29,6 +29,24 @@ def mod():
     return module
 
 
+@pytest.fixture(autouse=True)
+def _identity_firmware_cache(monkeypatch, request):
+    if request.node.get_closest_marker("no_identity_fw_cache"):
+        return
+    from backend.agent.tests.firmware_cache_testkit import identity_ensure_firmware
+
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.ensure_firmware",
+        identity_ensure_firmware,
+    )
+    try:
+        import agent.firmware_cache as _afc  # type: ignore
+
+        monkeypatch.setattr(_afc, "ensure_firmware", identity_ensure_firmware)
+    except Exception:
+        pass
+
+
 class FakeCmd:
     """Records argv and answers via a callable."""
 

@@ -125,6 +125,8 @@ class HostOut(ORMBaseModel):
     health: Optional[Dict[str, Any]] = None
     # #2983 / S1：控制面 SSH 拓扑对账探针摘要（verdict / topology / strike_open / signals）
     health_probe: Optional[Dict[str, Any]] = None
+    # #2972 / S4：Agent 侧 USB/ADB 自愈与持久化熔断状态（state / fuse_open / fuse_reason）
+    self_heal: Optional[Dict[str, Any]] = None
     # ADR-0021: hot-update guard — populated only on GET /hosts/{id}.
     active_job_count: int = 0
     active_jobs: List[HostActiveJob] = Field(default_factory=list)

@@ -758,4 +758,39 @@ describe('S2：USB / Hub 故障工作台（快捷视图、主行外显、异常�
     fireEvent.click(screen.getByTestId('host-set-emptied-host-hub-bad'));
     expect(onSetDeviceIntent).toHaveBeenCalledWith(degradedHubHost);
   });
+
+  it('自愈熔断主机自动置顶、主行外显熔断芯片并在诊断卡展示熔断态与计数', () => {
+    const fuseHost: HostTableData = {
+      ...host,
+      id: 'host-fuse-88',
+      name: 'Host-Fuse-88',
+      ip: '10.0.0.88',
+      health_status: 'DEGRADED',
+      health_reasons: ['usb_tree_empty'],
+      self_heal: {
+        state: 'hardware_suspect',
+        fuse_open: true,
+        fuse_reason: 'fuse_probe_failed',
+        xhci: {
+          state: 'hardware_suspect',
+          fuse_open: true,
+          fuse_reason: 'fuse_probe_failed',
+          boot_attempts: 1,
+          window_attempts: 1,
+          episode_failures: 0,
+          last_marker: 'STP_XHCI_REBIND_PROBE_FAILED',
+        },
+      },
+    };
+    render(<ExpandableHostTable hosts={[healthyHost, fuseHost]} />);
+
+    const rows = screen.getAllByRole('row');
+    expect(rows[1]).toHaveTextContent('Host-Fuse-88');
+    expect(screen.getByTestId('host-inline-faults-host-fuse-88')).toHaveTextContent('自愈熔断(疑似硬件)');
+
+    fireEvent.click(screen.getByText('Host-Fuse-88'));
+    const card = screen.getByTestId('host-usb-diagnostics-host-fuse-88');
+    expect(within(card).getByText(/疑似硬件 \(fuse_probe_failed\)/)).toBeInTheDocument();
+    expect(within(card).getByText(/1 \/ 1 · STP_XHCI_REBIND_PROBE_FAILED/)).toBeInTheDocument();
+  });
 });

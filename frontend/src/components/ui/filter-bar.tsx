@@ -222,8 +222,8 @@ export function FilterSearchInput({
         aria-label={ariaLabel}
         data-testid={testId}
         className={cn(
-          'h-9 w-full rounded-lg bg-muted/30 pl-9 pr-8 transition-colors focus:bg-background',
           FORM.inputSm,
+          'h-9 w-full rounded-lg bg-muted/30 pl-9 pr-8 text-xs sm:text-sm transition-colors focus:bg-background',
         )}
       />
       {value ? (
@@ -312,7 +312,7 @@ export function MoreFiltersPopover({
       {open && (
         <div
           className={cn(
-            'absolute z-40 mt-1.5 w-80 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg ring-1 ring-black/5',
+            'absolute z-40 mt-1.5 w-80 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg ring-1 ring-border/50',
             align === 'right' ? 'right-0' : 'left-0',
           )}
         >
