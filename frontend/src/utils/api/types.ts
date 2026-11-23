@@ -37,6 +37,32 @@ export interface Host {
      * null/undefined = 未采集到（lsusb 缺失或失败），区别于 0。
      */
     usb_device_count?: number | null;
+    /** sysfs 暴露 ADB 接口（ff:42）的 USB 设备数（L2/L4 分诊） */
+    adb_interface_count?: number | null;
+    /** adb devices 按 state 分桶计数（L3 分诊） */
+    adb_state_counts?: {
+      device?: number;
+      offline?: number;
+      unauthorized?: number;
+      other?: number;
+    } | null;
+    /** 内核 USB 日志通道可读性（ok / unavailable / unknown） */
+    usb_kernel_log?: 'ok' | 'unavailable' | 'unknown' | null;
+    /** S1：零权限 sysfs 级联 Hub 拓扑与半枚举（无驱动）Hub 计数 */
+    usb_hub_topology?: {
+      cascade_hubs: number;
+      unbound_hubs: number;
+      unbound_idle_bus_hubs: number;
+    } | null;
+    /** S1：最近 1 小时滑动窗内的内核 USB 错误数值计数 */
+    usb_kernel_errors_1h?: {
+      link_errors: number;
+      cable_suspect: number;
+      disconnects: number;
+      resets: number;
+      enum_errors: number;
+      hub_port_errors: number;
+    } | null;
   };
   health?: {
     status: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
@@ -47,6 +73,16 @@ export interface Host {
     mount_ok: boolean;
     adb_ok: boolean;
   };
+  /** #2983 / S1：控制面 SSH 拓扑对账探针摘要 */
+  health_probe?: {
+    checked_at?: string;
+    verdict?: string;
+    signals?: string[];
+    topology?: string;
+    recent_verdicts?: string[];
+    strike_open?: boolean;
+    strike_need?: number;
+  } | null;
   // ADR-0021 hot-update gate — populated only on GET /hosts/{id}.
   active_job_count?: number;
   active_jobs?: HostActiveJob[];

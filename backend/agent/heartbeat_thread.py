@@ -748,6 +748,18 @@ class HeartbeatThread:
             logger.debug("usb_power_presence_failed: %s", exc)
             usb_power_slots = None
 
+        # S1：零权限 sysfs 级联 Hub 拓扑与 1h 内核 USB 错误数值计数（纯观测）
+        try:
+            usb_hub_topology = device_discovery.inspect_usb_hub_topology()
+        except Exception as exc:
+            logger.debug("usb_hub_topology_failed: %s", exc)
+            usb_hub_topology = None
+        try:
+            usb_kernel_errors_1h = self._kernel_usb_watch.window_summary()
+        except Exception as exc:
+            logger.debug("usb_kernel_errors_1h_failed: %s", exc)
+            usb_kernel_errors_1h = None
+
         cap_result = compute_capacity(
             active_job_count=active_count,
             active_device_count=active_device_count,
@@ -765,6 +777,8 @@ class HeartbeatThread:
             # #3092：启动期常量——守卫降级时让「第二个实例可能静默叠加」随心跳可见
             single_instance_degraded=single_instance_guard_degraded(),
             usb_power_slots=usb_power_slots,
+            usb_hub_topology=usb_hub_topology,
+            usb_kernel_errors_1h=usb_kernel_errors_1h,
         )
 
         with self._capacity_lock:
