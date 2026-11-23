@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '@/lib/utils';
 import { BulkBarSpacer } from '@/components/ui/bulk-action-bar';
+import { ClickableRow } from '@/components/ui/clickable-row';
 import { Progress } from '@/components/ui/progress';
 import {
   Table,
@@ -24,18 +26,27 @@ import {
   FilterWorkbench,
   MoreFiltersPopover,
   type ActiveFilterChip,
-  type QuickViewOption,
 } from '@/components/ui/filter-bar';
 import { SearchableSelect } from '@/components/ui/searchable-select';
-import { FORM, resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
-import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw, ClipboardCheck, RefreshCw, ShieldAlert, Usb } from 'lucide-react';
-import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
-import type {
-  HostScriptPresence,
-  ScriptPresenceItem,
-  ScriptPresenceState,
-  ScriptPresenceSummary,
-} from '@/utils/api/types';
+import { resourceUsageBgClass, resourceUsageTextClass } from '@/design-system/tokens';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  CheckCircle2,
+  CircleSlash,
+  MoreHorizontal,
+  Pencil,
+  RotateCcw,
+  Server,
+  ShieldAlert,
+  Trash2,
+} from 'lucide-react';
+import { formatLocalTime, parseIsoToDate } from '@/utils/format';
+import type { HostScriptPresence } from '@/utils/api/types';
+import { HostDetailDrawer, type HostPresenceLoad } from '@/components/host/HostDetailDrawer';
 
 export interface HostResources {
   cpu_load: number;
@@ -56,6 +67,12 @@ export interface MountStatus {
 }
 
 export type AgentCodeSyncStatus = 'unknown' | 'matched' | 'drift' | 'pending';
+
+export type HostHealthFilter = 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE' | 'unhealthy';
+export type HostSyncFilter = 'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault';
+
+type HostSortKey = 'default' | 'name' | 'devices' | 'cpu' | 'ram' | 'disk' | 'heartbeat';
+type SortDirection = 'asc' | 'desc';
 
 export interface HostTableData {
   id: string | number;
@@ -179,19 +196,7 @@ interface ExpandableHostTableProps {
   canManageWatcherAdminState?: boolean;
   selectedIds?: Set<string | number>;
   onSelectionChange?: (ids: Set<string | number>) => void;
-  /**
-   * #2958 第五道闸：fleet 级脚本在位汇总（父组件拉取一次；缺省则不渲染汇总行）。
-   * 汇总只有计数、**没有逐台名单**，故逐台明细只能走下面两个逐台回调。
-   */
-  scriptPresenceSummary?: ScriptPresenceSummary | null;
-  /**
-   * #3090：fleet 汇总查询失败（失败 ≠ 无缺口，不得折叠成与「未提供汇总」同值）。
-   * 置位时汇总条位置渲染失败提示；逐台区块的账本陈旧读作「未知」，不得按 fresh 读。
-   */
-  scriptPresenceSummaryError?: boolean;
-  /** 重试 fleet 汇总查询（缺省则失败提示不带重试入口）。 */
-  onRetryScriptPresenceSummary?: () => void;
-  /** 展开某台主机时按需拉该机矩阵（缺省则展开行内不出现「脚本在位」区块）。 */
+  /** 打开主机详情抽屉时按需拉该机脚本在位矩阵（缺省则抽屉内不出现「脚本在位」区块）。 */
   onLoadHostScriptPresence?: (hostId: string | number) => Promise<HostScriptPresence>;
   /** 单机按需重核；成功后组件会重新拉一次该机矩阵。 */
   onRefreshHostScriptPresence?: (hostId: string | number) => Promise<unknown>;
@@ -200,10 +205,13 @@ interface ExpandableHostTableProps {
   onStatusFilterChange?: (value: 'all' | HostTableData['status']) => void;
   searchQuery?: string;
   onSearchQueryChange?: (value: string) => void;
-  healthFilter?: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
-  onHealthFilterChange?: (value: 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE') => void;
-  syncFilter?: 'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault';
-  onSyncFilterChange?: (value: 'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault') => void;
+  healthFilter?: HostHealthFilter;
+  onHealthFilterChange?: (value: HostHealthFilter) => void;
+  syncFilter?: HostSyncFilter;
+  onSyncFilterChange?: (value: HostSyncFilter) => void;
+  /** 受控详情抽屉主机 ID（支持 URL `?drawer=` 深链持久化） */
+  activeDrawerHostId?: string | null;
+  onActiveDrawerHostIdChange?: (hostId: string | null) => void;
   /** ADR-0038 v0.3 D9：快捷标记/清除「设备面已处置（emptied）」 */
   onSetDeviceIntent?: (host: HostTableData) => void;
   onClearDeviceIntent?: (host: HostTableData) => void;
@@ -237,19 +245,11 @@ const REASON_LABELS: Record<string, string> = {
   disk_unknown: '磁盘未知',
   mount_failed: '挂载失败',
   adb_low_healthy_devices: '无健康设备',
-  // #2902：USB 树上只剩控制器（零权限判据）——`adb_low_healthy_devices` 要求
-  // total_devices>0，整树死亡时它恒不成立，这条才是那种形态的唯一可见信号。
   usb_tree_empty: 'USB 总线空树（主控/供电异常）',
-  // #3046：USB 枚举到设备，但 sysfs ADB 接口（ff:42）数为 0——adb_low /
-  // usb_tree_empty 之间的缝；warning 级，不打闸。
   adb_interfaces_missing: 'USB 有设备但无 ADB 接口',
   adb_multiple_servers: 'ADB 多 server 冲突',
-  // #2900：内核 USB 子系统故障（agent 读内核日志判定）——主机可能一台设备都看不到
-  // 而心跳全正常，这两条是唯一可见信号。
   usb_host_controller_dead: 'USB 主控失联（xHCI 死亡）',
   usb_link_degraded: 'USB 链路劣化',
-  // #3092：单实例守卫降级（锁文件连只读都打不开）——同机可能双实例叠加心跳，
-  // 2026-07-27 coordinator 心跳互拒 3 天事故的入口形态。
   single_instance_guard_degraded: '单实例守卫降级（双实例风险）',
 };
 
@@ -316,7 +316,7 @@ function hostUsbFaultPriority(host: HostTableData): number {
   return 0;
 }
 
-/** 主行外显的紧凑故障芯片（不再把具体原因藏在「降级」hover tooltip 里）。 */
+/** 主行外显的紧凑故障芯片（常态静音，仅故障主机外显 ≤2 个芯片）。 */
 function buildInlineFaultChips(host: HostTableData): InlineFaultChip[] {
   const chips: InlineFaultChip[] = [];
   const reasons = host.health_reasons ?? [];
@@ -410,61 +410,10 @@ function agentSyncBadgeClass(status: AgentCodeSyncStatus | undefined): string {
     case 'pending':
       return 'bg-info/10 text-info';
     case 'drift':
-      return 'bg-destructive/10 text-destructive';
+      return 'bg-destructive/10 text-destructive-text';
     default:
       return 'bg-muted/50 text-muted-foreground';
   }
-}
-
-/** #2958 第五道闸：六态中文文案（与后端闭词表一一对应）。 */
-const SCRIPT_PRESENCE_LABELS: Record<ScriptPresenceState, string> = {
-  present: '在位',
-  missing: '缺失',
-  mismatch: '内容不符',
-  unknown: '未知',
-  n_a: '不适用',
-  maintenance: '维护窗',
-};
-
-/**
- * 缺口（红）> 未知（灰）> 维护窗（黄）> 在位（绿）：运维先看要动手的。
- * `unknown` 不得渲染成绿，也不计缺口——它的动作是「等 agent 可达」。
- */
-const SCRIPT_PRESENCE_ORDER: Record<ScriptPresenceState, number> = {
-  missing: 0,
-  mismatch: 1,
-  unknown: 2,
-  maintenance: 3,
-  present: 4,
-  n_a: 5,
-};
-
-function scriptPresenceStateClass(state: ScriptPresenceState): string {
-  switch (state) {
-    case 'present':
-      return 'bg-success/10 text-success';
-    case 'missing':
-    case 'mismatch':
-      return 'bg-destructive/10 text-destructive';
-    case 'maintenance':
-      return 'bg-warning/10 text-warning';
-    default:
-      return 'bg-muted/50 text-muted-foreground';
-  }
-}
-
-function sortScriptPresenceItems(items: ScriptPresenceItem[]): ScriptPresenceItem[] {
-  return [...items].sort((a, b) => {
-    const byState = SCRIPT_PRESENCE_ORDER[a.state] - SCRIPT_PRESENCE_ORDER[b.state];
-    if (byState !== 0) return byState;
-    return `${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`);
-  });
-}
-
-interface HostPresenceLoad {
-  status: 'loading' | 'ready' | 'error';
-  data?: HostScriptPresence;
-  error?: string;
 }
 
 function errorMessage(error: unknown): string {
@@ -480,6 +429,15 @@ function formatHeartbeatLabel(value?: string): string {
   if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)} 分钟前`;
   if (elapsedSeconds < 86400) return `${Math.floor(elapsedSeconds / 3600)} 小时前`;
   return `${Math.floor(elapsedSeconds / 86400)} 天前`;
+}
+
+function SortIcon({ active, direction }: { active: boolean; direction: SortDirection }) {
+  if (!active) return <ArrowUpDown className="h-3 w-3 text-muted-foreground/60" aria-hidden="true" />;
+  return direction === 'asc' ? (
+    <ArrowUp className="h-3 w-3 text-primary" aria-hidden="true" />
+  ) : (
+    <ArrowDown className="h-3 w-3 text-primary" aria-hidden="true" />
+  );
 }
 
 export function ExpandableHostTable({
@@ -501,9 +459,6 @@ export function ExpandableHostTable({
   canManageWatcherAdminState = false,
   selectedIds,
   onSelectionChange,
-  scriptPresenceSummary,
-  scriptPresenceSummaryError,
-  onRetryScriptPresenceSummary,
   onLoadHostScriptPresence,
   onRefreshHostScriptPresence,
   statusFilter: controlledStatusFilter,
@@ -514,6 +469,8 @@ export function ExpandableHostTable({
   onHealthFilterChange,
   syncFilter: controlledSyncFilter,
   onSyncFilterChange,
+  activeDrawerHostId: controlledDrawerHostId,
+  onActiveDrawerHostIdChange,
   onSetDeviceIntent,
   onClearDeviceIntent,
   isDeviceIntentUpdating,
@@ -525,11 +482,13 @@ export function ExpandableHostTable({
   onFilteredHostsChange,
   extraHeaderRight,
 }: ExpandableHostTableProps) {
-  const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
   const [localStatusFilter, setLocalStatusFilter] = useState<'all' | HostTableData['status']>('all');
   const [localSearchQuery, setLocalSearchQuery] = useState('');
-  const [localHealthFilter, setLocalHealthFilter] = useState<'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE'>('all');
-  const [localSyncFilter, setLocalSyncFilter] = useState<'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault'>('all');
+  const [localHealthFilter, setLocalHealthFilter] = useState<HostHealthFilter>('all');
+  const [localSyncFilter, setLocalSyncFilter] = useState<HostSyncFilter>('all');
+  const [localDrawerHostId, setLocalDrawerHostId] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<HostSortKey>('default');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   const statusFilter = controlledStatusFilter ?? localStatusFilter;
   const setStatusFilter = onStatusFilterChange ?? setLocalStatusFilter;
@@ -539,55 +498,79 @@ export function ExpandableHostTable({
   const setHealthFilter = onHealthFilterChange ?? setLocalHealthFilter;
   const syncFilter = controlledSyncFilter ?? localSyncFilter;
   const setSyncFilter = onSyncFilterChange ?? setLocalSyncFilter;
+  const activeDrawerHostId =
+    controlledDrawerHostId !== undefined ? controlledDrawerHostId : localDrawerHostId;
+  const setActiveDrawerHostId = useCallback(
+    (next: string | null) => {
+      if (onActiveDrawerHostIdChange) {
+        onActiveDrawerHostIdChange(next);
+      } else {
+        setLocalDrawerHostId(next);
+      }
+    },
+    [onActiveDrawerHostIdChange],
+  );
+
   const selectable = !!onSelectionChange;
   const selectAllRef = useRef<HTMLInputElement>(null);
-  // #2958：逐台矩阵按需拉取（展开时才请求）+ fleet 汇总明细面板开合。
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  // 逐台脚本在位按需拉取（仅在右侧抽屉打开对应主机时请求）
   const [presenceByHost, setPresenceByHost] = useState<Record<string, HostPresenceLoad>>({});
   const [presenceRefreshing, setPresenceRefreshing] = useState<Set<string | number>>(new Set());
   const presenceInFlight = useRef<Set<string>>(new Set());
-  const [presenceBreakdownOpen, setPresenceBreakdownOpen] = useState(false);
 
-  const loadHostPresence = async (hostId: string | number, force = false) => {
-    if (!onLoadHostScriptPresence) return;
-    const key = String(hostId);
-    if (!force && presenceInFlight.current.has(key)) return;
-    presenceInFlight.current.add(key);
-    setPresenceByHost((prev) => ({
-      ...prev,
-      [key]: { ...prev[key], status: 'loading', error: undefined },
-    }));
-    try {
-      const data = await onLoadHostScriptPresence(hostId);
-      setPresenceByHost((prev) => ({ ...prev, [key]: { status: 'ready', data } }));
-    } catch (error) {
+  const loadHostPresence = useCallback(
+    async (hostId: string | number, force = false) => {
+      if (!onLoadHostScriptPresence) return;
+      const key = String(hostId);
+      if (!force && presenceInFlight.current.has(key)) return;
+      presenceInFlight.current.add(key);
       setPresenceByHost((prev) => ({
         ...prev,
-        [key]: { ...prev[key], status: 'error', error: errorMessage(error) },
+        [key]: { ...prev[key], status: 'loading', error: undefined },
       }));
-    } finally {
-      presenceInFlight.current.delete(key);
-    }
-  };
+      try {
+        const data = await onLoadHostScriptPresence(hostId);
+        setPresenceByHost((prev) => ({ ...prev, [key]: { status: 'ready', data } }));
+      } catch (error) {
+        setPresenceByHost((prev) => ({
+          ...prev,
+          [key]: { ...prev[key], status: 'error', error: errorMessage(error) },
+        }));
+      } finally {
+        presenceInFlight.current.delete(key);
+      }
+    },
+    [onLoadHostScriptPresence],
+  );
 
-  const refreshHostPresence = async (hostId: string | number) => {
-    if (!onRefreshHostScriptPresence) return;
-    setPresenceRefreshing((prev) => new Set(prev).add(hostId));
-    try {
-      await onRefreshHostScriptPresence(hostId);
-      await loadHostPresence(hostId, true);
-    } catch (error) {
-      setPresenceByHost((prev) => ({
-        ...prev,
-        [String(hostId)]: { ...prev[String(hostId)], status: 'error', error: errorMessage(error) },
-      }));
-    } finally {
-      setPresenceRefreshing((prev) => {
-        const next = new Set(prev);
-        next.delete(hostId);
-        return next;
-      });
-    }
-  };
+  const refreshHostPresence = useCallback(
+    async (hostId: string | number) => {
+      if (!onRefreshHostScriptPresence) return;
+      setPresenceRefreshing((prev) => new Set(prev).add(hostId));
+      try {
+        await onRefreshHostScriptPresence(hostId);
+        await loadHostPresence(hostId, true);
+      } catch (error) {
+        setPresenceByHost((prev) => ({
+          ...prev,
+          [String(hostId)]: {
+            ...prev[String(hostId)],
+            status: 'error',
+            error: errorMessage(error),
+          },
+        }));
+      } finally {
+        setPresenceRefreshing((prev) => {
+          const next = new Set(prev);
+          next.delete(hostId);
+          return next;
+        });
+      }
+    },
+    [loadHostPresence, onRefreshHostScriptPresence],
+  );
 
   const hasMountIssue = (host: HostTableData) =>
     Boolean(host.mount_status?.some((m) => !m.mounted));
@@ -599,7 +582,11 @@ export function ExpandableHostTable({
       if (statusFilter !== 'all' && host.status !== statusFilter) return false;
       if (healthFilter !== 'all') {
         const effectiveHealth = host.health_status ?? 'HEALTHY';
-        if (effectiveHealth !== healthFilter) return false;
+        if (healthFilter === 'unhealthy') {
+          if (effectiveHealth !== 'DEGRADED' && effectiveHealth !== 'UNSCHEDULABLE') return false;
+        } else if (effectiveHealth !== healthFilter) {
+          return false;
+        }
       }
       if (syncFilter === 'drift' && host.agent_code_sync_status !== 'drift') return false;
       if (syncFilter === 'matched' && host.agent_code_sync_status !== 'matched') return false;
@@ -626,15 +613,116 @@ export function ExpandableHostTable({
       }
       return true;
     });
-    // 严重 USB/Hub/探针异常自动置顶，同档保持原始相对顺序（ES2019 稳定排序）
-    return [...matched].sort((a, b) => hostUsbFaultPriority(b) - hostUsbFaultPriority(a));
-  }, [hosts, statusFilter, healthFilter, syncFilter, searchQuery]);
+
+    if (sortKey === 'default') {
+      // 默认按严重 USB/Hub/探针异常自动置顶，同档保持原始相对顺序（ES2019 稳定排序）
+      return [...matched].sort((a, b) => hostUsbFaultPriority(b) - hostUsbFaultPriority(a));
+    }
+
+    const dir = sortDirection === 'asc' ? 1 : -1;
+    return [...matched].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === 'name') {
+        cmp = (a.name || a.ip).localeCompare(b.name || b.ip, 'zh-CN');
+      } else if (sortKey === 'devices') {
+        cmp = (a.device_count ?? 0) - (b.device_count ?? 0);
+      } else if (sortKey === 'cpu') {
+        cmp = (a.resources?.cpu_load ?? -1) - (b.resources?.cpu_load ?? -1);
+      } else if (sortKey === 'ram') {
+        cmp = (a.resources?.ram_usage ?? -1) - (b.resources?.ram_usage ?? -1);
+      } else if (sortKey === 'disk') {
+        cmp = (a.resources?.disk_usage ?? -1) - (b.resources?.disk_usage ?? -1);
+      } else if (sortKey === 'heartbeat') {
+        const ta = a.last_heartbeat ? (parseIsoToDate(a.last_heartbeat)?.getTime() ?? 0) : 0;
+        const tb = b.last_heartbeat ? (parseIsoToDate(b.last_heartbeat)?.getTime() ?? 0) : 0;
+        cmp = ta - tb;
+      }
+      return cmp * dir;
+    });
+  }, [hosts, statusFilter, healthFilter, syncFilter, searchQuery, sortKey, sortDirection]);
+
+  const handleSort = (nextKey: Exclude<HostSortKey, 'default'>) => {
+    if (sortKey !== nextKey) {
+      setSortKey(nextKey);
+      setSortDirection(nextKey === 'name' ? 'asc' : 'desc');
+    } else if (sortDirection === 'desc') {
+      setSortDirection('asc');
+    } else {
+      setSortKey('default');
+      setSortDirection('desc');
+    }
+  };
+
+  // 右侧详情抽屉当前主机 & 上下切换索引
+  const activeDrawerHost = useMemo(() => {
+    if (!activeDrawerHostId) return null;
+    return (
+      filteredHosts.find((h) => String(h.id) === activeDrawerHostId) ??
+      hosts.find((h) => String(h.id) === activeDrawerHostId) ??
+      null
+    );
+  }, [activeDrawerHostId, filteredHosts, hosts]);
+
+  const activeDrawerIndex = useMemo(() => {
+    if (!activeDrawerHost) return -1;
+    return filteredHosts.findIndex((h) => String(h.id) === String(activeDrawerHost.id));
+  }, [activeDrawerHost, filteredHosts]);
+
+  // 当抽屉打开到某台主机且未加载过脚本在位时，按需触发一次加载
+  useEffect(() => {
+    if (!activeDrawerHost || !onLoadHostScriptPresence) return;
+    const key = String(activeDrawerHost.id);
+    if (presenceByHost[key] === undefined) {
+      void loadHostPresence(activeDrawerHost.id);
+    }
+  }, [activeDrawerHost, loadHostPresence, onLoadHostScriptPresence, presenceByHost]);
+
+  const openDrawer = (hostId: string | number) => {
+    setActiveDrawerHostId(String(hostId));
+  };
+
+  // 虚拟化滚动（D5 Phase 1）
+  const rowVirtualizer = useVirtualizer({
+    count: filteredHosts.length,
+    getScrollElement: () =>
+      tableContainerRef.current?.querySelector<HTMLDivElement>('[data-slot="table-scroll-container"]') ??
+      null,
+    estimateSize: () => 56,
+    overscan: 8,
+    initialRect: { width: 1200, height: 640 },
+    observeElementRect: (instance, cb) => {
+      const el = instance.scrollElement;
+      if (!el) return;
+      const measure = () => {
+        const rect = el.getBoundingClientRect();
+        if (rect.height > 0) {
+          cb({ width: rect.width, height: rect.height });
+        } else {
+          cb({ width: 1200, height: 640 });
+        }
+      };
+      measure();
+      if (typeof ResizeObserver === 'undefined') return;
+      const ro = new ResizeObserver(measure);
+      ro.observe(el);
+      return () => ro.disconnect();
+    },
+  });
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const virtualPaddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const virtualPaddingBottom =
+    virtualRows.length > 0
+      ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+      : 0;
+  const visibleColumnCount = (selectable ? 1 : 0) + 10;
 
   const filteredIds = useMemo(() => filteredHosts.map((host) => host.id), [filteredHosts]);
 
   useEffect(() => {
     onFilteredHostsChange?.(filteredHosts);
   }, [filteredHosts, onFilteredHostsChange]);
+
   const selectedFilteredCount = filteredIds.filter((id) => selectedIds?.has(id)).length;
   const allFilteredSelected = filteredIds.length > 0 && selectedFilteredCount === filteredIds.length;
   const someFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
@@ -648,7 +736,8 @@ export function ExpandableHostTable({
     e.stopPropagation();
     if (!onSelectionChange || !selectedIds) return;
     const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id); else next.add(id);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
     onSelectionChange(next);
   };
 
@@ -665,30 +754,16 @@ export function ExpandableHostTable({
     }
   };
 
-  const toggleRow = (id: string | number) => {
-    const newExpanded = new Set(expandedRows);
-    if (newExpanded.has(id)) {
-      newExpanded.delete(id);
-    } else {
-      newExpanded.add(id);
-      if (onLoadHostScriptPresence && presenceByHost[String(id)] === undefined) {
-        void loadHostPresence(id);
-      }
-    }
-    setExpandedRows(newExpanded);
-  };
-
   const stats = useMemo(() => {
     const onlineHosts = hosts.filter((h) => h.status === 'ONLINE' && h.agent_installed);
     const aligned = onlineHosts.filter((h) => h.agent_code_sync_status === 'matched').length;
     return {
       total: hosts.length,
-      online: hosts.filter(h => h.status === 'ONLINE').length,
-      offline: hosts.filter(h => h.status === 'OFFLINE').length,
-      degraded: hosts.filter(h => h.status === 'DEGRADED').length,
+      online: hosts.filter((h) => h.status === 'ONLINE').length,
+      offline: hosts.filter((h) => h.status === 'OFFLINE').length,
+      degraded: hosts.filter((h) => h.status === 'DEGRADED').length,
       agentAligned: aligned,
-      // #2366：把「落后」单独报出来——只报「已对齐 N/M」时，全队落后一版会读成
-      // 「口径坏了」（现场实测：观测时点的 0/48 是真实状态，不是判据 bug）。
+      // #2366：把「落后」单独报出来——只报「已对齐 N/M」时，全队落后一版会读成「口径坏了」。
       agentDrift: onlineHosts.filter((h) => h.agent_code_sync_status === 'drift').length,
       agentTrackable: onlineHosts.length,
       mountErrorCount: hosts.filter((h) => h.mount_status?.some((m) => !m.mounted)).length,
@@ -699,7 +774,7 @@ export function ExpandableHostTable({
     };
   }, [hosts]);
 
-  // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip，避免与搜索框 / 下拉 / 快捷视图重复
+  // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip
   const hiddenChips = useMemo<ActiveFilterChip[]>(() => {
     const chips: ActiveFilterChip[] = [];
     if (syncFilter === 'matched') {
@@ -733,7 +808,6 @@ export function ExpandableHostTable({
     onShowRetiredChange?.(false);
   };
 
-  // 只统计仅存在于「更多筛选」内的条件，避免与顶层快捷视图（待热更新 / 挂载异常）双重亮起
   const moreActiveCount = (syncFilter === 'matched' ? 1 : 0) + (showRetired ? 1 : 0);
   const hasAnyActiveFilter =
     statusFilter !== 'all' ||
@@ -742,355 +816,300 @@ export function ExpandableHostTable({
     Boolean(searchQuery.trim()) ||
     Boolean(showRetired);
 
-  // #2958：缺口语义 = missing + mismatch（与告警口径一致）；unknown 不计缺口。
-  const presenceCounts = scriptPresenceSummary?.counts;
-  const presenceGapCount = presenceCounts
-    ? presenceCounts.missing + presenceCounts.mismatch
-    : 0;
-  const presenceStale = scriptPresenceSummary?.stale === true;
+  const isAllQuickView =
+    statusFilter === 'all' && healthFilter === 'all' && syncFilter === 'all';
+  const isUnhealthyActive =
+    healthFilter === 'unhealthy' ||
+    healthFilter === 'DEGRADED' ||
+    healthFilter === 'UNSCHEDULABLE';
+
+  const unifiedStatusViews = (
+    <div
+      data-testid="host-status-strip"
+      className="flex flex-wrap items-center gap-1"
+    >
+      <button
+        type="button"
+        aria-pressed={isAllQuickView}
+        aria-label="筛选全部主机"
+        onClick={() => {
+          if (onClearQuickView) {
+            onClearQuickView();
+            return;
+          }
+          setStatusFilter('all');
+          setHealthFilter('all');
+          setSyncFilter('all');
+        }}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+          isAllQuickView
+            ? 'border-foreground/35 bg-muted/60 font-medium text-foreground'
+            : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+        )}
+      >
+        <Server className="h-3.5 w-3.5 shrink-0" />
+        <span>全部主机</span>
+        <span className="font-mono font-semibold tabular-nums text-foreground">{stats.total}</span>
+      </button>
+
+      <button
+        type="button"
+        aria-pressed={statusFilter === 'ONLINE'}
+        aria-label="筛选在线主机"
+        onClick={() => setStatusFilter(statusFilter === 'ONLINE' ? 'all' : 'ONLINE')}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+          statusFilter === 'ONLINE'
+            ? 'border-success bg-success/10 font-medium text-foreground'
+            : 'border-transparent text-muted-foreground hover:bg-success/5 hover:text-foreground',
+        )}
+      >
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+        <span>在线</span>
+        <span className="font-mono font-semibold tabular-nums text-success">{stats.online}</span>
+      </button>
+
+      <button
+        type="button"
+        aria-pressed={statusFilter === 'DEGRADED'}
+        aria-label="筛选告警主机"
+        onClick={() => setStatusFilter(statusFilter === 'DEGRADED' ? 'all' : 'DEGRADED')}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+          statusFilter === 'DEGRADED'
+            ? 'border-warning bg-warning/10 font-medium text-foreground'
+            : 'border-transparent text-muted-foreground hover:bg-warning/5 hover:text-foreground',
+        )}
+      >
+        <AlertTriangle
+          className={cn(
+            'h-3.5 w-3.5 shrink-0',
+            stats.degraded > 0 ? 'text-warning' : 'text-muted-foreground',
+          )}
+        />
+        <span>告警</span>
+        <span
+          className={cn(
+            'font-mono font-semibold tabular-nums',
+            stats.degraded > 0 ? 'text-warning' : 'text-muted-foreground',
+          )}
+        >
+          {stats.degraded}
+        </span>
+      </button>
+
+      <button
+        type="button"
+        aria-pressed={statusFilter === 'OFFLINE'}
+        aria-label="筛选离线主机"
+        onClick={() => setStatusFilter(statusFilter === 'OFFLINE' ? 'all' : 'OFFLINE')}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+          statusFilter === 'OFFLINE'
+            ? 'border-foreground/35 bg-muted/60 font-medium text-foreground'
+            : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+        )}
+      >
+        <Activity className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span>离线</span>
+        <span className="font-mono font-semibold tabular-nums text-muted-foreground">
+          {stats.offline}
+        </span>
+      </button>
+
+      <span className="mx-1 hidden h-4 w-px bg-border sm:inline-block" aria-hidden="true" />
+
+      <button
+        type="button"
+        aria-pressed={syncFilter === 'usb_fault'}
+        onClick={() => setSyncFilter(syncFilter === 'usb_fault' ? 'all' : 'usb_fault')}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+          syncFilter === 'usb_fault'
+            ? 'border-destructive/40 bg-destructive/10 font-medium text-destructive-text'
+            : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+        )}
+      >
+        <span>USB / Hub 异常</span>
+        <span
+          className={cn(
+            'font-mono font-semibold tabular-nums',
+            stats.usbFaultCount > 0 ? 'text-destructive-text' : 'text-muted-foreground',
+          )}
+        >
+          {stats.usbFaultCount}
+        </span>
+      </button>
+
+      <button
+        type="button"
+        aria-pressed={syncFilter === 'drift'}
+        onClick={() => setSyncFilter(syncFilter === 'drift' ? 'all' : 'drift')}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+          syncFilter === 'drift'
+            ? 'border-warning/40 bg-warning/10 font-medium text-warning'
+            : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+        )}
+      >
+        <span>待热更新</span>
+        <span
+          className={cn(
+            'font-mono font-semibold tabular-nums',
+            stats.agentDrift > 0 ? 'text-warning' : 'text-muted-foreground',
+          )}
+        >
+          {stats.agentDrift}
+        </span>
+      </button>
+
+      <button
+        type="button"
+        aria-pressed={isUnhealthyActive}
+        title="筛选降级或禁调主机"
+        onClick={() => setHealthFilter(isUnhealthyActive ? 'all' : 'unhealthy')}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+          isUnhealthyActive
+            ? 'border-warning/40 bg-warning/10 font-medium text-warning'
+            : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+        )}
+      >
+        <span>健康异常</span>
+        <span
+          className={cn(
+            'font-mono font-semibold tabular-nums',
+            stats.unhealthyCount > 0 ? 'text-warning' : 'text-muted-foreground',
+          )}
+        >
+          {stats.unhealthyCount}
+        </span>
+      </button>
+
+      <button
+        type="button"
+        aria-pressed={syncFilter === 'mount_error'}
+        onClick={() => setSyncFilter(syncFilter === 'mount_error' ? 'all' : 'mount_error')}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+          syncFilter === 'mount_error'
+            ? 'border-destructive/40 bg-destructive/10 font-medium text-destructive-text'
+            : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+        )}
+      >
+        <span>挂载异常</span>
+        <span
+          className={cn(
+            'font-mono font-semibold tabular-nums',
+            stats.mountErrorCount > 0 ? 'text-destructive-text' : 'text-muted-foreground',
+          )}
+        >
+          {stats.mountErrorCount}
+        </span>
+      </button>
+    </div>
+  );
+
+  const workbenchHeaderRight = (
+    <div className="flex flex-wrap items-center gap-2">
+      {stats.agentTrackable > 0 ? (
+        <span
+          data-testid="host-agent-alignment-summary"
+          className="text-xs text-muted-foreground whitespace-nowrap"
+        >
+          Agent 已对齐 {stats.agentAligned}/{stats.agentTrackable}
+          {stats.agentDrift > 0 ? ` · ${stats.agentDrift} 台待热更新` : ''}
+        </span>
+      ) : null}
+      {extraHeaderRight}
+    </div>
+  );
 
   return (
     <TooltipProvider>
-      <div className="space-y-4">
-        {/* Summary Stats — 稀疏数字筛选卡 */}
-        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-          <button
-            type="button"
-            onClick={() => setStatusFilter('all')}
-            aria-pressed={statusFilter === 'all'}
-            aria-label="筛选全部主机"
-            className={cn(
-              'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-              statusFilter === 'all' ? 'border-foreground/40 bg-muted/30' : 'border-border hover:bg-muted/20',
-            )}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <p className={STAT.label}>主机总数</p>
-              <div className={cn(STAT.iconWell, STAT.iconWellMuted)}>
-                <Server />
-              </div>
-            </div>
-            <div className={cn(STAT.value, 'text-2xl')}>{stats.total}</div>
-            {stats.agentTrackable > 0 && (
-              <p className={STAT.suffix}>
-                Agent 已对齐 {stats.agentAligned}/{stats.agentTrackable}
-                {stats.agentDrift > 0 && ` · ${stats.agentDrift} 台待热更新`}
-              </p>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === 'ONLINE' ? 'all' : 'ONLINE')}
-            aria-pressed={statusFilter === 'ONLINE'}
-            aria-label="筛选在线主机"
-            className={cn(
-              'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-              statusFilter === 'ONLINE'
-                ? 'border-success bg-success/5'
-                : 'border-success/30 hover:border-success/40 hover:bg-success/5',
-            )}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <p className={STAT.label}>在线</p>
-              <div className={cn(STAT.iconWell, STAT.iconWellSuccess)}>
-                <CheckCircle2 className="text-success" />
-              </div>
-            </div>
-            <div className={cn(STAT.value, 'text-2xl text-success')}>{stats.online}</div>
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === 'DEGRADED' ? 'all' : 'DEGRADED')}
-            aria-pressed={statusFilter === 'DEGRADED'}
-            aria-label="筛选告警主机"
-            className={cn(
-              'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-              statusFilter === 'DEGRADED'
-                ? 'border-warning bg-warning/5'
-                : 'border-warning/30 hover:border-warning/40 hover:bg-warning/5',
-            )}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <p className={STAT.label}>告警</p>
-              <div className={cn(STAT.iconWell, 'bg-warning/10 text-warning')}>
-                <AlertTriangle className="text-warning" />
-              </div>
-            </div>
-            <div className={cn(STAT.value, 'text-2xl text-warning')}>{stats.degraded}</div>
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === 'OFFLINE' ? 'all' : 'OFFLINE')}
-            aria-pressed={statusFilter === 'OFFLINE'}
-            aria-label="筛选离线主机"
-            className={cn(
-              'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
-              statusFilter === 'OFFLINE'
-                ? 'border-foreground/40 bg-muted/30'
-                : 'border-border hover:bg-muted/20',
-            )}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <p className={STAT.label}>离线</p>
-              <div className={cn(STAT.iconWell, STAT.iconWellMuted)}>
-                <Activity />
-              </div>
-            </div>
-            <div className={cn(STAT.value, 'text-2xl text-muted-foreground')}>{stats.offline}</div>
-          </button>
-        </div>
-
-        {/* #2958 第五道闸：脚本在位 fleet 汇总（逐台明细在展开行内，汇总接口不含名单） */}
-        {scriptPresenceSummaryError ? (
-          // #3090 / #1195：查询失败不得读成成功空结果——汇总不可得 ≠ 没有缺口；
-          // 失败时账本陈旧同样不可得（逐台区块按本标记读作「未知」，不折叠成 false）。
-          <div
-            data-testid="script-presence-summary-error"
-            className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
-          >
-            <span>脚本在位汇总加载失败，暂无法判断缺口与账本陈旧。</span>
-            {onRetryScriptPresenceSummary && (
-              <button
-                type="button"
-                onClick={onRetryScriptPresenceSummary}
-                className="underline underline-offset-2"
-              >
-                重试
-              </button>
-            )}
-          </div>
-        ) : scriptPresenceSummary && presenceCounts && (
-          <div
-            data-testid="script-presence-summary"
-            className={cn(
-              'rounded-lg border px-3 py-2',
-              presenceStale
-                ? 'border-warning/40 bg-warning/5'
-                : presenceGapCount > 0
-                  ? 'border-destructive/30 bg-destructive/5'
-                  : 'border-border bg-card',
-            )}
-          >
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
-              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
-                <ClipboardCheck className="h-4 w-4 text-muted-foreground" />
-                脚本在位
-              </span>
-              <span
-                className={cn(
-                  'font-medium',
-                  presenceStale
-                    ? 'text-muted-foreground'
-                    : presenceGapCount > 0
-                      ? 'text-destructive'
-                      : 'text-success',
-                )}
-              >
-                缺口 {scriptPresenceSummary.hosts_with_gap} 台
-                {presenceGapCount > 0 && `（${presenceGapCount} 项）`}
-              </span>
-              {/* #3090：counts.* 是 host × name@version 的项数（只有 hosts_* 是台数），
-                  与「缺口 N 台（N 项）」并排时不得再标成「台」。 */}
-              <span className="text-muted-foreground">未知 {presenceCounts.unknown} 项</span>
-              <span className="text-muted-foreground">维护窗 {presenceCounts.maintenance} 项</span>
-              {presenceStale && (
-                <span
-                  className="inline-flex items-center gap-1 font-medium text-warning"
-                  data-testid="script-presence-stale"
-                >
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  账本陈旧（最近完整 sweep：
-                  {scriptPresenceSummary.checked_at_min
-                    ? formatDateTimeFull(scriptPresenceSummary.checked_at_min)
-                    : '无记录'}
-                  ）
-                </span>
-              )}
-              <button
-                type="button"
-                aria-expanded={presenceBreakdownOpen}
-                onClick={() => setPresenceBreakdownOpen((open) => !open)}
-                className="ml-auto rounded-md px-2 py-0.5 font-medium text-primary transition-colors hover:bg-primary/10"
-              >
-                {presenceBreakdownOpen ? '收起明细' : '展开明细'}
-              </button>
-            </div>
-            {presenceBreakdownOpen && (
-              <div className="mt-2 space-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
-                <div className="flex flex-wrap gap-x-3 gap-y-1">
-                  <span>在位 {presenceCounts.present}</span>
-                  <span className={presenceCounts.missing > 0 ? 'text-destructive' : undefined}>
-                    缺失 {presenceCounts.missing}
-                  </span>
-                  <span className={presenceCounts.mismatch > 0 ? 'text-destructive' : undefined}>
-                    内容不符 {presenceCounts.mismatch}
-                  </span>
-                  <span>未知 {presenceCounts.unknown}</span>
-                  <span className={presenceCounts.maintenance > 0 ? 'text-warning' : undefined}>
-                    维护窗 {presenceCounts.maintenance}
-                  </span>
-                  <span>不适用 {presenceCounts.n_a}</span>
-                  <span>目标版本 {scriptPresenceSummary.full_versions}</span>
-                  {/* #3111：账本只核验被 Plan 引用的版本——把「没被核验的 active 版本数」
-                      摆在目标版本旁边，`缺口 0 台` 才不会被读成「所有 active 版本都在位」。 */}
-                  <span title="已 active 但无任何 Plan 引用的版本：不进任何主机的可达集，账本不核验它们（缺口/missing 计数不含）">
-                    账本未覆盖 {scriptPresenceSummary.uncovered_active_versions}
-                  </span>
-                  <span>覆盖主机 {scriptPresenceSummary.hosts_total}</span>
-                </div>
-                <p>
-                  fleet 汇总不含逐台名单：逐台缺口请展开下方对应主机行查看，并用该区块的「重新核验」单机重核。
-                </p>
-                <p>
-                  最近完整 sweep：
-                  {scriptPresenceSummary.checked_at_min
-                    ? formatDateTimeFull(scriptPresenceSummary.checked_at_min)
-                    : '无记录'}
-                  {' → '}
-                  {scriptPresenceSummary.checked_at_max
-                    ? formatDateTimeFull(scriptPresenceSummary.checked_at_max)
-                    : '无记录'}
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 统一筛选工作台：快捷视图分段条 + 搜索 + 健康度 + 更多筛选 + Chips */}
-        {(() => {
-          const isAllQuickView =
-            statusFilter === 'all' && healthFilter === 'all' && syncFilter === 'all';
-          const quickViews: QuickViewOption[] = [
-            {
-              key: 'all',
-              label: '全部主机',
-              count: hosts.length,
-              active: isAllQuickView,
-              tone: 'default',
-              onClick: () => {
-                if (onClearQuickView) {
-                  onClearQuickView();
-                  return;
-                }
-                setStatusFilter('all');
-                setHealthFilter('all');
-                setSyncFilter('all');
-              },
-            },
-            {
-              key: 'usb_fault',
-              label: 'USB / Hub 异常',
-              count: stats.usbFaultCount,
-              active: syncFilter === 'usb_fault',
-              tone: 'danger',
-              onClick: () => setSyncFilter(syncFilter === 'usb_fault' ? 'all' : 'usb_fault'),
-            },
-            {
-              key: 'drift',
-              label: '待热更新',
-              count: stats.agentDrift,
-              active: syncFilter === 'drift',
-              tone: 'warning',
-              onClick: () => setSyncFilter(syncFilter === 'drift' ? 'all' : 'drift'),
-            },
-            {
-              key: 'unhealthy',
-              label: '健康异常',
-              count: stats.unhealthyCount,
-              active: healthFilter === 'DEGRADED' || healthFilter === 'UNSCHEDULABLE',
-              tone: 'warning',
-              onClick: () =>
-                setHealthFilter(
-                  healthFilter === 'DEGRADED' || healthFilter === 'UNSCHEDULABLE'
-                    ? 'all'
-                    : 'DEGRADED',
-                ),
-            },
-            {
-              key: 'mount_error',
-              label: '挂载异常',
-              count: stats.mountErrorCount,
-              active: syncFilter === 'mount_error',
-              tone: 'danger',
-              onClick: () => setSyncFilter(syncFilter === 'mount_error' ? 'all' : 'mount_error'),
-            },
-          ];
-
-          return (
-            <FilterWorkbench
-              quickViews={quickViews}
-              headerRight={extraHeaderRight}
-              hiddenChips={hiddenChips}
-              hasAnyActiveFilter={hasAnyActiveFilter}
-              onResetAll={handleResetAll}
-              matchSummary={`显示 ${filteredHosts.length} / ${hosts.length} 台主机`}
-              chipsTestId="hosts-filter-chips"
-            >
-              <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
-                <FilterSearchInput
-                  id="host-search"
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  placeholder="搜索主机名 / IP / Agent 版本..."
-                  ariaLabel="搜索主机"
-                  testId="host-search-input"
-                  className="flex-1 sm:max-w-md"
-                />
+      <div className="space-y-2">
+        {/* 统一单行工作台：顶行合并状态统计与快捷视角，主筛选行严格单行 */}
+        <FilterWorkbench
+          headerLeft={unifiedStatusViews}
+          headerRight={workbenchHeaderRight}
+          hiddenChips={hiddenChips}
+          hasAnyActiveFilter={hasAnyActiveFilter}
+          onResetAll={handleResetAll}
+          matchSummary={`显示 ${filteredHosts.length} / ${hosts.length} 台主机`}
+          chipsTestId="hosts-filter-chips"
+        >
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:flex-nowrap">
+            <FilterSearchInput
+              id="host-search"
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="搜索主机名 / IP / Agent 版本..."
+              ariaLabel="搜索主机"
+              testId="host-search-input"
+              className="flex-1 min-w-[220px] sm:max-w-[360px]"
+            />
+            <SearchableSelect
+              value={healthFilter}
+              onChange={(v) => setHealthFilter(v as HostHealthFilter)}
+              options={[
+                { value: 'HEALTHY', label: '正常' },
+                { value: 'unhealthy', label: '健康异常 (降级/禁调)' },
+                { value: 'DEGRADED', label: '降级' },
+                { value: 'UNSCHEDULABLE', label: '禁调' },
+              ]}
+              allLabel="全部健康度"
+              searchable={false}
+              icon={<ShieldAlert />}
+              ariaLabel="按健康状态筛选"
+              className="w-full sm:w-44"
+              testId="host-health-filter"
+            />
+            <MoreFiltersPopover activeCount={moreActiveCount} testId="hosts-more-filters">
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-medium text-muted-foreground">Agent 代码同步</div>
                 <SearchableSelect
-                  value={healthFilter}
-                  onChange={(v) => setHealthFilter(v as typeof healthFilter)}
+                  value={syncFilter}
+                  onChange={(v) => setSyncFilter(v as HostSyncFilter)}
                   options={[
-                    { value: 'HEALTHY', label: '正常' },
-                    { value: 'DEGRADED', label: '降级' },
-                    { value: 'UNSCHEDULABLE', label: '禁调' },
+                    { value: 'drift', label: '待热更新 (drift)' },
+                    { value: 'matched', label: '已对齐 (matched)' },
+                    { value: 'mount_error', label: '存储挂载异常' },
+                    { value: 'usb_fault', label: 'USB / Hub 异常' },
                   ]}
-                  allLabel="全部健康度"
+                  allLabel="全部同步状态"
                   searchable={false}
-                  icon={<ShieldAlert />}
-                  ariaLabel="按健康状态筛选"
-                  className="w-full sm:w-40"
-                  testId="host-health-filter"
+                  ariaLabel="按代码同步状态筛选"
+                  className="w-full"
+                  testId="host-sync-filter"
                 />
-                <MoreFiltersPopover activeCount={moreActiveCount} testId="hosts-more-filters">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-foreground">Agent 代码同步</label>
-                    <select
-                      value={syncFilter}
-                      onChange={(e) => setSyncFilter(e.target.value as typeof syncFilter)}
-                      aria-label="按代码同步状态筛选"
-                      className={cn(FORM.select, 'h-8 w-full text-xs')}
-                    >
-                      <option value="all">全部同步状态</option>
-                      <option value="drift">待热更新 (drift)</option>
-                      <option value="matched">已对齐 (matched)</option>
-                      <option value="mount_error">存储挂载异常</option>
-                    </select>
-                  </div>
-                  {onShowRetiredChange && (
-                    <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
-                      <span>显示已退役主机</span>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(showRetired)}
-                        onChange={(e) => onShowRetiredChange(e.target.checked)}
-                        data-testid="hosts-show-retired"
-                        className="rounded"
-                      />
-                    </label>
-                  )}
-                </MoreFiltersPopover>
               </div>
-            </FilterWorkbench>
-          );
-        })()}
+              {onShowRetiredChange ? (
+                <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
+                  <span>显示已退役主机</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(showRetired)}
+                    onChange={(e) => onShowRetiredChange(e.target.checked)}
+                    data-testid="hosts-show-retired"
+                    className="rounded"
+                  />
+                </label>
+              ) : null}
+            </MoreFiltersPopover>
+          </div>
+        </FilterWorkbench>
 
-        {/* Table */}
-        <div className="rounded-xl border border-border bg-card">
-          <Table className="min-w-[720px]">
-            <TableHeader>
-              <TableRow className="sticky top-0 z-10 bg-muted/95 hover:bg-muted/95">
-                {selectable && (
-                  <TableHead className="w-10 px-3 py-2">
+        {/* 虚拟化高密主表：点击行打开右侧标准 HostDetailDrawer，1280×800 核心列免横滚 */}
+        <div ref={tableContainerRef} className="overflow-hidden rounded-xl border border-border bg-card">
+          <Table
+            containerClassName="max-h-[calc(100vh-235px)] min-h-[240px] overflow-auto"
+            className="w-full min-w-[860px]"
+          >
+            <TableHeader className="sticky top-0 z-10 bg-muted/95 backdrop-blur-xs">
+              <TableRow className="bg-muted/95 hover:bg-muted/95">
+                {selectable ? (
+                  <TableHead className="w-9 px-2.5 py-2">
                     <input
                       ref={selectAllRef}
                       type="checkbox"
@@ -1100,1048 +1119,587 @@ export function ExpandableHostTable({
                       className="h-4 w-4 rounded border-border accent-primary"
                     />
                   </TableHead>
-                )}
-                <TableHead className="w-10"></TableHead>
-                <TableHead className="min-w-[150px] font-medium">主机</TableHead>
-                <TableHead className="min-w-[104px] font-medium">状态</TableHead>
-                <TableHead className="min-w-[188px] font-medium text-center whitespace-nowrap">设备 / 任务</TableHead>
-                <TableHead className="min-w-[156px] font-medium 2xl:hidden">资源</TableHead>
-                <TableHead className="hidden min-w-[112px] font-medium 2xl:table-cell">CPU</TableHead>
-                <TableHead className="hidden min-w-[112px] font-medium 2xl:table-cell">内存</TableHead>
-                <TableHead className="hidden min-w-[112px] font-medium 2xl:table-cell">磁盘</TableHead>
-                <TableHead className="w-28 font-medium whitespace-nowrap">Agent</TableHead>
-                <TableHead className="hidden min-w-[96px] font-medium text-right 2xl:table-cell">心跳</TableHead>
-                <TableHead className="min-w-[112px] font-medium text-right">操作</TableHead>
+                ) : null}
+                <TableHead className="min-w-[136px] px-2.5 py-2 font-medium">
+                  <button
+                    type="button"
+                    onClick={() => handleSort('name')}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    主机
+                    <SortIcon active={sortKey === 'name'} direction={sortDirection} />
+                  </button>
+                </TableHead>
+                <TableHead className="min-w-[120px] px-2.5 py-2 font-medium">状态</TableHead>
+                <TableHead className="min-w-[164px] px-2.5 py-2 text-center font-medium whitespace-nowrap">
+                  <button
+                    type="button"
+                    onClick={() => handleSort('devices')}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    设备 / 任务
+                    <SortIcon active={sortKey === 'devices'} direction={sortDirection} />
+                  </button>
+                </TableHead>
+                <TableHead className="w-[156px] px-2.5 py-2 text-center font-medium whitespace-nowrap 2xl:hidden">
+                  资源
+                </TableHead>
+                <TableHead className="hidden min-w-[104px] px-2.5 py-2 font-medium 2xl:table-cell">
+                  <button
+                    type="button"
+                    onClick={() => handleSort('cpu')}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    CPU
+                    <SortIcon active={sortKey === 'cpu'} direction={sortDirection} />
+                  </button>
+                </TableHead>
+                <TableHead className="hidden min-w-[104px] px-2.5 py-2 font-medium 2xl:table-cell">
+                  <button
+                    type="button"
+                    onClick={() => handleSort('ram')}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    内存
+                    <SortIcon active={sortKey === 'ram'} direction={sortDirection} />
+                  </button>
+                </TableHead>
+                <TableHead className="hidden min-w-[104px] px-2.5 py-2 font-medium 2xl:table-cell">
+                  <button
+                    type="button"
+                    onClick={() => handleSort('disk')}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    磁盘
+                    <SortIcon active={sortKey === 'disk'} direction={sortDirection} />
+                  </button>
+                </TableHead>
+                <TableHead className="w-[132px] px-2.5 py-2 font-medium whitespace-nowrap">Agent</TableHead>
+                <TableHead className="hidden min-w-[92px] px-2.5 py-2 text-right font-medium 2xl:table-cell">
+                  <button
+                    type="button"
+                    onClick={() => handleSort('heartbeat')}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    心跳
+                    <SortIcon active={sortKey === 'heartbeat'} direction={sortDirection} />
+                  </button>
+                </TableHead>
+                <TableHead className="w-[148px] px-2.5 py-2 text-right font-medium whitespace-nowrap">
+                  操作
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredHosts.map((host) => {
-                const isExpanded = expandedRows.has(host.id);
-                // #2958：逐台矩阵（展开时按需拉取；未拉过 = undefined）。
-                const presence = presenceByHost[String(host.id)];
-                const refreshingPresence = presenceRefreshing.has(host.id);
-                const presenceItems = presence?.data
-                  ? sortScriptPresenceItems(presence.data.items)
-                  : [];
+              {virtualPaddingTop > 0 ? (
+                <tr aria-hidden="true">
+                  <td colSpan={visibleColumnCount} style={{ height: `${virtualPaddingTop}px`, padding: 0 }} />
+                </tr>
+              ) : null}
+
+              {virtualRows.map((virtualRow) => {
+                const host = filteredHosts[virtualRow.index];
+                if (!host) return null;
+                const isDrawerActive = activeDrawerHost != null && String(activeDrawerHost.id) === String(host.id);
+                const faultChips = buildInlineFaultChips(host);
+                const visibleFaults = faultChips.slice(0, 2);
+                const restFaults = faultChips.slice(2);
+                const usb = host.usb_device_count;
+                const usbKnown = typeof usb === 'number' && Number.isFinite(usb);
+                const adbCount = host.device_count || 0;
+                const usbMismatch = usbKnown && usb > adbCount;
 
                 return (
-                  <Fragment key={host.id}>
-                    <TableRow
-                      key={host.id}
-                      className={cn(
-                        'cursor-pointer hover:bg-muted/50 transition-colors',
-                        isExpanded && 'bg-muted/50',
-                        selectedIds?.has(host.id) && 'bg-primary/5 hover:bg-primary/10',
-                      )}
-                      data-state={selectedIds?.has(host.id) ? 'selected' : undefined}
-                      onClick={() => toggleRow(host.id)}
-                    >
-                      {selectable && (
-                        <TableCell className="px-3 py-1.5">
-                          <input
-                            type="checkbox"
-                            checked={selectedIds?.has(host.id) ?? false}
-                            onClick={(e) => toggleSelect(host.id, e)}
-                            onChange={() => {}}
-                            aria-label={`选择主机 ${host.name ?? host.id}`}
-                            className="h-4 w-4 rounded border-border accent-primary"
-                          />
-                        </TableCell>
-                      )}
-                      <TableCell className="px-3 py-1.5">
-                        <ChevronDown
-                          className={cn(
-                            'w-4 h-4 text-muted-foreground transition-transform',
-                            !isExpanded && '-rotate-90'
-                          )}
+                  <ClickableRow
+                    key={host.id}
+                    role="button"
+                    aria-label={`查看主机 ${host.name || host.ip || host.id} 详情`}
+                    data-state={selectedIds?.has(host.id) ? 'selected' : undefined}
+                    onClick={() => openDrawer(host.id)}
+                    className={cn(
+                      'transition-colors hover:bg-muted/50',
+                      isDrawerActive && 'bg-primary/5 ring-1 ring-inset ring-primary/25',
+                      selectedIds?.has(host.id) && 'bg-primary/5 hover:bg-primary/10',
+                    )}
+                  >
+                    {selectable ? (
+                      <TableCell className="w-9 px-2.5 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds?.has(host.id) ?? false}
+                          onClick={(e) => toggleSelect(host.id, e)}
+                          onChange={() => {}}
+                          aria-label={`选择主机 ${host.name ?? host.id}`}
+                          className="h-4 w-4 rounded border-border accent-primary"
                         />
                       </TableCell>
-                      <TableCell className="max-w-[200px] px-3 py-1.5">
-                        <div className="truncate font-medium text-foreground" title={host.name ?? ''}>
-                          {host.name}
+                    ) : null}
+
+                    <TableCell className="max-w-[180px] px-2.5 py-1.5">
+                      <div className="truncate font-medium text-foreground" title={host.name ?? ''}>
+                        {host.name}
+                      </div>
+                      {host.name !== host.ip ? (
+                        <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={host.ip}>
+                          {host.ip}
                         </div>
-                        {host.name !== host.ip && (
-                          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={host.ip}>
-                            {host.ip}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1.5">
-                            <StatusBadge kind="host" status={host.status} size="sm" />
-                            {host.retired_at && (
-                              <span
-                                className={cn(
-                                  'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help',
-                                  host.status === 'ONLINE'
-                                    ? 'bg-warning/10 text-warning'
-                                    : 'bg-muted text-muted-foreground',
-                                )}
-                                title={`已退役${host.retired_by ? `（${host.retired_by}）` : ''}${
-                                  host.retire_reason ? `：${host.retire_reason}` : ''
-                                }`}
-                                data-testid={`host-retired-badge-${host.id}`}
-                              >
-                                {host.status === 'ONLINE' ? '已退役但仍在心跳' : '已退役'}
-                              </span>
-                            )}
-                            {host.emptied_at && (
-                              <span
-                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help bg-muted text-muted-foreground"
-                                title={`设备面已由人工处置${host.emptied_by ? `（${host.emptied_by}）` : ''}${
-                                  host.emptied_reason ? `：${host.emptied_reason}` : ''
-                                }——设备面告警（UsbBlind / 批量 offline）豁免中（ADR-0038 D9）`}
-                                data-testid={`host-emptied-badge-${host.id}`}
-                              >
-                                设备面已处置
-                              </span>
-                            )}
-                            {host.health_status && host.health_status !== 'HEALTHY' && (
-                              <span
-                                className={cn(
-                                  'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help',
-                                  host.health_status === 'UNSCHEDULABLE'
-                                    ? 'bg-destructive/10 text-destructive'
-                                    : 'bg-warning/10 text-warning'
-                                )}
-                                title={host.health_reasons?.map(r => REASON_LABELS[r] || r).join(', ') || ''}
-                              >
-                                {host.health_status === 'UNSCHEDULABLE' ? '禁调' : '降级'}
-                              </span>
-                            )}
-                          </div>
-                          {(() => {
-                            const faultChips = buildInlineFaultChips(host);
-                            if (faultChips.length === 0) return null;
-                            const visible = faultChips.slice(0, 2);
-                            const rest = faultChips.slice(2);
-                            return (
-                              <div
-                                className="flex flex-wrap items-center gap-1"
-                                data-testid={`host-inline-faults-${host.id}`}
-                              >
-                                {visible.map((chip) => (
-                                  <span
-                                    key={chip.key}
-                                    title={chip.title}
-                                    className={cn(
-                                      'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight',
-                                      chip.tone === 'danger'
-                                        ? 'bg-destructive/10 text-destructive'
-                                        : chip.tone === 'warning'
-                                          ? 'bg-warning/10 text-warning'
-                                          : 'bg-muted text-muted-foreground',
-                                    )}
-                                  >
-                                    {chip.label}
-                                  </span>
-                                ))}
-                                {rest.length > 0 && (
-                                  <span
-                                    className="inline-flex items-center rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground cursor-help"
-                                    title={rest.map((c) => c.title || c.label).join('；')}
-                                  >
-                                    +{rest.length}
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })()}
+                      ) : null}
+                    </TableCell>
+
+                    <TableCell className="px-2.5 py-1.5">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-1">
+                          <StatusBadge kind="host" status={host.status} size="sm" />
+                          {host.retired_at ? (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium cursor-help',
+                                host.status === 'ONLINE'
+                                  ? 'bg-warning/10 text-warning'
+                                  : 'bg-muted text-muted-foreground',
+                              )}
+                              title={`已退役${host.retired_by ? `（${host.retired_by}）` : ''}${
+                                host.retire_reason ? `：${host.retire_reason}` : ''
+                              }`}
+                              data-testid={`host-retired-badge-${host.id}`}
+                            >
+                              {host.status === 'ONLINE' ? '已退役但仍在心跳' : '已退役'}
+                            </span>
+                          ) : null}
+                          {host.emptied_at ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground cursor-help"
+                              title={`设备面已由人工处置${host.emptied_by ? `（${host.emptied_by}）` : ''}${
+                                host.emptied_reason ? `：${host.emptied_reason}` : ''
+                              }——设备面告警（UsbBlind / 批量 offline）豁免中（ADR-0038 D9）`}
+                              data-testid={`host-emptied-badge-${host.id}`}
+                            >
+                              设备面已处置
+                            </span>
+                          ) : null}
+                          {host.health_status && host.health_status !== 'HEALTHY' ? (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium cursor-help',
+                                host.health_status === 'UNSCHEDULABLE'
+                                  ? 'bg-destructive/10 text-destructive-text'
+                                  : 'bg-warning/10 text-warning',
+                              )}
+                              title={host.health_reasons?.map((r) => REASON_LABELS[r] || r).join(', ') || ''}
+                            >
+                              {host.health_status === 'UNSCHEDULABLE' ? '禁调' : '降级'}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {visibleFaults.length > 0 ? (
                           <div
-                            className={cn(
-                              'flex items-center gap-1 text-[11px]',
-                              host.watcher_admin_active !== false ? 'text-success' : 'text-destructive',
-                            )}
+                            className="flex flex-wrap items-center gap-1"
+                            data-testid={`host-inline-faults-${host.id}`}
                           >
-                            <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                            Watch {host.watcher_admin_active !== false ? '已激活' : '未激活'}
+                            {visibleFaults.map((chip) => (
+                              <span
+                                key={chip.key}
+                                title={chip.title}
+                                className={cn(
+                                  'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight',
+                                  chip.tone === 'danger'
+                                    ? 'bg-destructive/10 text-destructive-text'
+                                    : chip.tone === 'warning'
+                                      ? 'bg-warning/10 text-warning'
+                                      : 'bg-muted text-muted-foreground',
+                                )}
+                              >
+                                {chip.label}
+                              </span>
+                            ))}
+                            {restFaults.length > 0 ? (
+                              <span
+                                className="inline-flex items-center rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground cursor-help"
+                                title={restFaults.map((c) => c.title || c.label).join('；')}
+                              >
+                                +{restFaults.length}
+                              </span>
+                            ) : null}
                           </div>
+                        ) : null}
+
+                        <div
+                          className={cn(
+                            'flex items-center gap-1 text-[11px]',
+                            host.watcher_admin_active !== false ? 'text-success' : 'text-destructive-text',
+                          )}
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                          Watch {host.watcher_admin_active !== false ? '已激活' : '未激活'}
                         </div>
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5 text-center">
-                        <div className="inline-flex items-center gap-1">
-                          {onNavigateToDevices ? (
+                      </div>
+                    </TableCell>
+
+                    <TableCell className="px-2.5 py-1.5 text-center whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
+                        {onNavigateToDevices ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onNavigateToDevices(host.id);
+                            }}
+                            className={cn(
+                              'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:underline',
+                              adbCount > 0
+                                ? 'bg-primary/10 text-primary hover:bg-primary/20'
+                                : 'bg-muted/50 text-muted-foreground hover:bg-muted',
+                            )}
+                            title="点击跳转到设备页查看该主机下的设备"
+                          >
+                            在线 {adbCount}
+                          </button>
+                        ) : (
+                          <span
+                            className={cn(
+                              'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                              adbCount > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground',
+                            )}
+                            title={host.claim_hint ?? '在线设备数（来源：adb devices）'}
+                          >
+                            在线 {adbCount}
+                          </span>
+                        )}
+                        <span
+                          className={cn(
+                            'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                            !usbKnown
+                              ? 'bg-muted/50 text-muted-foreground'
+                              : usbMismatch
+                                ? 'bg-warning/10 text-warning'
+                                : 'bg-muted/50 text-muted-foreground',
+                          )}
+                          title={
+                            !usbKnown
+                              ? 'USB 设备数未采集到（lsusb 不可用或采集失败）'
+                              : usbMismatch
+                                ? `USB 枚举 ${usb} 台 > ADB 在线 ${adbCount} 台：设备在 USB 上但 ADB 未枚举，可能存在授权/驱动/多 ADB server 问题（来源：lsusb）`
+                                : 'USB 枚举到的疑似 Android 设备数（来源：lsusb），与 ADB 在线数对照'
+                          }
+                        >
+                          USB {usbKnown ? usb : '—'}
+                        </span>
+                        <span
+                          className={cn(
+                            'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                            (host.active_tasks || 0) > 0
+                              ? 'bg-info/10 text-info'
+                              : 'bg-muted/50 text-muted-foreground',
+                          )}
+                        >
+                          任务 {host.active_tasks || 0}
+                        </span>
+                      </div>
+                    </TableCell>
+
+                    <TableCell className="w-[156px] px-2.5 py-1.5 2xl:hidden">
+                      {host.resources && host.status === 'ONLINE' ? (
+                        <div className="mx-auto grid w-[140px] grid-cols-3 gap-1">
+                          {[
+                            ['CPU', host.resources.cpu_load],
+                            ['内存', host.resources.ram_usage],
+                            ['磁盘', host.resources.disk_usage],
+                          ].map(([label, value]) => (
+                            <div key={String(label)} className="text-center">
+                              <div className="text-[10px] text-muted-foreground">{label}</div>
+                              <div
+                                data-testid={label === '磁盘' ? 'host-disk-usage' : undefined}
+                                className={cn(
+                                  'font-mono text-[11px]',
+                                  typeof value === 'number'
+                                    ? getResourceColor(value)
+                                    : 'text-muted-foreground',
+                                )}
+                              >
+                                {formatUsagePercent(typeof value === 'number' ? value : null)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center text-muted-foreground/40">-</div>
+                      )}
+                    </TableCell>
+
+                    <TableCell className="hidden px-2.5 py-1.5 2xl:table-cell">
+                      {host.resources && host.status === 'ONLINE' ? (
+                        <div className="flex items-center gap-2">
+                          <Progress
+                            value={host.resources.cpu_load}
+                            className="h-2 w-14"
+                            indicatorClassName={getProgressColor(host.resources.cpu_load)}
+                          />
+                          <span className={cn('font-mono text-xs', getResourceColor(host.resources.cpu_load))}>
+                            {host.resources.cpu_load.toFixed(0)}%
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground/40">-</span>
+                      )}
+                    </TableCell>
+
+                    <TableCell className="hidden px-2.5 py-1.5 2xl:table-cell">
+                      {host.resources && host.status === 'ONLINE' ? (
+                        <div className="flex items-center gap-2">
+                          <Progress
+                            value={host.resources.ram_usage}
+                            className="h-2 w-14"
+                            indicatorClassName={getProgressColor(host.resources.ram_usage)}
+                          />
+                          <span className={cn('font-mono text-xs', getResourceColor(host.resources.ram_usage))}>
+                            {host.resources.ram_usage.toFixed(0)}%
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground/40">-</span>
+                      )}
+                    </TableCell>
+
+                    <TableCell className="hidden px-2.5 py-1.5 2xl:table-cell">
+                      {host.resources && host.status === 'ONLINE' ? (
+                        host.resources.disk_usage == null ? (
+                          <span data-testid="host-disk-usage" className="font-mono text-xs text-muted-foreground">
+                            未知
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <Progress
+                              value={host.resources.disk_usage}
+                              className="h-2 w-14"
+                              indicatorClassName={getProgressColor(host.resources.disk_usage)}
+                            />
+                            <span
+                              data-testid="host-disk-usage"
+                              className={cn('font-mono text-xs', getResourceColor(host.resources.disk_usage))}
+                            >
+                              {host.resources.disk_usage.toFixed(0)}%
+                            </span>
+                          </div>
+                        )
+                      ) : (
+                        <span className="text-muted-foreground/40">-</span>
+                      )}
+                    </TableCell>
+
+                    <TableCell className="w-[132px] px-2.5 py-1.5">
+                      {host.agent_installed ? (
+                        <div className="flex w-[124px] flex-col gap-0.5">
+                          <span
+                            className="truncate font-mono text-xs text-foreground"
+                            title={formatAgentVersionLabel(host)}
+                          >
+                            {formatAgentVersionLabel(host)}
+                          </span>
+                          <span
+                            className={cn(
+                              'inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                              agentSyncBadgeClass(host.agent_code_sync_status),
+                            )}
+                            title={
+                              host.agent_artifact_digest
+                                ? `当前摘要 ${host.agent_artifact_digest.replace(/^sha256:/, '').slice(0, 12)}${host.expected_code_revision ? ` · 期望 HEAD @${host.expected_code_revision}` : ''}`
+                                : host.expected_code_revision
+                                  ? `未上报摘要 · 期望 HEAD @${host.expected_code_revision}`
+                                  : undefined
+                            }
+                          >
+                            {AGENT_SYNC_LABELS[host.agent_code_sync_status ?? 'unknown']}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground/40">未安装</span>
+                      )}
+                    </TableCell>
+
+                    <TableCell
+                      className="hidden px-2.5 py-1.5 text-right text-xs text-muted-foreground 2xl:table-cell"
+                      title={host.last_heartbeat ? formatLocalTime(host.last_heartbeat) : undefined}
+                    >
+                      {host.last_heartbeat ? formatHeartbeatLabel(host.last_heartbeat) : '—'}
+                    </TableCell>
+
+                    <TableCell className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
+                        {host.retired_at ? (
+                          <span className="text-xs text-muted-foreground/40">已退役</span>
+                        ) : host.status === 'ONLINE' && onHotUpdate ? (
+                          <>
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                onNavigateToDevices(host.id);
+                                onHotUpdate(host.id);
                               }}
-                              className={cn(
-                                'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:underline',
-                                (host.device_count || 0) > 0
-                                  ? 'bg-primary/10 text-primary hover:bg-primary/20'
-                                  : 'bg-muted/50 text-muted-foreground hover:bg-muted',
-                              )}
-                              title="点击跳转到设备页查看该主机下的设备"
+                              disabled={isHotUpdating?.(host.id) || isFlashPrereqs?.(host.id)}
+                              aria-label={`${host.name ?? host.id} 热更新 Agent`}
+                              className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
                             >
-                              在线 {host.device_count || 0}
+                              {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
                             </button>
-                          ) : (
-                            <span
-                              className={cn(
-                                'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
-                                (host.device_count || 0) > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground'
-                              )}
-                              title={host.claim_hint ?? '在线设备数（来源：adb devices）'}
-                            >
-                              在线 {host.device_count || 0}
-                            </span>
-                          )}
-                          {(() => {
-                            // lsusb 对照值：与「在线」(adb devices) 并排，差值即 ADB
-                            // 未枚举到的物理设备。未采集显示「—」，不伪装成 0。
-                            const usb = host.usb_device_count;
-                            const known = typeof usb === 'number' && Number.isFinite(usb);
-                            const adbCount = host.device_count || 0;
-                            const mismatch = known && usb > adbCount;
-                            return (
-                              <span
-                                className={cn(
-                                  'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
-                                  !known
-                                    ? 'bg-muted/50 text-muted-foreground'
-                                    : mismatch
-                                      ? 'bg-warning/10 text-warning'
-                                      : 'bg-muted/50 text-muted-foreground'
-                                )}
-                                title={
-                                  !known
-                                    ? 'USB 设备数未采集到（lsusb 不可用或采集失败）'
-                                    : mismatch
-                                      ? `USB 枚举 ${usb} 台 > ADB 在线 ${adbCount} 台：设备在 USB 上但 ADB 未枚举，可能存在授权/驱动/多 ADB server 问题（来源：lsusb）`
-                                      : `USB 枚举到的疑似 Android 设备数（来源：lsusb），与 ADB 在线数对照`
-                                }
-                              >
-                                USB {known ? usb : '—'}
-                              </span>
-                            );
-                          })()}
-                          <span className={cn(
-                            'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
-                            (host.active_tasks || 0) > 0 ? 'bg-info/10 text-info' : 'bg-muted/50 text-muted-foreground'
-                          )}>
-                            任务 {host.active_tasks || 0}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5 2xl:hidden">
-                        {host.resources && host.status === 'ONLINE' ? (
-                          <div className="grid min-w-[150px] grid-cols-3 gap-1.5">
-                            {[
-                              ['CPU', host.resources.cpu_load],
-                              ['内存', host.resources.ram_usage],
-                              ['磁盘', host.resources.disk_usage],
-                            ].map(([label, value]) => (
-                              <div key={String(label)} className="text-center">
-                                <div className="text-[11px] text-muted-foreground">{label}</div>
-                                <div
-                                  data-testid={label === '磁盘' ? 'host-disk-usage' : undefined}
-                                  className={cn(
-                                    'font-mono text-[11px]',
-                                    typeof value === 'number'
-                                      ? getResourceColor(value)
-                                      : 'text-muted-foreground',
-                                  )}
-                                >
-                                  {formatUsagePercent(typeof value === 'number' ? value : null)}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground/40">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="hidden px-3 py-1.5 2xl:table-cell">
-                        {host.resources && host.status === 'ONLINE' ? (
-                          <div className="flex items-center gap-2">
-                            <Progress
-                              value={host.resources.cpu_load}
-                              className="h-2 w-16"
-                              indicatorClassName={getProgressColor(host.resources.cpu_load)}
-                            />
-                            <span className={cn('text-xs font-mono', getResourceColor(host.resources.cpu_load))}>
-                              {host.resources.cpu_load.toFixed(0)}%
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground/40">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="hidden px-3 py-1.5 2xl:table-cell">
-                        {host.resources && host.status === 'ONLINE' ? (
-                          <div className="flex items-center gap-2">
-                            <Progress
-                              value={host.resources.ram_usage}
-                              className="h-2 w-16"
-                              indicatorClassName={getProgressColor(host.resources.ram_usage)}
-                            />
-                            <span className={cn('text-xs font-mono', getResourceColor(host.resources.ram_usage))}>
-                              {host.resources.ram_usage.toFixed(0)}%
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground/40">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="hidden px-3 py-1.5 2xl:table-cell">
-                        {host.resources && host.status === 'ONLINE' ? (
-                          host.resources.disk_usage == null ? (
-                            <span data-testid="host-disk-usage" className="text-xs font-mono text-muted-foreground">未知</span>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <Progress
-                                value={host.resources.disk_usage}
-                                className="h-2 w-16"
-                                indicatorClassName={getProgressColor(host.resources.disk_usage)}
-                              />
-                              <span
-                                data-testid="host-disk-usage"
-                                className={cn('text-xs font-mono', getResourceColor(host.resources.disk_usage))}
-                              >
-                                {host.resources.disk_usage.toFixed(0)}%
-                              </span>
-                            </div>
-                          )
-                        ) : (
-                          <span className="text-muted-foreground/40">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5">
-                        {host.agent_installed ? (
-                          <div className="flex w-28 flex-col gap-1">
-                            <span
-                              className="font-mono text-xs text-foreground truncate"
-                              title={formatAgentVersionLabel(host)}
-                            >
-                              {formatAgentVersionLabel(host)}
-                            </span>
-                            <span
-                              className={cn(
-                                'inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
-                                agentSyncBadgeClass(host.agent_code_sync_status),
-                              )}
-                              title={
-                                host.agent_artifact_digest
-                                  ? `当前摘要 ${host.agent_artifact_digest.replace(/^sha256:/, '').slice(0, 12)}${host.expected_code_revision ? ` · 期望 HEAD @${host.expected_code_revision}` : ''}`
-                                  : host.expected_code_revision
-                                    ? `未上报摘要 · 期望 HEAD @${host.expected_code_revision}`
-                                    : undefined
-                              }
-                            >
-                              {AGENT_SYNC_LABELS[host.agent_code_sync_status ?? 'unknown']}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground/40 text-xs">未安装</span>
-                        )}
-                      </TableCell>
-                      <TableCell
-                        className="hidden p-3 text-right text-xs text-muted-foreground 2xl:table-cell"
-                        title={host.last_heartbeat ? formatLocalTime(host.last_heartbeat) : undefined}
-                      >
-                        {host.last_heartbeat
-                          ? formatHeartbeatLabel(host.last_heartbeat)
-                          : '—'}
-                      </TableCell>
-                      <TableCell className="px-3 py-1.5 text-right">
-                        <div className="inline-flex items-center gap-1.5">
-                          {host.retired_at ? (
-                            <span className="text-muted-foreground/40 text-xs">已退役</span>
-                          ) : host.status === 'ONLINE' && onHotUpdate ? (
-                            <>
+                            {onFlashPrereqs && host.agent_installed !== false ? (
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  onHotUpdate(host.id);
+                                  onFlashPrereqs(host.id);
                                 }}
-                                disabled={isHotUpdating?.(host.id) || isFlashPrereqs?.(host.id)}
-                                aria-label={`${host.name ?? host.id} 热更新 Agent`}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                                disabled={isFlashPrereqs?.(host.id) || isHotUpdating?.(host.id)}
+                                aria-label={`${host.name ?? host.id} 补齐刷机前置`}
+                                title="补齐 dialout / udev / Qt 刷机依赖"
+                                className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
                               >
-                                {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
+                                {isFlashPrereqs?.(host.id) ? '补齐中...' : '刷机前置'}
                               </button>
-                              {onFlashPrereqs && host.agent_installed !== false && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onFlashPrereqs(host.id);
-                                  }}
-                                  disabled={
-                                    isFlashPrereqs?.(host.id) || isHotUpdating?.(host.id)
-                                  }
-                                  aria-label={`${host.name ?? host.id} 补齐刷机前置`}
-                                  title="补齐 dialout / udev / Qt 刷机依赖"
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-muted-foreground bg-muted/60 hover:bg-muted rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                                >
-                                  {isFlashPrereqs?.(host.id) ? '补齐中...' : '刷机前置'}
-                                </button>
-                              )}
-                            </>
-                          ) : host.status !== 'ONLINE' && onInstall ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onInstall(host.id);
-                              }}
-                              disabled={isInstalling?.(host.id)}
-                              aria-label={
-                                host.agent_installed
-                                  ? `${host.name ?? host.id} 重新安装 Agent`
-                                  : `${host.name ?? host.id} 首次安装 Agent`
-                              }
-                              title={
-                                host.agent_installed
-                                  ? 'Agent 曾安装成功，当前离线 — 可重新安装'
-                                  : '尚未检测到 Agent 安装记录'
-                              }
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-warning bg-warning/10 hover:bg-warning/20 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                            >
-                              {isInstalling?.(host.id)
-                                ? '安装中...'
-                                : host.agent_installed
-                                  ? '重新安装'
-                                  : '首次安装'}
-                            </button>
-                          ) : (
-                            <span className="text-muted-foreground/40 text-xs">-</span>
-                          )}
-                          {isAdmin && (onEdit || onDelete || onRetire || onUnretire) && (
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={(e) => e.stopPropagation()}
-                                  aria-label={`${host.name ?? host.id} 更多操作`}
-                                  className="inline-flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                                >
-                                  <MoreHorizontal className="h-4 w-4" />
-                                </button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-32">
-                                {onEdit && (
-                                  <DropdownMenuItem onClick={() => onEdit(host)}>
-                                    <Pencil className="mr-2 h-3.5 w-3.5" />
-                                    编辑
-                                  </DropdownMenuItem>
-                                )}
-                                {onRetire && !host.retired_at && (
-                                  <DropdownMenuItem onClick={() => onRetire(host)}>
-                                    <CircleSlash className="mr-2 h-3.5 w-3.5" />
-                                    退役
-                                  </DropdownMenuItem>
-                                )}
-                                {onUnretire && host.retired_at && (
-                                  <DropdownMenuItem onClick={() => onUnretire(host)}>
-                                    <RotateCcw className="mr-2 h-3.5 w-3.5" />
-                                    解除退役
-                                  </DropdownMenuItem>
-                                )}
-                                {onDelete && (
-                                  <DropdownMenuItem
-                                    disabled={isDeleting?.(host.id)}
-                                    onClick={() => onDelete(host)}
-                                    className="text-destructive focus:bg-destructive/10 focus:text-destructive"
-                                  >
-                                    <Trash2 className="mr-2 h-3.5 w-3.5" />
-                                    删除
-                                  </DropdownMenuItem>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-
-                    {/* Expanded Details */}
-                    {isExpanded && (
-                      <TableRow className="bg-muted/40 hover:bg-muted/40">
-                        <TableCell colSpan={selectable ? 12 : 11} className="p-4">
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                            {/* CPU Details */}
-                            <div className="bg-card rounded-lg border border-border p-3">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Cpu className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm font-medium text-foreground">CPU</span>
-                              </div>
-                              {host.resources ? (
-                                <div className="space-y-1">
-                                  <div className="flex justify-between text-xs">
-                                    <span className="text-muted-foreground">负载</span>
-                                    <span className={cn('font-mono', getResourceColor(host.resources.cpu_load))}>
-                                      {host.resources.cpu_load.toFixed(1)}%
-                                    </span>
-                                  </div>
-                                  {host.resources.cpu_cores && (
-                                    <div className="flex justify-between text-xs">
-                                      <span className="text-muted-foreground">核心数</span>
-                                      <span className="font-mono text-foreground">{host.resources.cpu_cores}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">无数据</span>
-                              )}
-                            </div>
-
-                            {/* Memory Details */}
-                            <div className="bg-card rounded-lg border border-border p-3">
-                              <div className="flex items-center gap-2 mb-2">
-                                <MemoryStick className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm font-medium text-foreground">内存</span>
-                              </div>
-                              {host.resources ? (
-                                <div className="space-y-1">
-                                  <div className="flex justify-between text-xs">
-                                    <span className="text-muted-foreground">使用率</span>
-                                    <span className={cn('font-mono', getResourceColor(host.resources.ram_usage))}>
-                                      {host.resources.ram_usage.toFixed(1)}%
-                                    </span>
-                                  </div>
-                                  {host.resources.ram_total_gb && (
-                                    <div className="flex justify-between text-xs">
-                                      <span className="text-muted-foreground">总量</span>
-                                      <span className="font-mono text-foreground">{formatBytesFromGb(host.resources.ram_total_gb)}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">无数据</span>
-                              )}
-                            </div>
-
-                            {/* Disk Details */}
-                            <div className="bg-card rounded-lg border border-border p-3">
-                              <div className="flex items-center gap-2 mb-2">
-                                <HardDrive className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm font-medium text-foreground">磁盘</span>
-                              </div>
-                              {host.resources ? (
-                                <div className="space-y-1">
-                                  <div className="flex justify-between text-xs">
-                                    <span className="text-muted-foreground">使用率</span>
-                                    <span className={cn(
-                                      'font-mono',
-                                      host.resources.disk_usage == null
-                                        ? 'text-muted-foreground'
-                                        : getResourceColor(host.resources.disk_usage),
-                                    )}>
-                                      {formatUsagePercent(host.resources.disk_usage, 1)}
-                                    </span>
-                                  </div>
-                                  {host.resources.disk_total_gb && (
-                                    <div className="flex justify-between text-xs">
-                                      <span className="text-muted-foreground">总量</span>
-                                      <span className="font-mono text-foreground">{formatBytesFromGb(host.resources.disk_total_gb)}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">无数据</span>
-                              )}
-                            </div>
-
-                            {/* Agent Version */}
-                            <div className="bg-card rounded-lg border border-border p-3">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Server className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm font-medium text-foreground">Agent 版本</span>
-                              </div>
-                              {host.agent_installed ? (
-                                <div className="space-y-1">
-                                  <div className="flex justify-between text-xs gap-2">
-                                    <span className="text-muted-foreground shrink-0">协议</span>
-                                    <span className="font-mono text-foreground truncate">
-                                      {host.agent_protocol_version ?? '—'}
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between text-xs gap-2">
-                                    <span className="text-muted-foreground shrink-0">部署摘要</span>
-                                    <span
-                                      className="font-mono text-foreground truncate"
-                                      title={host.agent_artifact_digest ?? undefined}
-                                    >
-                                      {host.agent_artifact_digest
-                                        ? host.agent_artifact_digest.replace(/^sha256:/, '').slice(0, 12)
-                                        : '未上报'}
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between text-xs gap-2">
-                                    <span className="text-muted-foreground shrink-0">上报修订</span>
-                                    <span className="font-mono text-foreground truncate">
-                                      {host.agent_code_revision ? `@${host.agent_code_revision}` : '—'}
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between text-xs gap-2">
-                                    <span className="text-muted-foreground shrink-0">期望修订</span>
-                                    <span className="font-mono text-foreground truncate">
-                                      {host.expected_code_revision ? `@${host.expected_code_revision}` : '—'}
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between text-xs gap-2">
-                                    <span className="text-muted-foreground shrink-0">热更新部署</span>
-                                    <span className="font-mono text-foreground truncate">
-                                      {host.agent_code_deployed ? `@${host.agent_code_deployed}` : '—'}
-                                    </span>
-                                  </div>
-                                  {host.agent_code_deployed_at && (
-                                    <div className="flex justify-between text-xs gap-2">
-                                      <span className="text-muted-foreground shrink-0">部署时间</span>
-                                      <span className="font-mono text-foreground truncate">
-                                        {formatDateTimeFull(host.agent_code_deployed_at)}
-                                      </span>
-                                    </div>
-                                  )}
-                                  <div className="flex justify-between text-xs gap-2">
-                                    <span className="text-muted-foreground shrink-0">对齐状态</span>
-                                    <span
-                                      className={cn(
-                                        'rounded-full px-1.5 py-0.5 text-[11px] font-medium',
-                                        agentSyncBadgeClass(host.agent_code_sync_status),
-                                      )}
-                                      // #3550：matched 但修订三列分叉是 ADR-0040 v1.1（判据=digest）
-                                      // 的正常形态，只在会误导的组合上给归因，正常形态不打扰。
-                                      title={
-                                        host.agent_code_sync_status === 'matched'
-                                        && host.expected_code_revision
-                                        && host.agent_code_revision
-                                        && host.expected_code_revision !== host.agent_code_revision
-                                          ? '期望修订随每次合入前进；载荷摘要未变则无需重推——对齐判据是「部署摘要」，不是修订文本'
-                                          : undefined
-                                      }
-                                    >
-                                      {AGENT_SYNC_LABELS[host.agent_code_sync_status ?? 'unknown']}
-                                    </span>
-                                  </div>
-                                  <div className="text-[10px] leading-snug text-muted-foreground">
-                                    对齐以「部署摘要」判定；修订文本仅作溯源，期望修订随每次合入前进
-                                  </div>
-                                </div>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">未安装 Agent</span>
-                              )}
-                            </div>
-
-                            {/* Other Info */}
-                            <div className="bg-card rounded-lg border border-border p-3">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Clock className="w-4 h-4 text-muted-foreground" />
-                                <span className="text-sm font-medium text-foreground">其他</span>
-                              </div>
-                              <div className="space-y-1.5">
-                                <div className="flex items-center justify-between gap-2 text-xs">
-                                  <span className="text-muted-foreground">Watch</span>
-                                  <div className="flex items-center gap-2">
-                                    <span className={host.watcher_admin_active !== false ? 'text-success' : 'text-destructive'}>
-                                      {host.watcher_admin_active !== false ? '已激活' : '未激活'}
-                                    </span>
-                                    {onWatcherAdminStateChange && (
-                                      <button
-                                        role="switch"
-                                        aria-checked={host.watcher_admin_active !== false}
-                                        aria-label={`${host.name ?? host.id} Watcher 管理开关`}
-                                        disabled={
-                                          !canManageWatcherAdminState ||
-                                          !!isWatcherAdminStateUpdating?.(host.id)
-                                        }
-                                        data-testid={`watcher-admin-toggle-${host.id}`}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          onWatcherAdminStateChange(
-                                            host.id,
-                                            !(host.watcher_admin_active !== false),
-                                          );
-                                        }}
-                                        className={cn(
-                                          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full',
-                                          'border-2 border-transparent transition-colors',
-                                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                                          'disabled:cursor-not-allowed disabled:opacity-50',
-                                          host.watcher_admin_active !== false ? 'bg-success' : 'bg-muted',
-                                        )}
-                                      >
-                                        <span
-                                          className={cn(
-                                            'pointer-events-none inline-block h-4 w-4 rounded-full bg-card shadow-sm',
-                                            'ring-0 transition-transform',
-                                            host.watcher_admin_active !== false ? 'translate-x-4' : 'translate-x-0',
-                                          )}
-                                        />
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex justify-between gap-2 text-xs">
-                                  <span className="text-muted-foreground">最近心跳</span>
-                                  <span
-                                    className="font-mono text-foreground"
-                                    title={host.last_heartbeat ? formatLocalTime(host.last_heartbeat) : undefined}
-                                  >
-                                    {formatHeartbeatLabel(host.last_heartbeat)}
-                                  </span>
-                                </div>
-                                {host.resources && (
-                                  <>
-                                    {host.resources.temperature !== undefined && (
-                                      <div className="flex justify-between text-xs">
-                                        <span className="text-muted-foreground">温度</span>
-                                        <span className={cn(
-                                          'font-mono',
-                                          host.resources.temperature > 80 ? 'text-destructive' :
-                                          host.resources.temperature > 60 ? 'text-warning' : 'text-foreground'
-                                        )}>
-                                          {host.resources.temperature.toFixed(1)}°C
-                                        </span>
-                                      </div>
-                                    )}
-                                    {host.resources.uptime_seconds !== undefined && (
-                                      <div className="flex justify-between text-xs">
-                                        <span className="text-muted-foreground">运行时间</span>
-                                        <span className="font-mono text-foreground">{formatDurationSeconds(host.resources.uptime_seconds, 'compact')}</span>
-                                      </div>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* S2：USB / Hub 与对账诊断卡片 */}
-                          <div
-                            data-testid={`host-usb-diagnostics-${host.id}`}
-                            className="mt-4 rounded-lg border border-border bg-card p-3"
+                            ) : null}
+                          </>
+                        ) : host.status !== 'ONLINE' && onInstall ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onInstall(host.id);
+                            }}
+                            disabled={isInstalling?.(host.id)}
+                            aria-label={
+                              host.agent_installed
+                                ? `${host.name ?? host.id} 重新安装 Agent`
+                                : `${host.name ?? host.id} 首次安装 Agent`
+                            }
+                            title={
+                              host.agent_installed
+                                ? 'Agent 曾安装成功，当前离线 — 可重新安装'
+                                : '尚未检测到 Agent 安装记录'
+                            }
+                            className="inline-flex items-center gap-1 rounded-md bg-warning/10 px-2 py-1 text-xs font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
                           >
-                            <div className="mb-2 flex flex-wrap items-center gap-2">
-                              <Usb className="h-4 w-4 text-muted-foreground" />
-                              <span className="text-sm font-medium text-foreground">USB / Hub 与对账诊断</span>
-                              {host.usb_kernel_log && (
-                                <span
-                                  className={cn(
-                                    'rounded-full px-1.5 py-0.5 text-[11px] font-medium',
-                                    host.usb_kernel_log === 'ok'
-                                      ? 'bg-success/10 text-success'
-                                      : host.usb_kernel_log === 'unavailable'
-                                        ? 'bg-destructive/10 text-destructive'
-                                        : 'bg-muted text-muted-foreground',
-                                  )}
-                                >
-                                  内核日志通道：{host.usb_kernel_log === 'ok' ? '正常' : host.usb_kernel_log === 'unavailable' ? '不可读' : '未知'}
-                                </span>
-                              )}
-                              {isAdmin && !host.retired_at && (onSetDeviceIntent || onClearDeviceIntent) && (
-                                <div className="ml-auto flex items-center gap-1.5">
-                                  {host.emptied_at ? (
-                                    onClearDeviceIntent && (
-                                      <button
-                                        type="button"
-                                        disabled={isDeviceIntentUpdating?.(host.id)}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          onClearDeviceIntent(host);
-                                        }}
-                                        data-testid={`host-clear-emptied-${host.id}`}
-                                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/80 disabled:opacity-50"
-                                      >
-                                        解除设备面已处置
-                                      </button>
-                                    )
-                                  ) : (
-                                    onSetDeviceIntent && (
-                                      <button
-                                        type="button"
-                                        disabled={isDeviceIntentUpdating?.(host.id)}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          onSetDeviceIntent(host);
-                                        }}
-                                        data-testid={`host-set-emptied-${host.id}`}
-                                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground disabled:opacity-50"
-                                      >
-                                        标记设备面已处置（空置）
-                                      </button>
-                                    )
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4 text-xs">
-                              <div className="space-y-1">
-                                <div className="text-muted-foreground font-medium">设备可见性（L1–L4）</div>
-                                <div className="flex justify-between">
-                                  <span className="text-muted-foreground">USB 枚举 / ADB 接口 / 在线</span>
-                                  <span className="font-mono text-foreground">
-                                    {host.usb_device_count ?? '—'} / {host.adb_interface_count ?? '—'} / {host.device_count ?? 0}
-                                  </span>
-                                </div>
-                                {host.adb_state_counts && (
-                                  <div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                                    <span>device {host.adb_state_counts.device ?? 0}</span>
-                                    <span className={(host.adb_state_counts.offline ?? 0) > 0 ? 'text-warning font-medium' : undefined}>
-                                      offline {host.adb_state_counts.offline ?? 0}
-                                    </span>
-                                    <span className={(host.adb_state_counts.unauthorized ?? 0) > 0 ? 'text-warning font-medium' : undefined}>
-                                      unauth {host.adb_state_counts.unauthorized ?? 0}
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                              <div className="space-y-1">
-                                <div className="text-muted-foreground font-medium">外接 Hub 拓扑（sysfs）</div>
-                                {host.usb_hub_topology ? (
-                                  <>
-                                    <div className="flex justify-between">
-                                      <span className="text-muted-foreground">级联 Hub / 无驱动半枚举</span>
-                                      <span className={cn('font-mono', host.usb_hub_topology.unbound_hubs > 0 ? 'text-warning font-semibold' : 'text-foreground')}>
-                                        {host.usb_hub_topology.cascade_hubs} / {host.usb_hub_topology.unbound_hubs}
-                                      </span>
-                                    </div>
-                                    {host.usb_hub_topology.unbound_hubs > 0 && (
-                                      <div className="text-[11px] text-muted-foreground">
-                                        {host.usb_hub_topology.unbound_idle_bus_hubs >= host.usb_hub_topology.unbound_hubs
-                                          ? '仅落在无在用设备的闲置总线（SS 退化分支）'
-                                          : `含 ${host.usb_hub_topology.unbound_hubs - host.usb_hub_topology.unbound_idle_bus_hubs} 只在用总线 Hub 未绑定驱动`}
-                                      </div>
-                                    )}
-                                  </>
-                                ) : (
-                                  <div className="text-muted-foreground">待 Agent 升级后上报</div>
-                                )}
-                              </div>
-                              <div className="space-y-1">
-                                <div className="text-muted-foreground font-medium">近 1 小时内核 USB 错误</div>
-                                {host.usb_kernel_errors_1h ? (
-                                  (() => {
-                                    const nonZero = Object.entries(host.usb_kernel_errors_1h).filter(
-                                      ([, v]) => typeof v === 'number' && v > 0,
-                                    );
-                                    if (nonZero.length === 0) {
-                                      return <div className="text-success">0 条错误</div>;
-                                    }
-                                    return (
-                                      <div className="flex flex-wrap gap-1.5">
-                                        {nonZero.map(([k, v]) => (
-                                          <span
-                                            key={k}
-                                            className="rounded bg-warning/10 px-1.5 py-0.5 font-mono text-[11px] text-warning"
-                                          >
-                                            {USB_KERNEL_ERROR_LABELS[k] || k}: {v}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    );
-                                  })()
-                                ) : (
-                                  <div className="text-muted-foreground">无计数数据</div>
-                                )}
-                              </div>
-                              <div className="space-y-1">
-                                <div className="text-muted-foreground font-medium">SSH 拓扑对账探针</div>
-                                {host.health_probe ? (
-                                  <>
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-muted-foreground">拓扑 / 结论</span>
-                                      <span className={cn('font-medium', host.health_probe.strike_open ? 'text-destructive' : 'text-foreground')}>
-                                        {PROBE_TOPOLOGY_LABELS[host.health_probe.topology ?? ''] ?? host.health_probe.topology ?? '—'}
-                                        {' · '}
-                                        {PROBE_VERDICT_LABELS[host.health_probe.verdict ?? ''] ?? host.health_probe.verdict ?? '—'}
-                                      </span>
-                                    </div>
-                                    <div className="flex justify-between gap-2 text-[11px] text-muted-foreground">
-                                      <span>连续异常窗口</span>
-                                      <span className={host.health_probe.strike_open ? 'text-destructive font-medium' : undefined}>
-                                        {host.health_probe.strike_open ? '已触发（需核查）' : '正常'}
-                                      </span>
-                                    </div>
-                                  </>
-                                ) : (
-                                  <div className="text-muted-foreground">暂无探针记录</div>
-                                )}
-                                {host.self_heal && (
-                                  <div className="mt-1.5 border-t border-border/60 pt-1.5 text-[11px]">
-                                    <div className="flex justify-between gap-2">
-                                      <span className="text-muted-foreground">自愈熔断态</span>
-                                      <span className={host.self_heal.fuse_open ? 'font-medium text-destructive' : 'text-foreground'}>
-                                        {host.self_heal.fuse_open
-                                          ? `${host.self_heal.state === 'hardware_suspect' ? '疑似硬件' : '需人工'} (${host.self_heal.fuse_reason ?? '—'})`
-                                          : host.self_heal.state ?? 'idle'}
-                                      </span>
-                                    </div>
-                                    {host.self_heal.xhci && (
-                                      <div className="flex justify-between gap-2 text-muted-foreground">
-                                        <span>xHCI 计数 (boot/48h)</span>
-                                        <span className="font-mono">
-                                          {host.self_heal.xhci.boot_attempts ?? 0} / {host.self_heal.xhci.window_attempts ?? 0}
-                                          {host.self_heal.xhci.last_marker ? ` · ${host.self_heal.xhci.last_marker}` : ''}
-                                        </span>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* #2958 第五道闸：脚本在位矩阵（展开时按需拉；缺口优先排序） */}
-                          {onLoadHostScriptPresence && (
-                            <div
-                              data-testid={`host-script-presence-${host.id}`}
-                              className="mt-4 rounded-lg border border-border bg-card p-3"
-                            >
-                              <div className="mb-2 flex flex-wrap items-center gap-2">
-                                <ClipboardCheck className="h-4 w-4 text-muted-foreground" />
-                                <span className="text-sm font-medium text-foreground">脚本在位</span>
-                                {presence?.data?.checked_at && (
-                                  <span
-                                    className="text-[11px] text-muted-foreground"
-                                    title={formatLocalTime(presence.data.checked_at)}
-                                  >
-                                    核验于 {formatHeartbeatLabel(presence.data.checked_at)}
-                                  </span>
-                                )}
-                                {/* #3091：该按钮触发写端点（require_admin）——非管理员不渲染，
-                                    与同元素其它管理动作（isAdmin && …）保持一致 */}
-                                {isAdmin && onRefreshHostScriptPresence && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      void refreshHostPresence(host.id);
-                                    }}
-                                    disabled={refreshingPresence}
-                                    aria-label={`${host.name ?? host.id} 重新核验脚本在位`}
-                                    className="ml-auto inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
-                                  >
-                                    <RefreshCw className={cn('h-3.5 w-3.5', refreshingPresence && 'animate-spin')} />
-                                    {refreshingPresence ? '核验中...' : '重新核验'}
-                                  </button>
-                                )}
-                              </div>
-                              {scriptPresenceSummaryError ? (
-                                // #3090：fleet 汇总失败时陈旧不可得——不得静默按 fresh 读
-                                //（原实现里 `?.stale === true` 会把失败折叠成「不陈旧」）。
-                                <p
-                                  data-testid={`host-script-presence-stale-unknown-${host.id}`}
-                                  className="mb-2 rounded-md bg-muted/50 px-2 py-1 text-[11px] text-muted-foreground"
-                                >
-                                  fleet 汇总加载失败，账本是否陈旧未知
-                                </p>
-                              ) : presenceStale && (
-                                <p
-                                  data-testid={`host-script-presence-stale-${host.id}`}
-                                  className="mb-2 rounded-md bg-warning/10 px-2 py-1 text-[11px] text-warning"
-                                >
-                                  账本陈旧（最近完整 sweep：
-                                  {scriptPresenceSummary?.checked_at_min
-                                    ? formatDateTimeFull(scriptPresenceSummary.checked_at_min)
-                                    : '无记录'}
-                                  ），当前状态可能已过期
-                                </p>
-                              )}
-                              {presence?.status === 'error' && (
-                                <p className="mb-2 text-[11px] text-destructive">
-                                  核验数据加载失败：{presence.error || '未知错误'}
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      void loadHostPresence(host.id, true);
-                                    }}
-                                    className="ml-2 rounded-md px-1.5 py-0.5 font-medium text-primary hover:bg-primary/10"
-                                  >
-                                    重试
-                                  </button>
-                                </p>
-                              )}
-                              {!presence || (presence.status === 'loading' && !presence.data) ? (
-                                <span className="text-xs text-muted-foreground">加载中...</span>
-                              ) : presence.data ? (
-                                <div className="space-y-1.5">
-                                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                                    <span>在位 {presence.data.counts.present}</span>
-                                    <span
-                                      className={
-                                        presence.data.counts.missing + presence.data.counts.mismatch > 0
-                                          ? 'text-destructive'
-                                          : undefined
-                                      }
-                                    >
-                                      缺口 {presence.data.counts.missing + presence.data.counts.mismatch}
-                                      （缺失 {presence.data.counts.missing} · 内容不符 {presence.data.counts.mismatch}）
-                                    </span>
-                                    <span>未知 {presence.data.counts.unknown}</span>
-                                    <span>维护窗 {presence.data.counts.maintenance}</span>
-                                  </div>
-                                  {presenceItems.length === 0 ? (
-                                    presence.data.counts.n_a > 0 ? (
-                                      // #3090：n_a 被 items 有意剔除——「全部 n_a」是已 sweep
-                                      // 的健康态（可达集与目标版本不相交），不得再提示重新核验。
-                                      <p className="text-xs text-muted-foreground">
-                                        本轮已 sweep，全部 {presence.data.counts.n_a} 项均「不适用」（可达集与目标版本不相交）。
-                                      </p>
-                                    ) : (
-                                      <p className="text-xs text-muted-foreground">
-                                        暂无条目——该主机尚未跑过 sweep，可点「重新核验」。
-                                      </p>
-                                    )
-                                  ) : (
-                                    <ul className="divide-y divide-border/60">
-                                      {presenceItems.map((item) => (
-                                        <li
-                                          key={`${item.name}@${item.version}`}
-                                          className="flex items-start gap-2 py-1.5"
-                                        >
-                                          <span
-                                            className={cn(
-                                              'mt-px inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
-                                              scriptPresenceStateClass(item.state),
-                                            )}
-                                          >
-                                            {SCRIPT_PRESENCE_LABELS[item.state] ?? item.state}
-                                          </span>
-                                          <span className="shrink-0 font-mono text-xs text-foreground">
-                                            {item.name}@{item.version}
-                                          </span>
-                                          {item.detail && (
-                                            <span
-                                              className="min-w-0 truncate text-[11px] text-muted-foreground"
-                                              title={item.detail}
-                                            >
-                                              {item.detail}
-                                            </span>
-                                          )}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  )}
-                                </div>
+                            {isInstalling?.(host.id)
+                              ? '安装中...'
+                              : host.agent_installed
+                                ? '重新安装'
+                                : '首次安装'}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground/40">-</span>
+                        )}
+                        {isAdmin && (onEdit || onDelete || onRetire || onUnretire) ? (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label={`${host.name ?? host.id} 更多操作`}
+                                className="inline-flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                              >
+                                <MoreHorizontal className="h-4 w-4" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-32">
+                              {onEdit ? (
+                                <DropdownMenuItem onClick={() => onEdit(host)}>
+                                  <Pencil className="mr-2 h-3.5 w-3.5" />
+                                  编辑
+                                </DropdownMenuItem>
                               ) : null}
-                            </div>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </Fragment>
+                              {onRetire && !host.retired_at ? (
+                                <DropdownMenuItem onClick={() => onRetire(host)}>
+                                  <CircleSlash className="mr-2 h-3.5 w-3.5" />
+                                  退役
+                                </DropdownMenuItem>
+                              ) : null}
+                              {onUnretire && host.retired_at ? (
+                                <DropdownMenuItem onClick={() => onUnretire(host)}>
+                                  <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                                  解除退役
+                                </DropdownMenuItem>
+                              ) : null}
+                              {onDelete ? (
+                                <DropdownMenuItem
+                                  disabled={isDeleting?.(host.id)}
+                                  onClick={() => onDelete(host)}
+                                  className="text-destructive-text focus:bg-destructive/10 focus:text-destructive-text"
+                                >
+                                  <Trash2 className="mr-2 h-3.5 w-3.5" />
+                                  删除
+                                </DropdownMenuItem>
+                              ) : null}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </ClickableRow>
                 );
               })}
-            {filteredHosts.length === 0 && (
-              <TableEmptyRow colSpan={16}>
-                {hosts.length === 0 ? '暂无主机' : '没有符合当前筛选条件的主机'}
-              </TableEmptyRow>
-            )}
+
+              {virtualPaddingBottom > 0 ? (
+                <tr aria-hidden="true">
+                  <td colSpan={visibleColumnCount} style={{ height: `${virtualPaddingBottom}px`, padding: 0 }} />
+                </tr>
+              ) : null}
+
+              {filteredHosts.length === 0 ? (
+                <TableEmptyRow colSpan={visibleColumnCount}>
+                  {hosts.length === 0 ? '暂无主机' : '没有符合当前筛选条件的主机'}
+                </TableEmptyRow>
+              ) : null}
             </TableBody>
           </Table>
         </div>
 
-        {/* 全选后底部悬浮操作条会挡住最后一行；用真实占位撑开滚动，避免与 PageContainer lg:p-8 抢 padding */}
-        {selectable && selectedIds && selectedIds.size > 0 && (
+        {/* 右侧标准化主机详情抽屉（D2 / #465 / #4117 U3-1） */}
+        <HostDetailDrawer
+          host={activeDrawerHost}
+          onClose={() => setActiveDrawerHostId(null)}
+          isAdmin={isAdmin}
+          canManageWatcherAdminState={canManageWatcherAdminState}
+          onWatcherAdminStateChange={onWatcherAdminStateChange}
+          isWatcherAdminStateUpdating={isWatcherAdminStateUpdating}
+          onNavigateToDevices={onNavigateToDevices}
+          onSetDeviceIntent={onSetDeviceIntent}
+          onClearDeviceIntent={onClearDeviceIntent}
+          isDeviceIntentUpdating={isDeviceIntentUpdating}
+          onHotUpdate={onHotUpdate}
+          isHotUpdating={isHotUpdating}
+          onInstall={onInstall}
+          isInstalling={isInstalling}
+          hasScriptPresenceLoader={Boolean(onLoadHostScriptPresence)}
+          presence={activeDrawerHost ? presenceByHost[String(activeDrawerHost.id)] : undefined}
+          refreshingPresence={activeDrawerHost ? presenceRefreshing.has(activeDrawerHost.id) : false}
+          onReloadScriptPresence={
+            onLoadHostScriptPresence ? (hostId) => void loadHostPresence(hostId, true) : undefined
+          }
+          onRefreshScriptPresence={
+            onRefreshHostScriptPresence ? (hostId) => void refreshHostPresence(hostId) : undefined
+          }
+          currentIndex={activeDrawerIndex >= 0 ? activeDrawerIndex : undefined}
+          totalCount={activeDrawerIndex >= 0 ? filteredHosts.length : undefined}
+          onPrev={
+            activeDrawerIndex > 0
+              ? () => setActiveDrawerHostId(String(filteredHosts[activeDrawerIndex - 1].id))
+              : undefined
+          }
+          onNext={
+            activeDrawerIndex >= 0 && activeDrawerIndex < filteredHosts.length - 1
+              ? () => setActiveDrawerHostId(String(filteredHosts[activeDrawerIndex + 1].id))
+              : undefined
+          }
+          reasonLabels={REASON_LABELS}
+          usbKernelErrorLabels={USB_KERNEL_ERROR_LABELS}
+          probeTopologyLabels={PROBE_TOPOLOGY_LABELS}
+          probeVerdictLabels={PROBE_VERDICT_LABELS}
+          formatHeartbeatLabel={formatHeartbeatLabel}
+        />
+
+        {/* 全选后底部悬浮操作条会挡住最后一行；用真实占位撑开滚动 */}
+        {selectable && selectedIds && selectedIds.size > 0 ? (
           <BulkBarSpacer testId="host-table-selection-spacer" />
-        )}
+        ) : null}
       </div>
     </TooltipProvider>
   );
