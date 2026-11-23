@@ -31,7 +31,9 @@ export default function AppShell() {
   const location = useLocation();
   const sessionQ = useAuthSession();
   const currentUser = sessionQ.data;
-  const { isConnected: dashConnected } = useSocketIO(DASHBOARD_SUBSCRIPTION);
+  const { isConnected: dashConnected } = useSocketIO(DASHBOARD_SUBSCRIPTION, {
+    trackLastMessage: false,
+  });
   const { headerSlot } = useHeaderSlot();
   useCrossClientSync();
 
@@ -155,7 +157,14 @@ export default function AppShell() {
               {headerSlot}
             </div>
 
-            <div className="flex items-center gap-2">
+            {headerSlot && (
+              <div
+                className="mx-3 hidden h-5 w-px shrink-0 bg-border sm:block"
+                aria-hidden="true"
+              />
+            )}
+
+            <div className="flex shrink-0 items-center gap-2">
               <Badge
                 variant={dashConnected ? 'success' : 'destructive'}
                 className="hidden gap-1.5 sm:inline-flex"

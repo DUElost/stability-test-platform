@@ -79,6 +79,9 @@ describe('AppShell 移动抽屉焦点顺序（#1197）', () => {
 
   it('挂载即调用 useSocketIO(DASHBOARD_SUBSCRIPTION) 发起 dash socket 连接（#3970）', () => {
     renderShell();
-    expect(mockUseSocketIO).toHaveBeenCalledWith(DASHBOARD_SUBSCRIPTION);
+    expect(mockUseSocketIO).toHaveBeenCalledWith(
+      DASHBOARD_SUBSCRIPTION,
+      expect.objectContaining({ trackLastMessage: false }),
+    );
   });
 });

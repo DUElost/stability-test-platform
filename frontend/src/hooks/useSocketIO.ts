@@ -94,8 +94,23 @@ function _isRecoverableAuthError(message: string): boolean {
 //   - 期间任何新 hook 取消 timer
 //   - 登出时 disconnectDashSocket() 强制清理
 let _hookRefcount = 0;
+let _onlineListenerAttached = false;
 let _idleDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
 const _IDLE_DISCONNECT_MS = 30_000;
+
+function _ensureOnlineListener() {
+  if (!_onlineListenerAttached && typeof window !== 'undefined') {
+    window.addEventListener('online', _retryDashConnectNow);
+    _onlineListenerAttached = true;
+  }
+}
+
+function _detachOnlineListener() {
+  if (_onlineListenerAttached && typeof window !== 'undefined') {
+    window.removeEventListener('online', _retryDashConnectNow);
+    _onlineListenerAttached = false;
+  }
+}
 
 function _notifyDashStatus(status: ConnectionStatus) {
   _dashStatus = status;
@@ -140,6 +155,7 @@ export function disconnectDashSocket(): void {
   _authRetryCount = 0;
   _cancelAuthRetry();
   _hookRefcount = 0;
+  _detachOnlineListener();
   if (sock) {
     try {
       sock.removeAllListeners();
@@ -378,6 +394,12 @@ interface UseSocketIOOptions {
   onConnect?: () => void;
   onDisconnect?: () => void;
   onMessage?: <T>(message: SocketIOMessage<T>) => void;
+  /**
+   * 是否在收到每条事件时更新 `lastMessage` state（默认 true 保持兼容）。
+   * 仅关注连接态或通过 `onMessage` 回调处理事件的壳层调用方（如 `AppShell` /
+   * `useCrossClientSync`）传 `false` 可避免每条广播触发顶层外壳重渲染。
+   */
+  trackLastMessage?: boolean;
   reconnectConfig?: unknown; // accepted but ignored (SocketIO handles reconnection)
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
@@ -404,7 +426,13 @@ export function useSocketIO<T = unknown>(
   url: string,
   options: UseSocketIOOptions = {}
 ): UseSocketIOReturn<T> {
-  const { enabled = true, onConnect, onDisconnect, onMessage } = options;
+  const {
+    enabled = true,
+    onConnect,
+    onDisconnect,
+    onMessage,
+    trackLastMessage = true,
+  } = options;
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(_dashStatus);
   const [lastMessage, setLastMessage] = useState<SocketIOMessage<T> | null>(null);
@@ -421,6 +449,9 @@ export function useSocketIO<T = unknown>(
     // 审计 Frontend #3: 这个 hook 实例进入活跃集合,取消任何 pending 的 idle 断连。
     _hookRefcount += 1;
     _cancelIdleDisconnect();
+    // #1279 + #4117 U1-3: 按引用计数维护全局 online 监听，单个子页卸载不再把
+    // AppShell 共享的 online 重连监听误摘掉。
+    _ensureOnlineListener();
 
     const handler = (status: ConnectionStatus) => {
       setConnectionStatus(status);
@@ -434,15 +465,11 @@ export function useSocketIO<T = unknown>(
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 订阅 effect 的初始状态同步
     setConnectionStatus(_dashStatus);
 
-    // #1279: 浏览器网络恢复时立即重连（socket 可能因刷新失败处于手动断开态，
-    // 重试预算也可能已耗尽——online 是「真实恢复」的可靠信号）。
-    window.addEventListener('online', _retryDashConnectNow);
-
     return () => {
-      window.removeEventListener('online', _retryDashConnectNow);
       _dashStatusListeners.delete(handler);
       _hookRefcount = Math.max(0, _hookRefcount - 1);
       if (_hookRefcount === 0) {
+        _detachOnlineListener();
         // 全部 hook unmount → 30s 后空闲断连
         // (覆盖 StrictMode 双挂载 + 页面切换间的瞬时全卸载)
         _scheduleIdleDisconnect();
@@ -462,7 +489,9 @@ export function useSocketIO<T = unknown>(
 
     const eventHandler = (data: unknown) => {
       const msg = data as SocketIOMessage<T>;
-      setLastMessage(msg);
+      if (trackLastMessage) {
+        setLastMessage(msg);
+      }
       callbacksRef.current.onMessage?.(msg);
     };
 
@@ -478,7 +507,7 @@ export function useSocketIO<T = unknown>(
         _unsubscribeRoom(config.room);
       }
     };
-  }, [url, enabled]);
+  }, [url, enabled, trackLastMessage]);
 
   const sendMessage = useCallback((msg: object) => {
     const socket = _getDashSocket();
