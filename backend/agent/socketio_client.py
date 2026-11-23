@@ -306,7 +306,11 @@ class AgentSocketIOClient:
 
     def _emit(self, event: str, data: dict) -> bool:
         """Emit an event. Buffers if disconnected. Returns True if sent immediately."""
+        from .outbound_guard import is_bound_heartbeat_stale
+
         with self._lock:
+            if event == "heartbeat" and is_bound_heartbeat_stale():
+                return False
             if self._connected and self._sio:
                 try:
                     self._sio.emit(event, data, namespace="/agent")

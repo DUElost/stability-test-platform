@@ -17,6 +17,7 @@ from .heartbeat import send_heartbeat
 from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
 from .mount_health_probe import MountHealthProbe, normalize_mount_point
+from .outbound_guard import bind_heartbeat_stale_check
 from .usb_power_slots import read_usb_power_presence
 from .settings import get_heartbeat_settings
 from .startup_guards import single_instance_guard_degraded
@@ -163,6 +164,25 @@ class HeartbeatThread:
                 # 防止 ACK 返回后、下一拍心跳完成前按旧配置继续发起普通认领。
                 with self._capacity_lock:
                     self._effective_slots = 0
+
+    def _is_mount_generation_stale(self, mount_gen: int) -> bool:
+        with self._mount_points_lock:
+            return mount_gen != self._mount_points_generation
+
+    def _snapshot_current_mounts(self) -> tuple[int, List[str], Dict[str, Any]]:
+        """在锁内同时绑定列表代际与探针代际，防止取表后进 snapshot() 前 reset() 串代。"""
+        with self._mount_points_lock:
+            mount_gen = self._mount_points_generation
+            mount_points = list(self._mount_points)
+            get_probe_gen = getattr(self._mount_health_probe, "current_generation", None)
+            probe_gen = get_probe_gen() if callable(get_probe_gen) else None
+        bind_gen = getattr(self._mount_health_probe, "bound_generation", None)
+        if probe_gen is not None and callable(bind_gen):
+            with bind_gen(probe_gen):
+                mount_status = self._mount_health_probe.snapshot(mount_points)
+        else:
+            mount_status = self._mount_health_probe.snapshot(mount_points)
+        return mount_gen, mount_points, mount_status
 
     def reload_from_settings(self) -> None:
         """#2086：`reload_config` 的实例级 re-apply（心跳域）。
@@ -667,10 +687,7 @@ class HeartbeatThread:
             except Exception as exc:
                 logger.debug("operation_stats_failed: %s", exc)
         # ADR-0064 D5：非阻塞快照；NFS 探针挂起时立即返回并标 probe_stale。
-        with self._mount_points_lock:
-            mount_gen = self._mount_points_generation
-            mount_points = list(self._mount_points)
-        mount_status = self._mount_health_probe.snapshot(mount_points)
+        mount_gen, mount_points, mount_status = self._snapshot_current_mounts()
 
         active_count = self._get_active_job_count() if self._get_active_job_count else 0
         active_device_count = self._get_active_device_count() if self._get_active_device_count else 0
@@ -785,10 +802,7 @@ class HeartbeatThread:
         response = None
         for attempt in range(3):
             if attempt > 0:
-                with self._mount_points_lock:
-                    mount_gen = self._mount_points_generation
-                    mount_points = list(self._mount_points)
-                mount_status = self._mount_health_probe.snapshot(mount_points)
+                mount_gen, mount_points, mount_status = self._snapshot_current_mounts()
             artifact_digest = self._resolve_artifact_digest()
             cap_result = compute_capacity(
                 active_job_count=active_count,
@@ -821,27 +835,33 @@ class HeartbeatThread:
             cap_payload = cap_result.get("capacity")
             health_payload = cap_result.get("health")
             with self._phase("http"):
-                with self._mount_points_lock:
-                    if mount_gen != self._mount_points_generation:
-                        continue
-                response = send_heartbeat(
-                    self._api_url,
-                    self._host_id,
-                    mount_points,
-                    host_info=self._host_info,
-                    devices=devices_list,
-                    script_catalog_version=catalog_ver,
-                    capacity=cap_payload,
-                    health=health_payload,
-                    agent_instance_id=self._agent_instance_id,
-                    boot_id=self._boot_id,
-                    agent_version=self._agent_version,
-                    agent_code_revision=self._agent_code_revision,
-                    agent_artifact_digest=artifact_digest,
-                    system_stats=system_stats,
-                    mount_status=mount_status,
-                    capabilities=AGENT_CAPABILITIES,
-                )
+                with bind_heartbeat_stale_check(
+                    lambda gen=mount_gen: self._is_mount_generation_stale(gen)
+                ):
+                    with self._mount_points_lock:
+                        if mount_gen != self._mount_points_generation:
+                            continue
+                    response = send_heartbeat(
+                        self._api_url,
+                        self._host_id,
+                        mount_points,
+                        host_info=self._host_info,
+                        devices=devices_list,
+                        script_catalog_version=catalog_ver,
+                        capacity=cap_payload,
+                        health=health_payload,
+                        agent_instance_id=self._agent_instance_id,
+                        boot_id=self._boot_id,
+                        agent_version=self._agent_version,
+                        agent_code_revision=self._agent_code_revision,
+                        agent_artifact_digest=artifact_digest,
+                        system_stats=system_stats,
+                        mount_status=mount_status,
+                        capabilities=AGENT_CAPABILITIES,
+                    )
+            with self._mount_points_lock:
+                if mount_gen != self._mount_points_generation:
+                    continue
             break
         else:
             logger.info("heartbeat_tick_superseded_by_mount_reload")
@@ -921,10 +941,13 @@ class HeartbeatThread:
                 stats = dict(system_stats)
                 stats["devices"] = devices_list
                 stats["mount_status"] = mount_status
-                with self._mount_points_lock:
-                    ws_stale = mount_gen != self._mount_points_generation
-                if not ws_stale:
-                    self._sio_client.send_heartbeat(stats)
-                    logger.debug("heartbeat_ws_push_sent")
+                with bind_heartbeat_stale_check(
+                    lambda gen=mount_gen: self._is_mount_generation_stale(gen)
+                ):
+                    with self._mount_points_lock:
+                        ws_stale = mount_gen != self._mount_points_generation
+                    if not ws_stale:
+                        self._sio_client.send_heartbeat(stats)
+                        logger.debug("heartbeat_ws_push_sent")
             except Exception as e:
                 logger.debug("heartbeat_ws_push_failed: %s", e)

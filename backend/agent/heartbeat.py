@@ -94,7 +94,11 @@ def send_heartbeat(
     if agent_secret:
         headers["x-agent-secret"] = agent_secret
 
+    from .outbound_guard import is_bound_heartbeat_stale
+
     try:
+        if is_bound_heartbeat_stale():
+            return None
         resp = requests.post(f"{api_url}/api/v1/heartbeat", json=payload, headers=headers, timeout=5)
         resp.raise_for_status()
         data = resp.json()

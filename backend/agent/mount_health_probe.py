@@ -14,7 +14,8 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -151,11 +152,27 @@ class MountHealthProbe:
         self._monotonic = monotonic
         self._wall_clock = wall_clock
         self._lock = threading.Lock()
+        self._thread_local = threading.local()
         self._probe_generation: int = 0
         self._active_probe_generation: Optional[int] = None
         self._last_probe_monotonic: Optional[float] = None
         self._reachable_by_point: Dict[str, bool] = {}
         self._probed_at_wall: Optional[float] = None
+
+    def current_generation(self) -> int:
+        """返回当前探针代际编号，供调用方在拷贝挂载列表时同锁绑定（#4077）。"""
+        with self._lock:
+            return self._probe_generation
+
+    @contextmanager
+    def bound_generation(self, expected_generation: int) -> Iterator[None]:
+        """在当前线程绑定本次 ``snapshot`` 必须匹配的探针代际（不改变 ``snapshot(points)`` 签名）。"""
+        prev = getattr(self._thread_local, "expected_generation", None)
+        self._thread_local.expected_generation = expected_generation
+        try:
+            yield
+        finally:
+            self._thread_local.expected_generation = prev
 
     def reset(self) -> None:
         """清除已缓存的可达性快照并递增代际，隔离旧探测后台线程（#4077）。"""
@@ -169,7 +186,8 @@ class MountHealthProbe:
     def snapshot(self, mount_points: Iterable[str]) -> Dict[str, Dict[str, Any]]:
         """非阻塞快照；必要时安排后台探测。"""
         with self._lock:
-            sample_gen = self._probe_generation
+            bound_gen = getattr(self._thread_local, "expected_generation", None)
+            sample_gen = self._probe_generation if bound_gen is None else bound_gen
         points = list(mount_points)
         targets = read_mountinfo_targets(
             mountinfo_path=self._mountinfo_path,
@@ -177,12 +195,14 @@ class MountHealthProbe:
         )
         now = self._monotonic()
         with self._lock:
+            superseded = self._probe_generation != sample_gen
             probing = self._active_probe_generation == self._probe_generation
             last = self._last_probe_monotonic
-            reachable_map = dict(self._reachable_by_point)
-            probed_at = self._probed_at_wall
+            reachable_map = {} if superseded else dict(self._reachable_by_point)
+            probed_at = None if superseded else self._probed_at_wall
             stale = (
-                probing
+                superseded
+                or probing
                 or last is None
                 or (now - last) > self._stale_after_seconds
             )

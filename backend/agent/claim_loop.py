@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from .active_job_bindings import ActiveJobOccupancy
 from .api_client import fetch_pending_jobs
+from .outbound_guard import bind_claim_capacity_reader
 from .usb_power_slots import vbus_claim_slots
 from .job_runner import _arrive_patrol_barrier_preengine
 from .recovery_executor import _make_local_worker_token, _rollback_failed_claim
@@ -75,11 +76,12 @@ def process_claim_tick(
     normal_slots = max(min(available_slots, heartbeat_thread.effective_slots), 0)
     if normal_slots <= 0 and vbus_slots <= 0:
         return
-    jobs = fetch_pending_jobs(
-        api_url, host_id, agent_instance_id, capacity=normal_slots,
-        vbus_slots=vbus_slots,
-        active_job_ids=sorted(active_job_ids),
-    )
+    with bind_claim_capacity_reader(lambda: heartbeat_thread.effective_slots):
+        jobs = fetch_pending_jobs(
+            api_url, host_id, agent_instance_id, capacity=normal_slots,
+            vbus_slots=vbus_slots,
+            active_job_ids=sorted(active_job_ids),
+        )
     jobs = jobs[:normal_slots + vbus_slots]
 
     if jobs:

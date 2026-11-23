@@ -118,6 +118,12 @@ def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
         body["vbus_slots"] = vbus_slots
     if active_job_ids is not None:
         body["active_job_ids"] = sorted({int(jid) for jid in active_job_ids})
+    from .outbound_guard import resolve_bound_claim_capacity
+
+    effective_capacity = resolve_bound_claim_capacity(capacity)
+    if effective_capacity <= 0 and vbus_slots <= 0:
+        return []
+    body["capacity"] = effective_capacity
     resp = requests.post(
         f"{api_url}/api/v1/agent/jobs/claim",
         json=body,

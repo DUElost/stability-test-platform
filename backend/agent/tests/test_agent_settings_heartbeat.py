@@ -637,6 +637,269 @@ def test_heartbeat_tick_rechecks_generation_after_artifact_digest_and_before_ws(
     assert ws_payloads[0]["mount_status"]["/mnt/stp-log-new"]["ok"] is False
 
 
+def test_real_send_heartbeat_and_sio_emit_abort_when_reloaded_after_tick_gate(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R4 B1: 进入真实 send_heartbeat() 构建负载及等待 WS 发送锁期间切根，不得向传输层发出旧根 ok=true。"""
+    import threading
+    import time
+    from types import SimpleNamespace
+    import backend.agent.heartbeat as hb_payload_mod
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+    from backend.agent.socketio_client import AgentSocketIOClient
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+
+    posted_payloads: list[dict] = []
+    emitted_ws: list[tuple[str, dict]] = []
+    in_payload_build = threading.Event()
+    release_payload_build = threading.Event()
+    pause_in_send = True
+
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.discover_devices",
+        lambda *_a: [
+            {"serial": "dev-1", "adb_state": "device"},
+            {"serial": "dev-2", "adb_state": "device"},
+        ],
+    )
+    monkeypatch.setattr(
+        HeartbeatThread,
+        "_collect_device_infos",
+        lambda _self, devs: [
+            {"adb_state": "device", "adb_connected": True} for _ in devs
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.list_adb_fork_servers",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.get_adb_server_port",
+        lambda: 5037,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_usb_devices_and_root_hubs",
+        lambda: (2, 1),
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_adb_interface_devices",
+        lambda: 2,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.read_usb_power_presence",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agent.system_monitor.collect_system_stats",
+        lambda: {
+            "cpu_load": 1.0,
+            "ram_usage": 10.0,
+            "disk_usage": {"writable_percent": 10.0},
+        },
+    )
+
+    class _FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"ok": True}
+
+    def fake_post(_url: str, *, json: dict, **_kw):
+        posted_payloads.append(json)
+        return _FakeResp()
+
+    orig_getenv = hb_payload_mod.os.getenv
+
+    def pause_on_secret(key: str, default: str = ""):
+        if pause_in_send and key == "AGENT_SECRET":
+            in_payload_build.set()
+            assert release_payload_build.wait(5.0)
+        return orig_getenv(key, default)
+
+    monkeypatch.setattr("backend.agent.heartbeat.requests.post", fake_post)
+    monkeypatch.setattr("backend.agent.heartbeat.os.getenv", pause_on_secret)
+
+    # 1) 验证真实 send_heartbeat() 内切根后放弃旧 POST，改以新根重发
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    thread._kernel_usb_watch = SimpleNamespace(
+        poll=lambda **_k: [],
+        channel_state=lambda: "ok",
+    )
+
+    t1 = threading.Thread(target=thread._tick, daemon=True)
+    t1.start()
+    assert in_payload_build.wait(2.0)
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    thread.reload_from_settings()
+    pause_in_send = False
+    release_payload_build.set()
+    t1.join(timeout=3.0)
+    assert not t1.is_alive()
+
+    assert len(posted_payloads) == 1
+    assert "/mnt/stp-log-new" in posted_payloads[0]["mount_status"]
+    assert posted_payloads[0]["mount_status"]["/mnt/stp-log-new"]["ok"] is False
+    assert posted_payloads[0]["health"]["mount_ok"] is False
+    assert posted_payloads[0]["capacity"]["effective_slots"] == 0
+
+    # 2) 验证真实 AgentSocketIOClient._emit 在等待 _lock 期间切根，放行后不得 emit 旧根 ok=true
+    sio_client = AgentSocketIOClient("http://server", "host-1")
+    sio_client._connected = True
+    sio_client._sio = SimpleNamespace(
+        emit=lambda ev, data, namespace="/agent": emitted_ws.append((ev, data)),
+    )
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread.reload_from_settings()
+    thread._sio_client = sio_client
+
+    # 用发送锁挡住 WS 发送；等待线程阻塞在 sio_client._lock 上后再执行切根
+    sio_client._lock.acquire()
+    try:
+        t2 = threading.Thread(target=thread._tick, daemon=True)
+        t2.start()
+        deadline = time.monotonic() + 2.0
+        while not posted_payloads or len(posted_payloads) < 2:
+            assert time.monotonic() < deadline, "expected HTTP tick to reach WS stage"
+            time.sleep(0.01)
+        time.sleep(0.05)
+        heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+        thread.reload_from_settings()
+    finally:
+        sio_client._lock.release()
+    t2.join(timeout=3.0)
+    assert not t2.is_alive()
+    assert emitted_ws == [], f"stale WS emit must be suppressed under _lock: {emitted_ws}"
+
+
+def test_heartbeat_snapshot_after_list_copy_before_enter_snapshot_prevents_stale_gen(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R4 B1: 复制旧列表后、进入 snapshot() 前遭遇 reset()，不得以旧路径领取新代际。"""
+    import threading
+    from types import SimpleNamespace
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+
+    probed_points: list[str] = []
+    sent_payloads: list[dict] = []
+    entered_snapshot = threading.Event()
+    release_snapshot = threading.Event()
+    pause_before_snap = True
+
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.discover_devices",
+        lambda *_a: [],
+    )
+    monkeypatch.setattr(
+        HeartbeatThread,
+        "_collect_device_infos",
+        lambda _self, devs: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.list_adb_fork_servers",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.get_adb_server_port",
+        lambda: 5037,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_usb_devices_and_root_hubs",
+        lambda: (0, 1),
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_adb_interface_devices",
+        lambda: 0,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.read_usb_power_presence",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agent.system_monitor.collect_system_stats",
+        lambda: {"cpu_load": 1.0, "ram_usage": 10.0, "disk_usage": {"writable_percent": 10.0}},
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.send_heartbeat",
+        lambda *_a, **kwargs: sent_payloads.append(kwargs) or {"ok": True},
+    )
+
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    probe = MountHealthProbe(
+        interval_seconds=60.0,
+        stale_after_seconds=60.0,
+        probe_fn=lambda p: probed_points.append(p) or True,
+        mountinfo_reader=lambda _p: (
+            "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n"
+            "2 0 0:2 / /mnt/new rw - nfs4 srv:/new rw\n"
+        ),
+    )
+    orig_snapshot = probe.snapshot
+
+    def pause_before_orig(points):
+        nonlocal pause_before_snap
+        if pause_before_snap and points == ["/mnt/old"]:
+            pause_before_snap = False
+            entered_snapshot.set()
+            assert release_snapshot.wait(5.0)
+        return orig_snapshot(points)
+
+    probe.snapshot = pause_before_orig  # type: ignore[method-assign]
+    thread._mount_health_probe = probe
+    thread._kernel_usb_watch = SimpleNamespace(
+        poll=lambda **_k: [],
+        channel_state=lambda: "ok",
+    )
+
+    t = threading.Thread(target=thread._tick, daemon=True)
+    t.start()
+    assert entered_snapshot.wait(2.0)
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/new")
+    thread.reload_from_settings()
+    release_snapshot.set()
+    t.join(timeout=3.0)
+    assert not t.is_alive()
+
+    assert len(sent_payloads) == 1
+    new_entry = sent_payloads[0]["mount_status"]["/mnt/new"]
+    assert new_entry["reachable"] is None
+    assert new_entry["probed_at"] is None
+    assert new_entry["probe_stale"] is True
+    assert "/mnt/old" not in probed_points or "/mnt/new" in probed_points
+    # 关键断言：旧路径不得把仅旧根探索当作新代际的首次探针并把新根标为非 stale
+    assert not (probed_points == ["/mnt/old"] and new_entry["probe_stale"] is False)
+
+
 def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
     from backend.agent.coordinator import HostRunCoordinator
 
