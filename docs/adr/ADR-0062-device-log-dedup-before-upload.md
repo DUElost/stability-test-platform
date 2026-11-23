@@ -1,6 +1,6 @@
 # ADR-0062：设备日志先汇总去重、再按问题上传代表证据
 
-- 状态：**Proposed** v2.0（2026-11-23 起草，经第 3 轮独立复核修订：拟议增补中心存储实时可写门控、UNISOC 并入 `DEDUP_FIRST` 与阶段 D 退出旧链，见 §10.9；**v2.0 转 Accepted 并随对应批次激活前，[v1.2 Accepted 全文基线](https://github.com/DUElost/stability-test-platform/blob/71b7ee51682ce1b0bdd11044e78253ba1adc5f4c/docs/adr/ADR-0062-device-log-dedup-before-upload.md)与 B8 MTK 交付权威不变**。v1.2 于 2026-11-16 Accepted：Owner 收窄 B8 交付边界，见 §10.8；v1.0 于 2026-11-02 Accepted，同日 ADR-0053 转 Superseded。实施按 §9 走 ADR-0058 批次）
+- 状态：**Proposed** v2.0（2026-11-23 起草，经第 4 轮独立复核修订：拟议增补中心存储实时可写门控、UNISOC 并入 `DEDUP_FIRST` 与阶段 D 退出旧链，见 §10.9；**v2.0 转 Accepted 并随对应批次激活前，[v1.2 Accepted 全文基线](https://github.com/DUElost/stability-test-platform/blob/71b7ee51682ce1b0bdd11044e78253ba1adc5f4c/docs/adr/ADR-0062-device-log-dedup-before-upload.md)与 B8 MTK 交付权威不变**。v1.2 于 2026-11-16 Accepted：Owner 收窄 B8 交付边界，见 §10.8；v1.0 于 2026-11-02 Accepted，同日 ADR-0053 转 Superseded。实施按 §9 走 ADR-0058 批次）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-10-29
@@ -37,7 +37,7 @@
   - v1.0 2026-11-02 第 6 轮轻量复核（PR #3833 评论 6568551177）结论「可转 Accepted」，B3 闭合，裁定落点无矛盾。Proposed → Accepted；ADR-0053 同日改为 Superseded（§7）。政策与 v0.10 相同。
   - v1.1 2026-11-04 写入 Owner 两项裁定（§10.7）：问题归并规则只由自研扫描工具维护，平台只读工具输出；工具按版本发布后才可部署。修订 D4（新增第 7、8 条）与 D6 第 1 条，D12 第 3 条不变。
   - v1.2 2026-11-16：按 Owner 裁定将 B8 的交付出口收窄到已登记的日志证据、统计和缺口，调整 D10、D14–D16 与阶段二验收（§10.8）。
-  - v2.0 2026-11-23（Proposed，经第 1–3 轮独立复核修订）：固定引用 [v1.2 Accepted 全文基线](https://github.com/DUElost/stability-test-platform/blob/71b7ee51682ce1b0bdd11044e78253ba1adc5f4c/docs/adr/ADR-0062-device-log-dedup-before-upload.md)；按 2026-11-22~23 现网测绘与 Owner 三项裁决（§10.9），拟议增补中心存储统一拒陈旧可写守卫（D2.4）、UNISOC 唯一 ADB 采集与基线隔离/完整空证明/命名固化/不可变缓冲/离线扫描（D2.5、D4.8–9、D6.1、D8.2、D9.6）、条件性解除「仅限 MTK」限定与分阶段验收及阶段 D 统一旧链入口冻结+真实写入者排空屏障（§2、§5、D3.1、D11、D12.1、D13.3/6、§9、§11），并按 ADR-0059 拆分为单规则句。未转 Accepted 并随对应批次激活前，v1.2 条款继续作为现行权威执行。
+  - v2.0 2026-11-23（Proposed，经第 1–4 轮独立复核修订）：固定引用 [v1.2 Accepted 全文基线](https://github.com/DUElost/stability-test-platform/blob/71b7ee51682ce1b0bdd11044e78253ba1adc5f4c/docs/adr/ADR-0062-device-log-dedup-before-upload.md)；按 2026-11-22~23 现网测绘与 Owner 三项裁决（§10.9），拟议增补中心存储统一拒陈旧可写守卫（D2.4）、UNISOC 唯一 ADB 采集与基线隔离/完整空证明/命名固化/不可变缓冲/离线扫描（D2.5、D4.8–9、D6.1、D8.2、D9.6）、条件性解除「仅限 MTK」限定与分阶段验收及阶段 D 统一旧链入口冻结+真实写入者排空屏障（§2、§5、D3.1、D11、D12.1、D13.3/6、§9、§11，并对齐 §11.15 影子期 `NOT_READY` 先于 `SCOPE_ONLY` 与 ADR-0059 单规则句拆分）。未转 Accepted 并随对应批次激活前，v1.2 条款继续作为现行权威执行。
 
 ## 1. 背景与证据
 
@@ -152,8 +152,11 @@ merge 的结果影响下游报表。已经写入 `devices/` 的字节仍保留�
    - 控制面在计算 Agent host 常规可调度容量、判定 `DEDUP_FIRST` 准入以及下发扫描或上传轮次前，必须核验目标 Agent host 持有新鲜且未过期的 `STP_AEE_NFS_ROOT` 在位可写正证（`probe_stale` 不得为 `true`）。
    - 当上述在位可写正证缺失、无效或过期（含 `probe_stale=true`）时，控制面不得将相应作业或轮次派发至该 Agent host。
    - Agent 在向中心存储写入任何数据前（含第一笔报表或伴随文件复制、分片或空回执登记、HddSpill 溢出上传、事件上传或代表证据写入），必须确认 `STP_AEE_NFS_ROOT` 当前在位可写且非过期。
-   - 写前可写校验失败时，Agent 必须阻断本次中心存储写入并递增对应失败指标。
-   - 写前可写校验失败时，Agent 必须继续本地采集，不得删除本地原件（I4），也不得将 `DEDUP_FIRST` 分区改写回 `CURRENT`。
+   - 写前可写校验失败时，Agent 必须阻断本次中心存储写入。
+   - 写前可写校验失败时，Agent 必须递增对应失败指标。
+   - 写前可写校验失败时，Agent 必须继续本地采集。
+   - 写前可写校验失败时，Agent 不得删除本地原件（I4）。
+   - 写前可写校验失败时，Agent 不得将 `DEDUP_FIRST` 分区改写回 `CURRENT`。
 5. （v2.0 Proposed，#4104 方案乙）：
    - 当展锐分区处于 `DEDUP_FIRST` 模式时，控制面在全部事件入库与认领路径（单条上报、批量上报、状态重放与 `associate_unassigned_events_to_plan_run`）均不得将常规事件置为 `UPLOAD_PENDING`。
    - 对可能归入 `DEDUP_FIRST` 分区但归属或运行模式尚待认领的事件，控制面与 Agent 均必须以同一归属与定模决策路径核验归属，不得在定模完成前先行置为 `UPLOAD_PENDING` 或按 `CURRENT` 补传。
@@ -163,12 +166,15 @@ merge 的结果影响下游报表。已经写入 `devices/` 的字节仍保留�
    - 对设备坏钟（如复位到 `1970-01-01`）场景，Agent 必须以「相对基线新增或变更的不可篡改采集水线」与绑定串号判定 `实际 PlanRun` 归属，不得把前序基线目录按首见时间误归入当前作业。
    - 对无法确定归属的事件，Agent 必须按待认领或未归属缺口登记。
    - Agent 必须在采集每次发生时落盘为发生唯一不可变本地目录，并随发生固化全部 D9 第 6 条命名输入（或已计算的规范主文件夹名）。
-   - Agent 必须按 D1 第 2 条与 I1 照常登记缺件事件（不得过滤缺件发生），控制面必须照常把它计入发生（I1）并标注缺件。
+   - Agent 必须按 D1 第 2 条与 I1 照常登记缺件事件并标注缺件（不得过滤缺件发生）。
+   - 控制面必须按 D1 第 2 条与 I1 照常将缺件事件计入发生。
    - Agent 不得因类型目录同名（例如同一设备多次 `Assert.109000001`）原地覆盖既有本地原件。
    - Agent 必须在每个 `(实际 PlanRun, 平台, Agent host)` 记录真实的采集成功、失败或未完成事实，供 S4/S5 区分正常零事件与采集失败。
    - 控制面不得仅因作业进入终态就视同采集已完成。
    - 在展锐 `DEDUP_FIRST` 分区的 S4 扫描阶段，Agent 不得调用 ADB 命令再次抓取设备日志。
-   - Agent 必须在 S4 按 `实际 PlanRun × 平台 × Agent host` 冻结本轮本地不可变发生目录集合并回接 I2 溢出副本快照；控制面与 Agent 均不得跨不同发生拼凑三件证据。
+   - Agent 必须在 S4 按 `实际 PlanRun × 平台 × Agent host` 冻结本轮本地不可变发生目录集合并回接 I2 溢出副本快照。
+   - Agent 不得跨不同发生拼凑三件证据。
+   - 控制面不得跨不同发生拼凑三件证据。
 
 ### D3 S3 分区模式固定与轮次调度
 
@@ -191,12 +197,13 @@ merge 的结果影响下游报表。已经写入 `devices/` 的字节仍保留�
 5. Agent 必须在报表上送回执后回收本轮扫描临时目录（staging）。
 6. 扫描工具失败或上送失败时，控制面必须在 S5 把该 (host, 平台) 记为缺失，并由下一轮或补充轮恢复。
 7. 扫描工具必须在每份报表旁输出成员关系文件（契约 `stp.scan_membership` 1.x），给出每行的分支（相似度去重 / 单例 / 过滤）、组归属、代表标记，以及工具版本、规则版本和解析库版本。Agent 必须随报表上送该文件。成员关系文件缺失或不可用时，控制面必须把该报表计为降级覆盖，不得自行比较签名作为替代。
-8. 工具维护者必须为每个正式发布版本打上对应平台仓库的不可变 tag（MTK 为 `start-log-scan/vX.Y.Z`，展锐新增 tag 规则见第 9 条）并附带有效 `release.json`。工具维护者不得原地修改已发布版本。Agent 与控制面只能运行已按正式版本 tag 发布且 `release.json` 校验通过的扫描工具；当版本 tag 缺失或 `release.json` 缺失、损坏或校验失败时，Agent 与控制面均不得运行该工具。部署者在部署任何平台工具新版本前必须取得 Owner 同意。
+8. 工具维护者必须为每个正式发布版本打上对应平台仓库的不可变 tag（MTK 为 `start-log-scan/vX.Y.Z`，展锐新增 tag 规则见第 9 条）并附带有效 `release.json`。工具维护者不得原地修改已发布版本。Agent 与控制面仅在扫描工具已按正式版本 tag 发布且 `release.json` 校验通过时才可以运行该工具；当版本 tag 缺失或 `release.json` 缺失、损坏或校验失败时，Agent 与控制面均不得运行该工具。部署者在部署任何平台工具新版本前必须取得 Owner 同意。
 9. （v2.0 Proposed，#3884 / #3830 / #3766 / #4104）：
    - 工具维护者必须通过不可变版本 tag `scan-result-gt/vX.Y.Z` 加有效 `release.json` 发布展锐扫描工具（`Scan-Result-GT`），且不得原地修改已发布版本。
-   - Agent 与控制面只能运行经过 `scan-result-gt/vX.Y.Z` 与有效 `release.json` 校验通过的展锐扫描工具，不得运行未发布或清单校验失败的版本。
+   - Agent 与控制面仅在 `Scan-Result-GT` 已按 `scan-result-gt/vX.Y.Z` 发布且 `release.json` 校验通过时才可以运行该工具，不得运行未发布或清单校验失败的版本。
    - Agent 必须在 S4 仅向 `Scan-Result-GT` 提供按 `实际 PlanRun × 平台 × Agent host` 冻结的本地不可变输入快照及已回接 I2 溢出副本。
-   - `Scan-Result-GT` 必须纯离线扫描上述冻结快照并在单次扫描完成后正常退出（不得依赖超时强杀）；`Scan-Result-GT` 不得遍历或读取未列入当前实际 PlanRun 的 Agent host 其他设备。
+   - `Scan-Result-GT` 必须纯离线扫描上述冻结快照并在单次扫描完成后正常退出（不得依赖超时强杀）。
+   - `Scan-Result-GT` 不得遍历或读取未列入当前实际 PlanRun 的 Agent host 其他设备。
    - 当冻结快照存在事件时，`Scan-Result-GT` 必须输出格式不变（D12 第 3 条）的 `*_org.xls`、符合 `stp.scan_membership` 1.x 契约的成员关系文件，以及确定性映射回本地 `DLE`、`occurrence_key`、随发生固化的 D9 第 6 条命名输入或已计算的规范主文件夹名、以及三件源材料状态（`dblog`/`mobilelog`/`bugreport`）的原始行伴随映射。
    - 当个别事件的命名输入与规范主文件夹名均缺失时，Agent 与控制面仍必须按 I1 照常登记发生并保留报表行，只在 S8/S9 登记可解释的发布缺口；Agent 与控制面均不得因此丢弃报表行或重查已换版设备。
    - 只有当同一 `(实际 PlanRun, 平台, Agent host)` 同时满足以下三项条件时，Agent 才可以向控制面登记 `platform=unisoc` 的显式有效空回执（计入 S5 覆盖 `EMPTY`）：（1）`UnisocUniviewReconciler` 的本轮采集过程确认无异常（如 ADB `ls` 非零返回、权限或断连未知等未完成采集不得记为空）；（2）本分区全部中心已校验 `I2` 溢出副本已无误回接并纳入输入清单；（3）`Scan-Result-GT` 正常退出并产出机器可读零结果证明。
@@ -609,7 +616,10 @@ Owner 收窄 B8 的交付范围。本批使用 `stability_Start-Log-Scan` 完成
 15. （v2.0 Proposed，阶段 C 激活前验收）展锐真实设备有效零事件 vs 采集/回接/扫描异常（拆开 S5、S6 与 S9 判定）：
     - **S5 `(Agent host, 平台)`**：仅采集确认完成 + `I2` 溢出完整回接 + 工具零结果证明三项同时成立时记 `EMPTY`；若 ADB `ls` 失败/断连或回接/扫描失败或缺证明，记为 `MISSING`（不得将未知/失败记空）。
     - **S6 轮次归并**：全部期望 `(host, 平台)` 为 `MISSING` 时，本轮 merge 记 `NO_INPUT`（不得包装为零问题）；存在 `EMPTY` 覆盖时进入有效零问题/问题归并。
-    - **S9 交付状态**：阶段 C 激活前处于影子运行期时保持 `SCOPE_ONLY`；在已激活 `DEDUP_FIRST` 分区上按 D9 第 5 条顺序判定——最后一轮未关闭或最近一次 merge 失败/`NO_INPUT` 或存在「重试中」代表时均判 `NOT_READY`；有效覆盖完整且 0 问题/全代表就绪判 `READY`（有效空交付物）；仅当已激活且满足 D9 第 5 条其余就绪前提时，`EMPTY` + 部分 `MISSING` 才判 `READY_WITH_GAPS` 并列出全部缺口。
+    - **S9 交付状态**：按共同前置 → 阶段分支的顺序判定（不因处于影子期跳过前置校验）：
+      1. 无论影子运行期还是已激活 `DEDUP_FIRST` 分区，只要最后一轮未关闭、依据轮次最近一次 merge 未成功（失败或 `NO_INPUT`）、或有效覆盖为空（全 `MISSING`），控制面必须判定 **`NOT_READY`**。
+      2. 上述共同前置均通过后，若尚处于阶段 C 激活前影子运行期（S8 不适用），控制面必须判定 **`SCOPE_ONLY`**（不发布交付证据）。
+      3. 上述共同前置均通过后，若处于已激活 `DEDUP_FIRST` 分区，控制面必须按 D9 第 5 条继续判定：存在「重试中」代表时判 **`NOT_READY`**；有效覆盖完整且无证据不全问题、无「失败」代表时判 **`READY`**（无问题时为有效空交付物）；满足 D9 第 5 条其余前提的其余情况（含 `EMPTY` + 部分 `MISSING` 缺口或存在证据不全/失败代表缺口）判 **`READY_WITH_GAPS`** 并列出全部缺口。
 16. （v2.0 Proposed，阶段 C 激活前验收）展锐坏钟基线隔离与同设备同名异次发生：前序作业遗留目录停留在基线内时，即使新作业设备挂钟复位为 `1970-01-01` 也不串入当前作业；同一设备多次发生同名异常（如多个 `Assert.109000001`）本地不可变目录与 S8 `{证据区根}/…_MonkeyYloginfo/{SN}/{唯一事件目录名}/` 互不覆盖，重试幂等且不覆盖既有发生。
 17. （v2.0 Proposed，阶段 C 激活前验收）展锐首次扫描前发生 HddSpill 溢出（含设备后续换版重刷）：中心已校验溢出副本回接参加 S4 扫描与 S6/S7 选代表，同一发生本地/溢出身份一致、通过随发生固化的命名输入或规范主文件夹名独立复现规范主文件夹且累计不重复也不漏记；若命名输入均缺失则仍计 I1 发生并在 S9 记发布缺口，不丢行也不重查已换版设备。
 18. （v2.0 Proposed，阶段 C 激活前隔离演练 + 激活后生产验收）双向混合与双新链 S9：`MTK 现行 + 展锐先去重` 各自隔离失败、手动 `extract` 仅对 `CURRENT` 分区放行；阶段 C 激活后双平台同为 `DEDUP_FIRST` 时真实通过 S9 发布（非影子 `SCOPE_ONLY`），D13.2 历史未定模分区保持旧语义不变。
