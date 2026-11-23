@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { ExpandableHostTable, type HostTableData } from './ExpandableHostTable';
 import { BULK_BAR_SPACER_CLASS } from '@/components/ui/bulk-action-bar';
@@ -424,22 +425,7 @@ describe('ADR-0038 v0.3 D9 设备面意图徽标（#3159）', () => {
   });
 });
 
-describe('脚本在位（#2958 第五道闸）', () => {
-  const summary = {
-    counts: { present: 40, missing: 1, mismatch: 2, unknown: 3, n_a: 4, maintenance: 1 },
-    // #3222：fleet 包模式分布；fixture 给空对象即可，本 suite 不读该字段。
-    fleet_packages: {},
-    hosts_total: 48,
-    hosts_with_gap: 2,
-    full_versions: 51,
-    // #3111：账本不核验的 active 版本（无 Plan 引用）——与 full_versions 刻意不同值，
-    // 免得断言两边写同一个数时把「字段接错」放过去。
-    uncovered_active_versions: 46,
-    checked_at_min: '2026-09-21T00:00:00Z',
-    checked_at_max: '2026-09-21T06:00:00Z',
-    stale: false,
-  };
-
+describe('脚本在位（#2958 第五道闸 · 抽屉按需加载）', () => {
   const hostPresence = {
     host_id: String(host.id),
     checked_at: '2026-09-21T06:00:00Z',
@@ -457,44 +443,13 @@ describe('脚本在位（#2958 第五道闸）', () => {
     ],
   };
 
-  it('fleet 汇总行报缺口台数与未知/维护项数，明细面板给六态分解', () => {
-    render(<ExpandableHostTable hosts={[host]} scriptPresenceSummary={summary} />);
-
-    const bar = screen.getByTestId('script-presence-summary');
-    expect(within(bar).getByText(/缺口 2 台/)).toBeInTheDocument();
-    // #3090：counts.* 是「项」（host × name@version），只有 hosts_with_gap 是「台」
-    expect(within(bar).getByText(/^未知 3 项$/)).toBeInTheDocument();
-    expect(within(bar).getByText(/^维护窗 1 项$/)).toBeInTheDocument();
-    // 非陈旧时不得出现陈旧提示，缺口按红读
-    expect(screen.queryByTestId('script-presence-stale')).not.toBeInTheDocument();
-    expect(within(bar).getByText(/缺口 2 台/).className).toContain('text-destructive');
-
-    fireEvent.click(within(bar).getByRole('button', { name: '展开明细' }));
-    expect(within(bar).getByText('内容不符 2')).toBeInTheDocument();
-    expect(within(bar).getByText('缺失 1')).toBeInTheDocument();
-    expect(within(bar).getByText('不适用 4')).toBeInTheDocument();
-    expect(within(bar).getByText('目标版本 51')).toBeInTheDocument();
-    // #3111：未覆盖的 active 版本数必须在明细里，且与目标版本分开读
-    expect(within(bar).getByText(/^账本未覆盖 46$/)).toBeInTheDocument();
-    // 汇总没有逐台名单，文案要指路到展开行
-    expect(within(bar).getByText(/不含逐台名单/)).toBeInTheDocument();
-  });
-
-  it('stale=true 时汇总读作陈旧（不当绿读）', () => {
-    render(
-      <ExpandableHostTable hosts={[host]} scriptPresenceSummary={{ ...summary, stale: true }} />,
-    );
-
-    expect(screen.getByTestId('script-presence-stale')).toHaveTextContent('账本陈旧');
-    const gap = screen.getByText(/缺口 2 台/);
-    expect(gap.className).not.toContain('text-success');
-    expect(gap.className).not.toContain('text-destructive');
-    expect(gap.className).toContain('text-muted-foreground');
-  });
-
-  it('展开主机行才拉单机矩阵，缺口在前、未知不读成绿', async () => {
+  it('打开详情抽屉才拉单机矩阵，缺口在前、未知不读成绿', async () => {
     const onLoad = vi.fn().mockResolvedValue(hostPresence);
-    render(<ExpandableHostTable hosts={[host]} onLoadHostScriptPresence={onLoad} />);
+    render(
+      <MemoryRouter>
+        <ExpandableHostTable hosts={[host]} onLoadHostScriptPresence={onLoad} />
+      </MemoryRouter>,
+    );
 
     expect(onLoad).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText(host.name));
@@ -513,6 +468,8 @@ describe('脚本在位（#2958 第五道闸）', () => {
     expect(within(block).getByText('缺失').className).toContain('text-destructive');
     expect(within(block).getByText('未知').className).toContain('text-muted-foreground');
     expect(within(block).getByText('在位').className).toContain('text-success');
+    // 链往脚本库
+    expect(within(block).getByRole('link', { name: /脚本库/ })).toHaveAttribute('href', '/script-management');
   });
 
   it('「重新核验」调 refresh 并重拉该机矩阵', async () => {
@@ -547,28 +504,11 @@ describe('脚本在位（#2958 第五道闸）', () => {
     );
 
     fireEvent.click(screen.getByText(host.name));
-    await screen.findByText('powercycle_setup@0.2.0');   // 区块本身仍可读
+    await screen.findByText('powercycle_setup@0.2.0');
 
     expect(
       screen.queryByRole('button', { name: `${host.name} 重新核验脚本在位` }),
     ).toBeNull();
-  });
-
-  it('stale=true 时逐台区块顶部给陈旧提示', async () => {
-    const onLoad = vi.fn().mockResolvedValue(hostPresence);
-    render(
-      <ExpandableHostTable
-        hosts={[host]}
-        scriptPresenceSummary={{ ...summary, stale: true }}
-        onLoadHostScriptPresence={onLoad}
-      />,
-    );
-
-    fireEvent.click(screen.getByText(host.name));
-
-    const banner = await screen.findByTestId(`host-script-presence-stale-${host.id}`);
-    expect(banner).toHaveTextContent('账本陈旧');
-    expect(banner).toHaveTextContent('当前状态可能已过期');
   });
 
   it('加载失败显示错误与重试入口（不渲染成空矩阵）', async () => {
@@ -579,45 +519,6 @@ describe('脚本在位（#2958 第五道闸）', () => {
 
     expect(await screen.findByText(/核验数据加载失败：网络不可达/)).toBeInTheDocument();
     expect(screen.queryByText(/暂无条目/)).not.toBeInTheDocument();
-  });
-
-  it('fleet 汇总查询失败：出现失败提示与重试，不出现「缺口/未知」汇总条（#3497 B2-G1）', () => {
-    const onRetry = vi.fn();
-    render(
-      <ExpandableHostTable
-        hosts={[host]}
-        scriptPresenceSummary={null}
-        scriptPresenceSummaryError
-        onRetryScriptPresenceSummary={onRetry}
-      />,
-    );
-
-    expect(screen.getByTestId('script-presence-summary-error')).toHaveTextContent(
-      '脚本在位汇总加载失败',
-    );
-    expect(screen.queryByTestId('script-presence-summary')).not.toBeInTheDocument();
-    expect(screen.queryByText(/缺口 2 台/)).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '重试' }));
-    expect(onRetry).toHaveBeenCalledTimes(1);
-  });
-
-  it('fleet 汇总失败时逐台陈旧读作「未知」，不得静默按 fresh 渲染（#3497 B2-G1）', async () => {
-    const onLoad = vi.fn().mockResolvedValue(hostPresence);
-    render(
-      <ExpandableHostTable
-        hosts={[host]}
-        scriptPresenceSummary={null}
-        scriptPresenceSummaryError
-        onLoadHostScriptPresence={onLoad}
-      />,
-    );
-
-    fireEvent.click(screen.getByText(host.name));
-
-    const note = await screen.findByTestId(`host-script-presence-stale-unknown-${host.id}`);
-    expect(note).toHaveTextContent('账本是否陈旧未知');
-    expect(screen.queryByTestId(`host-script-presence-stale-${host.id}`)).not.toBeInTheDocument();
   });
 
   it('逐台空态：全部 n_a 显示 n_a 项数，不误报「尚未跑过 sweep」（#3497 B2-G1）', async () => {
@@ -657,6 +558,64 @@ describe('脚本在位（#2958 第五道闸）', () => {
 
     expect(screen.getByText('Agent 版本')).toBeInTheDocument();
     expect(screen.queryByText('脚本在位')).not.toBeInTheDocument();
+  });
+});
+
+describe('U3-1 标杆治理：健康异常快捷视图、抽屉挂载呈现与键盘无障碍', () => {
+  it('「健康异常」快捷视图同时命中 DEGRADED 与 UNSCHEDULABLE（不漏禁调主机）', () => {
+    const healthy: HostTableData = { ...host, id: 10, name: 'Host-OK', health_status: 'HEALTHY' };
+    const degraded: HostTableData = { ...host, id: 11, name: 'Host-Deg', health_status: 'DEGRADED' };
+    const unschedulable: HostTableData = {
+      ...host,
+      id: 12,
+      name: 'Host-Block',
+      health_status: 'UNSCHEDULABLE',
+    };
+    render(<ExpandableHostTable hosts={[healthy, degraded, unschedulable]} />);
+
+    const quickBtn = screen.getByRole('button', { name: /健康异常/ });
+    expect(quickBtn).toHaveTextContent('2');
+    fireEvent.click(quickBtn);
+
+    expect(screen.queryByText('Host-OK')).not.toBeInTheDocument();
+    expect(screen.getByText('Host-Deg')).toBeInTheDocument();
+    expect(screen.getByText('Host-Block')).toBeInTheDocument();
+  });
+
+  it('详情抽屉呈现 mount_status 并链往 /storage，支持键盘 Enter 打开与 Esc 关闭归位', async () => {
+    const user = userEvent.setup();
+    const mountedHost: HostTableData = {
+      ...host,
+      id: 20,
+      name: 'Host-Mount-Test',
+      mount_status: [
+        { path: '/mnt/aee/central/long-storage-share', mounted: false },
+        { path: '/var/log/stp', mounted: true, available_gb: 120, total_gb: 500 },
+      ],
+    };
+    render(
+      <MemoryRouter>
+        <ExpandableHostTable hosts={[mountedHost]} />
+      </MemoryRouter>,
+    );
+
+    const row = screen.getByRole('button', { name: /查看主机 Host-Mount-Test 详情/ });
+    row.focus();
+    await user.keyboard('{Enter}');
+
+    const drawer = await screen.findByTestId('fleet-host-drawer');
+    const mountSection = within(drawer).getByTestId('host-mount-status-20');
+    expect(within(mountSection).getByText('/mnt/aee/central/long-storage-share')).toBeInTheDocument();
+    expect(within(mountSection).getByText('未挂载')).toBeInTheDocument();
+    expect(within(mountSection).getByRole('link', { name: /前往文件服务器/ })).toHaveAttribute('href', '/storage');
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByTestId('fleet-host-drawer')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(row);
+    });
   });
 });
 
@@ -715,8 +674,8 @@ describe('S2：USB / Hub 故障工作台（快捷视图、主行外显、异常�
     );
 
     // 异常主机应自动置顶到健康主机之前
-    const rows = screen.getAllByRole('row');
-    expect(rows[1]).toHaveTextContent('Host-Hub-Bad');
+    const rows = screen.getAllByRole('button', { name: /^查看主机 / });
+    expect(rows[0]).toHaveTextContent('Host-Hub-Bad');
 
     // 主行直接外显故障芯片，无需 hover tooltip
     const inlineFaults = screen.getByTestId('host-inline-faults-host-hub-bad');
@@ -784,8 +743,8 @@ describe('S2：USB / Hub 故障工作台（快捷视图、主行外显、异常�
     };
     render(<ExpandableHostTable hosts={[healthyHost, fuseHost]} />);
 
-    const rows = screen.getAllByRole('row');
-    expect(rows[1]).toHaveTextContent('Host-Fuse-88');
+    const rows = screen.getAllByRole('button', { name: /^查看主机 / });
+    expect(rows[0]).toHaveTextContent('Host-Fuse-88');
     expect(screen.getByTestId('host-inline-faults-host-fuse-88')).toHaveTextContent('自愈熔断(疑似硬件)');
 
     fireEvent.click(screen.getByText('Host-Fuse-88'));

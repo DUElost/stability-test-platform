@@ -4,6 +4,7 @@
 """
 
 import logging
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -15,10 +16,13 @@ from .contracts.capabilities import AGENT_CAPABILITIES
 from .heartbeat import send_heartbeat
 from .heartbeat_timing import HeartbeatTiming
 from .kernel_usb_faults import KernelUsbWatch
-from .mount_health_probe import MountHealthProbe
+from .mount_health_probe import MountHealthProbe, normalize_mount_point
+from .outbound_guard import OutboundDispatchGate, bind_heartbeat_stale_check
 from .usb_power_slots import read_usb_power_presence
 from .settings import get_heartbeat_settings
 from .startup_guards import single_instance_guard_degraded
+from .startup_identity import resolve_monitored_mount_points
+from .aee.paths import resolve_shared_storage_root
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +131,13 @@ class HeartbeatThread:
         self._kernel_usb_watch = KernelUsbWatch()
         # ADR-0064 D5 / #4054：挂载可达性后台探测；主循环只读非阻塞快照。
         self._mount_health_probe = MountHealthProbe()
+        self._mount_points_lock = threading.Lock()
+        # #4077 R6：串行化「发布切根 + advance_and_drain」——同配置二次 reload
+        # 不得在首次排空完成前抢先 ACK。
+        self._reload_publish_lock = threading.Lock()
+        self._mount_points_generation: int = 0
+        self._shared_storage_root: str = normalize_mount_point(resolve_shared_storage_root())
+        self._dispatch_gate = OutboundDispatchGate()
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
@@ -138,6 +149,54 @@ class HeartbeatThread:
         self._last_slow_due_count = 0
         self._last_disk_due_count = 0
 
+    def _reload_mount_points_from_env(self) -> None:
+        """从 env 刷新监控挂载列表与权威中心根、隔离旧探针快照，并即时失效普通认领槽位（#4077）。"""
+        if "MOUNT_POINTS" not in os.environ and "STP_AEE_NFS_ROOT" not in os.environ:
+            return
+        updated_mounts = resolve_monitored_mount_points()
+        updated_shared_root = normalize_mount_point(resolve_shared_storage_root())
+        # 发布与排空必须在同一把 `_reload_publish_lock` 下完成：若 R1 已发布切根并
+        # 正在 `advance_and_drain`，同配置的 R2 不得因 `changed=False` 提前 ACK（#4077 R6）。
+        with self._reload_publish_lock:
+            with self._mount_points_lock:
+                prev_shared_root = getattr(self, "_shared_storage_root", "")
+                changed = (
+                    list(self._mount_points) != updated_mounts
+                    or prev_shared_root != updated_shared_root
+                )
+                if changed:
+                    self._mount_points_generation += 1
+                    self._mount_points = updated_mounts
+                    self._shared_storage_root = updated_shared_root
+                    self._mount_health_probe.reset()
+                    # 切根后立即归零普通有效槽位（VBUS 名额由 vbus_claim_slots 独立控制），
+                    # 防止 ACK 返回后、下一拍心跳完成前按旧配置继续发起普通认领。
+                    with self._capacity_lock:
+                        self._effective_slots = 0
+            if changed:
+                gate = getattr(self, "_dispatch_gate", None)
+                if isinstance(gate, OutboundDispatchGate):
+                    gate.advance_and_drain()
+
+    def _is_mount_generation_stale(self, mount_gen: int) -> bool:
+        with self._mount_points_lock:
+            return mount_gen != self._mount_points_generation
+
+    def _snapshot_current_mounts(self) -> tuple[int, List[str], Dict[str, Any]]:
+        """在锁内同时绑定列表代际与探针代际，防止取表后进 snapshot() 前 reset() 串代。"""
+        with self._mount_points_lock:
+            mount_gen = self._mount_points_generation
+            mount_points = list(self._mount_points)
+            get_probe_gen = getattr(self._mount_health_probe, "current_generation", None)
+            probe_gen = get_probe_gen() if callable(get_probe_gen) else None
+        bind_gen = getattr(self._mount_health_probe, "bound_generation", None)
+        if probe_gen is not None and callable(bind_gen):
+            with bind_gen(probe_gen):
+                mount_status = self._mount_health_probe.snapshot(mount_points)
+        else:
+            mount_status = self._mount_health_probe.snapshot(mount_points)
+        return mount_gen, mount_points, mount_status
+
     def reload_from_settings(self) -> None:
         """#2086：`reload_config` 的实例级 re-apply（心跳域）。
 
@@ -148,8 +207,10 @@ class HeartbeatThread:
 
         #2279：读取失败**不抛**——否则 `reload_config` 会因某个坏旋钮整体失败
         （该方法在命令处理器里无外层兜底），连带 coordinator 等后续步骤不执行。
-        失败时保持既有属性值（= 沿用上一份合法配置），记 ERROR 并返回。
+        失败时保持既有节奏属性值（= 沿用上一份合法配置），但挂载列表刷新（#4077）
+        独立生效，不被坏节奏旋钮阻塞。
         """
+        self._reload_mount_points_from_env()
         _hb = self._read_heartbeat_settings_safe()
         if _hb is None:
             logger.error(
@@ -165,9 +226,10 @@ class HeartbeatThread:
         self._reconnect_cooldown = _hb.stp_adb_reconnect_cooldown_seconds
         logger.info(
             "heartbeat_pacing_reloaded min=%s max=%s adb_repair_cooldown=%s "
-            "reconnect_cooldown=%s",
+            "reconnect_cooldown=%s mount_points=%s",
             self._min_poll_interval, self._max_poll_interval,
             self._adb_repair_cooldown, self._reconnect_cooldown,
+            self._mount_points,
         )
 
     @property
@@ -638,7 +700,7 @@ class HeartbeatThread:
             except Exception as exc:
                 logger.debug("operation_stats_failed: %s", exc)
         # ADR-0064 D5：非阻塞快照；NFS 探针挂起时立即返回并标 probe_stale。
-        mount_status = self._mount_health_probe.snapshot(self._mount_points)
+        mount_gen, mount_points, mount_status = self._snapshot_current_mounts()
 
         active_count = self._get_active_job_count() if self._get_active_job_count else 0
         active_device_count = self._get_active_device_count() if self._get_active_device_count else 0
@@ -823,51 +885,76 @@ class HeartbeatThread:
             except Exception as exc:
                 logger.debug("self_heal_snapshot_failed: %s", exc)
 
-        cap_result = compute_capacity(
-            active_job_count=active_count,
-            active_device_count=active_device_count,
-            online_healthy_devices=online_healthy,
-            total_devices=total_devices,
-            system_stats=system_stats,
-            mount_status=mount_status,
-            adb_server_conflict=adb_server_conflict,
-            usb_device_count=usb_device_count,
-            adb_interface_count=adb_interface_count,
-            adb_state_counts=adb_state_counts,
-            usb_root_hub_count=usb_root_hub_count,
-            usb_fault_reasons=usb_fault_reasons,
-            usb_kernel_log_channel=usb_kernel_log_channel,
-            # #3092：启动期常量——守卫降级时让「第二个实例可能静默叠加」随心跳可见
-            single_instance_degraded=single_instance_guard_degraded(),
-            usb_power_slots=usb_power_slots,
-            usb_hub_topology=usb_hub_topology,
-            usb_kernel_errors_1h=usb_kernel_errors_1h,
-        )
-
-        with self._capacity_lock:
-            self._effective_slots = cap_result.get("capacity", {}).get("effective_slots", 0)
-
-        if self._tick_phases is not None:
-            self._tick_phases["prepare"] = time.monotonic() - prepare_started
-        with self._phase("http"):
-            response = send_heartbeat(
-                self._api_url,
-                self._host_id,
-                self._mount_points,
-                host_info=self._host_info,
-                devices=devices_list,
-                script_catalog_version=versions.get("script_catalog_version", ""),
-                capacity=cap_result.get("capacity"),
-                health=cap_result.get("health"),
-                agent_instance_id=self._agent_instance_id,
-                boot_id=self._boot_id,
-                agent_version=self._agent_version,
-                agent_code_revision=self._agent_code_revision,
-                agent_artifact_digest=self._resolve_artifact_digest(),
+        response = None
+        for attempt in range(3):
+            if attempt > 0:
+                mount_gen, mount_points, mount_status = self._snapshot_current_mounts()
+            artifact_digest = self._resolve_artifact_digest()
+            cap_result = compute_capacity(
+                active_job_count=active_count,
+                active_device_count=active_device_count,
+                online_healthy_devices=online_healthy,
+                total_devices=total_devices,
                 system_stats=system_stats,
                 mount_status=mount_status,
-                capabilities=AGENT_CAPABILITIES,
+                adb_server_conflict=adb_server_conflict,
+                usb_device_count=usb_device_count,
+                adb_interface_count=adb_interface_count,
+                adb_state_counts=adb_state_counts,
+                usb_root_hub_count=usb_root_hub_count,
+                usb_fault_reasons=usb_fault_reasons,
+                usb_kernel_log_channel=usb_kernel_log_channel,
+                # #3092：启动期常量——守卫降级时让「第二个实例可能静默叠加」随心跳可见
+                single_instance_degraded=single_instance_guard_degraded(),
+                usb_power_slots=usb_power_slots,
+                usb_hub_topology=usb_hub_topology,
+                usb_kernel_errors_1h=usb_kernel_errors_1h,
             )
+            with self._mount_points_lock:
+                if mount_gen != self._mount_points_generation:
+                    continue
+                with self._capacity_lock:
+                    self._effective_slots = cap_result.get("capacity", {}).get(
+                        "effective_slots", 0
+                    )
+            if self._tick_phases is not None:
+                self._tick_phases["prepare"] = time.monotonic() - prepare_started
+            catalog_ver = versions.get("script_catalog_version", "")
+            cap_payload = cap_result.get("capacity")
+            health_payload = cap_result.get("health")
+            with self._phase("http"):
+                with bind_heartbeat_stale_check(
+                    lambda gen=mount_gen: self._is_mount_generation_stale(gen),
+                    dispatch_gate=getattr(self, "_dispatch_gate", None),
+                ):
+                    with self._mount_points_lock:
+                        if mount_gen != self._mount_points_generation:
+                            continue
+                    response = send_heartbeat(
+                        self._api_url,
+                        self._host_id,
+                        mount_points,
+                        host_info=self._host_info,
+                        devices=devices_list,
+                        script_catalog_version=catalog_ver,
+                        capacity=cap_payload,
+                        health=health_payload,
+                        agent_instance_id=self._agent_instance_id,
+                        boot_id=self._boot_id,
+                        agent_version=self._agent_version,
+                        agent_code_revision=self._agent_code_revision,
+                        agent_artifact_digest=artifact_digest,
+                        system_stats=system_stats,
+                        mount_status=mount_status,
+                        capabilities=AGENT_CAPABILITIES,
+                    )
+            with self._mount_points_lock:
+                if mount_gen != self._mount_points_generation:
+                    continue
+            break
+        else:
+            logger.info("heartbeat_tick_superseded_by_mount_reload")
+            return
         if response and response.get("script_catalog_outdated") and self._on_scripts_outdated:
             try:
                 self._on_scripts_outdated()
@@ -951,7 +1038,14 @@ class HeartbeatThread:
                 stats = dict(system_stats)
                 stats["devices"] = devices_list
                 stats["mount_status"] = mount_status
-                self._sio_client.send_heartbeat(stats)
-                logger.debug("heartbeat_ws_push_sent")
+                with bind_heartbeat_stale_check(
+                    lambda gen=mount_gen: self._is_mount_generation_stale(gen),
+                    dispatch_gate=getattr(self, "_dispatch_gate", None),
+                ):
+                    with self._mount_points_lock:
+                        ws_stale = mount_gen != self._mount_points_generation
+                    if not ws_stale:
+                        self._sio_client.send_heartbeat(stats)
+                        logger.debug("heartbeat_ws_push_sent")
             except Exception as e:
                 logger.debug("heartbeat_ws_push_failed: %s", e)

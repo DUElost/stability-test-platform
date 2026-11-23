@@ -13,8 +13,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from . import __version__ as _agent_pkg_version
+from .aee.paths import resolve_shared_storage_root
 from .host_registry import auto_register_host, get_host_info, load_required_host_id
 from .identity import generate_agent_instance_id, read_boot_id
+from .mount_health_probe import normalize_mount_point
 from .settings import get_registration_settings
 from .version_info import read_agent_code_revision, read_artifact_digest
 
@@ -36,6 +38,27 @@ class AgentProcessIdentity:
     mount_points: List[str]
     adb_path: str
     agent_secret: str
+
+
+def resolve_monitored_mount_points() -> List[str]:
+    """Build heartbeat mount check paths from ``MOUNT_POINTS`` plus ``STP_AEE_NFS_ROOT``.
+
+    When ``STP_AEE_NFS_ROOT`` is unset or empty, preserves the legacy
+    ``[p for p in MOUNT_POINTS.split(",") if p]`` behavior (no whitespace
+    trimming or deduplication). When ``STP_AEE_NFS_ROOT`` is configured, keeps
+    all existing ``MOUNT_POINTS`` entries and appends ``STP_AEE_NFS_ROOT`` if not
+    already represented (#4077).
+    """
+    points = [p for p in os.getenv("MOUNT_POINTS", "").split(",") if p]
+    shared_root = resolve_shared_storage_root()
+    if not shared_root:
+        return points
+
+    seen = {normalize_mount_point(item) for item in points}
+    norm_shared = normalize_mount_point(shared_root)
+    if norm_shared not in seen:
+        points.append(shared_root)
+    return points
 
 
 def resolve_or_register_host_id(api_url: str, host_info: Dict[str, Any]) -> str:
@@ -118,7 +141,7 @@ def bootstrap_process_identity(api_url: str) -> AgentProcessIdentity:
     # 取值点保持迁移前的惰性时机——HOST_ID 正常时不解析注册旋钮）
     host_id = resolve_or_register_host_id(api_url, host_info)
     poll_interval = float(os.getenv("POLL_INTERVAL", "5"))
-    mount_points = [p for p in os.getenv("MOUNT_POINTS", "").split(",") if p]
+    mount_points = resolve_monitored_mount_points()
     adb_path = os.getenv("ADB_PATH", "adb")
     agent_secret = os.getenv("AGENT_SECRET", "")
 

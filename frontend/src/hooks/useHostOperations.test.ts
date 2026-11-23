@@ -12,6 +12,10 @@ vi.mock('@/utils/api', () => ({
     hotUpdate: {
       trigger: vi.fn(),
     },
+    flashPrereqs: {
+      ensure: vi.fn(),
+      status: vi.fn(),
+    },
   },
 }));
 
@@ -23,6 +27,8 @@ describe('useHostOperations', () => {
     vi.mocked(api.agentInstall.status).mockReset();
     vi.mocked(api.agentInstall.cancel).mockReset();
     vi.mocked(api.hotUpdate.trigger).mockReset();
+    vi.mocked(api.flashPrereqs.ensure).mockReset();
+    vi.mocked(api.flashPrereqs.status).mockReset();
   });
 
   afterEach(() => {
@@ -383,6 +389,67 @@ describe('useHostOperations', () => {
       await result.current.startInstallBatch([
         { hostId: 'd', label: 'host-d', agentInstalled: true },
       ]);
+    });
+
+    expect(result.current.ops[0].status).toBe('canceled');
+    expect(result.current.ops[0].error).toContain('运行记录已丢失');
+  });
+
+  // #3193：刷机前置批量终态与 install 批次对齐（CANCELED / lost 不得落成 failed）
+  it('#3193 marks flash-prereqs canceled (not failed) when run ends CANCELED', async () => {
+    vi.mocked(api.flashPrereqs.ensure).mockResolvedValueOnce({
+      ok: true,
+      host_id: 'f1',
+      log_path: '/var/log/stp/con-f1.log',
+      console_run_id: 'con-f1',
+      room: 'console:con-f1',
+      status: 'running',
+      message: 'ok',
+    });
+    vi.mocked(api.flashPrereqs.status).mockResolvedValueOnce({
+      host_id: 'f1',
+      log_path: '/var/log/stp/con-f1.log',
+      status: 'canceled',
+      console_status: 'CANCELED',
+      console_found: false,
+    });
+
+    const onTerminal = vi.fn();
+    const { result } = renderHook(() =>
+      useHostOperations({ concurrency: 1, pollMs: 10, onTerminal }),
+    );
+    await act(async () => {
+      await result.current.startFlashPrereqsBatch([{ hostId: 'f1', label: 'host-f1' }]);
+    });
+
+    expect(result.current.ops[0].status).toBe('canceled');
+    expect(result.current.ops[0].error).toBeUndefined();
+    expect(onTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: 'f1', kind: 'flash_prereqs', ok: false, status: 'CANCELED' }),
+    );
+  });
+
+  it('#3193 marks lost flash-prereqs runs canceled and keeps lifecycle note', async () => {
+    vi.mocked(api.flashPrereqs.ensure).mockResolvedValueOnce({
+      ok: true,
+      host_id: 'f2',
+      log_path: '/var/log/stp/con-f2.log',
+      console_run_id: 'con-f2',
+      room: 'console:con-f2',
+      status: 'running',
+      message: 'ok',
+    });
+    vi.mocked(api.flashPrereqs.status).mockResolvedValueOnce({
+      host_id: 'f2',
+      log_path: '/var/log/stp/con-f2.log',
+      status: 'lost',
+      console_status: null,
+      console_found: false,
+    });
+
+    const { result } = renderHook(() => useHostOperations({ concurrency: 1, pollMs: 10 }));
+    await act(async () => {
+      await result.current.startFlashPrereqsBatch([{ hostId: 'f2', label: 'host-f2' }]);
     });
 
     expect(result.current.ops[0].status).toBe('canceled');

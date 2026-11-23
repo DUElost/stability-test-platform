@@ -93,7 +93,6 @@ _RE_HARDCODED_PALETTE = re.compile(
 # 每完成一页治理必须同步从对应集合中移除该文件。
 _NATIVE_DIALOG_ALLOWLIST = frozenset(
     {
-        "pages/hosts/HostsPage.tsx",
         "pages/projects/ProjectDetailPage.tsx",
         "pages/projects/ProjectsPage.tsx",
         "pages/suites/TestSuiteDetailPage.tsx",
@@ -109,7 +108,6 @@ _RAW_TABLE_ALLOWLIST = frozenset(
 _CLICKABLE_TR_ALLOWLIST = frozenset(
     {
         "components/execution/plan-execute/DeviceTablePanel.tsx",
-        "components/network/ExpandableHostTable.tsx",
         "components/plan-run/DeviceOverview.tsx",
     }
 )

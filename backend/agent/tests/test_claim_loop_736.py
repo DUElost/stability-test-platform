@@ -123,3 +123,61 @@ def test_fetch_pending_jobs_active_job_ids_contract():
 
         fetch_pending_jobs("http://x", "h1", "inst", capacity=1, active_job_ids=[9, 3, 9])
         assert post.call_args.kwargs["json"]["active_job_ids"] == [3, 9]
+
+
+def test_claim_tick_respects_reload_zeroed_slots_across_vbus_probe():
+    """#4077 R3 B1: claim tick 取 VBUS 名额期间若切根归零普通槽位，fetch_pending_jobs 仅带 capacity=0 + vbus_slots=1。"""
+    kwargs = _tick_kwargs()
+    kwargs["heartbeat_thread"].effective_slots = 2
+
+    def fake_vbus_slots() -> int:
+        # 模拟并发 reload_config ACK 将心跳普通有效槽位归零
+        kwargs["heartbeat_thread"].effective_slots = 0
+        return 1
+
+    with patch("backend.agent.claim_loop.vbus_claim_slots", side_effect=fake_vbus_slots), patch(
+        "backend.agent.claim_loop.fetch_pending_jobs", return_value=[]
+    ) as fetch:
+        process_claim_tick(**kwargs)
+
+    fetch.assert_called_once()
+    assert fetch.call_args.kwargs["capacity"] == 0
+    assert fetch.call_args.kwargs["vbus_slots"] == 1
+
+
+def test_claim_tick_clamps_capacity_inside_real_fetch_pending_jobs_before_post(monkeypatch):
+    """#4077 R4 B1: 进入真实 fetch_pending_jobs 构造 active_job_ids 期间若切根归零，requests.post 仍仅收 capacity=0。"""
+    kwargs = _tick_kwargs()
+    kwargs["heartbeat_thread"].effective_slots = 2
+    with kwargs["occupancy"].lock:
+        kwargs["occupancy"].job_ids.add(11)
+
+    posted_bodies: list[dict] = []
+
+    class _FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": []}
+
+    def fake_post(_url: str, *, json: dict, **_kw):
+        posted_bodies.append(dict(json))
+        return _FakeResp()
+
+    orig_sorted = sorted
+
+    def pause_on_sorted(iterable, *args, **kw):
+        # 在 fetch_pending_jobs 构造 active_job_ids 时模拟并发 reload ACK 将普通槽位归零
+        kwargs["heartbeat_thread"].effective_slots = 0
+        return orig_sorted(iterable, *args, **kw)
+
+    monkeypatch.setattr("backend.agent.claim_loop.vbus_claim_slots", lambda: 1)
+    monkeypatch.setattr("backend.agent.api_client.sorted", pause_on_sorted, raising=False)
+    monkeypatch.setattr("backend.agent.api_client.requests.post", fake_post)
+
+    process_claim_tick(**kwargs)
+
+    assert len(posted_bodies) == 1
+    assert posted_bodies[0]["capacity"] == 0
+    assert posted_bodies[0]["vbus_slots"] == 1

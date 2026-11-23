@@ -72,6 +72,25 @@ vi.mock('../../utils/api', async (importOriginal) => {
     hotUpdate: {
       trigger: vi.fn().mockResolvedValue({}),
     },
+    flashPrereqs: {
+      ensure: vi.fn().mockResolvedValue({
+        ok: true,
+        host_id: 'h1',
+        log_path: '/var/log/stp/con-fp.log',
+        console_run_id: 'con-fp',
+        room: 'console:con-fp',
+        status: 'running',
+        message: 'ok',
+      }),
+      status: vi.fn().mockResolvedValue({
+        host_id: 'h1',
+        log_path: '/var/log/stp/con-fp.log',
+        status: 'succeeded',
+        console_run_id: 'con-fp',
+        console_status: 'SUCCESS',
+        console_found: true,
+      }),
+    },
     scriptPresence: {
       summary: vi.fn().mockResolvedValue({
         counts: { present: 0, missing: 0, mismatch: 0, unknown: 0, n_a: 0, maintenance: 0 },
@@ -725,54 +744,61 @@ describe('ADR-0038 退役前端（#1807）', () => {
     expect(screen.queryByText(/所有主机都已退役/)).not.toBeInTheDocument();
   });
 
-  it('退役入口调用 API 并携带原因（写审计）', async () => {
+  it('退役入口通过 RetireHostDialog 收集必填原因并调用 API（写审计）', async () => {
     const { api } = await import('../../utils/api');
     mockHostsList.mockResolvedValue({
       items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
       total: 1,
     });
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('  样机报废  ');
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
     fireEvent.click(await screen.findByTestId('retire-1'));
+    const input = await screen.findByTestId('host-retire-reason-input');
+    fireEvent.change(input, { target: { value: '  样机报废  ' } });
+    fireEvent.click(screen.getByTestId('host-retire-submit'));
 
     await waitFor(() =>
       expect(api.hosts.retire).toHaveBeenCalledWith(1, '样机报废'),
     );
-    promptSpy.mockRestore();
   });
 
-  it('解除退役入口调用 API 并携带原因', async () => {
+  it('解除退役入口通过 RetireHostDialog 收集原因并调用 API', async () => {
     const { api } = await import('../../utils/api');
     mockHostsList.mockResolvedValue({ items: [retiredHost], total: 1 });
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('恢复使用');
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
     fireEvent.click(await screen.findByTestId('unretire-9'));
+    const input = await screen.findByTestId('host-retire-reason-input');
+    fireEvent.change(input, { target: { value: '恢复使用' } });
+    fireEvent.click(screen.getByTestId('host-retire-submit'));
 
     await waitFor(() =>
       expect(api.hosts.unretire).toHaveBeenCalledWith(9, '恢复使用'),
     );
-    promptSpy.mockRestore();
   });
 
-  it('取消原因输入不发起请求', async () => {
+  it('空原因拦截提交且取消对话框不发起请求', async () => {
     const { api } = await import('../../utils/api');
     mockHostsList.mockResolvedValue({
       items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
       total: 1,
     });
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue(null);
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
     fireEvent.click(await screen.findByTestId('retire-1'));
-
-    await waitFor(() => expect(screen.getByTestId('retire-1')).toBeInTheDocument());
+    await screen.findByTestId('host-retire-dialog');
+    fireEvent.click(screen.getByTestId('host-retire-submit'));
+    expect(screen.getByRole('alert')).toHaveTextContent('退役原因不能为空');
     expect(api.hosts.retire).not.toHaveBeenCalled();
-    promptSpy.mockRestore();
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('host-retire-dialog')).not.toBeInTheDocument();
+    });
+    expect(api.hosts.retire).not.toHaveBeenCalled();
   });
 
   it('批量删除失败时透出 409 文案（不吞原因）', async () => {
@@ -874,6 +900,49 @@ describe('ADR-0038 退役前端（#1807）', () => {
     );
     expect(mocks.toast.error).not.toHaveBeenCalledWith(
       expect.stringContaining('安装失败'),
+    );
+  });
+
+  // #3193：刷机前置批次取消走 info 不报失败，且进行中时页头重开按钮显示「进行中」
+  it('#3193 取消的刷机前置走 info 提示，不报失败', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [
+        {
+          id: 'h-fp',
+          name: 'Worker-FP',
+          ip: '192.0.2.88',
+          status: 'ONLINE',
+          extra: {},
+          mount_status: {},
+          agent_installed: true,
+        },
+      ],
+      total: 1,
+    });
+    mocks.confirm.mockResolvedValue(true);
+    vi.mocked(api.flashPrereqs.status).mockResolvedValueOnce({
+      host_id: 'h-fp',
+      log_path: '/var/log/stp/con-fp.log',
+      status: 'canceled',
+      console_run_id: 'con-fp',
+      console_status: 'CANCELED',
+      console_found: false,
+    });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    fireEvent.click(await screen.findByTestId('select-all-hosts'));
+    fireEvent.click(await screen.findByTestId('host-bulk-flash-prereqs'));
+
+    await waitFor(() =>
+      expect(mocks.toast.info).toHaveBeenCalledWith(
+        expect.stringContaining('刷机前置已取消'),
+      ),
+    );
+    expect(mocks.toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('刷机前置失败'),
     );
   });
 });
