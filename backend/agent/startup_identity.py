@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from . import __version__ as _agent_pkg_version
+from .aee.paths import resolve_shared_storage_root
 from .host_registry import auto_register_host, get_host_info, load_required_host_id
 from .identity import generate_agent_instance_id, read_boot_id
 from .settings import get_registration_settings
@@ -36,6 +37,30 @@ class AgentProcessIdentity:
     mount_points: List[str]
     adb_path: str
     agent_secret: str
+
+
+def resolve_monitored_mount_points() -> List[str]:
+    """Build heartbeat mount check paths from ``MOUNT_POINTS`` plus ``STP_AEE_NFS_ROOT``.
+
+    Always monitoring ``STP_AEE_NFS_ROOT`` ensures storage cutovers (e.g.
+    ``/mnt/stp-aee`` -> ``/mnt/stp-log``) cannot leave an unmounted center root
+    hidden behind a stale ``MOUNT_POINTS`` entry (#4077).
+    """
+    raw_items = [p.strip() for p in os.getenv("MOUNT_POINTS", "").split(",") if p.strip()]
+    points: List[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        norm = item.rstrip("/") or "/"
+        if norm not in seen:
+            seen.add(norm)
+            points.append(item)
+    shared_root = resolve_shared_storage_root()
+    if shared_root:
+        norm_shared = shared_root.rstrip("/") or "/"
+        if norm_shared not in seen:
+            seen.add(norm_shared)
+            points.append(shared_root)
+    return points
 
 
 def resolve_or_register_host_id(api_url: str, host_info: Dict[str, Any]) -> str:
@@ -118,7 +143,7 @@ def bootstrap_process_identity(api_url: str) -> AgentProcessIdentity:
     # 取值点保持迁移前的惰性时机——HOST_ID 正常时不解析注册旋钮）
     host_id = resolve_or_register_host_id(api_url, host_info)
     poll_interval = float(os.getenv("POLL_INTERVAL", "5"))
-    mount_points = [p for p in os.getenv("MOUNT_POINTS", "").split(",") if p]
+    mount_points = resolve_monitored_mount_points()
     adb_path = os.getenv("ADB_PATH", "adb")
     agent_secret = os.getenv("AGENT_SECRET", "")
 

@@ -9,6 +9,7 @@ import pytest
 from backend.agent.startup_identity import (
     AgentProcessIdentity,
     bootstrap_process_identity,
+    resolve_monitored_mount_points,
     resolve_or_register_host_id,
 )
 
@@ -93,6 +94,7 @@ def test_bootstrap_process_identity_assembles_fields():
         {
             "POLL_INTERVAL": "7",
             "MOUNT_POINTS": "a,b",
+            "STP_AEE_NFS_ROOT": "",
             "ADB_PATH": "/usr/bin/adb",
             "AGENT_SECRET": "sec",
         },
@@ -109,6 +111,21 @@ def test_bootstrap_process_identity_assembles_fields():
     assert identity.adb_path == "/usr/bin/adb"
     assert identity.agent_secret == "sec"
     assert identity.agent_artifact_digest == "digest"
+
+
+def test_resolve_monitored_mount_points_includes_shared_storage_root(monkeypatch):
+    """#4077: STP_AEE_NFS_ROOT must be monitored even when MOUNT_POINTS is stale."""
+    monkeypatch.setenv("MOUNT_POINTS", "/mnt/stp-aee, /mnt/stp-log/")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-log")
+    assert resolve_monitored_mount_points() == ["/mnt/stp-aee", "/mnt/stp-log/"]
+
+    monkeypatch.setenv("MOUNT_POINTS", "/mnt/stp-aee")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-log")
+    assert resolve_monitored_mount_points() == ["/mnt/stp-aee", "/mnt/stp-log"]
+
+    monkeypatch.delenv("MOUNT_POINTS", raising=False)
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-log")
+    assert resolve_monitored_mount_points() == ["/mnt/stp-log"]
 
 
 def test_main_wires_startup_identity():
