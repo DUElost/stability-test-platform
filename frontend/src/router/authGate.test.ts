@@ -10,29 +10,43 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ApiError } from '@/utils/api/client';
+import { classifyAuthFailure } from '@/utils/auth';
 import { resolveAuthGate } from './authGate';
 
 const gate = (over: Partial<{isLoading: boolean; isSuccess: boolean; isError: boolean; error: unknown}>) =>
   resolveAuthGate({ isLoading: false, isSuccess: false, isError: false, ...over });
 
-describe('resolveAuthGate：会话查询四态（#3226）', () => {
-  it('502 → transient（控制面重启 / nginx 502 同形）', () => {
-    expect(gate({ isError: true, error: { response: { status: 502 } } })).toBe('transient');
+describe('resolveAuthGate：会话查询四态（#3226 / #3531 真实 ApiError 形状）', () => {
+  it('ApiError 502 → transient（控制面重启 / nginx 502 同形）', () => {
+    expect(gate({ isError: true, error: new ApiError('HTTP_502', 'Bad Gateway', { status: 502 }) })).toBe('transient');
   });
-  it('断网（无 response）→ transient', () => {
+  it('ApiError 断网（NETWORK_ERROR / 无 status）→ transient', () => {
+    expect(gate({ isError: true, error: new ApiError('NETWORK_ERROR', '网络请求失败') })).toBe('transient');
     expect(gate({ isError: true, error: new Error('Network Error') })).toBe('transient');
   });
-  it('超时 → transient（#1199 的上界触发后不得登出）', () => {
+  it('ApiError 超时（TIMEOUT / ECONNABORTED）→ transient（#1199 的上界触发后不得登出）', () => {
+    expect(gate({ isError: true, error: new ApiError('TIMEOUT', '请求超时，请重试') })).toBe('transient');
     expect(gate({ isError: true, error: { code: 'ECONNABORTED' } })).toBe('transient');
   });
-  it('503/429 → transient（过载≠未授权，同 #2959 的现实场景）', () => {
+  it('ApiError 503/504/429 → transient（过载≠未授权，同 #2959 的现实场景）', () => {
     for (const status of [503, 504, 429]) {
-      expect(gate({ isError: true, error: { response: { status } } })).toBe('transient');
+      expect(gate({ isError: true, error: new ApiError(`HTTP_${status}`, 'Overloaded', { status }) })).toBe('transient');
     }
   });
-  it('真 401 / 403 → anonymous（会话终态，仍跳登录）', () => {
+  it('真 ApiError 401 / 403 → anonymous（#3531：无 .response 字段也不得误落 transient 死路）', () => {
+    expect(gate({ isError: true, error: new ApiError('HTTP_401', 'Unauthorized', { status: 401 }) })).toBe('anonymous');
+    expect(gate({ isError: true, error: new ApiError('HTTP_403', 'Forbidden', { status: 403 }) })).toBe('anonymous');
+  });
+  it('裸 axios 401 / 403 仍兼容 → anonymous', () => {
     expect(gate({ isError: true, error: { response: { status: 401 } } })).toBe('anonymous');
     expect(gate({ isError: true, error: { response: { status: 403 } } })).toBe('anonymous');
+  });
+  it('classifyAuthFailure 同时识别 ApiError 与裸 axios 的 401/403 与超时（#3531）', () => {
+    expect(classifyAuthFailure(new ApiError('HTTP_401', 'Unauthorized', { status: 401 }))).toBe('rejected');
+    expect(classifyAuthFailure(new ApiError('HTTP_403', 'Forbidden', { status: 403 }))).toBe('rejected');
+    expect(classifyAuthFailure(new ApiError('TIMEOUT', '请求超时，请重试'))).toBe('transient');
+    expect(classifyAuthFailure(new ApiError('HTTP_503', 'Service Unavailable', { status: 503 }))).toBe('transient');
   });
   it('成功 → authorized；加载中 → loading', () => {
     expect(gate({ isSuccess: true })).toBe('authorized');

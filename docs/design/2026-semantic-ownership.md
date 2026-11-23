@@ -37,7 +37,7 @@
 |---|---|---|---|
 | **X1** | 脚本「唯一权威」三处字面 | **内容** = ADR-0021 `### D4`；**运行时** = ADR-0033 `### D3`；`plan_snapshot` 步骤身份（`(script_name, script_version)` 等）= 派发时刻自 D4 冻结的**副本面**，**不是**第三权威源（快照**无** `script_meta` 键；#2856 / Mode C） | 采纳多数评审；0021 关联区括注已措辞降级（见 §8）；假键名勘误随 #2856 |
 | **X2** | 日志域四层权威 | **四层都对**；表内分四行登记 + 路由行 `log-chain-map`。**不是冲突**，是缺可引用汇总 → [`2026-log-chain-global-semantics.md`](./2026-log-chain-global-semantics.md)。全链**地图/路由**见 [`2026-device-log-chain-contract.md`](./2026-device-log-chain-contract.md)（Living Contract，Ownership Authority only，**非**第五内容权威） | S15 **不得**把四层并存判成 ≥2 owner；`log-chain-map` **不得**当第五内容 owner |
-| **X3** | merge 执行位置归属 | **现状登记** = ADR-0027 清单**第 7 条**；**中心存储模型** = ADR-0062（Accepted，待实施；2026-11-02 取代 ADR-0053）；三阶段归档职责仍见 ADR-0025；**B1 迁 worker 触发后**结构面才归 ADR-0033 | 与 B0 相容；边行 `R-merge-locus` |
+| **X3** | merge 执行位置归属 | **现状登记** = ADR-0027 清单**第 7 条**；**中心存储模型** = ADR-0062（v1.2 已交付、v2.0 Accepted 2026-11-23 按 §9.2 分阶段激活；2026-11-02 取代 ADR-0053）；三阶段归档职责仍见 ADR-0025；**B1 迁 worker 触发后**结构面才归 ADR-0033 | 与 B0 相容；边行 `R-merge-locus` |
 
 ---
 
@@ -166,7 +166,7 @@
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
-| `center-storage-model` | concept | 中心存储上送选择、问题 / 发生 / 代表身份、交付登记与留存回收边界（2026-11-02 由 ADR-0053 改归 ADR-0062；2026-11-04 v1.1：问题归并规则归扫描工具，平台只读工具输出；2026-11-16 v1.2：以登记的 MTK 日志证据、统计和缺口为交付出口，既有报表消费按分区限定） | `docs/adr/ADR-0062-device-log-dedup-before-upload.md :: ## 5. 决策（按流转环节 S1–S11）` | 修改上送选择、代表证据或留存边界；B8 阶段二切换上传后同步现态契约 |
+| `center-storage-model` | concept | 中心存储上送选择、问题 / 发生 / 代表身份、交付登记与留存回收边界（2026-11-02 由 ADR-0053 改归 ADR-0062；2026-11-04 v1.1：问题归并规则归扫描工具，平台只读工具输出；2026-11-16 v1.2：以登记的 MTK 日志证据、统计和缺口为交付出口，既有报表消费按分区限定；2026-11-23 v2.0 Accepted：UNISOC 并入 `DEDUP_FIRST`、中心挂载强门控与阶段 D 退出 `CURRENT`，按 §9.2 分阶段激活） | `docs/adr/ADR-0062-device-log-dedup-before-upload.md :: ## 5. 决策（按流转环节 S1–S11）` | 修改上送选择、代表证据或留存边界；B8 阶段二切换上传或 §9.2 各阶段激活后同步现态契约 |
 | `log-chain-map` | concept | 日志域全链**地图/路由入口**（Ownership Authority only；**非**第五内容权威） | `docs/design/2026-device-log-chain-contract.md :: ## 3. 阶段 owner 表（四层 + 后半段）` | 把 Contract 升格为内容宪法；与四层 ADR 抢定义权 |
 | `R-merge-locus` | relation | `Merge ─executed_at→ 控制面实例` | `docs/adr/ADR-0027-control-plane-horizontal-scaling.md :: 7. **merge（\`run_merge_sync\`）为实例绑定操作**` | B1/B2/多实例互斥 |
 | `R-merge-consumes-log` | relation | `Merge ─consumes→ scan/日志产物` | `docs/design/2026-scan-upload-merge-contract.md :: ## 控制面 merge` | 改输入集 |
@@ -282,6 +282,7 @@
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-23 | ADR-0062 v2.0（Accepted，归属域 `center-storage-model`）：经六轮独立复核通过并于同日由 Owner 裁决接受，增补 UNISOC 并入 `DEDUP_FIRST`、中心挂载强门控与阶段 D 退出（按 §9.2 阶段 A–D 分阶段激活）；`center-storage-model` 行按 S15⑤ 恢复 `## 5. 决策（按流转环节 S1–S11）` 实锚 |
 | 2026-09-18 | 初稿：方案 A + Ownership only + X1/X2/X3 + 四类嵌入 + flash + S15 + 12 行 |
 | 2026-09-18 | **用户三点修正**：B/C 深嵌为主；Accepted ADR 全覆盖框架 + 扩表/TBD；评审采纳对照 §6 |
 | 2026-09-18 | **外置措辞澄清**：主判据=不入项目代码树；右列改名「外置/不入仓」；Adapter=薄调用接缝非第二目标 |

@@ -1,1 +1,8 @@
-{"capabilities": ["progress_stamps"]}
+{
+  "capabilities": [
+    "progress_stamps"
+  ],
+  "requires_agent_capabilities": [
+    "firmware_cache_v1"
+  ]
+}
