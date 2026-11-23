@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useBeforeUnload } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/useToast';
@@ -390,17 +390,30 @@ export function usePlanEditForm(planId: number | null) {
   const [projectionResult, setProjectionResult] = useState<{
     identity: object; planId: number | null; data?: ParameterProjection; unavailable: boolean;
   } | null>(null);
+  const hasFetchedDraftRef = useRef(false);
   useEffect(() => {
     let current = true;
     if (!isNew && (planLoading || !basePlan)) return;
-    const request = projectionIsDraft
-      ? api.plans.draftParameterProjection(projectionRequest)
-      : api.plans.parameterProjection(planId!);
-    void request.then(
-      data => { if (current) setProjectionResult({ identity: projectionIdentity, planId, data, unavailable: false }); },
-      () => { if (current) setProjectionResult({ identity: projectionIdentity, planId, unavailable: true }); },
-    );
-    return () => { current = false; };
+    const runFetch = () => {
+      const request = projectionIsDraft
+        ? api.plans.draftParameterProjection(projectionRequest)
+        : api.plans.parameterProjection(planId!);
+      void request.then(
+        data => { if (current) setProjectionResult({ identity: projectionIdentity, planId, data, unavailable: false }); },
+        () => { if (current) setProjectionResult({ identity: projectionIdentity, planId, unavailable: true }); },
+      );
+    };
+    if (!projectionIsDraft || !hasFetchedDraftRef.current) {
+      if (projectionIsDraft) hasFetchedDraftRef.current = true;
+      runFetch();
+      return () => { current = false; };
+    }
+    // 后续草稿态编辑 200ms 防抖：编辑步骤/设置期间避免每次击键触发一次服务端草稿投影请求
+    const timer = window.setTimeout(runFetch, 200);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
   }, [projectionIdentity, projectionIsDraft, projectionRequest, planId, isNew, planLoading, basePlan]);
   const projection = projectionResult?.identity === projectionIdentity ? projectionResult.data : undefined;
   const projectionUnavailable = projectionResult?.identity === projectionIdentity && projectionResult.unavailable;
