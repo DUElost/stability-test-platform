@@ -56,6 +56,8 @@ def compute_capacity(
     usb_kernel_log_channel: Optional[str] = None,
     single_instance_degraded: bool = False,
     usb_power_slots: Optional[dict] = None,
+    usb_hub_topology: Optional[dict] = None,
+    usb_kernel_errors_1h: Optional[dict] = None,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
@@ -135,6 +137,11 @@ def compute_capacity(
     # 其余主机不带这个键（心跳 payload 不变）。
     if usb_power_slots is not None:
         capacity["usb_power_slots"] = usb_power_slots
+    # S1：零权限 sysfs Hub 拓扑与 1h 内核 USB 错误数值计数（纯观测，不参与槽位/门禁）
+    if usb_hub_topology is not None:
+        capacity["usb_hub_topology"] = usb_hub_topology
+    if usb_kernel_errors_1h is not None:
+        capacity["usb_kernel_errors_1h"] = usb_kernel_errors_1h
 
     return {"capacity": capacity, "health": health}
 
