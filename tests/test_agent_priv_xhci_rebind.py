@@ -66,6 +66,13 @@ def test_parser_accepts_only_bare_xhci_rebind(wrapper):
     ns = parser.parse_args(["xhci-rebind"])
     assert ns.command == "xhci-rebind"
     assert wrapper._validate_parser_contract(parser) == []
+    # D9.1：显式锁定子解析器 allow_abbrev=False（避免日后新增选项时被前缀缩写绕过）
+    subparsers = next(
+        action.choices
+        for action in parser._actions
+        if isinstance(getattr(action, "choices", None), dict) and action.choices
+    )
+    assert subparsers["xhci-rebind"].allow_abbrev is False
 
 
 @pytest.mark.parametrize("argv", [

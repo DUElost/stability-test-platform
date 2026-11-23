@@ -177,6 +177,41 @@ def test_claim_pause_gate_blocks_normal_and_vbus_claims(monkeypatch):
     assert len(fetched) == 1
 
 
+def test_claim_pause_gate_waits_for_inflight_claim_tick_to_exit():
+    """并发锁定：acquire_pause 必须等待在途 claim_scope 退出后才返回 True。"""
+    gate = ClaimPauseGate()
+    entered = threading.Event()
+    release_claim = threading.Event()
+    paused_after_claim_exit = threading.Event()
+    order: list[str] = []
+
+    def inflight_claim():
+        with gate.claim_scope() as allowed:
+            assert allowed is True
+            order.append("claim_enter")
+            entered.set()
+            release_claim.wait(timeout=2.0)
+            order.append("claim_exit")
+
+    def acquire_worker():
+        assert gate.acquire_pause(timeout=2.0) is True
+        order.append("pause_acquired")
+        paused_after_claim_exit.set()
+        gate.release_pause()
+
+    t_claim = threading.Thread(target=inflight_claim)
+    t_pause = threading.Thread(target=acquire_worker)
+    t_claim.start()
+    assert entered.wait(timeout=2.0) is True
+    t_pause.start()
+    # 在途 tick 未退出前，acquire_pause 不得提前完成
+    assert paused_after_claim_exit.wait(timeout=0.1) is False
+    release_claim.set()
+    t_claim.join(timeout=2.0)
+    t_pause.join(timeout=2.0)
+    assert order == ["claim_enter", "claim_exit", "pause_acquired"]
+
+
 # ── SelfHealCoordinator：xHCI rebind 闭环 ────────────────────────────────────
 
 
@@ -242,6 +277,60 @@ def test_xhci_rebind_holds_claim_pause_through_cooldown_and_recovers(tmp_path: P
     assert snap["fuse_open"] is False
     assert snap["xhci"]["boot_attempts"] == 1
     assert snap["xhci"]["episode_failures"] == 0
+
+
+def test_xhci_and_l3_persist_attempt_on_disk_before_action_runs(tmp_path: Path):
+    """D9.6 防洗白时序钉子：调用 wrapper / adb reconnect 的当下，磁盘状态文件必须已落盘本次 attempt。
+
+    若将 record_attempt/save 挪到动作调用之后，本用例必须变红。
+    """
+    xhci_fuse_path = tmp_path / "xhci_rebind_fuse.json"
+    observed_in_xhci: list[tuple[int, int, int]] = []
+
+    def assert_persisted_during_xhci():
+        assert xhci_fuse_path.is_file(), "调用 xhci-rebind 时熔断状态文件必须已落盘"
+        mode = os.stat(xhci_fuse_path).st_mode & 0o777
+        loaded = PersistentFuseStore(
+            xhci_fuse_path, boot_id_provider=lambda: "boot-xyz",
+        ).load(now=10_000.0)
+        observed_in_xhci.append((loaded.boot_attempts, len(loaded.window_attempts), mode))
+        return 0, None, "ok"
+
+    coord = _make_coord(tmp_path, run_xhci_rebind=assert_persisted_during_xhci)
+    for _ in range(EMPTY_TREE_TICKS_NEED):
+        coord.maybe_trigger_xhci_rebind(
+            enabled=True, whitelist=frozenset({"172-21-15-88"}),
+            usb_device_count=0, usb_root_hub_count=2, other_usb_nodes=0,
+            discovered_devices=0, active_jobs=0, active_devices=0,
+            snapshot_monotonic=500.0, poll_interval=5.0,
+        )
+    assert observed_in_xhci == [(1, 1, 0o600)]
+
+    # 同构验证 L3 adb reconnect offline：调用当下磁盘文件也必须已计入 attempt
+    adb_fuse_path = tmp_path / "adb_reconnect_fuse.json"
+    observed_in_adb: list[tuple[int, int, int]] = []
+    mass_offline = [{"serial": f"S{i}", "adb_state": "offline"} for i in range(4)]
+
+    def assert_persisted_during_adb(_adb: str) -> bool:
+        assert adb_fuse_path.is_file(), "调用 adb reconnect 时熔断状态文件必须已落盘"
+        mode = os.stat(adb_fuse_path).st_mode & 0o777
+        loaded = PersistentFuseStore(
+            adb_fuse_path, boot_id_provider=lambda: "boot-xyz",
+        ).load(now=10_000.0)
+        observed_in_adb.append((loaded.boot_attempts, len(loaded.window_attempts), mode))
+        return True
+
+    coord_l3 = _make_coord(
+        tmp_path,
+        run_adb_reconnect=assert_persisted_during_adb,
+        probe_adb_devices=lambda _adb: [{"serial": "S0", "adb_state": "device"}],
+    )
+    for _ in range(2):
+        coord_l3.maybe_trigger_adb_reconnect_offline(
+            enabled=True, devices_list=mass_offline, cooldown_seconds=60.0,
+            active_jobs=0, active_devices=0, snapshot_monotonic=500.0, poll_interval=5.0,
+        )
+    assert observed_in_adb == [(1, 1, 0o600)]
 
 
 def test_xhci_probe_failed_trips_hardware_suspect_immediately(tmp_path: Path):
