@@ -1329,6 +1329,93 @@ def test_sealed_hit_detects_same_size_one_byte_corruption(tmp_path, monkeypatch)
     assert opened_source_images == []
 
 
+def _prep_unsealed_cache_env(tmp_path, monkeypatch, cache: Path):
+    _mount_ok(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_aee_local_root",
+        lambda: tmp_path / "aee",
+    )
+    (tmp_path / "aee").mkdir(exist_ok=True)
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_disk_usage", lambda _p: _disk()
+    )
+    monkeypatch.setattr("backend.agent.firmware_cache._st_dev", lambda _p: 1)
+    monkeypatch.setenv("STP_AGENT_INSTALL_DIR", str(tmp_path / "install"))
+    (tmp_path / "install").mkdir(exist_ok=True)
+    return _settings(stp_firmware_cache_dir=str(cache))
+
+
+def test_unsealed_in_tree_file_symlink_is_cached(tmp_path, monkeypatch):
+    """未封包根内文件软链（boot.img→base.img，目标大小≠链接路径长度）须完整交付。"""
+    unsealed = tmp_path / "fw"
+    unsealed.mkdir()
+    # 目标文件远大于 "base.img" 路径字符串长度，避免等长巧合
+    base_payload = b"BASE_PAYLOAD_" + (b"Z" * 64)
+    (unsealed / "base.img").write_bytes(base_payload)
+    (unsealed / "boot.img").symlink_to("base.img")
+    assert (unsealed / "boot.img").is_symlink()
+    assert len(base_payload) != len("base.img")
+
+    cache = tmp_path / "cache"
+    cfg = _prep_unsealed_cache_env(tmp_path, monkeypatch, cache)
+    with ensure_firmware(
+        unsealed, PROFILE_MTK, permit_client=_fake_permit(), settings=cfg
+    ) as r:
+        boot = r.local_dir / "boot.img"
+        assert boot.is_file()
+        assert not boot.is_symlink()
+        assert boot.read_bytes() == base_payload
+        assert (r.local_dir / READY_MARKER).is_file()
+
+
+def test_unsealed_escape_and_dangling_symlink_fail_closed(tmp_path, monkeypatch):
+    """未封包越界软链与悬空软链均显式失败，零 ready、不交付缺件目录。"""
+    cache = tmp_path / "cache"
+    cfg = _prep_unsealed_cache_env(tmp_path, monkeypatch, cache)
+
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"secret-outside")
+    escape_src = tmp_path / "fw_escape"
+    escape_src.mkdir()
+    (escape_src / "ok.bin").write_bytes(b"ok")
+    (escape_src / "evil.img").symlink_to(outside)
+
+    with pytest.raises(FirmwareCacheError) as ei:
+        resolve_cache_identity(escape_src, PROFILE_MTK)
+    assert ei.value.code == CODE_ENUM_FAILED
+    with pytest.raises(FirmwareCacheError) as ei2:
+        with ensure_firmware(
+            escape_src,
+            PROFILE_MTK,
+            permit_client=_fake_permit(),
+            settings=cfg,
+            max_retries=1,
+        ):
+            pass
+    assert ei2.value.code == CODE_ENUM_FAILED
+    assert list(cache.rglob(READY_MARKER)) == []
+
+    dangling_src = tmp_path / "fw_dangling"
+    dangling_src.mkdir()
+    (dangling_src / "ok.bin").write_bytes(b"ok")
+    (dangling_src / "missing.img").symlink_to("no_such_target.img")
+
+    with pytest.raises(FirmwareCacheError) as ei3:
+        resolve_cache_identity(dangling_src, PROFILE_MTK)
+    assert ei3.value.code == CODE_ENUM_FAILED
+    with pytest.raises(FirmwareCacheError) as ei4:
+        with ensure_firmware(
+            dangling_src,
+            PROFILE_MTK,
+            permit_client=_fake_permit(),
+            settings=cfg,
+            max_retries=1,
+        ):
+            pass
+    assert ei4.value.code == CODE_ENUM_FAILED
+    assert list(cache.rglob(READY_MARKER)) == []
+
+
 def test_unsealed_lstat_failure_is_explicit(tmp_path, monkeypatch):
     """M6：未封包枚举单文件 lstat 失败 → 显式失败。"""
     import errno

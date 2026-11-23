@@ -321,18 +321,29 @@ def _unsealed_file_fingerprint(
 ) -> tuple[str, int, list[dict[str, Any]]]:
     """未封包兼容：显式递归 ``os.scandir``，不吞任何 ``OSError``（#4086 v1.6）。
 
-    目录打开 / 条目类型判定 / ``lstat`` 任一失败立即
-    ``firmware_unsealed_enumerate_failed``，禁止产出残缺整包。
+    目录打开 / 条目类型判定 / ``lstat`` / 根内文件软链 ``stat`` 任一失败立即
+    ``firmware_unsealed_enumerate_failed``；根内指向普通文件的软链按目标
+    size/mtime 纳入指纹（ADR-0064 D1 #6），越界/悬空/目录软链 fail-closed。
     """
     entries: list[list[Any]] = []
     files_meta: list[dict[str, Any]] = []
     root = source_dir.resolve(strict=False)
+    root_real = os.path.realpath(str(source_dir))
 
     def _enum_failed(message: str, exc: Optional[BaseException] = None) -> None:
         err = FirmwareCacheError(CODE_ENUM_FAILED, message)
         if exc is not None:
             raise err from exc
         raise err
+
+    def _append_file(abs_path: Path, st: os.stat_result) -> None:
+        rel = abs_path.relative_to(root).as_posix()
+        rel = normalize_relpath(rel)
+        mtime_ns = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))
+        entries.append([rel, int(st.st_size), mtime_ns])
+        files_meta.append(
+            {"relpath": rel, "size": int(st.st_size), "mtime_ns": mtime_ns}
+        )
 
     def _walk(current: Path) -> None:
         try:
@@ -366,6 +377,41 @@ def _unsealed_file_fingerprint(
                         exc,
                     )
                     continue  # pragma: no cover
+                if is_sym:
+                    full_path = entry.path
+                    abs_path = Path(full_path)
+                    try:
+                        real_target = os.path.realpath(full_path)
+                    except OSError as exc:
+                        _enum_failed(
+                            f"realpath failed during unsealed enumerate: "
+                            f"{full_path}: {exc}",
+                            exc,
+                        )
+                        continue  # pragma: no cover
+                    if real_target != root_real and not real_target.startswith(
+                        root_real + os.sep
+                    ):
+                        _enum_failed(
+                            f"symlink escapes source_dir during unsealed "
+                            f"enumerate: {full_path} -> {real_target}"
+                        )
+                    try:
+                        st_target = os.stat(full_path)
+                    except OSError as exc:
+                        _enum_failed(
+                            f"stat through symlink failed during unsealed "
+                            f"enumerate: {full_path}: {exc}",
+                            exc,
+                        )
+                        continue  # pragma: no cover
+                    if not stat.S_ISREG(st_target.st_mode):
+                        _enum_failed(
+                            f"symlink target is not a regular file during "
+                            f"unsealed enumerate: {full_path} -> {real_target}"
+                        )
+                    _append_file(abs_path, st_target)
+                    continue
                 try:
                     is_dir = entry.is_dir(follow_symlinks=False)
                 except OSError as exc:
@@ -375,7 +421,7 @@ def _unsealed_file_fingerprint(
                         exc,
                     )
                     continue  # pragma: no cover
-                if is_dir and not is_sym:
+                if is_dir:
                     _walk(Path(entry.path))
                     continue
                 abs_path = Path(entry.path)
@@ -390,19 +436,7 @@ def _unsealed_file_fingerprint(
                     continue  # pragma: no cover
                 if not stat.S_ISREG(st.st_mode):
                     continue
-                rel = abs_path.relative_to(root).as_posix()
-                rel = normalize_relpath(rel)
-                mtime_ns = int(
-                    getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
-                )
-                entries.append([rel, int(st.st_size), mtime_ns])
-                files_meta.append(
-                    {
-                        "relpath": rel,
-                        "size": int(st.st_size),
-                        "mtime_ns": mtime_ns,
-                    }
-                )
+                _append_file(abs_path, st)
 
     _walk(root)
     blob = json.dumps(entries, ensure_ascii=True, separators=(",", ":")).encode(

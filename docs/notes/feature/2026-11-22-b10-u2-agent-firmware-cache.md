@@ -53,3 +53,5 @@ Class: feature
   锁布局偏离已按 D12 写入 PR「偏离说明」。
 - 第 3 轮 / #4086 v1.6 收口：未封包改显式递归 `os.scandir`（含 `is_dir` EIO）、
   `.staging` 祖先别名与同 key 末级软链防护、二级降级复核耗尽不被主盘空间不足掩盖为 NFS。
+- 第 4 轮：未封包根内文件软链按目标 size/mtime 纳入指纹并完整拷贝；越界/悬空/非文件
+  软链 fail-closed（修复 `S_ISREG(lstat)` 静默漏链回归）。
