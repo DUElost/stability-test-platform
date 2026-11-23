@@ -264,10 +264,10 @@ class KernelUsbWatch:
         # #2957：首扫 = 最近 1 小时（不再读整段 boot，见类 docstring）
         self._since_wall: Optional[float] = wall_clock() - FIRST_SCAN_LOOKBACK_SECONDS
         self._hc_dead_latched = False
-        #: 样本 = ``(区间起点, 区间终点, link_errors, cable_suspect)``。留**终点**是
-        #: #2957 首扫的需要：首扫覆盖 [now-3600, now] 一小时，若按起点裁剪，
+        #: 样本 = ``(区间起点, 区间终点, link_errors, cable_suspect, disconnects, resets, enum_errors, hub_port_errors)``。
+        #: 留**终点**是 #2957 首扫的需要：首扫覆盖 [now-3600, now] 一小时，若按起点裁剪，
         #: 下一次扫描就会被当作「过期」丢掉，而它覆盖的事件其实还在窗内。
-        self._samples: deque[Tuple[float, float, int, int]] = deque()
+        self._samples: deque[Tuple[float, float, int, int, int, int, int, int]] = deque()
         self._warned_unavailable = False
         self._channel_state = CHANNEL_UNKNOWN
 
@@ -282,6 +282,24 @@ class KernelUsbWatch:
         """
         with self._lock:
             return self._channel_state
+
+    def window_summary(self) -> Optional[dict[str, int]]:
+        """最近 1 小时滑动窗内的内核 USB 错误数值计数（非阻塞）。
+
+        通道不是 ``ok``（未知或不可读）时返回 None——未知 ≠ 0。
+        """
+        with self._lock:
+            if self._channel_state != CHANNEL_OK:
+                return None
+            counts = self._window_all_counts_locked()
+            return {
+                "link_errors": counts[0],
+                "cable_suspect": counts[1],
+                "disconnects": counts[2],
+                "resets": counts[3],
+                "enum_errors": counts[4],
+                "hub_port_errors": counts[5],
+            }
 
     # ── 调用方接口 ───────────────────────────────────────────────────────
     def poll(self, *, usb_device_count: Optional[int]) -> list[str]:
@@ -348,7 +366,16 @@ class KernelUsbWatch:
                 # 死亡不在本窗内，由结果层 usb_tree_empty（#2902/#2967）承接（#2957）。
                 self._hc_dead_latched = True
             self._samples.append(
-                (since, self._wall_clock(), faults.link_errors, faults.cable_suspect)
+                (
+                    since,
+                    self._wall_clock(),
+                    faults.link_errors,
+                    faults.cable_suspect,
+                    faults.disconnects,
+                    faults.resets,
+                    faults.enum_errors,
+                    faults.hub_port_errors,
+                )
             )
             self._prune_locked()
 
@@ -358,10 +385,18 @@ class KernelUsbWatch:
             # 覆盖区间**整体**滑出窗口才丢（按终点判；首扫是 1 小时一段，不是 60s）
             self._samples.popleft()
 
-    def _window_counts_locked(self) -> Tuple[int, int]:
+    def _window_all_counts_locked(self) -> Tuple[int, int, int, int, int, int]:
         cutoff = self._wall_clock() - self._window_seconds
         in_window = [s for s in self._samples if s[1] >= cutoff]
         return (
             sum(s[2] for s in in_window),
             sum(s[3] for s in in_window),
+            sum(s[4] for s in in_window),
+            sum(s[5] for s in in_window),
+            sum(s[6] for s in in_window),
+            sum(s[7] for s in in_window),
         )
+
+    def _window_counts_locked(self) -> Tuple[int, int]:
+        counts = self._window_all_counts_locked()
+        return counts[0], counts[1]

@@ -308,6 +308,37 @@ host_kernel_log_channel = Gauge(
     ['host_id', 'state'],  # state: ok | unavailable | unknown
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# S1：主机 USB / Hub 精细数值指标（纯观测，来自心跳 capacity；未知不上报、不伪造 0）。
+host_usb_devices = Gauge(
+    'stability_host_usb_devices',
+    'USB target devices enumerated via lsusb per host',
+    ['host_id'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+host_adb_interfaces = Gauge(
+    'stability_host_adb_interfaces',
+    'USB devices exposing ADB interface (ff:42) in sysfs per host',
+    ['host_id'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+host_usb_cascade_hubs = Gauge(
+    'stability_host_usb_cascade_hubs',
+    'External cascade USB hubs detected in sysfs per host',
+    ['host_id'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+host_usb_unbound_hubs = Gauge(
+    'stability_host_usb_unbound_hubs',
+    'Cascade USB hubs without a bound driver (half-enumerated) per host',
+    ['host_id', 'scope'],  # scope: total | idle_bus
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+host_usb_kernel_errors_1h = Gauge(
+    'stability_host_usb_kernel_errors_1h',
+    '1-hour sliding window count of kernel USB fault events per host',
+    ['host_id', 'kind'],  # kind: KERNEL_ERROR_COUNTER_KEYS
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ADR-0038 v0.3 D9.3：设备面意图位（#3159）。置位 = 人为声明「该 host 的设备面
 # 已被人工处置（移机 / 清空 / 关机）」，UsbBlind / AdbOfflineConcentration 两条
 # 设备面规则据此豁免（规则侧 unless，不隐藏原始数据）；D9.8 陈旧告警也读它。
