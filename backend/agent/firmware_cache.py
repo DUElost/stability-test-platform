@@ -328,13 +328,24 @@ def _unsealed_file_fingerprint(
     entries: list[list[Any]] = []
     files_meta: list[dict[str, Any]] = []
     root = source_dir.resolve(strict=False)
-    root_real = os.path.realpath(str(source_dir))
 
     def _enum_failed(message: str, exc: Optional[BaseException] = None) -> None:
         err = FirmwareCacheError(CODE_ENUM_FAILED, message)
         if exc is not None:
             raise err from exc
         raise err
+
+    try:
+        # strict=True：解析中 lstat/readlink 的 OSError（EIO/ELOOP/ENOENT/…）
+        # 立即向外传播，禁止非严格 realpath 吞错后继续交付。
+        root_real = os.path.realpath(str(source_dir), strict=True)
+    except OSError as exc:
+        _enum_failed(
+            f"realpath(source_dir) failed during unsealed enumerate: "
+            f"{source_dir}: {exc}",
+            exc,
+        )
+        raise  # pragma: no cover — _enum_failed always raises
 
     def _append_file(abs_path: Path, st: os.stat_result) -> None:
         rel = abs_path.relative_to(root).as_posix()
@@ -381,7 +392,7 @@ def _unsealed_file_fingerprint(
                     full_path = entry.path
                     abs_path = Path(full_path)
                     try:
-                        real_target = os.path.realpath(full_path)
+                        real_target = os.path.realpath(full_path, strict=True)
                     except OSError as exc:
                         _enum_failed(
                             f"realpath failed during unsealed enumerate: "

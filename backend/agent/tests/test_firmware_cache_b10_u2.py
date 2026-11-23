@@ -1368,6 +1368,77 @@ def test_unsealed_in_tree_file_symlink_is_cached(tmp_path, monkeypatch):
         assert (r.local_dir / READY_MARKER).is_file()
 
 
+def test_unsealed_symlink_realpath_lstat_eio_fail_closed(tmp_path, monkeypatch):
+    """软链 realpath(strict) 路径上 os.lstat 注入 EIO → ENUM_FAILED，零 ready。"""
+    import errno
+
+    unsealed = tmp_path / "fw"
+    unsealed.mkdir()
+    (unsealed / "base.img").write_bytes(b"BASE_PAYLOAD_" + (b"Z" * 64))
+    boot = unsealed / "boot.img"
+    boot.symlink_to("base.img")
+    cache = tmp_path / "cache"
+    cfg = _prep_unsealed_cache_env(tmp_path, monkeypatch, cache)
+
+    real_lstat = os.lstat
+    boot_real = str(boot.resolve(strict=False))
+
+    def boom_lstat(path, *args, **kwargs):
+        path_s = str(path)
+        if path_s == boot_real or Path(path_s).name == "boot.img":
+            # 仅在解析 boot.img 软链时炸一次，避免误伤 scandir 前的其它调用
+            if getattr(boom_lstat, "_hit", 0) < 1:
+                boom_lstat._hit = 1  # type: ignore[attr-defined]
+                raise OSError(errno.EIO, "lstat boom during realpath")
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", boom_lstat)
+    with pytest.raises(FirmwareCacheError) as ei:
+        with ensure_firmware(
+            unsealed,
+            PROFILE_MTK,
+            permit_client=_fake_permit(),
+            settings=cfg,
+            max_retries=1,
+        ):
+            pass
+    assert ei.value.code == CODE_ENUM_FAILED
+    assert list(cache.rglob(READY_MARKER)) == []
+
+
+def test_unsealed_symlink_realpath_readlink_eio_fail_closed(tmp_path, monkeypatch):
+    """软链 realpath(strict) 路径上 os.readlink 注入 EIO → ENUM_FAILED，零 ready。"""
+    import errno
+
+    unsealed = tmp_path / "fw"
+    unsealed.mkdir()
+    (unsealed / "base.img").write_bytes(b"BASE_PAYLOAD_" + (b"Z" * 64))
+    boot = unsealed / "boot.img"
+    boot.symlink_to("base.img")
+    cache = tmp_path / "cache"
+    cfg = _prep_unsealed_cache_env(tmp_path, monkeypatch, cache)
+
+    real_readlink = os.readlink
+
+    def boom_readlink(path, *args, **kwargs):
+        if Path(path).name == "boot.img":
+            raise OSError(errno.EIO, "readlink boom during realpath")
+        return real_readlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "readlink", boom_readlink)
+    with pytest.raises(FirmwareCacheError) as ei:
+        with ensure_firmware(
+            unsealed,
+            PROFILE_MTK,
+            permit_client=_fake_permit(),
+            settings=cfg,
+            max_retries=1,
+        ):
+            pass
+    assert ei.value.code == CODE_ENUM_FAILED
+    assert list(cache.rglob(READY_MARKER)) == []
+
+
 def test_unsealed_escape_and_dangling_symlink_fail_closed(tmp_path, monkeypatch):
     """未封包越界软链与悬空软链均显式失败，零 ready、不交付缺件目录。"""
     cache = tmp_path / "cache"

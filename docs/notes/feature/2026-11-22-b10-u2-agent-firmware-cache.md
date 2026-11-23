@@ -55,3 +55,5 @@ Class: feature
   `.staging` 祖先别名与同 key 末级软链防护、二级降级复核耗尽不被主盘空间不足掩盖为 NFS。
 - 第 4 轮：未封包根内文件软链按目标 size/mtime 纳入指纹并完整拷贝；越界/悬空/非文件
   软链 fail-closed（修复 `S_ISREG(lstat)` 静默漏链回归）。
+- 第 5 轮：软链/`source_dir` 解析改 `os.path.realpath(..., strict=True)`，禁止非严格
+  模式吞掉解析中 `lstat`/`readlink` 的 `OSError`。
