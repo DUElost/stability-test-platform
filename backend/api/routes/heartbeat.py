@@ -34,6 +34,7 @@ from backend.services.device_retirement import (
     retired_heartbeat_context as device_retired_heartbeat_context,
     should_alert_retired_device_heartbeat,
 )
+from backend.services.host_health_probe import HEALTH_PROBE_EXTRA_KEY
 
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
 logger = logging.getLogger(__name__)
@@ -363,6 +364,13 @@ def _process_heartbeat_with_db(
             host_extra[keep_key] = prev_extra[keep_key]
     if payload.extra:
         host_extra.update(payload.extra)
+    # 保留控制面独立写入的 health_probe（#2983 SSH 拓扑对账探针）：
+    # 1) 避免每 5s 心跳重建 host_extra 时将其擦除（否则 recent_verdicts 永达不到 strike_need）；
+    # 2) 放在 payload.extra 合并之后，防止 Agent 上报覆盖控制面独立对账结论。
+    if HEALTH_PROBE_EXTRA_KEY in prev_extra:
+        host_extra[HEALTH_PROBE_EXTRA_KEY] = prev_extra[HEALTH_PROBE_EXTRA_KEY]
+    else:
+        host_extra.pop(HEALTH_PROBE_EXTRA_KEY, None)
     if payload.host:
         host_extra["host"] = payload.host
     # ADR-0019 Phase 3c: 规范化 capacity / health 存储到 extra
