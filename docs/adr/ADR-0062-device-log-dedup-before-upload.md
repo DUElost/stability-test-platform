@@ -545,7 +545,7 @@ Owner 收窄 B8 的交付范围。本批使用 `stability_Start-Log-Scan` 完成
 
 ### 10.9 v2.0 Proposed（2026-11-23）
 
-基于 2026-11-22 ~ 11-23 现网运行测绘（PlanRun 1589/1594/1595、全 fleet Ansible 复核确认 13 台缺失 `/mnt/stp-log` 挂载与 1 台解释器待查主机待复核，见 [#4077 续查](https://github.com/DUElost/stability-test-platform/issues/4077#issuecomment-7089730175)，以及 `.71`/`.82` 实机工具链勘察），Owner 裁决三项方向（#4077、#4101、#4102、#4103、#4104、#3884、#3830、#3766）：
+基于 2026-11-22 ~ 11-23 现网运行测绘（PlanRun 1589/1594/1595、全 fleet Ansible 复核确认 13 台缺失 `/mnt/stp-log` 挂载与 1 台 `172.21.x.x` 待复核，见 [#4077 续查](https://github.com/DUElost/stability-test-platform/issues/4077#issuecomment-7089730175)，以及 `.71`/`.82` 实机工具链勘察），Owner 裁决三项方向（#4077、#4101、#4102、#4103、#4104、#3884、#3830、#3766）：
 
 | 裁决项 | Owner 裁定 | 落点 |
 |---|---|---|
