@@ -1,12 +1,12 @@
-import { useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft,
   CheckCircle2,
   Download,
   FileUp,
   FolderOutput,
+  MoreHorizontal,
   Pencil,
   Plus,
   Trash2,
@@ -15,13 +15,29 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { PageContainer } from '@/components/layout';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { useConfirm } from '@/hooks/useConfirm';
 import { useToast } from '@/hooks/useToast';
-import { ALERT_BOX, FORM, STATUS_CHIP, TEXT } from '@/design-system';
+import { ALERT_BOX, FORM, TEXT } from '@/design-system';
 import { LAYOUT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { api, toApiError } from '@/utils/api';
@@ -83,6 +99,7 @@ export default function TestSuiteDetailPage() {
   const suiteId = Number(suiteIdParam);
   const navigate = useNavigate();
   const toast = useToast();
+  const confirmDialog = useConfirm();
   const queryClient = useQueryClient();
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
@@ -95,6 +112,12 @@ export default function TestSuiteDetailPage() {
   const [editingCase, setEditingCase] = useState<TestCase | null>(null);
   const [validateResult, setValidateResult] = useState<SuiteValidateResult | null>(null);
   const [caseSearch, setCaseSearch] = useState('');
+  const [debouncedCaseSearch, setDebouncedCaseSearch] = useState('');
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedCaseSearch(caseSearch.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [caseSearch]);
 
   const suiteQ = useQuery({
     queryKey: suiteKeys.detail(suiteId),
@@ -103,8 +126,8 @@ export default function TestSuiteDetailPage() {
   });
 
   const casesQ = useQuery({
-    queryKey: suiteKeys.cases(suiteId, caseSearch || null),
-    queryFn: () => api.suites.listCases(suiteId, { q: caseSearch || undefined }),
+    queryKey: suiteKeys.cases(suiteId, debouncedCaseSearch || null),
+    queryFn: () => api.suites.listCases(suiteId, { q: debouncedCaseSearch || undefined }),
     enabled: Number.isFinite(suiteId),
   });
 
@@ -232,108 +255,114 @@ export default function TestSuiteDetailPage() {
 
   return (
     <PageContainer width="content" className={LAYOUT.pageGap}>
-      <div className="mb-4">
-        <Link
-          to="/test-suites"
-          className={cn('inline-flex items-center gap-1 text-sm', TEXT.subtitle, 'hover:text-foreground')}
-        >
-          <ArrowLeft className="h-4 w-4" />
-          返回套件列表
-        </Link>
-      </div>
+      <PageHeader
+        title={suite.name}
+        subtitle={suite.display_name || undefined}
+        breadcrumbs={[
+          { label: '用例套件', path: '/test-suites' },
+          { label: suite.name },
+        ]}
+        action={
+          isAdmin ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  setEditingCase(null);
+                  setCaseDialogOpen(true);
+                }}
+              >
+                <Plus className="mr-1.5 h-4 w-4" />
+                新增用例
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="suite-validate-btn"
+                onClick={() => validateMutation.mutate()}
+                disabled={validateMutation.isPending}
+              >
+                <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                校验
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="suite-global-pick-btn"
+                onClick={() => globalInputRef.current?.click()}
+                disabled={importMutation.isPending}
+              >
+                <FileUp className="mr-1.5 h-4 w-4" />
+                选择 Global 文件
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="suite-import-btn"
+                onClick={() => runtaskInputRef.current?.click()}
+                disabled={importMutation.isPending}
+              >
+                <Upload className="mr-1.5 h-4 w-4" />
+                导入 runtask
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="outline" aria-label="更多操作">
+                    <MoreHorizontal className="mr-1.5 h-4 w-4" />
+                    更多
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => void handleExport()}>
+                    <Download className="mr-2 h-4 w-4" />
+                    导出 XML
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => void handleExportGlobal()}>
+                    <FileUp className="mr-2 h-4 w-4" />
+                    导出 Global
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    data-testid="suite-export-tool-btn"
+                    disabled={exportToolMutation.isPending}
+                    onSelect={() => exportToolMutation.mutate()}
+                  >
+                    <FolderOutput className="mr-2 h-4 w-4" />
+                    导出到工具目录
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive-text focus:text-destructive-text"
+                    disabled={deactivateMutation.isPending}
+                    onSelect={() => {
+                      void confirmDialog({
+                        title: '停用套件',
+                        description: `停用套件「${suite.name}」？已有 Plan 绑定将无法继续派发。`,
+                        variant: 'destructive',
+                        confirmText: '停用',
+                      }).then((ok) => {
+                        if (ok) deactivateMutation.mutate();
+                      });
+                    }}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    停用套件
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          ) : undefined
+        }
+      />
 
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold" data-testid="suite-detail-title">{suite.name}</h1>
-          {suite.display_name && <p className={TEXT.subtitle}>{suite.display_name}</p>}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <DriftBadge stale={suite.export_stale} />
-            {libraryContentDrift && (
-              <Badge variant="outline" className="border-destructive/40 text-destructive">
-                库内容漂移
-              </Badge>
-            )}
-            {suite.project_key && (
-              <Badge variant="secondary">项目 {suite.project_key}</Badge>
-            )}
-          </div>
-        </div>
-        {isAdmin && (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              data-testid="suite-validate-btn"
-              onClick={() => validateMutation.mutate()}
-              disabled={validateMutation.isPending}
-            >
-              <CheckCircle2 className="mr-2 h-4 w-4" />
-              校验
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => void handleExport()}>
-              <Download className="mr-2 h-4 w-4" />
-              导出 XML
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => void handleExportGlobal()}>
-              <FileUp className="mr-2 h-4 w-4" />
-              导出 Global
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              data-testid="suite-export-tool-btn"
-              onClick={() => exportToolMutation.mutate()}
-              disabled={exportToolMutation.isPending}
-            >
-              <FolderOutput className="mr-2 h-4 w-4" />
-              导出到工具目录
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              data-testid="suite-global-pick-btn"
-              onClick={() => globalInputRef.current?.click()}
-              disabled={importMutation.isPending}
-            >
-              <FileUp className="mr-2 h-4 w-4" />
-              选择 Global 文件
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              data-testid="suite-import-btn"
-              onClick={() => runtaskInputRef.current?.click()}
-              disabled={importMutation.isPending}
-            >
-              <Upload className="mr-2 h-4 w-4" />
-              导入 runtask
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setEditingCase(null);
-                setCaseDialogOpen(true);
-              }}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              新增用例
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className={STATUS_CHIP.destructive}
-              onClick={() => {
-                if (window.confirm(`停用套件「${suite.name}」？已有 Plan 绑定将无法继续派发。`)) {
-                  deactivateMutation.mutate();
-                }
-              }}
-              disabled={deactivateMutation.isPending}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              停用
-            </Button>
-          </div>
+      <div className="-mt-2 flex flex-wrap items-center gap-2">
+        <DriftBadge stale={suite.export_stale} />
+        {libraryContentDrift && (
+          <Badge variant="outline" className="border-destructive/40 text-destructive-text">
+            库内容漂移
+          </Badge>
+        )}
+        {suite.project_key && (
+          <Badge variant="secondary">项目 {suite.project_key}</Badge>
         )}
       </div>
 
@@ -422,31 +451,31 @@ export default function TestSuiteDetailPage() {
           )}
           {!casesQ.isLoading && !casesQ.isError && (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
-                    <th className="py-2 pr-3">#</th>
-                    <th className="py-2 pr-3">名称</th>
-                    <th className="py-2 pr-3">次数</th>
-                    <th className="py-2 pr-3">状态</th>
-                    {isAdmin && <th className="py-2">操作</th>}
-                  </tr>
-                </thead>
-                <tbody>
+              <Table className="text-sm">
+                <TableHeader>
+                  <TableRow className="border-b text-left text-muted-foreground">
+                    <TableHead className="h-auto px-0 py-2 pr-3">#</TableHead>
+                    <TableHead className="h-auto px-0 py-2 pr-3">名称</TableHead>
+                    <TableHead className="h-auto px-0 py-2 pr-3">次数</TableHead>
+                    <TableHead className="h-auto px-0 py-2 pr-3">状态</TableHead>
+                    {isAdmin && <TableHead className="h-auto px-0 py-2">操作</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {(casesQ.data ?? []).map((testCase) => (
-                    <tr key={testCase.id} className="border-b border-border/60" data-testid={`case-row-${testCase.id}`}>
-                      <td className="py-2 pr-3 font-mono text-xs">{testCase.ordinal}</td>
-                      <td className="py-2 pr-3">{testCase.name}</td>
-                      <td className="py-2 pr-3">{testCase.times}</td>
-                      <td className="py-2 pr-3">
+                    <TableRow key={testCase.id} className="border-b border-border/60" data-testid={`case-row-${testCase.id}`}>
+                      <TableCell className="px-0 py-2 pr-3 font-mono text-xs">{testCase.ordinal}</TableCell>
+                      <TableCell className="px-0 py-2 pr-3">{testCase.name}</TableCell>
+                      <TableCell className="px-0 py-2 pr-3">{testCase.times}</TableCell>
+                      <TableCell className="px-0 py-2 pr-3">
                         {testCase.enabled ? (
                           <Badge variant="outline" className="border-success/40 text-success">启用</Badge>
                         ) : (
                           <Badge variant="outline">禁用</Badge>
                         )}
-                      </td>
+                      </TableCell>
                       {isAdmin && (
-                        <td className="py-2">
+                        <TableCell className="px-0 py-2">
                           <div className="flex gap-1">
                             <Button
                               size="sm"
@@ -464,20 +493,25 @@ export default function TestSuiteDetailPage() {
                               variant="ghost"
                               aria-label="删除用例"
                               onClick={() => {
-                                if (window.confirm(`删除用例「${testCase.name}」？`)) {
-                                  deleteCaseMutation.mutate(testCase.id);
-                                }
+                                void confirmDialog({
+                                  title: '删除用例',
+                                  description: `删除用例「${testCase.name}」？`,
+                                  variant: 'destructive',
+                                  confirmText: '删除',
+                                }).then((ok) => {
+                                  if (ok) deleteCaseMutation.mutate(testCase.id);
+                                });
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
-                        </td>
+                        </TableCell>
                       )}
-                    </tr>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
               {(casesQ.data ?? []).length === 0 && (
                 <p className={cn('py-6 text-center text-sm', TEXT.subtitle)}>暂无用例</p>
               )}

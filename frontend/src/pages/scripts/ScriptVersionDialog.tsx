@@ -28,6 +28,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
   const [paramSchemaText, setParamSchemaText] = useState('');
   const [description, setDescription] = useState('');
   const [parseError, setParseError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   // React 官方"adjust state when prop changes"模式：render 期对比 prev 快照并重置表单。
   // resetKey 为 `${open}|${script.id}` 稳定字符串，无引用比较问题。
@@ -43,6 +44,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
       setParamSchemaText('');
       setDescription('');
       setParseError('');
+      setSubmitting(false);
     }
   }
 
@@ -60,6 +62,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     setParseError('');
 
     let defaultParams: Record<string, unknown> = {};
@@ -79,6 +82,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
       return;
     }
 
+    setSubmitting(true);
     try {
       await api.scripts.createVersion(script.name, {
         version: versionTrimmed,
@@ -93,6 +97,8 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '创建版本失败';
       toast.error(msg);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -198,11 +204,11 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
           {parseError && <p className={FORM.error}>{parseError}</p>}
 
           <div className="mt-4 flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>
               取消
             </Button>
-            <Button type="submit" disabled={!canSubmit}>
-              创建版本
+            <Button type="submit" disabled={!canSubmit || submitting}>
+              {submitting ? '创建中…' : '创建版本'}
             </Button>
           </div>
         </form>

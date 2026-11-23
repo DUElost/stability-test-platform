@@ -12,6 +12,7 @@ import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { LAYOUT, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { useConfirm } from '@/hooks/useConfirm';
 import { useToast } from '@/hooks/useToast';
 import { api, toApiError } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
@@ -53,6 +54,7 @@ function facetOptions(projects: ProjectSummary[], field: FacetField): string[] {
 export default function ProjectsPage() {
   const navigate = useNavigate();
   const toast = useToast();
+  const confirmDialog = useConfirm();
   const queryClient = useQueryClient();
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
@@ -99,10 +101,13 @@ export default function ProjectsPage() {
     },
   });
 
-  const handlePromote = (seed: ProjectSummary) => {
-    if (!window.confirm(`将「${seed.display_name}」转为人工项目？其 ${seed.device_count} 台设备归属不变。`)) {
-      return;
-    }
+  const handlePromote = async (seed: ProjectSummary) => {
+    const ok = await confirmDialog({
+      title: '转为人工项目',
+      description: `将「${seed.display_name}」转为人工项目？其 ${seed.device_count} 台设备归属不变。`,
+      confirmText: '确认转正',
+    });
+    if (!ok) return;
     promoteMutation.mutate(seed.project_key);
   };
 
@@ -118,10 +123,14 @@ export default function ProjectsPage() {
     },
   });
 
-  const handleAbandonSeed = (seed: ProjectSummary) => {
-    if (!window.confirm(`放弃回填标签「${seed.display_name}」？其 ${seed.device_count} 台设备不受影响（型号归属由 project_model 成员行决定），标签将从待转正队列移除。`)) {
-      return;
-    }
+  const handleAbandonSeed = async (seed: ProjectSummary) => {
+    const ok = await confirmDialog({
+      title: '放弃回填标签',
+      description: `放弃回填标签「${seed.display_name}」？其 ${seed.device_count} 台设备不受影响（型号归属由 project_model 成员行决定），标签将从待转正队列移除。`,
+      variant: 'destructive',
+      confirmText: '确认放弃',
+    });
+    if (!ok) return;
     abandonSeedMutation.mutate(seed.project_key);
   };
 
@@ -545,24 +554,26 @@ export default function ProjectsPage() {
                       <span className="text-xs text-muted-foreground" title="无型号设备兜底">
                         兜底标签
                       </span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        data-testid={`seed-abandon-${seed.project_key}`}
-                        disabled={abandonSeedMutation.isPending}
-                        onClick={() => handleAbandonSeed(seed)}
-                      >
-                        放弃
-                      </Button>
+                      {isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          data-testid={`seed-abandon-${seed.project_key}`}
+                          disabled={abandonSeedMutation.isPending}
+                          onClick={() => void handleAbandonSeed(seed)}
+                        >
+                          放弃
+                        </Button>
+                      )}
                     </div>
-                  ) : (
+                  ) : isAdmin ? (
                     <div className="flex shrink-0 items-center gap-2">
                       <Button
                         size="sm"
                         variant="outline"
                         data-testid={`seed-promote-${seed.project_key}`}
                         disabled={promoteMutation.isPending}
-                        onClick={() => handlePromote(seed)}
+                        onClick={() => void handlePromote(seed)}
                       >
                         转为项目
                       </Button>
@@ -571,12 +582,12 @@ export default function ProjectsPage() {
                         variant="ghost"
                         data-testid={`seed-abandon-${seed.project_key}`}
                         disabled={abandonSeedMutation.isPending}
-                        onClick={() => handleAbandonSeed(seed)}
+                        onClick={() => void handleAbandonSeed(seed)}
                       >
                         放弃
                       </Button>
                     </div>
-                  )}
+                  ) : null}
                 </div>
               ))}
             </div>

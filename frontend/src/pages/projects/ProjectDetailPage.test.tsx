@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent, within } from '@testing-library/rea
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { ConfirmProvider } from '@/hooks/useConfirm';
 import ProjectDetailPage from './ProjectDetailPage';
 
 const mocks = vi.hoisted(() => ({
@@ -78,11 +79,13 @@ function renderPage() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/projects/proj-a']}>
-        <Routes>
-          <Route path="/projects/:projectKey" element={<ProjectDetailPage />} />
-        </Routes>
-      </MemoryRouter>
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/projects/proj-a']}>
+          <Routes>
+            <Route path="/projects/:projectKey" element={<ProjectDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>
     </QueryClientProvider>,
   );
 }
@@ -201,17 +204,15 @@ describe('ProjectDetailPage', () => {
 
   it('archives project with confirm on admin', async () => {
     mocks.archiveProject.mockResolvedValue(makeDetail({ status: 'ARCHIVED' }));
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderPage();
     await screen.findByText('Project A');
     fireEvent.click(screen.getByTestId('archive-project-open'));
+    fireEvent.click(await screen.findByRole('button', { name: '确认归档' }));
 
-    expect(confirmSpy).toHaveBeenCalled();
     await waitFor(() => {
       expect(mocks.archiveProject).toHaveBeenCalledWith('proj-a');
     });
-    confirmSpy.mockRestore();
   });
 
   it('unarchives an archived project on admin', async () => {
@@ -232,28 +233,25 @@ describe('ProjectDetailPage', () => {
   it('removes a rule with confirm on admin', async () => {
     mocks.getProject.mockResolvedValue(makeDetail({ match_models: ['M1'] }));
     mocks.removeRule.mockResolvedValue({ project_key: 'proj-a', model: 'M1' });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderPage();
     await screen.findByText('Project A');
     fireEvent.click(screen.getByLabelText('移除规则 M1'));
+    fireEvent.click(await screen.findByRole('button', { name: '确认移除' }));
 
-    expect(confirmSpy).toHaveBeenCalled();
     await waitFor(() => {
       expect(mocks.removeRule).toHaveBeenCalledWith('proj-a', 'M1');
     });
-    confirmSpy.mockRestore();
   });
 
   it('skips remove when confirm dismissed', async () => {
     mocks.getProject.mockResolvedValue(makeDetail({ match_models: ['M1'] }));
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     renderPage();
     await screen.findByText('Project A');
     fireEvent.click(screen.getByLabelText('移除规则 M1'));
+    fireEvent.click(await screen.findByRole('button', { name: '取消' }));
     expect(mocks.removeRule).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
   it('renders devices / plans / risk trend from scoped queries', async () => {
@@ -387,19 +385,18 @@ describe('ProjectDetailPage', () => {
     mocks.modelsOf
       .mockResolvedValueOnce([{ model: 'M1', device_count: 1, platforms: ['MTK'] }])
       .mockResolvedValueOnce([]);
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderPage();
     await screen.findByText('当前归属此项目的设备型号：M1 (1)');
 
     fireEvent.click(screen.getByLabelText('移除规则 M1'));
+    fireEvent.click(await screen.findByRole('button', { name: '确认移除' }));
 
     await waitFor(() => {
       expect(
         screen.queryByText('当前归属此项目的设备型号：M1 (1)'),
       ).not.toBeInTheDocument();
     });
-    confirmSpy.mockRestore();
   });
 
   // #3194：原始计数（含退役/legacy）>20 而过滤后 total ≤20 时，列表其实已全量——

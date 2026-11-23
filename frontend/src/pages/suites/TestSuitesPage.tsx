@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Layers, Plus, Search } from 'lucide-react';
@@ -21,6 +21,7 @@ import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { ProjectFilterSelect } from '@/components/project/ProjectFilterSelect';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useToast } from '@/hooks/useToast';
+import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 import { LAYOUT, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { api, toApiError } from '@/utils/api';
@@ -40,16 +41,34 @@ export default function TestSuitesPage() {
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
 
-  const [search, setSearch] = useState('');
-  const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
+  const { getString, updateParams } = useUrlFilterParams();
+  const initialQ = getString('q', '');
+  const initialProject = getString('project', '') || undefined;
+  const [search, setSearch] = useState(initialQ);
+  const [debouncedSearch, setDebouncedSearch] = useState(initialQ);
+  const [projectKey, setProjectKey] = useState<string | undefined>(initialProject);
   const [createOpen, setCreateOpen] = useState(false);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const trimmed = search.trim();
+      setDebouncedSearch(trimmed);
+      updateParams({ q: trimmed || null });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search, updateParams]);
+
+  const handleProjectChange = (nextProject: string | undefined) => {
+    setProjectKey(nextProject);
+    updateParams({ project: nextProject ?? null });
+  };
+
   const { data: suites, isLoading, isError, error, refetch } = useQuery({
-    queryKey: suiteKeys.list(projectKey, search || null),
+    queryKey: suiteKeys.list(projectKey, debouncedSearch || null),
     queryFn: () => api.suites.list({
       project_key: projectKey ?? undefined,
       is_active: true,
-      q: search || undefined,
+      q: debouncedSearch || undefined,
     }),
   });
 
@@ -96,7 +115,7 @@ export default function TestSuitesPage() {
         </div>
         <ProjectFilterSelect
           value={projectKey}
-          onChange={setProjectKey}
+          onChange={handleProjectChange}
           className="w-full sm:w-44"
           testId="suite-project-filter"
         />

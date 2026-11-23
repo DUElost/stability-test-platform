@@ -91,18 +91,12 @@ _RE_HARDCODED_PALETTE = re.compile(
 
 # 以下 allowlist 均为 Wave 3 / Wave 4 待治理存量清单，只减不增；
 # 每完成一页治理必须同步从对应集合中移除该文件。
-_NATIVE_DIALOG_ALLOWLIST = frozenset(
-    {
-        "pages/projects/ProjectDetailPage.tsx",
-        "pages/projects/ProjectsPage.tsx",
-        "pages/suites/TestSuiteDetailPage.tsx",
-    }
-)
+# U4-2（#4117）已将全部原生弹窗收敛至 AlertDialog / useConfirm，存量基线为 0。
+_NATIVE_DIALOG_ALLOWLIST: frozenset[str] = frozenset()
 _RAW_TABLE_ALLOWLIST = frozenset(
     {
         "components/plan-run/LogEventsCard.tsx",
         "components/plan-run/TestCaseResultsCard.tsx",
-        "pages/suites/TestSuiteDetailPage.tsx",
     }
 )
 _CLICKABLE_TR_ALLOWLIST = frozenset(
@@ -113,11 +107,8 @@ _CLICKABLE_TR_ALLOWLIST = frozenset(
 )
 # U1-1（#4122）已将全部 3 处旧手写抽屉收敛至 ui/sheet.tsx，存量基线为 0。
 _BESPOKE_ARIA_MODAL_ALLOWLIST: frozenset[str] = frozenset()
-_HARDCODED_PALETTE_ALLOWLIST = frozenset(
-    {
-        "pages/projects/components/MapModelsDialog.tsx",
-    }
-)
+# U4-2（#4117）已将全部硬编码调色板收敛至语义 token，存量基线为 0。
+_HARDCODED_PALETTE_ALLOWLIST: frozenset[str] = frozenset()
 _PAGE_CONTAINER_EXEMPT = frozenset(
     {
         "pages/auth/LoginPage.tsx",

@@ -36,8 +36,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { FORM, INTERACTIVE, STATUS_CHIP, TEXT } from '@/design-system';
+import { FORM, INTERACTIVE, LAYOUT, STATUS_CHIP, TEXT } from '@/design-system';
 import { StateTabs } from '@/components/ui/state-tabs';
+import { PaginationBar } from '@/components/ui/pagination-bar';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { notificationTarget } from './notificationTarget';
 import { cn } from '@/lib/utils';
@@ -64,9 +65,22 @@ export default function NotificationsPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
   const qc = useQueryClient();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState<TabKey>((searchParams.get('tab') as TabKey) || 'channels');
   const [tabAutoDetected, setTabAutoDetected] = useState(false);
+
+  const handleTabChange = (nextTab: TabKey) => {
+    setTab(nextTab);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (nextTab === 'channels') next.delete('tab');
+        else next.set('tab', nextTab);
+        return next;
+      },
+      { replace: true },
+    );
+  };
 
   // #1196：通知记录是普通用户的只读视图；渠道/规则配置页签仅 admin。
   // 非 admin 一律落到 logs（含 URL 显式带 ?tab=channels 的情况）。
@@ -258,7 +272,7 @@ export default function NotificationsPage() {
   };
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title={isAdmin ? '通知管理' : '通知记录'}
         subtitle={isAdmin ? '配置通知渠道和告警规则' : '平台通知历史（只读）'}
@@ -277,7 +291,7 @@ export default function NotificationsPage() {
           { key: 'logs', label: '通知记录' },
         ]}
         activeKey={effectiveTab}
-        onChange={(key) => setTab(key as TabKey)}
+        onChange={(key) => handleTabChange(key as TabKey)}
         ariaLabel="通知视图切换"
       />
 
@@ -591,11 +605,11 @@ function NotificationLogsTab() {
   const qc = useQueryClient();
   const toast = useToast();
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
   const [markingId, setMarkingId] = useState<number | null>(null);
-  const pageSize = 20;
 
   const logsQ = useQuery({
-    queryKey: ['notification-logs', page],
+    queryKey: ['notification-logs', page, pageSize],
     queryFn: () => api.notifications.listLogs(page * pageSize, pageSize),
   });
 
@@ -719,27 +733,21 @@ function NotificationLogsTab() {
           </div>
 
           {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2 pt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page === 0}
-                onClick={() => setPage(page - 1)}
-              >
-                上一页
-              </Button>
-              <span className={cn('text-sm', TEXT.caption)}>
-                {page + 1} / {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages - 1}
-                onClick={() => setPage(page + 1)}
-              >
-                下一页
-              </Button>
-            </div>
+            <PaginationBar
+              page={page + 1}
+              totalPages={totalPages}
+              total={total}
+              pageSize={pageSize}
+              canPreviousPage={page > 0}
+              canNextPage={page < totalPages - 1}
+              onGoToPage={(p) => setPage(p - 1)}
+              onPrevPage={() => setPage(Math.max(0, page - 1))}
+              onNextPage={() => setPage(Math.min(totalPages - 1, page + 1))}
+              onChangePageSize={(size) => {
+                setPageSize(size);
+                setPage(0);
+              }}
+            />
           )}
         </>
       )}

@@ -534,15 +534,15 @@ describe('NotificationsPage', () => {
       setData({ logs, logsTotal: 25 });
       renderPage('/notifications?tab=logs');
       await screen.findByText('告警 1');
-      expect(screen.getByText('1 / 2')).toBeInTheDocument();
-      expect(screen.getByText('上一页').closest('button')).toBeDisabled();
+      expect(screen.getByText('第 1 / 2 页')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled();
 
-      fireEvent.click(screen.getByText('下一页'));
+      fireEvent.click(screen.getByRole('button', { name: '下一页' }));
 
       await waitFor(() => expect(screen.getByText('告警 21')).toBeInTheDocument());
       expect(mocks.notifications.listLogs).toHaveBeenCalledWith(20, 20);
-      expect(screen.getByText('2 / 2')).toBeInTheDocument();
-      expect(screen.getByText('下一页').closest('button')).toBeDisabled();
+      expect(screen.getByText('第 2 / 2 页')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled();
     });
 
     it('无记录时给出空态', async () => {
