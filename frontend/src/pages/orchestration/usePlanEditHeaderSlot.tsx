@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, ChevronRight, Code2, Play, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { useHeaderSlotSetter } from '@/contexts/HeaderSlotContext';
 import { STATUS_CHIP } from '@/design-system/tokens';
 
 interface PlanEditHeaderFormLike {
@@ -27,7 +27,7 @@ interface PlanEditHeaderFormLike {
  */
 export function usePlanEditHeaderSlot(form: PlanEditHeaderFormLike, ready: boolean) {
   const navigate = useNavigate();
-  const { setHeaderSlot } = useHeaderSlot();
+  const { setHeaderSlot } = useHeaderSlotSetter();
   const formRef = useRef(form);
 
   // 每次渲染后同步最新 form（渲染期写 ref 违反 react-hooks/refs）。
@@ -36,9 +36,14 @@ export function usePlanEditHeaderSlot(form: PlanEditHeaderFormLike, ready: boole
     formRef.current = form;
   });
 
+  useEffect(() => () => setHeaderSlot(null), [setHeaderSlot]);
+
   useEffect(() => {
     // 加载中/错误分支不注入：与其余页面一致，顶栏留空；错误分支页内已有逃生口返回按钮
-    if (!ready) return;
+    if (!ready) {
+      setHeaderSlot(null);
+      return;
+    }
     setHeaderSlot(
       <div className="flex w-full min-w-0 items-center gap-3">
         <Button
@@ -59,7 +64,7 @@ export function usePlanEditHeaderSlot(form: PlanEditHeaderFormLike, ready: boole
           </strong>
           {form.isDirty ? (
             <span
-              className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_CHIP.warning} border border-warning`}
+              className={`ml-1 inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_CHIP.warning} border border-warning`}
             >
               <AlertCircle className="w-3 h-3" /> 未保存
             </span>
@@ -67,13 +72,13 @@ export function usePlanEditHeaderSlot(form: PlanEditHeaderFormLike, ready: boole
             // #2384：新 Plan 服务端还没有这条记录——`!isDirty` 只说明「相对空模板没改过」，
             // 把它当成「已保存」是错误事实陈述（同屏的「创建」还是灰的、左侧卡片写着草稿）。
             <span
-              className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_CHIP.muted} border border-border`}
+              className={`ml-1 inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_CHIP.muted} border border-border`}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground" /> 待创建
             </span>
           ) : (
             <span
-              className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_CHIP.success} border border-success`}
+              className={`ml-1 inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_CHIP.success} border border-success`}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-success" /> 已保存
             </span>
@@ -110,6 +115,5 @@ export function usePlanEditHeaderSlot(form: PlanEditHeaderFormLike, ready: boole
         </div>
       </div>,
     );
-    return () => setHeaderSlot(null);
   }, [ready, form.name, form.isNew, form.isDirty, form.saving, navigate, setHeaderSlot]);
 }

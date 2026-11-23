@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link, useInRouterContext } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -58,6 +59,7 @@ function debtSourceText(row: DeviceReturnDebtItem): string {
  * 这里必须正常渲染空态而不是报错。
  */
 export function DeviceReturnPanel({ deviceId, returnState, isAdmin }: Props) {
+  const inRouter = useInRouterContext();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [overrideResult, setOverrideResult] = useState<DeviceReturnOverrideResult | null>(null);
   const queryClient = useQueryClient();
@@ -166,7 +168,19 @@ export function DeviceReturnPanel({ deviceId, returnState, isAdmin }: Props) {
               >
                 <span className="font-medium text-foreground">{familyLabel(row.family)}</span>
                 <span className="text-destructive">{disarmResultLabel(row.cause)}</span>
-                <span className={TEXT.subtitle}>来源：{debtSourceText(row)}</span>
+                <span className={TEXT.subtitle}>
+                  来源：
+                  {inRouter && row.source_job_id != null ? (
+                    <Link
+                      to={`/jobs/${row.source_job_id}/report`}
+                      className="text-primary hover:underline"
+                    >
+                      {debtSourceText(row)}
+                    </Link>
+                  ) : (
+                    debtSourceText(row)
+                  )}
+                </span>
                 <span className={TEXT.subtitle}>建立：{formatDateTimeShort(row.created_at)}</span>
               </li>
             ))}

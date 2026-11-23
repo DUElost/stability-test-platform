@@ -83,12 +83,12 @@ vi.mock('./components/BatchEditDeviceTagsDialog', () => ({
 // RetireDevicesDialog 保持真实渲染（#3497 G6：页面级用例断言弹窗计数文案）
 // DeviceBulkActionBar 与 AssignProjectDialog 保持真实渲染（归入流程端到端测试）
 
-function createWrapper() {
+function createWrapper(initialEntries?: string[]) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return ({ children }: { children: React.ReactNode }) => (
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     </MemoryRouter>
   );
@@ -265,6 +265,7 @@ describe('DevicesPage', () => {
   });
 
   it('non-admin does not see the bulk-assign entry', async () => {
+    const user = userEvent.setup();
     mockUseAuthSession.mockReturnValue({ data: { role: 'user' } });
     const DevicesPage = (await import('./DevicesPage')).default;
     render(<DevicesPage />, { wrapper: createWrapper() });
@@ -286,11 +287,13 @@ describe('DevicesPage', () => {
     expect(screen.getByTestId('device-bulk-assign-project')).toHaveAttribute('title', '需要管理员权限');
     expect(screen.getByTestId('device-bulk-tags')).toBeDisabled();
     expect(screen.getByTestId('device-bulk-tags')).toHaveAttribute('title', '需要管理员权限');
+    await user.click(screen.getByTestId('device-bulk-more'));
     expect(screen.queryByTestId('device-bulk-swipe-trail-on')).not.toBeInTheDocument();
     expect(screen.queryByTestId('device-bulk-swipe-trail-off')).not.toBeInTheDocument();
   });
 
   it('admin can bulk-enable swipe trail on selected devices', async () => {
+    const user = userEvent.setup();
     mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
     const DevicesPage = (await import('./DevicesPage')).default;
     render(<DevicesPage />, { wrapper: createWrapper() });
@@ -299,7 +302,8 @@ describe('DevicesPage', () => {
       expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
-    fireEvent.click(await screen.findByTestId('device-bulk-swipe-trail-on'));
+    await user.click(await screen.findByTestId('device-bulk-more'));
+    await user.click(await screen.findByTestId('device-bulk-swipe-trail-on'));
 
     await waitFor(() => {
       expect(mockBulkSwipeTrail).toHaveBeenCalledWith([1], true);
@@ -451,6 +455,7 @@ describe('DevicesPage', () => {
 
     await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
+    await user.click(await screen.findByTestId('device-bulk-more'));
     await user.click(await screen.findByTestId('device-bulk-retire'));
     await user.type(await screen.findByLabelText('退役原因'), '库存报废');
     await user.click(screen.getByTestId('device-retire-submit'));
@@ -480,6 +485,7 @@ describe('DevicesPage', () => {
     await waitFor(() => expect(screen.getByText('RET-A')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('选择设备 RET-A'));
     fireEvent.click(screen.getByLabelText('选择设备 RET-B'));
+    await user.click(await screen.findByTestId('device-bulk-more'));
     await user.click(await screen.findByTestId('device-bulk-unretire'));
 
     const dialog = await screen.findByRole('dialog');
@@ -508,6 +514,7 @@ describe('DevicesPage', () => {
     fireEvent.click(screen.getByLabelText('选择设备 RET-A'));
     fireEvent.click(screen.getByLabelText('选择设备 RET-B'));
     fireEvent.click(screen.getByLabelText('选择设备 ACTIVE-C'));
+    await user.click(await screen.findByTestId('device-bulk-more'));
     await user.click(await screen.findByTestId('device-bulk-unretire'));
 
     const dialog = await screen.findByRole('dialog');
@@ -535,6 +542,7 @@ describe('DevicesPage', () => {
     fireEvent.click(screen.getByLabelText('选择设备 RET-A'));
     fireEvent.click(screen.getByLabelText('选择设备 RET-B'));
     fireEvent.click(screen.getByLabelText('选择设备 ACTIVE-C'));
+    await user.click(await screen.findByTestId('device-bulk-more'));
     await user.click(await screen.findByTestId('device-bulk-retire'));
 
     const dialog = await screen.findByRole('dialog');
@@ -542,6 +550,7 @@ describe('DevicesPage', () => {
   });
 
   it('#2962：非 admin 看不到退役入口', async () => {
+    const user = userEvent.setup();
     mockUseAuthSession.mockReturnValue({ data: { role: 'user' } });
     const DevicesPage = (await import('./DevicesPage')).default;
     render(<DevicesPage />, { wrapper: createWrapper() });
@@ -551,8 +560,50 @@ describe('DevicesPage', () => {
     await waitFor(() =>
       expect(screen.getByTestId('device-bulk-action-bar')).toBeInTheDocument(),
     );
+    await user.click(screen.getByTestId('device-bulk-more'));
     expect(screen.queryByTestId('device-bulk-retire')).not.toBeInTheDocument();
     expect(screen.queryByTestId('device-bulk-unretire')).not.toBeInTheDocument();
+  });
+
+  it('#4117 U2-1a：0 设备项目筛选保留 FilterWorkbench，不陷入整页空态死胡同', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({ items: [], total: 0 });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper(['/devices?project=proj-a']) });
+
+    expect(await screen.findByTestId('device-project-filter')).toBeInTheDocument();
+    expect(screen.getByText('未找到匹配条件的设备')).toBeInTheDocument();
+    expect(screen.queryByText('还没有设备')).not.toBeInTheDocument();
+  });
+
+  it('#4117 U2-1a：需关注(离线/异常) QuickView 同时命中 offline 与 error 并支持往返清除', async () => {
+    mockFetchAllDevicePages.mockResolvedValue({
+      items: [
+        { id: 1, serial: 'DEV-IDLE', model: 'M1', host_id: '198-51-100-123', status: 'ONLINE', tags: [], last_seen: '2026-08-05T18:00:00+08:00' },
+        { id: 2, serial: 'DEV-OFFLINE', model: 'M1', host_id: '198-51-100-123', status: 'OFFLINE', tags: [], last_seen: '2026-08-05T18:00:00+08:00' },
+        { id: 3, serial: 'DEV-ERROR', model: 'M1', host_id: '198-51-100-123', status: 'ERROR', tags: [], last_seen: '2026-08-05T18:00:00+08:00' },
+      ],
+      total: 3,
+    });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => expect(screen.getByText('DEV-IDLE')).toBeInTheDocument());
+    const attentionBtn = screen.getByRole('button', { name: /需关注/ });
+    fireEvent.click(attentionBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText('DEV-IDLE')).not.toBeInTheDocument();
+      expect(screen.getByText('DEV-OFFLINE')).toBeInTheDocument();
+      expect(screen.getByText('DEV-ERROR')).toBeInTheDocument();
+    });
+
+    // 再次点击往返清除，恢复全部 3 台
+    fireEvent.click(attentionBtn);
+    await waitFor(() => {
+      expect(screen.getByText('DEV-IDLE')).toBeInTheDocument();
+      expect(screen.getByText('DEV-OFFLINE')).toBeInTheDocument();
+      expect(screen.getByText('DEV-ERROR')).toBeInTheDocument();
+    });
   });
 });
 
@@ -642,7 +693,8 @@ async function copySerialsText(): Promise<string> {
     const DevicesPage = (await import('./DevicesPage')).default;
     render(<DevicesPage />, { wrapper: createWrapper() });
     await selectAllDevices();
-    await user.click(await screen.findByText('复制序列号'));
+    await user.click(await screen.findByTestId('device-bulk-more'));
+    await user.click(await screen.findByTestId('device-bulk-copy-serials'));
     // writeText 优先；缺失时才走 textarea + execCommand fallback
     expect(writes.length + execCalls.length).toBeGreaterThan(0);
     return writes[0] ?? '';

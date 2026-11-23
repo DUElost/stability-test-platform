@@ -55,3 +55,24 @@ describe('admin-only 入口按角色隐藏（#2360）', () => {
     expect(screen.getByText('文件服务器')).toBeInTheDocument();
   });
 });
+
+describe('Sidebar AI 助手固定入口交互（#4117 U1-3）', () => {
+  it('移动端点击 AI 助手触发 onNavigate 收起抽屉，桌面收起态提供 title 提示', () => {
+    const onNavigate = vi.fn();
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/']}>
+        <Sidebar onNavigate={onNavigate} collapsed={false} isMobile />
+      </MemoryRouter>,
+    );
+    const link = screen.getByRole('link', { name: 'AI 助手' });
+    fireEvent.click(link);
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MemoryRouter initialEntries={['/']}>
+        <Sidebar onNavigate={onNavigate} collapsed isMobile={false} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('link', { name: 'AI 助手' })).toHaveAttribute('title', 'AI 助手');
+  });
+});

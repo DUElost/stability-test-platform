@@ -51,6 +51,7 @@ export function useCrossClientSync() {
   }, [qc]);
 
   useSocketIO(DASHBOARD_SUBSCRIPTION, {
+    trackLastMessage: false,
     onConnect: onReconnect,
     onMessage: (msg) => {
       if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_CHANGED) {

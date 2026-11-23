@@ -268,12 +268,14 @@ export function MoreFiltersPopover({
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('[role="listbox"]')) return;
       if (!containerRef.current?.contains(event.target as Node)) {
         setOpen(false);
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !document.querySelector('[role="listbox"]')) {
         setOpen(false);
       }
     };

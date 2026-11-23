@@ -1,5 +1,24 @@
-import { Archive, ArchiveRestore, CheckCheck, Copy, Download, FolderKanban, Pointer, Tags, X } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  CheckCheck,
+  ChevronDown,
+  Copy,
+  Download,
+  FolderKanban,
+  MoreHorizontal,
+  Pointer,
+  Tags,
+  X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { BULK_BAR_INNER_CLASS, BULK_BAR_OUTER_CLASS } from '@/components/ui/bulk-action-bar';
 
 interface DeviceBulkActionBarProps {
@@ -29,6 +48,12 @@ interface DeviceBulkActionBarProps {
   onClear: () => void;
 }
 
+/**
+ * 设备批量操作条（#4117 U2-1a 收敛）：
+ * 主区保留 3 个高频动作（批量标签 / 归入项目 / 导出 CSV），
+ * 复制序列号、滑动留痕与退役/解除退役收拢至「更多操作」DropdownMenu，
+ * 避免 9 个平铺按钮在 1280×800 折行撑高底栏。
+ */
 export default function DeviceBulkActionBar({
   selectedCount,
   filteredCount,
@@ -127,69 +152,83 @@ export default function DeviceBulkActionBar({
             归入项目
           </Button>
 
-          {canSwipeTrail && (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                data-testid="device-bulk-swipe-trail-on"
-                disabled={swipeTrailPending}
-                onClick={onSwipeTrailOn}
-                className="gap-1"
-              >
-                <Pointer className="h-3.5 w-3.5" />
-                {swipeTrailPending ? '下发中…' : '开启滑动留痕'}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                data-testid="device-bulk-swipe-trail-off"
-                disabled={swipeTrailPending}
-                onClick={onSwipeTrailOff}
-                className="gap-1"
-              >
-                <Pointer className="h-3.5 w-3.5" />
-                {swipeTrailPending ? '下发中…' : '关闭滑动留痕'}
-              </Button>
-            </>
-          )}
-
-          <Button size="sm" variant="outline" onClick={onCopySerials} className="gap-1">
-            <Copy className="h-3.5 w-3.5" />
-            复制序列号
-          </Button>
-
-          {canRetire && (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                data-testid="device-bulk-retire"
-                disabled={retirePending}
-                onClick={onRetire}
-                className="gap-1 text-destructive hover:text-destructive"
-              >
-                <Archive className="h-3.5 w-3.5" />
-                {retirePending ? '退役中…' : '退役'}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                data-testid="device-bulk-unretire"
-                disabled={retirePending}
-                onClick={onUnretire}
-                className="gap-1"
-              >
-                <ArchiveRestore className="h-3.5 w-3.5" />
-                {retirePending ? '处理中…' : '解除退役'}
-              </Button>
-            </>
-          )}
-
           <Button size="sm" variant="outline" onClick={onExport} className="gap-1">
             <Download className="h-3.5 w-3.5" />
             导出 CSV
           </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="device-bulk-more"
+                className="gap-1"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+                更多操作
+                <ChevronDown className="h-3 w-3 opacity-70" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" side="top" className="w-44">
+              <DropdownMenuItem
+                data-testid="device-bulk-copy-serials"
+                onSelect={onCopySerials}
+                className="gap-2 text-xs"
+              >
+                <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                复制序列号
+              </DropdownMenuItem>
+
+              {canSwipeTrail && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    data-testid="device-bulk-swipe-trail-on"
+                    disabled={swipeTrailPending}
+                    onSelect={onSwipeTrailOn}
+                    className="gap-2 text-xs"
+                  >
+                    <Pointer className="h-3.5 w-3.5 text-muted-foreground" />
+                    {swipeTrailPending ? '下发中…' : '开启滑动留痕'}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    data-testid="device-bulk-swipe-trail-off"
+                    disabled={swipeTrailPending}
+                    onSelect={onSwipeTrailOff}
+                    className="gap-2 text-xs"
+                  >
+                    <Pointer className="h-3.5 w-3.5 text-muted-foreground" />
+                    {swipeTrailPending ? '下发中…' : '关闭滑动留痕'}
+                  </DropdownMenuItem>
+                </>
+              )}
+
+              {canRetire && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    data-testid="device-bulk-retire"
+                    disabled={retirePending}
+                    onSelect={onRetire}
+                    className="gap-2 text-xs text-destructive focus:text-destructive"
+                  >
+                    <Archive className="h-3.5 w-3.5" />
+                    {retirePending ? '退役中…' : '退役'}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    data-testid="device-bulk-unretire"
+                    disabled={retirePending}
+                    onSelect={onUnretire}
+                    className="gap-2 text-xs"
+                  >
+                    <ArchiveRestore className="h-3.5 w-3.5 text-muted-foreground" />
+                    {retirePending ? '处理中…' : '解除退役'}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         <Button

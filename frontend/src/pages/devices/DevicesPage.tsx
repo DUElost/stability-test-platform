@@ -60,6 +60,8 @@ export default function DevicesPage() {
   const searchQuery = getString('q', '');
   const taggedOnly = getBool('tagged');
   const currentPage = getPositiveInt('page', 1);
+  const rawDrawerParam = getString('drawer');
+  const drawerDeviceId = rawDrawerParam ? getPositiveInt('drawer', 0) || null : null;
   const [retireDialog, setRetireDialog] = useState<{ open: boolean; mode: DeviceRetireMode }>(
     { open: false, mode: 'retire' },
   );
@@ -425,10 +427,36 @@ export default function DevicesPage() {
     ? selectedRetiredCount
     : selectedDevices.length - selectedRetiredCount;
 
+  const hasActivePageFilter =
+    Boolean(projectKey) ||
+    includeStale ||
+    includeRetired ||
+    statusFilter !== 'all' ||
+    hostFilter !== 'all' ||
+    modelFilter !== 'all' ||
+    productFilter !== 'all' ||
+    versionFilter !== 'all' ||
+    Boolean(searchQuery.trim()) ||
+    taggedOnly;
+
+  const addDeviceAction = (
+    <Button
+      size="sm"
+      data-testid="device-add-button"
+      disabled={!isAdmin}
+      title={!isAdmin ? '需要管理员权限' : undefined}
+      onClick={() => setIsModalOpen(true)}
+      className="gap-1.5"
+    >
+      <Plus className="h-3.5 w-3.5" />
+      添加设备
+    </Button>
+  );
+
   if (isLoading) {
     return (
-      <PageContainer width="wide">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
+      <PageContainer width="wide" className="py-4">
+        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
         <PageSkeleton>
           <PageSkeleton.Stats count={5} />
           <PageSkeleton.Block size="lg" />
@@ -440,8 +468,8 @@ export default function DevicesPage() {
   if (error) {
     const isProject404 = toApiError(error).status === 404 && !unassignedOnly;
     return (
-      <PageContainer width="wide">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
+      <PageContainer width="wide" className="py-4">
+        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
         <ErrorState
           // 未知项目 key：路由/筛选参数错误语义，按错误态渲染不吞成空列表
           title={isProject404 ? '项目不存在' : '加载设备失败'}
@@ -459,10 +487,10 @@ export default function DevicesPage() {
     );
   }
 
-  if (formattedDevices.length === 0) {
+  if (formattedDevices.length === 0 && !hasActivePageFilter) {
     return (
-      <PageContainer width="wide">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
+      <PageContainer width="wide" className="py-4">
+        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
         <EmptyState
           title="还没有设备"
           description="添加您的第一台测试设备"
@@ -504,13 +532,11 @@ export default function DevicesPage() {
   }
 
   return (
-    <PageContainer
-      width="wide"
-      className={selectedDeviceIds.size > 0 ? 'pb-28' : undefined}
-    >
+    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
       <PageHeader
         title="物理设备"
-        subtitle="管理和监控测试设备 · 点击设备行展开详情，勾选后可批量处理"
+        subtitle="管理和监控测试设备 · 点击设备行查看详情，勾选后可批量处理"
+        action={addDeviceAction}
       />
 
       {/* Device Table */}
@@ -521,18 +547,6 @@ export default function DevicesPage() {
           selectedIds={selectedDeviceIds}
           onSelectionChange={setSelectedDeviceIds}
           onFilteredDevicesChange={handleFilteredDevicesChange}
-          extraHeaderRight={
-            <Button
-              size="sm"
-              data-testid="device-add-button"
-              disabled={!isAdmin}
-              title={!isAdmin ? '需要管理员权限' : undefined}
-              onClick={() => setIsModalOpen(true)}
-            >
-              <Plus className="w-4 h-4" />
-              添加设备
-            </Button>
-          }
           isAdmin={isAdmin}
           onEditDeviceTags={isAdmin ? (device) => setSingleTagDevice(device) : undefined}
           statusFilter={statusFilter}
@@ -576,7 +590,7 @@ export default function DevicesPage() {
             <ProjectFilterSelect
               value={projectKey}
               onChange={setProjectKey}
-              className="w-full sm:w-44"
+              className="w-full sm:w-40"
               testId="device-project-filter"
               showUnassigned
             />
@@ -597,6 +611,10 @@ export default function DevicesPage() {
           }
           onNavigateToHost={(hostName) =>
             navigate(`/hosts?q=${encodeURIComponent(hostName)}`)
+          }
+          drawerDeviceId={drawerDeviceId}
+          onDrawerDeviceIdChange={(nextId) =>
+            updateParams({ drawer: nextId ?? undefined })
           }
         />
       </div>

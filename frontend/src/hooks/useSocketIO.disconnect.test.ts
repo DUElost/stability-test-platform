@@ -99,4 +99,52 @@ describe('disconnectDashSocket (审计 Frontend #3)', () => {
     vi.advanceTimersByTime(30_000);
     expect(sock.disconnect).toHaveBeenCalled();
   });
+
+  it('ref-counts window online listener across multiple hooks (#4117 U1-3)', async () => {
+    const sioMock = await import('socket.io-client');
+    const mod = await import('./useSocketIO');
+    const { renderHook } = await import('@testing-library/react');
+
+    const r1 = renderHook(() => mod.useSocketIO('dashboard', { trackLastMessage: false }));
+    const r2 = renderHook(() => mod.useSocketIO('fleet:devices'));
+    const sock = ((sioMock as any).io._created as any[])[0];
+    sock.connected = false;
+    sock.connect.mockClear();
+
+    // Unmounting one hook must NOT remove the shared window online listener
+    r2.unmount();
+    window.dispatchEvent(new Event('online'));
+    expect(sock.connect).toHaveBeenCalledTimes(1);
+
+    // Unmounting the last hook removes the listener
+    sock.connected = false;
+    sock.connect.mockClear();
+    r1.unmount();
+    window.dispatchEvent(new Event('online'));
+    expect(sock.connect).not.toHaveBeenCalled();
+  });
+
+  it('trackLastMessage=false invokes onMessage without mutating lastMessage state', async () => {
+    const sioMock = await import('socket.io-client');
+    const mod = await import('./useSocketIO');
+    const { renderHook, act } = await import('@testing-library/react');
+
+    const onMessage = vi.fn();
+    const { result, unmount } = renderHook(() =>
+      mod.useSocketIO('dashboard', { trackLastMessage: false, onMessage }),
+    );
+    const sock = ((sioMock as any).io._created as any[])[0];
+    const listeners = sock._listeners.get('plan_changed') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+
+    act(() => {
+      for (const fn of listeners) {
+        fn({ type: 'plan_changed', payload: { plan_id: 1 } });
+      }
+    });
+
+    expect(onMessage).toHaveBeenCalledWith({ type: 'plan_changed', payload: { plan_id: 1 } });
+    expect(result.current.lastMessage).toBeNull();
+    unmount();
+  });
 });
