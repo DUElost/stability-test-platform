@@ -128,6 +128,13 @@ def test_resolve_monitored_mount_points_includes_shared_storage_root(monkeypatch
     assert resolve_monitored_mount_points() == ["/mnt/stp-log"]
 
 
+def test_resolve_monitored_mount_points_preserves_trailing_space_distinct_paths(monkeypatch):
+    """#4077 R2: 路径尾部空格是真实路径差异，不得与无空格 STP_AEE_NFS_ROOT 错误归并。"""
+    monkeypatch.setenv("MOUNT_POINTS", "/mnt/review-new ")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/review-new")
+    assert resolve_monitored_mount_points() == ["/mnt/review-new ", "/mnt/review-new"]
+
+
 def test_resolve_monitored_mount_points_preserves_legacy_when_shared_root_unset(monkeypatch):
     """#4077 B2: 未设或空值 STP_AEE_NFS_ROOT 时严格保留旧 split 语义（不 trim / 不去重）。"""
     monkeypatch.setenv("MOUNT_POINTS", "/mnt/a , /mnt/a , ")

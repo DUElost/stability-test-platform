@@ -253,24 +253,43 @@ def _block_device(source: str | None) -> str | None:
     return re.sub(r"p?\d+$", "", Path(source).name)
 
 
+def _normalize_mount_key(path: str) -> str:
+    """Normalize a mount key matching agent mountinfo semantics (strip trailing slashes only)."""
+    if not path:
+        return ""
+    stripped_slashes = path.rstrip("/")
+    if not stripped_slashes:
+        return "/" if path.startswith("/") else ""
+    return stripped_slashes
+
+
 def _resolve_host_mount_ok(raw_status: Any, authoritative_key: str) -> bool | None:
     """Resolve a host's mount health from heartbeat ``mount_status``.
 
     When ``authoritative_key`` (``STP_AEE_NFS_ROOT``) is present as a key in
     ``raw_status``, only its ``ok`` boolean is authoritative (an invalid/missing
     boolean returns ``None`` rather than falling back to legacy keys, #4077).
+    Trailing slashes are ignored during key matching, while literal whitespace
+    in path names is preserved so distinct paths cannot shadow the target.
     """
     if not isinstance(raw_status, dict) or not raw_status:
         return None
     if authoritative_key:
-        for key, entry in raw_status.items():
-            if not isinstance(key, str):
-                continue
-            norm_key = key.strip().rstrip("/") or ("/" if key.strip() == "/" else "")
-            if norm_key == authoritative_key:
-                if isinstance(entry, dict) and isinstance(entry.get("ok"), bool):
-                    return bool(entry["ok"])
+        matched = [
+            entry
+            for key, entry in raw_status.items()
+            if isinstance(key, str) and _normalize_mount_key(key) == authoritative_key
+        ]
+        if matched:
+            flags = [
+                bool(entry["ok"])
+                if isinstance(entry, dict) and isinstance(entry.get("ok"), bool)
+                else None
+                for entry in matched
+            ]
+            if any(flag is None for flag in flags):
                 return None
+            return all(flags)
     ok_flags = [
         bool(entry.get("ok"))
         for entry in raw_status.values()
@@ -291,9 +310,7 @@ def _host_mount_summary(
     仍为 True 时掩盖新中心存储（``/mnt/stp-log``）未挂载（#4077）；若该键未上报，
     兼容回落到「任一上报项 ok=True」。
     """
-    authoritative_key = (shared_root or "").strip().rstrip("/") or (
-        "/" if (shared_root or "").strip() == "/" else ""
-    )
+    authoritative_key = _normalize_mount_key(shared_root or "")
     items: list[dict[str, Any]] = []
     mounted = 0
     failed = 0

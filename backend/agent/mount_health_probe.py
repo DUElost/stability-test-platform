@@ -151,14 +151,17 @@ class MountHealthProbe:
         self._monotonic = monotonic
         self._wall_clock = wall_clock
         self._lock = threading.Lock()
-        self._probing = False
+        self._probe_generation: int = 0
+        self._active_probe_generation: Optional[int] = None
         self._last_probe_monotonic: Optional[float] = None
         self._reachable_by_point: Dict[str, bool] = {}
         self._probed_at_wall: Optional[float] = None
 
     def reset(self) -> None:
-        """清除已缓存的可达性快照，供 reload_config 切换挂载根后重探（#4077）。"""
+        """清除已缓存的可达性快照并递增代际，隔离旧探测后台线程（#4077）。"""
         with self._lock:
+            self._probe_generation += 1
+            self._active_probe_generation = None
             self._last_probe_monotonic = None
             self._reachable_by_point = {}
             self._probed_at_wall = None
@@ -172,7 +175,7 @@ class MountHealthProbe:
         )
         now = self._monotonic()
         with self._lock:
-            probing = self._probing
+            probing = self._active_probe_generation == self._probe_generation
             last = self._last_probe_monotonic
             reachable_map = dict(self._reachable_by_point)
             probed_at = self._probed_at_wall
@@ -205,7 +208,8 @@ class MountHealthProbe:
 
     def _maybe_start_probe(self, mount_points: List[str]) -> None:
         with self._lock:
-            if self._probing:
+            gen = self._probe_generation
+            if self._active_probe_generation == gen:
                 return
             now = self._monotonic()
             if (
@@ -213,17 +217,17 @@ class MountHealthProbe:
                 and now - self._last_probe_monotonic < self._interval_seconds
             ):
                 return
-            self._probing = True
+            self._active_probe_generation = gen
             # 先推进节流戳：探测挂起期间心跳只读缓存并标 stale，不重复起线程。
             self._last_probe_monotonic = now
         threading.Thread(
             target=self._probe_worker,
-            args=(list(mount_points),),
+            args=(list(mount_points), gen),
             name="mount-health-probe",
             daemon=True,
         ).start()
 
-    def _probe_worker(self, mount_points: List[str]) -> None:
+    def _probe_worker(self, mount_points: List[str], generation: int) -> None:
         reachable: Dict[str, bool] = {}
         try:
             for point in mount_points:
@@ -234,7 +238,9 @@ class MountHealthProbe:
                     reachable[point] = False
         finally:
             with self._lock:
-                self._reachable_by_point = reachable
-                self._probed_at_wall = self._wall_clock()
-                self._probing = False
-                self._last_probe_monotonic = self._monotonic()
+                # reset() 后已进入新代际，旧后台探针的结果与节流戳一律丢弃。
+                if generation == self._probe_generation:
+                    self._reachable_by_point = reachable
+                    self._probed_at_wall = self._wall_clock()
+                    self._active_probe_generation = None
+                    self._last_probe_monotonic = self._monotonic()

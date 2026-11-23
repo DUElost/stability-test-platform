@@ -326,6 +326,168 @@ def test_reload_from_settings_switches_shared_root_and_gates_capacity(heartbeat_
     assert after_cap["capacity"]["effective_slots"] == 0
 
 
+def test_reload_config_inflight_tick_cannot_keep_slots_or_emit_stale_root(
+    heartbeat_env, monkeypatch,
+):
+    """#4077 R2 B1: reload 切到未挂新根后立即清零普通槽位，且在途旧 tick 不得回写旧槽位或上报旧根。"""
+    import threading
+    from types import SimpleNamespace
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+
+    mountinfo_text = "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n"
+    sent_payloads: list[dict] = []
+    pause_after_snapshot = False
+    snapshot_entered = threading.Event()
+    snapshot_release = threading.Event()
+
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.discover_devices",
+        lambda *_a: [
+            {"serial": "dev-1", "adb_state": "device"},
+            {"serial": "dev-2", "adb_state": "device"},
+        ],
+    )
+    monkeypatch.setattr(
+        HeartbeatThread,
+        "_collect_device_infos",
+        lambda _self, devs: [
+            {"adb_state": "device", "adb_connected": True} for _ in devs
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.list_adb_fork_servers",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.get_adb_server_port",
+        lambda: 5037,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_usb_devices_and_root_hubs",
+        lambda: (2, 1),
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.count_adb_interface_devices",
+        lambda: 2,
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.read_usb_power_presence",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.agent.system_monitor.collect_system_stats",
+        lambda: {
+            "cpu_load": 1.0,
+            "ram_usage": 10.0,
+            "disk_usage": {"writable_percent": 10.0},
+        },
+    )
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.send_heartbeat",
+        lambda *_a, **kwargs: sent_payloads.append(kwargs) or {"ok": True},
+    )
+
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _path: mountinfo_text,
+    )
+    orig_snapshot = probe.snapshot
+
+    def gated_snapshot(points):
+        res = orig_snapshot(points)
+        if pause_after_snapshot and points == ["/mnt/old"]:
+            snapshot_entered.set()
+            assert snapshot_release.wait(5.0)
+        return res
+
+    probe.snapshot = gated_snapshot  # type: ignore[method-assign]
+    thread._mount_health_probe = probe
+    thread._kernel_usb_watch = SimpleNamespace(
+        poll=lambda **_k: [],
+        channel_state=lambda: "ok",
+    )
+
+    # 第 1 拍建立普通槽位 2
+    thread._tick()
+    assert thread.effective_slots == 2
+    assert len(sent_payloads) == 1
+
+    # 第 2 拍在完成旧列表 snapshot() 后暂停，期间触发 reload 切到未挂新根
+    pause_after_snapshot = True
+    tick_thread = threading.Thread(target=thread._tick, daemon=True)
+    tick_thread.start()
+    assert snapshot_entered.wait(2.0)
+
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    thread.reload_from_settings()
+    # ACK 当刻普通槽位已立即归零（不待下一拍），不让在途认领按 capacity=2 发起
+    assert thread.effective_slots == 0
+
+    pause_after_snapshot = False
+    snapshot_release.set()
+    tick_thread.join(timeout=3.0)
+    assert not tick_thread.is_alive()
+
+    assert thread.effective_slots == 0
+    assert len(sent_payloads) == 2
+    latest = sent_payloads[-1]
+    assert "/mnt/stp-log-new" in latest["mount_status"]
+    assert latest["mount_status"]["/mnt/stp-log-new"]["ok"] is False
+    assert latest["health"]["mount_ok"] is False
+    assert latest["capacity"]["effective_slots"] == 0
+
+
+def test_reload_mount_points_succeeds_even_with_invalid_pacing_knob(
+    heartbeat_env, caplog,
+):
+    """#4077 R2 B1: 非法心跳节奏旋钮不得阻断挂载点刷新、探针 reset 与槽位清零。"""
+    import logging
+    from backend.agent.heartbeat_thread import HeartbeatThread
+    from backend.agent.mount_health_probe import MountHealthProbe
+
+    heartbeat_env.set("MOUNT_POINTS", "/mnt/old")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/old")
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=["/mnt/old"],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    thread._mount_health_probe = MountHealthProbe(
+        probe_fn=lambda _p: True,
+        mountinfo_reader=lambda _p: "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n",
+    )
+    with thread._capacity_lock:
+        thread._effective_slots = 2
+    before_min = thread._min_poll_interval
+
+    heartbeat_env.set("STP_HEARTBEAT_INTERVAL_MIN", "not-a-number")
+    heartbeat_env.set("STP_AEE_NFS_ROOT", "/mnt/stp-log-new")
+    with caplog.at_level(logging.ERROR):
+        thread.reload_from_settings()
+
+    assert thread._min_poll_interval == before_min
+    assert any("heartbeat_pacing_reload_skipped" in r.message for r in caplog.records)
+    assert thread._mount_points == ["/mnt/old", "/mnt/stp-log-new"]
+    assert thread.effective_slots == 0
+
+
 def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
     from backend.agent.coordinator import HostRunCoordinator
 

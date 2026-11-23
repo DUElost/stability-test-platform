@@ -145,3 +145,56 @@ def test_mount_health_probe_caches_reachable(monkeypatch):
     else:
         pytest.fail(f"probe never completed: {probe_obj.snapshot(['/data'])}")
     assert calls == ["/data"]
+
+
+def test_probe_reset_discards_inflight_old_worker_and_probes_new_root():
+    """#4077 R2: reset() 后旧后台探针完成不得写回新鲜度或节流新根探测。"""
+    old_started = threading.Event()
+    old_release = threading.Event()
+    new_done = threading.Event()
+    probed: list[str] = []
+
+    def probe(point: str) -> bool:
+        probed.append(point)
+        if point == "/mnt/old":
+            old_started.set()
+            old_release.wait(5.0)
+            return True
+        if point == "/mnt/new":
+            new_done.set()
+            return True
+        return False
+
+    probe_obj = MountHealthProbe(
+        interval_seconds=60.0,
+        stale_after_seconds=60.0,
+        probe_fn=probe,
+        mountinfo_reader=lambda _p: (
+            "1 0 0:1 / /mnt/old rw - nfs4 srv:/old rw\n"
+            "2 0 0:2 / /mnt/new rw - nfs4 srv:/new rw\n"
+        ),
+    )
+    first_old = probe_obj.snapshot(["/mnt/old"])
+    assert first_old["/mnt/old"]["probe_stale"] is True
+    assert old_started.wait(2.0)
+
+    # reload_config 切根调用 reset()，随后旧 worker 才完成并返回
+    probe_obj.reset()
+    old_release.set()
+    time.sleep(0.05)
+
+    # 新根首次 snapshot 必须仍为 probe_stale=True（不被旧 worker 伪装成已完成），且可立即触发新探针
+    snap_new = probe_obj.snapshot(["/mnt/new"])
+    assert snap_new["/mnt/new"]["reachable"] is None
+    assert snap_new["/mnt/new"]["probe_stale"] is True
+    assert new_done.wait(2.0)
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        done_snap = probe_obj.snapshot(["/mnt/new"])
+        if done_snap["/mnt/new"]["reachable"] is True and done_snap["/mnt/new"]["probe_stale"] is False:
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail(f"new probe never settled: {probe_obj.snapshot(['/mnt/new'])}")
+    assert "/mnt/new" in probed

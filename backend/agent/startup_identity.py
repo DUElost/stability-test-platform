@@ -16,6 +16,7 @@ from . import __version__ as _agent_pkg_version
 from .aee.paths import resolve_shared_storage_root
 from .host_registry import auto_register_host, get_host_info, load_required_host_id
 from .identity import generate_agent_instance_id, read_boot_id
+from .mount_health_probe import normalize_mount_point
 from .settings import get_registration_settings
 from .version_info import read_agent_code_revision, read_artifact_digest
 
@@ -53,8 +54,8 @@ def resolve_monitored_mount_points() -> List[str]:
     if not shared_root:
         return points
 
-    seen = {(item.strip().rstrip("/") or "/") for item in points if item.strip()}
-    norm_shared = shared_root.rstrip("/") or "/"
+    seen = {normalize_mount_point(item) for item in points}
+    norm_shared = normalize_mount_point(shared_root)
     if norm_shared not in seen:
         points.append(shared_root)
     return points

@@ -526,6 +526,25 @@ def test_host_mount_summary_prefers_authoritative_shared_root_over_stale_entry()
     assert items_by_ip["h-legacy-only"]["mounted"] is True
 
 
+def test_host_mount_summary_does_not_collide_trailing_space_keys():
+    """#4077 R2: 带尾部空格的路径不得抢先匹配或遮蔽真正的权威共享根。"""
+    summary = monitor._host_mount_summary(
+        [
+            _host("h-space-vs-false", {"/mnt/review-new ": {"ok": True}, "/mnt/review-new": {"ok": False}}),
+            _host("h-space-vs-invalid", {"/mnt/review-new ": {"ok": True}, "/mnt/review-new": {"ok": "false"}}),
+            _host("h-slash-alias-mixed", {"/mnt/review-new": {"ok": True}, "/mnt/review-new/": {"ok": False}}),
+        ],
+        shared_root="/mnt/review-new",
+    )
+    items_by_ip = {item["ip"]: item for item in summary["items"]}
+    assert items_by_ip["h-space-vs-false"]["mounted"] is False
+    assert items_by_ip["h-space-vs-invalid"]["mounted"] is None
+    assert items_by_ip["h-slash-alias-mixed"]["mounted"] is False
+    assert summary["mounted"] == 0
+    assert summary["failed"] == 2
+    assert summary["unreported"] == 1
+
+
 def test_collect_file_server_overview_passes_shared_root(tmp_path, monkeypatch):
     """#4077 入口接线：collect_file_server_overview 传入权威 shared_root。"""
     _patch_file_server_deps(monkeypatch, tmp_path)
