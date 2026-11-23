@@ -96,7 +96,8 @@ const JOB: Record<string, StatusEntry> = {
   RUNNING: { label: "运行中", variant: "warning", Icon: Loader2 },
   COMPLETED: { label: "完成", variant: "success", Icon: CheckCircle2 },
   FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
-  ABORTED: { label: "中止", variant: "destructive", Icon: Ban },
+  // #4117 U1-2：与 JOB_RESULT.CANCELED 对齐（主动中止 ≠ 系统失败，不用纯红 destructive）
+  ABORTED: { label: "已中止", variant: "secondary", Icon: Ban },
   UNKNOWN: { label: "未知", variant: "secondary", Icon: HelpCircle },
 };
 
