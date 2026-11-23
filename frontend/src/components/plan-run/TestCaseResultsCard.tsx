@@ -11,6 +11,14 @@ import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { InlineEmpty } from '@/components/ui/empty-state';
 import { InlineError } from '@/components/ui/error-state';
 import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { SLOW_REFETCH_MS } from '@/hooks/plan-run/planRunDetailUtils';
 
@@ -81,32 +89,32 @@ export default function TestCaseResultsCard({ runId, isTerminal }: Props) {
         ) : (
           <>
             <div className="max-h-80 overflow-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
-                    <th className="py-1 pr-2">用例</th>
-                    <th className="py-1 pr-2">状态</th>
-                    <th className="py-1 pr-2">设备</th>
-                    <th className="py-1">详情</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table className="text-xs">
+                <TableHeader>
+                  <TableRow className="border-b text-left text-muted-foreground">
+                    <TableHead className="h-auto px-0 py-1 pr-2">用例</TableHead>
+                    <TableHead className="h-auto px-0 py-1 pr-2">状态</TableHead>
+                    <TableHead className="h-auto px-0 py-1 pr-2">设备</TableHead>
+                    <TableHead className="h-auto px-0 py-1">详情</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {q.data.items.map((row: TestCaseResultRow) => (
-                    <tr key={row.id} className="border-b border-border/50" data-testid={`tcr-row-${row.id}`}>
-                      <td className="py-1.5 pr-2 font-mono">{row.case_name}</td>
-                      <td className="py-1.5 pr-2">
+                    <TableRow key={row.id} className="border-b border-border/50" data-testid={`tcr-row-${row.id}`}>
+                      <TableCell className="px-0 py-1.5 pr-2 font-mono">{row.case_name}</TableCell>
+                      <TableCell className="px-0 py-1.5 pr-2">
                         <span className={cn('rounded px-1.5 py-0.5', STATUS_CLASS[row.status] ?? STATUS_CHIP.muted)}>
                           {row.status}
                         </span>
-                      </td>
-                      <td className="py-1.5 pr-2">{row.device_id ?? '—'}</td>
-                      <td className="py-1.5 text-muted-foreground truncate max-w-[240px]" title={row.detail ?? ''}>
+                      </TableCell>
+                      <TableCell className="px-0 py-1.5 pr-2">{row.device_id ?? '—'}</TableCell>
+                      <TableCell className="px-0 py-1.5 text-muted-foreground truncate max-w-[240px]" title={row.detail ?? ''}>
                         {row.detail ?? '—'}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
             {hasMore && !atLimitCap && (
               <div className="border-t border-border/50 pt-1.5 text-center">

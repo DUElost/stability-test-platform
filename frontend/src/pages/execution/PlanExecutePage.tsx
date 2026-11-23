@@ -400,10 +400,24 @@ export default function PlanExecutePage() {
     const host = hostMap.get(id);
     return [id, hostLabel(host, id)];
   })).entries()), [allDevices, hostMap]);
+  const devicesByHostId = useMemo(() => {
+    const grouped = new Map<string, DeviceSummary[]>();
+    for (const device of allDevices) {
+      const id = String(device.host_id ?? 'unassigned');
+      const bucket = grouped.get(id);
+      if (bucket) bucket.push(device);
+      else grouped.set(id, [device]);
+    }
+    return grouped;
+  }, [allDevices]);
   const nodeSummaries = useMemo(() => hostOptions.map(([id, label]) => {
-    const devices = allDevices.filter((device: DeviceSummary) => String(device.host_id ?? 'unassigned') === id);
-    const selected = devices.filter((device: DeviceSummary) => selectedDeviceIds.has(device.id)).length;
-    const available = devices.filter(isSchedulable).length;
+    const devices = devicesByHostId.get(id) ?? [];
+    let selected = 0;
+    let available = 0;
+    for (const device of devices) {
+      if (selectedDeviceIds.has(device.id)) selected += 1;
+      if (isSchedulable(device)) available += 1;
+    }
     const host = hostMap.get(id);
     return {
       id,
@@ -418,7 +432,7 @@ export default function PlanExecutePage() {
       healthStatus: host?.health?.status ?? null,
       healthReasons: host?.health?.reasons ?? [],
     };
-  }).sort(compareNodeEntries), [allDevices, hostMap, hostOptions, selectedDeviceIds]);
+  }).sort(compareNodeEntries), [devicesByHostId, hostMap, hostOptions, selectedDeviceIds]);
   const visibleNodeSummaries = useMemo(() => {
     const keyword = nodeSearch.trim().toLowerCase();
     if (!keyword) return nodeSummaries;
@@ -485,17 +499,33 @@ export default function PlanExecutePage() {
   );
 
   const filterKeyword = deviceFilter.trim().toLowerCase();
-  const baseFilteredDevices = allDevices.filter(d =>
-    !filterKeyword
-    || d.serial.toLowerCase().includes(filterKeyword)
-    || (d.model ?? '').toLowerCase().includes(filterKeyword)
-    || deviceProductText(d.model, d.product).toLowerCase().includes(filterKeyword),
-  ).filter((d: DeviceSummary) =>
-    (deviceVersionFilter === 'all' || d.build_display_id === deviceVersionFilter)
-    && (deviceHostFilter === 'all' || String(d.host_id ?? 'unassigned') === deviceHostFilter)
-    && (deviceModelFilter === 'all' || d.model === deviceModelFilter)
-    && (deviceProductFilter === 'all' || d.product === deviceProductFilter)
-    && (deviceTagFilter.length === 0 || (d.tags ?? []).some(tag => deviceTagFilter.includes(tag))),
+  const baseFilteredDevices = useMemo(
+    () =>
+      allDevices
+        .filter(
+          (d) =>
+            !filterKeyword
+            || d.serial.toLowerCase().includes(filterKeyword)
+            || (d.model ?? '').toLowerCase().includes(filterKeyword)
+            || deviceProductText(d.model, d.product).toLowerCase().includes(filterKeyword),
+        )
+        .filter(
+          (d: DeviceSummary) =>
+            (deviceVersionFilter === 'all' || d.build_display_id === deviceVersionFilter)
+            && (deviceHostFilter === 'all' || String(d.host_id ?? 'unassigned') === deviceHostFilter)
+            && (deviceModelFilter === 'all' || d.model === deviceModelFilter)
+            && (deviceProductFilter === 'all' || d.product === deviceProductFilter)
+            && (deviceTagFilter.length === 0 || (d.tags ?? []).some((tag) => deviceTagFilter.includes(tag))),
+        ),
+    [
+      allDevices,
+      filterKeyword,
+      deviceVersionFilter,
+      deviceHostFilter,
+      deviceModelFilter,
+      deviceProductFilter,
+      deviceTagFilter,
+    ],
   );
   const poolReadinessByDeviceId = deviceReadinessByDeviceId;
   const filteredDevices = useMemo(() => {
@@ -1086,7 +1116,7 @@ export default function PlanExecutePage() {
       {phase === 'dispatch' && (
         <PageHeader
           title="发起前确认"
-          subtitle="容量驾驶舱 + 近期执行感知。不承诺精确开跑时钟（挂 ADR-0026 QUEUED UI）"
+          subtitle="容量驾驶舱 + 近期执行感知。不承诺精确开跑时钟"
         />
       )}
 

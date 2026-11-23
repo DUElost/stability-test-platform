@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, AlertCircle, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PageContainer } from '@/components/layout';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/useToast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -236,7 +237,7 @@ export default function PlanRunDetailPage() {
   const showDiag = diagOpen || gateFailed;
 
   return (
-    <div className={cn('flex h-full flex-col overflow-hidden', SURFACE.page)}>
+    <PageContainer width="bleed" scrollable={false} className={cn('flex h-full flex-col overflow-hidden', SURFACE.page)}>
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {leftPanelOpen && (
           <div
@@ -468,6 +469,6 @@ export default function PlanRunDetailPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }
