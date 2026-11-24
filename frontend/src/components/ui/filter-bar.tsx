@@ -288,14 +288,14 @@ export function MoreFiltersPopover({
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative inline-block">
+    <div ref={containerRef} className="relative inline-block shrink-0">
       <button
         type="button"
         aria-expanded={open}
         data-testid={testId}
         onClick={() => setOpen((prev) => !prev)}
         className={cn(
-          'inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs sm:text-sm transition-all',
+          'inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-xs sm:text-sm transition-all',
           'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25',
           activeCount > 0
             ? 'border-primary/40 bg-primary/5 font-medium text-primary'
