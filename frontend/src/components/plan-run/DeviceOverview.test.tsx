@@ -167,10 +167,13 @@ describe('DeviceOverview', () => {
     expect(within(withoutIdentity).queryByTestId('device-script-3002')).not.toBeInTheDocument();
   });
 
-  it('缩略图视图保持紧凑：不渲染脚本身份', () => {
+  it('缩略图视图保持紧凑：不渲染脚本身份且不叠加异常小红点', () => {
     renderWithClient(<DeviceOverview data={fixture} />);
     const cell = screen.getByTestId('minimap-cell-3001');
     expect(cell).not.toHaveTextContent('monkey_test');
+    expect(screen.queryByTestId('minimap-signal-dot-3001')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('minimap-signal-dot-3002')).not.toBeInTheDocument();
+    expect(screen.getByTestId('minimap-cell-3002').getAttribute('title')).toContain('异常 2');
   });
 
   it('defaults to grid (minimap) view and switches to table on toggle', () => {    renderWithClient(<DeviceOverview data={fixture} />);

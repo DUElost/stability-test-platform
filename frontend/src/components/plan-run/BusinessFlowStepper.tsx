@@ -102,9 +102,10 @@ function StageNode({ stageKey, stage, isCurrent }: {
 export default function BusinessFlowStepper({ timeline, isLoading, isError }: Props) {
   const stages = timeline?.stages ?? [];
 
-  const currentStage = stages.find(
-    (s) => s.status === 'running'
-  );
+  const currentStageKey =
+    timeline?.current_stage && STAGES.includes(timeline.current_stage as StageKey)
+      ? (timeline.current_stage as StageKey)
+      : (stages.find((s) => s.status === 'running')?.stage as StageKey | undefined);
 
   return (
     <div className="space-y-2.5" data-testid="business-flow-stepper">
@@ -121,7 +122,7 @@ export default function BusinessFlowStepper({ timeline, isLoading, isError }: Pr
         <div className="flex gap-2">
           {STAGES.map((key, idx) => {
             const stage = stages.find((s) => s.stage === key);
-            const isCurrent = currentStage?.stage === key;
+            const isCurrent = currentStageKey === key;
             return (
               <div key={key} className="flex items-center flex-1">
                 <StageNode stageKey={key} stage={stage} isCurrent={isCurrent} />

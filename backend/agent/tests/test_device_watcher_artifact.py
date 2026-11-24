@@ -202,3 +202,30 @@ def test_uploader_exception_is_swallowed(mock_instance, db):
     )
     # _safe_emit 也跑了 → outbox 里有记录
     assert len(db.get_pending_log_signals()) == 1
+
+
+@patch("backend.agent.artifact_uploader.ArtifactUploader.instance")
+@pytest.mark.parametrize(
+    "filename,uri_name",
+    [
+        ("aee.lck", "1795192503706_aee.lck"),
+        ("db_history", "1795192503709_db_history"),
+        ("file_tree.txt", "1795192503731_file_tree.txt"),
+        ("SWT_JBT_TRACES", "1795322515947_SWT_JBT_TRACES"),
+    ],
+)
+def test_non_issue_aee_metadata_files_are_skipped(mock_instance, db, filename, uri_name):
+    uploader = MagicMock()
+    mock_instance.return_value = uploader
+    puller = MagicMock()
+    w = _watcher(db, puller=puller)
+
+    ev = _event("AEE", filename=filename)
+    w._on_immediate(ev)
+    puller.submit.assert_not_called()
+
+    w._on_pull_done(
+        ev,
+        {"artifact_uri": f"/mnt/nfs/jobs/77/AEE/{uri_name}", "sha256": "e" * 64, "size_bytes": 128},
+    )
+    uploader.submit.assert_not_called()

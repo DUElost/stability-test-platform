@@ -495,21 +495,25 @@ describe('PlanRunDetailPage', () => {
     );
   });
 
-  it('renders Hero / Minimap / Stepper / DeviceTable / Watcher', async () => {
+  it('renders Hero / Minimap / Stepper / DeviceTable / Watcher without duplicate dispatch/stepper blocks', async () => {
     renderPage();
     await waitFor(() =>
       expect(screen.getByTestId('plan-run-status-pill')).toHaveTextContent('RUNNING'),
     );
     // #447：hero 显示归属项目 key（plan_run 快照归属）
     expect(screen.getByTitle('归属项目 MLD')).toBeInTheDocument();
-    expect(screen.getByTestId('precheck-row')).toHaveTextContent('健康预检');
-    expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-202');
-    expect(screen.getByTestId('precheck-row')).toHaveTextContent('1/2');
-    // BusinessFlowStepper replaces BusinessFlowTimeline
-    expect(screen.getByTestId('business-flow-stepper')).toBeInTheDocument();
+    // 派发门禁与业务流进展收口在「派发与诊断」子栏，Minimap 下方不再重复显示
+    expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('business-flow-stepper')).not.toBeInTheDocument();
     expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
     // AnomalyDashboard (mocked) uses watcher-summary testid for backward compat
     expect(await screen.findByTestId('watcher-summary')).toBeInTheDocument();
+    // 切换至「派发与诊断」子栏后，派发门禁与业务流进展完整可见且仅出现一次
+    fireEvent.click(screen.getByTestId('plan-run-section-diagnostics'));
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('健康预检');
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-202');
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('1/2');
+    expect(screen.getAllByTestId('business-flow-stepper')).toHaveLength(1);
     // Switch to table view to verify row content
     fireEvent.click(screen.getByTestId('device-overview-table-btn'));
     // BACKOFF row visible with red failure streak
@@ -602,10 +606,11 @@ describe('PlanRunDetailPage', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/jobs/3001/report?planRun=12');
   });
 
-  it('renders device overview and business-flow stepper in the details view', async () => {
+  it('renders device overview at top and business-flow stepper in diagnostics tab', async () => {
     renderPage();
-    // Overview content is always visible (no inner tab switching)
     expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
+    expect(screen.queryByTestId('business-flow-stepper')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('plan-run-section-diagnostics'));
     expect(await screen.findByTestId('business-flow-stepper')).toBeInTheDocument();
   });
 
@@ -754,6 +759,7 @@ describe('PlanRunDetailPage', () => {
     renderPage();
 
     await waitFor(() => screen.getByTestId('plan-run-status-pill'));
+    fireEvent.click(screen.getByTestId('plan-run-section-diagnostics'));
     expect(screen.getByTestId('precheck-row')).toBeInTheDocument();
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('通过');
   });
@@ -798,6 +804,7 @@ describe('PlanRunDetailPage', () => {
     renderPage();
 
     await waitFor(() => screen.getByTestId('plan-run-status-pill'));
+    fireEvent.click(screen.getByTestId('plan-run-section-diagnostics'));
     expect(screen.getByTestId('precheck-row')).toBeInTheDocument();
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('同步中');
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-101');
@@ -936,6 +943,8 @@ describe('PlanRunDetailPage', () => {
       },
     });
     renderPage();
+    await waitFor(() => screen.getByTestId('plan-run-section-diagnostics'));
+    fireEvent.click(screen.getByTestId('plan-run-section-diagnostics'));
     await waitFor(() => screen.getByTestId('dispatch-gate-card'));
     expect(screen.getAllByText(/agent_offline: host-202/).length).toBeGreaterThan(0);
     expect(screen.getByTestId('dispatch-gate-host-host-202')).toHaveTextContent(
@@ -965,6 +974,8 @@ describe('PlanRunDetailPage', () => {
 
     renderPage();
 
+    await waitFor(() => screen.getByTestId('plan-run-section-diagnostics'));
+    fireEvent.click(screen.getByTestId('plan-run-section-diagnostics'));
     const gate = await screen.findByTestId('dispatch-gate-card');
     expect(gate).toHaveTextContent('dispatch queue unavailable');
     expect(gate).toHaveTextContent('failed');
@@ -994,6 +1005,8 @@ describe('PlanRunDetailPage', () => {
 
     renderPage();
 
+    await waitFor(() => screen.getByTestId('plan-run-section-diagnostics'));
+    fireEvent.click(screen.getByTestId('plan-run-section-diagnostics'));
     const gate = await screen.findByTestId('dispatch-gate-card');
     expect(gate).toHaveTextContent('派发完成');
     expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
@@ -1209,6 +1222,8 @@ describe('PlanRunDetailPage', () => {
 
     renderPage();
 
+    await waitFor(() => screen.getByTestId('plan-run-section-diagnostics'));
+    fireEvent.click(screen.getByTestId('plan-run-section-diagnostics'));
     const row = await screen.findByTestId('precheck-row');
     expect(row).toHaveTextContent('失败');
     expect(row).toHaveTextContent('watch激活与不激活的节点不能同时在一个计划中');
