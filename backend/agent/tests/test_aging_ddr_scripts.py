@@ -18,16 +18,21 @@ SCRIPTS_ROOT = REPO_ROOT / "backend" / "agent" / "scripts"
 
 
 def _patch_advancing_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
-    """Replace mod.time.sleep/time so sleep advances a fake clock (no wall wait)."""
+    """sleep 推进假时钟（time / monotonic 同步），不做墙钟等待。
+
+    同构自 `test_flash_firmware_v140.py`。aging_ddr_setup 的 `_verify_startup`
+    用 `time.monotonic` 判截止，所以 time 与 monotonic 一起替换。
+    """
     state = {"now": start}
 
-    def fake_time() -> float:
+    def fake_now() -> float:
         return state["now"]
 
     def fake_sleep(seconds: float) -> None:
         state["now"] += float(seconds)
 
-    monkeypatch.setattr(mod.time, "time", fake_time)
+    monkeypatch.setattr(mod.time, "time", fake_now)
+    monkeypatch.setattr(mod.time, "monotonic", fake_now)
     monkeypatch.setattr(mod.time, "sleep", fake_sleep)
     return state
 
