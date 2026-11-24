@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 import os
 import shutil
@@ -13,7 +13,7 @@ from typing import Any, List, Union
 from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
 from backend.core.host_identity import allocate_host_id
-from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS  # noqa: F401
 from backend.core.ssh_security import (
     SshSecurityConfigError,
     encrypt_ssh_password,
@@ -74,37 +74,10 @@ from backend.services.artifact_digest import (
 from backend.services.agent_version_info import finalize_hot_update_outcome
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
 from backend.services.agent_version_info import build_host_version_view
+from backend.services.inventory_status import effective_host_status
 from backend.services.run_console import RunConsole
 
 logger = logging.getLogger(__name__)
-
-
-def _ensure_host_status_up_to_date(host: Host) -> bool:
-    """Update host status to OFFLINE if heartbeat has expired.
-    Returns True if status was changed, False otherwise.
-    """
-    if host.status != "ONLINE":
-        return False
-
-    now = datetime.now(timezone.utc)
-    offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
-    last_heartbeat = host.last_heartbeat
-    if last_heartbeat and last_heartbeat.tzinfo is None:
-        # 兼容历史/测试数据中的 naive 时间
-        last_heartbeat = last_heartbeat.replace(tzinfo=timezone.utc)
-
-    if last_heartbeat is None or last_heartbeat < offline_deadline:
-        host.status = "OFFLINE"
-        logger.info(
-            "host_status_marked_offline",
-            extra={
-                "host_id": host.id,
-                "host_name": host.name,
-                "last_heartbeat": last_heartbeat.isoformat() if last_heartbeat else None,
-            },
-        )
-        return True
-    return False
 
 _AGENT_SECRET_PLACEHOLDER = "change-me-in-production"
 
@@ -186,6 +159,7 @@ def _host_to_out(
     db: Session | None = None,
     host_key_trust: str | None = None,
     desired_artifact_digest: str | None = None,
+    now: datetime | None = None,
 ) -> HostOut:
     """从 ORM 对象构造 HostOut，从 host.extra 中提取 capacity/health。
 
@@ -195,6 +169,7 @@ def _host_to_out(
     若提供 ``db``，会一并查询 host 上的活跃 Job 列表（ADR-0021 hot-update gate）。
     """
     out = HostOut.model_validate(h)
+    out.status = effective_host_status(h, now=now)
     extra = dict(h.extra or {})
     for key in ("ssh_password", "ssh_key_path", "password", "secret", "token", "private_key"):
         extra.pop(key, None)
@@ -424,23 +399,17 @@ def list_hosts(
 ):
     # ADR-0038 D5（不变量 1）：退役主机默认不出现在列表；详情页仍可见
     # （GET /hosts/{id} 不过滤——退役是历史终态，详情要能查退役痕迹）。
+    now = datetime.now(timezone.utc)
     query = db.query(Host)
     if not include_retired:
         query = query.filter(Host.retired_at.is_(None))
     query = query.order_by(Host.id)
     total = query.count()
     hosts = query.offset(skip).limit(limit).all()
-    # Update status for hosts with expired heartbeat
-    needs_commit = False
-    for host in hosts:
-        if _ensure_host_status_up_to_date(host):
-            needs_commit = True
-    if needs_commit:
-        db.commit()
     # desired digest 现算一次复用（列表 N 台不重复 stat 输入集）
     # #2320：它是**展示面**判据，读失败必须降级而不是把整页打成 500。
     desired = _list_desired_artifact_digest()
-    items = [_host_to_out(h, desired_artifact_digest=desired) for h in hosts]
+    items = [_host_to_out(h, desired_artifact_digest=desired, now=now) for h in hosts]
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
@@ -449,12 +418,11 @@ def list_hosts(
 
 @router.get("/{host_id}", response_model=HostOut)
 def get_host(host_id: str, db: Session = Depends(get_db), _current_user: User = Depends(get_current_active_user)):
+    now = datetime.now(timezone.utc)
     host = db.get(Host, host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
-    if _ensure_host_status_up_to_date(host):
-        db.commit()
-    return _host_to_out(host, db=db)
+    return _host_to_out(host, db=db, now=now)
 
 
 @router.put("/{host_id}", response_model=HostOut)

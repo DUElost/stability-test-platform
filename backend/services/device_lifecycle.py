@@ -25,21 +25,27 @@ def not_retired_condition():
     return Device.retired_at.is_(None)
 
 
-def stale_condition(*, now: Optional[datetime] = None):
-    """陈旧度 SQL 判据（与 `core.is_stale` 同口径）：OFFLINE ∧ (last_seen 空 ∨ 早于 7 天)。"""
+def stale_condition(*, now: Optional[datetime] = None, status_expr=None):
+    """陈旧度 SQL 判据（与 `core.is_stale` 同口径）：OFFLINE ∧ (last_seen 空 ∨ 早于 7 天)。
+
+    可显式传入 ``status_expr``（例如 ``device_effective_status_expr(now=now)``），
+    保证在读路径与有效离线口径严格对齐。
+    """
 
     cutoff = normalize_now(now) - timedelta(days=STALE_AFTER_DAYS)
+    status_col = Device.status if status_expr is None else status_expr
     return and_(
-        Device.status == "OFFLINE",
+        status_col == "OFFLINE",
         or_(Device.last_seen.is_(None), Device.last_seen < cutoff),
     )
 
 
-def not_stale_condition(*, now: Optional[datetime] = None):
+def not_stale_condition(*, now: Optional[datetime] = None, status_expr=None):
     """陈旧度补集（容量口径用）：非 OFFLINE，或 last_seen 仍在 7 天窗内。"""
 
     cutoff = normalize_now(now) - timedelta(days=STALE_AFTER_DAYS)
+    status_col = Device.status if status_expr is None else status_expr
     return or_(
-        Device.status != "OFFLINE",
+        status_col != "OFFLINE",
         and_(Device.last_seen.isnot(None), Device.last_seen >= cutoff),
     )

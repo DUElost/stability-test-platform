@@ -286,7 +286,12 @@ class TestProjectAttribution:
         from backend.models.project import TestProject
         from backend.models.project_model import ProjectModel
 
-        host = Host(id="h-attr", hostname="hattr", status="ONLINE")
+        host = Host(
+            id="h-attr",
+            hostname="hattr",
+            status="ONLINE",
+            last_heartbeat=datetime.now(timezone.utc),
+        )
         db_session.add(host)
         db_session.commit()
         project = TestProject(project_key="ATTR-P", display_name="attr")
@@ -342,7 +347,12 @@ class TestProjectAttribution:
         from backend.models.project import TestProject
         from backend.models.project_model import ProjectModel
 
-        host = Host(id="h-seed952", hostname="hseed952", status="ONLINE")
+        host = Host(
+            id="h-seed952",
+            hostname="hseed952",
+            status="ONLINE",
+            last_heartbeat=datetime.now(timezone.utc),
+        )
         db_session.add(host)
         db_session.commit()
         seed = TestProject(project_key="SEED-P", display_name="seed", source="SEED")
