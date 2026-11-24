@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "description": "Aging DDR stress test (FacAging com.ape.aging): preflight, pure-ADB DDR launch, DST-tolerant patrol with early PASS/FAIL exit, disarm and CSV report collection",
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": [
+      {
+        "step_id": "check_device",
+        "action": "script:check_device",
+        "version": "1.0.2",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "ensure_root",
+        "action": "script:ensure_root",
+        "version": "1.0.2",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "aging_ddr_setup",
+        "action": "script:aging_ddr_setup",
+        "version": "1.0.0",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {
+          "mode": "AGING",
+          "aging_module_pass_count": 7
+        }
+      }
+    ],
+    "patrol": {
+      "interval_seconds": 30,
+      "steps": [
+        {
+          "step_id": "aging_ddr_check",
+          "action": "script:aging_ddr_check",
+          "version": "1.0.0",
+          "timeout_seconds": 60,
+          "retry": 0,
+          "params": {
+            "max_offline_seconds": 2400
+          }
+        }
+      ]
+    },
+    "teardown": [
+      {
+        "step_id": "aging_ddr_disarm",
+        "action": "script:aging_ddr_disarm",
+        "version": "1.0.0",
+        "timeout_seconds": 1860,
+        "retry": 1,
+        "params": {
+          "mode": "disarm",
+          "wait_device_online_seconds": 1800
+        }
+      },
+      {
+        "step_id": "aging_ddr_finish",
+        "action": "script:aging_ddr_finish",
+        "version": "1.0.0",
+        "timeout_seconds": 420,
+        "retry": 1,
+        "params": {
+          "collect_attempts": 3,
+          "collect_retry_wait_seconds": 120
+        }
+      }
+    ]
+  }
+}
