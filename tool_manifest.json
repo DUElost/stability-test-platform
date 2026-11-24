@@ -106,6 +106,58 @@
         }
       ]
     },
+    "aging_ddr_check": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/aging_ddr_check/1.0.0.tar.gz",
+          "package_sha256": "36fb78de632c207cb9361bbe558744871237feb6cd0315ffca8e0ec66c8c15e1",
+          "python": null,
+          "retired": false,
+          "script": "aging_ddr_check.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "aging_ddr_disarm": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/aging_ddr_disarm/1.0.0.tar.gz",
+          "package_sha256": "1b8aa17ab28729ede60b35de1ea51fae83b14137a9f28d75a37eeb4657a80b23",
+          "python": null,
+          "retired": false,
+          "script": "aging_ddr_disarm.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "aging_ddr_finish": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/aging_ddr_finish/1.0.0.tar.gz",
+          "package_sha256": "5008140e5952ede733d545fd5be7d864eebd116de5a7dafc032176e8006ee38f",
+          "python": null,
+          "retired": false,
+          "script": "aging_ddr_finish.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "aging_ddr_setup": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/aging_ddr_setup/1.0.0.tar.gz",
+          "package_sha256": "ed6274e2aed4acf87200dc9fc6beeae64b2263e7a1b3e3c7c8d4d3e62edd82c1",
+          "python": null,
+          "retired": false,
+          "script": "aging_ddr_setup.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
     "aimonkey": {
       "kind": "tool",
       "versions": [
