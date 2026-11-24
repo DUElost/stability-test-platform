@@ -590,7 +590,7 @@ export default function DevicesPage() {
             <ProjectFilterSelect
               value={projectKey}
               onChange={setProjectKey}
-              className="w-full sm:w-40"
+              className="w-full sm:w-[116px] shrink-0"
               testId="device-project-filter"
               showUnassigned
             />

@@ -802,9 +802,9 @@ export function ExpandableDeviceTable({
                 id="device-search"
                 value={searchQuery}
                 onChange={setSearchQuery}
-                placeholder="搜索序列号 / 型号 / 主机..."
+                placeholder="搜索序列号 / 型号..."
                 ariaLabel="搜索设备"
-                className="flex-1 min-w-[180px]"
+                className="flex-1 min-w-[168px]"
               />
               {extraToolbarControls}
               <SearchableSelect
@@ -815,7 +815,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入主机名搜索..."
                 icon={<Server />}
                 ariaLabel="按所属主机筛选"
-                className="w-full sm:w-[120px] xl:w-32"
+                className="w-full sm:w-[116px] shrink-0"
                 testId="device-host-filter"
               />
               <SearchableSelect
@@ -826,7 +826,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入型号搜索..."
                 icon={<Smartphone />}
                 ariaLabel="按型号筛选"
-                className="w-full sm:w-[120px] xl:w-32"
+                className="w-full sm:w-[116px] shrink-0"
                 testId="device-model-filter"
               />
               <SearchableSelect
@@ -837,7 +837,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入 product 搜索..."
                 icon={<Cpu />}
                 ariaLabel="按 product 筛选"
-                className="w-full sm:w-[132px] xl:w-36"
+                className="w-full sm:w-[156px] shrink-0"
                 testId="device-product-filter"
               />
               <SearchableSelect
@@ -848,7 +848,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入版本号搜索..."
                 icon={<GitBranch />}
                 ariaLabel="按版本筛选"
-                className="w-full sm:w-[120px] xl:w-32"
+                className="w-full sm:w-[116px] shrink-0"
                 testId="device-version-filter"
               />
               {hasMoreFilters && (
