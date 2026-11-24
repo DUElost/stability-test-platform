@@ -797,14 +797,14 @@ export function ExpandableDeviceTable({
             matchSummary={`匹配 ${filteredDevices.length} / ${devices.length} 台设备`}
             chipsTestId="devices-filter-chips"
           >
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center xl:flex-nowrap">
+            <div className="flex flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center xl:flex-nowrap">
               <FilterSearchInput
                 id="device-search"
                 value={searchQuery}
                 onChange={setSearchQuery}
-                placeholder="搜索序列号 / 型号..."
+                placeholder="搜索序列号 / 型号"
                 ariaLabel="搜索设备"
-                className="flex-1 min-w-[168px]"
+                className="flex-1 min-w-[160px]"
               />
               {extraToolbarControls}
               <SearchableSelect
@@ -815,7 +815,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入主机名搜索..."
                 icon={<Server />}
                 ariaLabel="按所属主机筛选"
-                className="w-full sm:w-[116px] shrink-0"
+                className="w-full sm:w-[122px] shrink-0"
                 testId="device-host-filter"
               />
               <SearchableSelect
@@ -826,7 +826,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入型号搜索..."
                 icon={<Smartphone />}
                 ariaLabel="按型号筛选"
-                className="w-full sm:w-[116px] shrink-0"
+                className="w-full sm:w-[122px] shrink-0"
                 testId="device-model-filter"
               />
               <SearchableSelect
@@ -848,7 +848,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入版本号搜索..."
                 icon={<GitBranch />}
                 ariaLabel="按版本筛选"
-                className="w-full sm:w-[116px] shrink-0"
+                className="w-full sm:w-[122px] shrink-0"
                 testId="device-version-filter"
               />
               {hasMoreFilters && (
