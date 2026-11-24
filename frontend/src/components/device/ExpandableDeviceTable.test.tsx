@@ -199,7 +199,6 @@ describe('ExpandableDeviceTable', () => {
       expect(latest.map((d) => d.id)).toEqual([3]);
     });
 
-    fireEvent.click(screen.getByTestId('devices-more-filters'));
     fireEvent.click(screen.getByRole('combobox', { name: '按版本筛选' }));
     fireEvent.click(screen.getByRole('option', { name: 'build-b' }));
     await waitFor(() => {
@@ -343,7 +342,9 @@ it('distinguishes NX3Carrier by product and filters same-model devices', async (
   render(<ExpandableDeviceTable devices={nxDevices} />);
   expect(screen.getByText('Product: NX3Carrier · sys_mssi_64_cn_armv82')).toBeInTheDocument();
   expect(screen.getByText('Product: 未上报')).toBeInTheDocument();
-  fireEvent.click(screen.getByTestId('devices-more-filters'));
+  // Product 筛选直接在主筛选条外显，无需先点开「更多筛选」
+  expect(screen.getByTestId('device-product-filter')).toBeInTheDocument();
+  expect(screen.getByTestId('device-version-filter')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('combobox', { name: '按 product 筛选' }));
   fireEvent.click(screen.getByRole('option', { name: 'sys_mssi_64_cn_armv82' }));
   expect(screen.getByText('CARRIER-A')).toBeInTheDocument();
@@ -461,8 +462,7 @@ it('scopes version, model, product, and host filter options to active status and
   expect(screen.queryByRole('option', { name: 'Host-Offline' })).not.toBeInTheDocument();
   fireEvent.keyDown(document, { key: 'Escape' });
 
-  // Product 与版本收拢在「更多筛选」中，选项同样受活跃状态作用域约束
-  fireEvent.click(screen.getByTestId('devices-more-filters'));
+  // Product 与版本直接在主筛选条外显，选项同样受活跃状态作用域约束
   fireEvent.click(screen.getByRole('combobox', { name: '按版本筛选' }));
   expect(screen.getByRole('option', { name: 'V-IDLE' })).toBeInTheDocument();
   expect(screen.queryByRole('option', { name: 'V-OFFLINE' })).not.toBeInTheDocument();

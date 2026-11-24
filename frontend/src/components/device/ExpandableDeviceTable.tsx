@@ -29,6 +29,8 @@ import {
   ArrowUpDown,
   ChevronLeft,
   ChevronRight,
+  Cpu,
+  GitBranch,
   Smartphone,
   Server,
   Wifi,
@@ -579,24 +581,8 @@ export function ExpandableDeviceTable({
 
       {/* 统一单行工作台：顶行合并状态统计与快捷视角（省去 92px 稀疏五卡），主筛选行严格单行 */}
       {(() => {
-        // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip，避免与搜索框 / 下拉 / 快捷视图重复
+        // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip（陈旧 / 退役）
         const hiddenChips: ActiveFilterChip[] = [];
-        if (effectiveProductFilter !== 'all') {
-          hiddenChips.push({
-            key: 'product',
-            label: 'Product',
-            value: effectiveProductFilter,
-            onRemove: () => setProductFilter('all'),
-          });
-        }
-        if (effectiveVersionFilter !== 'all') {
-          hiddenChips.push({
-            key: 'version',
-            label: '版本',
-            value: effectiveVersionFilter,
-            onRemove: () => setVersionFilter('all'),
-          });
-        }
         if (includeStale && onIncludeStaleChange) {
           hiddenChips.push({
             key: 'stale',
@@ -614,12 +600,11 @@ export function ExpandableDeviceTable({
           });
         }
 
-        // 只统计存在于「更多筛选」内的条件（Product / 版本 / 陈旧 / 退役）
+        // 只统计存在于「更多筛选」内的条件（陈旧 / 退役）
         const moreActiveCount =
-          (effectiveProductFilter !== 'all' ? 1 : 0) +
-          (effectiveVersionFilter !== 'all' ? 1 : 0) +
-          (includeStale ? 1 : 0) +
-          (includeRetired ? 1 : 0);
+          (includeStale && onIncludeStaleChange ? 1 : 0) +
+          (includeRetired && onIncludeRetiredChange ? 1 : 0);
+        const hasMoreFilters = Boolean(onIncludeStaleChange || onIncludeRetiredChange);
 
         const hasAnyActiveFilter =
           statusFilter !== 'all' ||
@@ -812,14 +797,14 @@ export function ExpandableDeviceTable({
             matchSummary={`匹配 ${filteredDevices.length} / ${devices.length} 台设备`}
             chipsTestId="devices-filter-chips"
           >
-            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:flex-nowrap">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center xl:flex-nowrap">
               <FilterSearchInput
                 id="device-search"
                 value={searchQuery}
                 onChange={setSearchQuery}
-                placeholder="搜索序列号 / 型号 / 版本 / 主机 / 标签..."
+                placeholder="搜索序列号 / 型号 / 主机..."
                 ariaLabel="搜索设备"
-                className="flex-1 min-w-[220px] sm:max-w-[320px]"
+                className="flex-1 min-w-[180px]"
               />
               {extraToolbarControls}
               <SearchableSelect
@@ -830,7 +815,7 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入主机名搜索..."
                 icon={<Server />}
                 ariaLabel="按所属主机筛选"
-                className="w-full sm:w-36"
+                className="w-full sm:w-[120px] xl:w-32"
                 testId="device-host-filter"
               />
               <SearchableSelect
@@ -841,61 +826,59 @@ export function ExpandableDeviceTable({
                 searchPlaceholder="输入型号搜索..."
                 icon={<Smartphone />}
                 ariaLabel="按型号筛选"
-                className="w-full sm:w-36"
+                className="w-full sm:w-[120px] xl:w-32"
                 testId="device-model-filter"
               />
-              <MoreFiltersPopover activeCount={moreActiveCount} testId="devices-more-filters">
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-medium text-muted-foreground">Product</div>
-                  <SearchableSelect
-                    value={effectiveProductFilter}
-                    onChange={setProductFilter}
-                    options={productOptions.map((p) => ({ value: p, label: p }))}
-                    allLabel="全部 product"
-                    searchPlaceholder="输入 product 搜索..."
-                    ariaLabel="按 product 筛选"
-                    className="w-full"
-                    testId="device-product-filter"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-medium text-muted-foreground">系统版本</div>
-                  <SearchableSelect
-                    value={effectiveVersionFilter}
-                    onChange={setVersionFilter}
-                    options={versionOptions.map((v) => ({ value: v, label: v }))}
-                    allLabel="全部版本"
-                    searchPlaceholder="输入版本号搜索..."
-                    ariaLabel="按版本筛选"
-                    className="w-full"
-                    testId="device-version-filter"
-                  />
-                </div>
-                {onIncludeStaleChange && (
-                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
-                    <span>显示陈旧设备</span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(includeStale)}
-                      onChange={(e) => onIncludeStaleChange(e.target.checked)}
-                      data-testid="device-toggle-stale"
-                      className="rounded"
-                    />
-                  </label>
-                )}
-                {onIncludeRetiredChange && (
-                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
-                    <span>显示已退役设备</span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(includeRetired)}
-                      onChange={(e) => onIncludeRetiredChange(e.target.checked)}
-                      data-testid="device-toggle-retired"
-                      className="rounded"
-                    />
-                  </label>
-                )}
-              </MoreFiltersPopover>
+              <SearchableSelect
+                value={effectiveProductFilter}
+                onChange={setProductFilter}
+                options={productOptions.map((p) => ({ value: p, label: p }))}
+                allLabel="全部 product"
+                searchPlaceholder="输入 product 搜索..."
+                icon={<Cpu />}
+                ariaLabel="按 product 筛选"
+                className="w-full sm:w-[132px] xl:w-36"
+                testId="device-product-filter"
+              />
+              <SearchableSelect
+                value={effectiveVersionFilter}
+                onChange={setVersionFilter}
+                options={versionOptions.map((v) => ({ value: v, label: v }))}
+                allLabel="全部版本"
+                searchPlaceholder="输入版本号搜索..."
+                icon={<GitBranch />}
+                ariaLabel="按版本筛选"
+                className="w-full sm:w-[120px] xl:w-32"
+                testId="device-version-filter"
+              />
+              {hasMoreFilters && (
+                <MoreFiltersPopover activeCount={moreActiveCount} testId="devices-more-filters">
+                  {onIncludeStaleChange && (
+                    <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
+                      <span>显示陈旧设备</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(includeStale)}
+                        onChange={(e) => onIncludeStaleChange(e.target.checked)}
+                        data-testid="device-toggle-stale"
+                        className="rounded"
+                      />
+                    </label>
+                  )}
+                  {onIncludeRetiredChange && (
+                    <label className="flex cursor-pointer items-center justify-between rounded-lg border border-border px-3 py-2 text-xs hover:bg-muted/30">
+                      <span>显示已退役设备</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(includeRetired)}
+                        onChange={(e) => onIncludeRetiredChange(e.target.checked)}
+                        data-testid="device-toggle-retired"
+                        className="rounded"
+                      />
+                    </label>
+                  )}
+                </MoreFiltersPopover>
+              )}
             </div>
           </FilterWorkbench>
         );
