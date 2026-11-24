@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, AlertCircle, AlertTriangle } from 'lucide-react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, AlertCircle, AlertTriangle, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageContainer } from '@/components/layout';
 import { Skeleton } from '@/components/ui/skeleton';
+import { StateTabs } from '@/components/ui/state-tabs';
 import { useToast } from '@/hooks/useToast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import PlanRunHero from '@/components/plan-run/PlanRunHero';
@@ -31,7 +32,7 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from '@/components/ui/alert-dialog';
-import { ALERT_BANNER, SURFACE, TEXT } from '@/design-system/tokens';
+import { ALERT_BANNER, PANEL, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { ErrorState } from '@/components/ui/error-state';
 import { normalizeWatcherTimeScope, shouldShowDispatchGate, normalizeDispatchStateForRun } from '@/hooks/plan-run/planRunDetailUtils';
@@ -40,11 +41,18 @@ import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 import { api, loadErrorCopy } from '@/utils/api';
 import type { DeviceLinkStatus, DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
 
+type DetailSectionTab = 'monitoring' | 'delivery' | 'diagnostics';
+
 export default function PlanRunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
   const id = Number(runId);
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
+  const backTarget = (() => {
+    const from = (location.state as { from?: unknown } | null)?.from;
+    return typeof from === 'string' && from.startsWith('/') ? from : '/execution/plan-runs';
+  })();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const deviceStatusFilter = (searchParams.get('status') ?? 'all') as DeviceUiStatus | 'all';
@@ -53,6 +61,11 @@ export default function PlanRunDetailPage() {
   const watcherTimeScope = normalizeWatcherTimeScope(
     searchParams.get('scope') ?? searchParams.get('window'),
   );
+  const rawSection = searchParams.get('section');
+  const activeSection: DetailSectionTab =
+    rawSection === 'delivery' || rawSection === 'diagnostics' ? rawSection : 'monitoring';
+  const drawerParam = searchParams.get('drawer');
+  const selectedJobId = drawerParam && /^\d+$/.test(drawerParam) ? Number(drawerParam) : null;
 
   const updateParam = useCallback(
     (key: string, value: string, isDefault: boolean) =>
@@ -83,8 +96,30 @@ export default function PlanRunDetailPage() {
     (scope: WatcherTimeScope) => updateParam('scope', scope, scope === 'all'),
     [updateParam],
   );
+  const setActiveSection = useCallback(
+    (section: DetailSectionTab) => updateParam('section', section, section === 'monitoring'),
+    [updateParam],
+  );
+  const setSelectedJobId = useCallback(
+    (jobId: number | null) =>
+      updateParam('drawer', jobId == null ? '' : String(jobId), jobId == null),
+    [updateParam],
+  );
+  const resetDeviceFilters = useCallback(
+    () =>
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('status');
+          next.delete('link');
+          next.delete('host');
+          return next;
+        },
+        { replace: true },
+      ),
+    [setSearchParams],
+  );
 
-  const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [diagOpen, setDiagOpen] = useState(false);
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [finalArchiveOpen, setFinalArchiveOpen] = useState(false);
@@ -118,13 +153,23 @@ export default function PlanRunDetailPage() {
     projectionJobId: snapshotJobId,
   });
 
-  const selectedDevice = useMemo(
+  const deviceList = useMemo(() => devicesQ.data?.devices ?? [], [devicesQ.data?.devices]);
+  const selectedDeviceIdx = useMemo(
     () =>
       selectedJobId == null
-        ? null
-        : devicesQ.data?.devices.find((device) => device.job_id === selectedJobId) ?? null,
-    [devicesQ.data?.devices, selectedJobId],
+        ? -1
+        : deviceList.findIndex((device) => device.job_id === selectedJobId),
+    [deviceList, selectedJobId],
   );
+  const selectedDevice = selectedDeviceIdx >= 0 ? deviceList[selectedDeviceIdx] : null;
+  const handlePrevDevice =
+    selectedDeviceIdx > 0
+      ? () => setSelectedJobId(deviceList[selectedDeviceIdx - 1].job_id)
+      : undefined;
+  const handleNextDevice =
+    selectedDeviceIdx >= 0 && selectedDeviceIdx < deviceList.length - 1
+      ? () => setSelectedJobId(deviceList[selectedDeviceIdx + 1].job_id)
+      : undefined;
 
   const finalArchivePromptedKey = `plan-run-${id}-final-archive-prompted`;
   // #780：原先读 `archive.readiness` / `archive.ready_for_extract`——后端
@@ -180,9 +225,18 @@ export default function PlanRunDetailPage() {
 
   if (!id || Number.isNaN(id)) {
     return (
-      <div className={cn('flex h-64 items-center justify-center text-sm', TEXT.subtitle)}>
-        <AlertCircle className="mr-2 h-4 w-4" /> 无效 PlanRun ID
-      </div>
+      <PageContainer width="content" className="space-y-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate(backTarget)}
+        >
+          <ArrowLeft className="mr-1 h-4 w-4" /> 返回列表
+        </Button>
+        <div className={cn('flex h-48 items-center justify-center text-sm', TEXT.subtitle)}>
+          <AlertCircle className="mr-2 h-4 w-4" /> 无效 PlanRun ID
+        </div>
+      </PageContainer>
     );
   }
 
@@ -191,11 +245,11 @@ export default function PlanRunDetailPage() {
       notFound: '执行记录不存在或已被清理（可能已过期回收）。',
     });
     return (
-      <div className="space-y-3">
+      <PageContainer width="content" className="space-y-3">
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate('/execution/plan-runs')}
+          onClick={() => navigate(backTarget)}
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> 返回列表
         </Button>
@@ -206,7 +260,7 @@ export default function PlanRunDetailPage() {
           description={runErrorCopy.description}
           onRetry={runErrorCopy.retryable ? () => runQ.refetch() : undefined}
         />
-      </div>
+      </PageContainer>
     );
   }
 
@@ -293,6 +347,11 @@ export default function PlanRunDetailPage() {
                   timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
                     ?.patrol_cycle_index ?? null
                 }
+                statusFilter={deviceStatusFilter}
+                linkFilter={deviceLinkFilter}
+                onSelectStatus={setDeviceStatusFilter}
+                onSelectLink={setDeviceLinkFilter}
+                onResetFilters={resetDeviceFilters}
               />
             </div>
             <div className="shrink-0">
@@ -330,6 +389,7 @@ export default function PlanRunDetailPage() {
           )}
 
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
+            {/* Minimap 与设备态势常驻置顶（Owner 硬保留约束） */}
             <DeviceOverview
               data={devicesQ.data}
               isLoading={devicesQ.isLoading}
@@ -341,56 +401,10 @@ export default function PlanRunDetailPage() {
               onLinkFilterChange={setDeviceLinkFilter}
               onHostFilterChange={setDeviceHostFilter}
               onSelectDevice={(device) => setSelectedJobId(device.job_id)}
+              selectedJobId={selectedJobId}
             />
 
-            <AnomalyDashboard
-              runId={id}
-              data={watcherQ.data}
-              isLoading={watcherQ.isLoading}
-              isError={watcherQ.isError}
-              timeScope={watcherTimeScope}
-              onTimeScopeChange={setWatcherTimeScope}
-              onSelectDeviceSerial={(serial) => {
-                const matched = devicesQ.data?.devices.find(
-                  (d) => d.device_serial === serial,
-                );
-                if (matched) {
-                  setSelectedJobId(matched.job_id);
-                } else {
-                  navigate(
-                    `/execution/plan-runs/${id}/logs?q=${encodeURIComponent(serial)}`,
-                  );
-                }
-              }}
-            />
-
-            <ArchiveStatusCard
-              opsMetrics={watcherQ.data?.archive?.ops_metrics}
-              linkStats={watcherQ.data?.archive?.link_stats}
-              isLoading={watcherQ.isLoading}
-              isError={watcherQ.isError}
-              onRetry={() => void watcherQ.refetch()}
-            />
-
-            {/* #529：终态 DLE 事件视图（归档权威）。RUNNING 不渲染，见组件 gate。 */}
-            {isTerminal && <LogEventsCard runId={id} isTerminal />}
-            {isTerminal && <TestCaseResultsCard runId={id} isTerminal />}
-
-            <DedupReportCard
-              runId={id}
-              uploadSummary={runQ.data?.run_context?.upload_summary}
-              extractSummary={runQ.data?.run_context?.extract}
-              mergePlatforms={runQ.data?.run_context?.merge_platforms}
-            />
-
-            <JiraRunHistory planRunId={id} />
-
-            <BusinessFlowStepper
-              timeline={timelineQ.data}
-              isLoading={timelineQ.isLoading}
-              isError={timelineQ.isError}
-            />
-
+            {/* 准入预检与派发故障摘要条始终可见，避免门禁报错被二级页签隐藏 */}
             {showDispatchGate && (
               <section data-testid="dispatch-gate-section" className="space-y-2">
                 {precheck && (
@@ -412,6 +426,148 @@ export default function PlanRunDetailPage() {
                   />
                 </div>
               </section>
+            )}
+
+            <StateTabs
+              variant="underline"
+              ariaLabel="执行详情分区"
+              testId="plan-run-section-tabs"
+              activeKey={activeSection}
+              onChange={(key) => setActiveSection(key as DetailSectionTab)}
+              items={[
+                {
+                  key: 'monitoring',
+                  label: '异常与进度',
+                  panelId: 'plan-run-panel-monitoring',
+                  testId: 'plan-run-section-monitoring',
+                },
+                {
+                  key: 'delivery',
+                  label: isTerminal ? '日志与交付' : '日志与交付（归档）',
+                  panelId: 'plan-run-panel-delivery',
+                  testId: 'plan-run-section-delivery',
+                },
+                {
+                  key: 'diagnostics',
+                  label: gateFailed ? '派发与诊断（异常）' : '派发与诊断',
+                  panelId: 'plan-run-panel-diagnostics',
+                  testId: 'plan-run-section-diagnostics',
+                },
+              ]}
+            />
+
+            {activeSection === 'monitoring' && (
+              <div
+                role="tabpanel"
+                id="plan-run-panel-monitoring"
+                className="space-y-3"
+              >
+                <AnomalyDashboard
+                  runId={id}
+                  data={watcherQ.data}
+                  isLoading={watcherQ.isLoading}
+                  isError={watcherQ.isError}
+                  timeScope={watcherTimeScope}
+                  onTimeScopeChange={setWatcherTimeScope}
+                  onSelectDeviceSerial={(serial) => {
+                    const matched = devicesQ.data?.devices.find(
+                      (d) => d.device_serial === serial,
+                    );
+                    if (matched) {
+                      setSelectedJobId(matched.job_id);
+                    } else {
+                      navigate(
+                        `/execution/plan-runs/${id}/logs?q=${encodeURIComponent(serial)}`,
+                      );
+                    }
+                  }}
+                />
+
+                <ArchiveStatusCard
+                  opsMetrics={watcherQ.data?.archive?.ops_metrics}
+                  linkStats={watcherQ.data?.archive?.link_stats}
+                  isLoading={watcherQ.isLoading}
+                  isError={watcherQ.isError}
+                  onRetry={() => void watcherQ.refetch()}
+                />
+
+                <BusinessFlowStepper
+                  timeline={timelineQ.data}
+                  isLoading={timelineQ.isLoading}
+                  isError={timelineQ.isError}
+                />
+              </div>
+            )}
+
+            {activeSection === 'delivery' && (
+              <div
+                role="tabpanel"
+                id="plan-run-panel-delivery"
+                className="space-y-3"
+              >
+                {/* #529：终态 DLE 事件视图（归档权威）。RUNNING 不渲染，见组件 gate。 */}
+                {isTerminal && <LogEventsCard runId={id} isTerminal />}
+                {isTerminal && <TestCaseResultsCard runId={id} isTerminal />}
+
+                <DedupReportCard
+                  runId={id}
+                  uploadSummary={runQ.data?.run_context?.upload_summary}
+                  extractSummary={runQ.data?.run_context?.extract}
+                  mergePlatforms={runQ.data?.run_context?.merge_platforms}
+                />
+
+                <JiraRunHistory planRunId={id} />
+              </div>
+            )}
+
+            {activeSection === 'diagnostics' && (
+              <div
+                role="tabpanel"
+                id="plan-run-panel-diagnostics"
+                className="space-y-3"
+              >
+                <div className={cn(PANEL.root, 'flex flex-wrap items-center justify-between gap-3 p-4')}>
+                  <div className="min-w-0">
+                    <div className={cn('text-sm font-semibold', TEXT.heading)}>
+                      冻结计划快照与参数投影（L2 / L3）
+                    </div>
+                    <p className={cn('mt-0.5 text-xs', TEXT.subtitle)}>
+                      查看本次执行冻结的 Plan 步序、有效参数投影及单设备 L3 下发参数。
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSnapshotOpen(true)}
+                    disabled={!runQ.data}
+                  >
+                    <FileText className="mr-1.5 h-3.5 w-3.5" />
+                    打开计划快照
+                  </Button>
+                </div>
+
+                {showDispatchGate ? (
+                  <DispatchGateCard
+                    precheck={precheck}
+                    dispatchState={dispatchState}
+                    isTerminal={isTerminal}
+                    onRetryDispatch={() => retryDispatchMut.mutate()}
+                    isRetrying={retryDispatchMut.isPending}
+                    retryable={runQ.data?.capabilities?.retry_dispatch}
+                  />
+                ) : (
+                  <div className={cn(PANEL.root, 'p-4 text-xs', TEXT.subtitle)}>
+                    当前 PlanRun 无需额外的派发门禁诊断信息。
+                  </div>
+                )}
+
+                <BusinessFlowStepper
+                  timeline={timelineQ.data}
+                  isLoading={timelineQ.isLoading}
+                  isError={timelineQ.isError}
+                />
+              </div>
             )}
           </div>
         </div>
@@ -435,6 +591,10 @@ export default function PlanRunDetailPage() {
         }
         isRetryPending={retryMut.isPending}
         isExitPending={exitMut.isPending}
+        devicePosition={selectedDeviceIdx >= 0 ? selectedDeviceIdx + 1 : undefined}
+        totalDevices={deviceList.length}
+        onPrevDevice={handlePrevDevice}
+        onNextDevice={handleNextDevice}
       />
 
       {/* #3350 + #3653 U4：快照身份仍来自 detail.plan_snapshot；参数只消费 L2/L3 投影 */}

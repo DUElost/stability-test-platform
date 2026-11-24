@@ -1,4 +1,8 @@
-import type { PlanRunDevicesPayload } from '@/utils/api/types';
+import type {
+  DeviceLinkStatus,
+  DeviceUiStatus,
+  PlanRunDevicesPayload,
+} from '@/utils/api/types';
 import { BORDER, KPI_TONE, STAT, SURFACE, type KpiTone } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import SectionHeader from './SectionHeader';
@@ -7,6 +11,11 @@ interface Props {
   devices?: PlanRunDevicesPayload;
   currentStage?: string | null;
   patrolCycle?: number | null;
+  statusFilter?: DeviceUiStatus | 'all';
+  linkFilter?: DeviceLinkStatus | 'all';
+  onSelectStatus?: (status: DeviceUiStatus | 'all') => void;
+  onSelectLink?: (link: DeviceLinkStatus | 'all') => void;
+  onResetFilters?: () => void;
 }
 
 function Cell({
@@ -14,29 +23,60 @@ function Cell({
   label,
   tone = 'default',
   testId,
+  active = false,
+  onClick,
+  title,
 }: {
   value: number | string;
   label: string;
   tone?: KpiTone;
   testId: string;
+  active?: boolean;
+  onClick?: () => void;
+  title?: string;
 }) {
   const cls = KPI_TONE[tone];
+  const baseCls = cn(
+    'flex w-full flex-col items-center justify-center rounded-lg border py-1.5 px-1.5 shadow-none transition-colors',
+    SURFACE.elevated,
+    active ? 'border-primary/60 bg-primary/5 ring-1 ring-primary/40' : BORDER.default,
+    onClick && 'cursor-pointer hover:border-primary/40 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+  );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={active}
+        title={title}
+        className={baseCls}
+        data-testid={testId}
+      >
+        <span className={cn(STAT.value, 'text-xl leading-tight', cls.value)}>{value}</span>
+        <span className={cn('mt-0.5 text-[11px]', STAT.label, cls.label)}>{label}</span>
+      </button>
+    );
+  }
+
   return (
-    <div
-      className={cn(
-        'flex flex-col items-center justify-center rounded-lg border py-2.5 px-1 shadow-none',
-        SURFACE.elevated,
-        BORDER.default,
-      )}
-      data-testid={testId}
-    >
-      <span className={cn(STAT.value, 'text-2xl', cls.value)}>{value}</span>
-      <span className={cn('mt-1', STAT.label, cls.label)}>{label}</span>
+    <div className={baseCls} data-testid={testId}>
+      <span className={cn(STAT.value, 'text-xl leading-tight', cls.value)}>{value}</span>
+      <span className={cn('mt-0.5 text-[11px]', STAT.label, cls.label)}>{label}</span>
     </div>
   );
 }
 
-export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: Props) {
+export default function PlanRunKpiGrid({
+  devices,
+  currentStage,
+  patrolCycle,
+  statusFilter = 'all',
+  linkFilter = 'all',
+  onSelectStatus,
+  onSelectLink,
+  onResetFilters,
+}: Props) {
   const byStatus = devices?.by_status ?? {};
   const byLinkStatus = devices?.by_link_status;
   const total = devices?.total ?? 0;
@@ -69,29 +109,72 @@ export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: P
           ? '清理'
           : '—';
 
+  const disconnectedTarget: DeviceUiStatus = unknown > 0 ? 'unknown' : 'backoff';
+  const linkAbnormalTarget: DeviceLinkStatus = (() => {
+    if (!byLinkStatus) return 'offline';
+    if ((byLinkStatus.offline ?? 0) > 0) return 'offline';
+    if ((byLinkStatus.adb_error ?? 0) > 0) return 'adb_error';
+    if ((byLinkStatus.host_offline ?? 0) > 0) return 'host_offline';
+    return 'unknown';
+  })();
+
+  const toggleStatus = onSelectStatus
+    ? (target: DeviceUiStatus) =>
+        onSelectStatus(statusFilter === target ? 'all' : target)
+    : undefined;
+
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-2">
       <SectionHeader title="关键指标" />
-      <div className="grid grid-cols-2 gap-2">
-        <Cell value={total} label="设备总数" testId="kpi-total" />
+      <div className="grid grid-cols-2 gap-1.5">
+        <Cell
+          value={total}
+          label="设备总数"
+          testId="kpi-total"
+          active={Boolean(onResetFilters) && statusFilter === 'all' && linkFilter === 'all'}
+          onClick={onResetFilters}
+          title={onResetFilters ? '点击查看全部设备' : undefined}
+        />
         <Cell
           value={stageLabel}
           label={patrolCycle != null ? `周期 #${patrolCycle}` : '当前阶段'}
           testId="kpi-stage"
         />
-        <Cell value={running} label="运行中" tone="warning" testId="kpi-running" />
-        <Cell value={completed} label="已完成" tone="success" testId="kpi-completed" />
+        <Cell
+          value={running}
+          label="运行中"
+          tone="warning"
+          testId="kpi-running"
+          active={statusFilter === 'running'}
+          onClick={toggleStatus ? () => toggleStatus('running') : undefined}
+          title={toggleStatus ? '点击筛选运行中设备' : undefined}
+        />
+        <Cell
+          value={completed}
+          label="已完成"
+          tone="success"
+          testId="kpi-completed"
+          active={statusFilter === 'completed'}
+          onClick={toggleStatus ? () => toggleStatus('completed') : undefined}
+          title={toggleStatus ? '点击筛选已完成设备' : undefined}
+        />
         <Cell
           value={failed}
           label="失败"
           tone={failed > 0 ? 'destructive' : 'default'}
           testId="kpi-failed"
+          active={statusFilter === 'failed'}
+          onClick={toggleStatus ? () => toggleStatus('failed') : undefined}
+          title={toggleStatus ? '点击筛选失败设备' : undefined}
         />
         <Cell
           value={disconnectedAndBackoff}
           label="Job 失联/退避"
           tone={disconnectedTone}
           testId="kpi-disconnected-backoff"
+          active={statusFilter === 'unknown' || statusFilter === 'backoff'}
+          onClick={toggleStatus ? () => toggleStatus(disconnectedTarget) : undefined}
+          title={toggleStatus ? '点击筛选失联/退避设备' : undefined}
         />
         {/* 连接维度与上面的执行维度正交,同一台设备可能同时计入两处,
             所以横跨整行单独呈现,避免读成「又一个执行状态」。 */}
@@ -101,6 +184,18 @@ export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: P
             label="设备连接异常"
             tone={linkTone}
             testId="kpi-link-abnormal"
+            active={linkFilter !== 'all' && linkFilter !== 'online'}
+            onClick={
+              onSelectLink
+                ? () =>
+                    onSelectLink(
+                      linkFilter !== 'all' && linkFilter !== 'online'
+                        ? 'all'
+                        : linkAbnormalTarget,
+                    )
+                : undefined
+            }
+            title={onSelectLink ? '点击筛选连接异常设备' : undefined}
           />
         </div>
       </div>

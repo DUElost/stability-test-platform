@@ -392,4 +392,36 @@ describe('DeviceDetailDrawer — 解除结果（ADR-0061 D1.2 / U6）', () => {
     );
     expect(screen.getByTestId('device-drawer-disarm-power-cycle')).toHaveTextContent('future_value');
   });
+
+  it('U5-3：支持上一台/下一台切机、复制串号、AI 诊断与单机日志深链', () => {
+    const onPrevDevice = vi.fn();
+    const onNextDevice = vi.fn();
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({ log_signal_count: 3 })}
+        {...handlers}
+        runId={1594}
+        devicePosition={2}
+        totalDevices={5}
+        onPrevDevice={onPrevDevice}
+        onNextDevice={onNextDevice}
+      />,
+    );
+
+    expect(screen.getByText('2/5')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('device-drawer-prev'));
+    expect(onPrevDevice).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('device-drawer-next'));
+    expect(onNextDevice).toHaveBeenCalledTimes(1);
+
+    expect(screen.getByTestId('device-drawer-copy-serial')).toBeInTheDocument();
+    expect(screen.getByTestId('device-drawer-logs-btn')).toHaveAttribute(
+      'href',
+      '/execution/plan-runs/1594/logs?q=DEV-AAAA',
+    );
+    expect(screen.getByTestId('device-drawer-ai-btn').getAttribute('href')).toContain(
+      '/assistant?prompt=',
+    );
+    expect(screen.queryByText(/上方"业务流时间线"/)).toBeNull();
+  });
 });

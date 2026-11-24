@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, FileText, X, Loader2, ChevronDown, RotateCcw } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -11,13 +11,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { PlanRun, PlanRunStatus } from '@/utils/api/types';
 import {
   PLAN_RUN_HERO_BADGE,
   PLAN_RUN_HERO_SURFACE,
   type PlanRunHeroStatus,
 } from '@/design-system/colors';
-import { ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
+import { ELEVATION, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDateTimeShort, formatDurationSeconds } from '@/utils/format';
 import { ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
@@ -64,36 +70,12 @@ export function PlanRunHeroActions({
   className,
 }: PlanRunHeroActionsProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
   const [reason, setReason] = useState('');
-  const exportBtnRef = useRef<HTMLButtonElement | null>(null);
-  const [exportPos, setExportPos] = useState<{
-    top: number;
-    left: number;
-    width: number;
-    openUp: boolean;
-  } | null>(null);
 
   const isTerminal = !!run && isPlanRunTerminal(run.status);
   const canAbort = run?.capabilities
     ? run.capabilities.abort === true
     : !isTerminal;
-
-  const openExportMenu = () => {
-    const rect = exportBtnRef.current?.getBoundingClientRect();
-    if (rect) {
-      const menuH = 72;
-      const spaceBelow = window.innerHeight - rect.bottom;
-      const openUp = spaceBelow < menuH + 12;
-      setExportPos({
-        top: openUp ? rect.top : rect.bottom,
-        left: rect.left,
-        width: rect.width,
-        openUp,
-      });
-    }
-    setExportOpen((v) => !v);
-  };
 
   return (
     // #3484：侧栏行宽 ~229px 容不下三个 nowrap 按钮（min-content 96+124+96+gap=328），
@@ -114,65 +96,38 @@ export function PlanRunHeroActions({
           查看快照
         </Button>
       )}
-      <div className="relative flex-1">
-        <Button
-          variant="outline"
-          size="sm"
-          ref={exportBtnRef}
-          data-testid="plan-run-export-btn"
-          onClick={openExportMenu}
-          disabled={!run}
-          className="w-full text-[11px] h-7"
-        >
-          <Download className="mr-1 h-3 w-3" />
-          导出报告
-          <ChevronDown className="ml-1 h-3 w-3" />
-        </Button>
-        {exportOpen && run && (
-          <>
-            <div className="fixed inset-0 z-20" onClick={() => setExportOpen(false)} />
-            <div
-              className={cn(
-                'fixed z-30 overflow-hidden rounded-md border shadow-lg',
-                SURFACE.elevated,
-                ELEVATION.dropdown,
-              )}
-              style={{
-                top: exportPos?.openUp
-                  ? undefined
-                  : (exportPos?.top ?? 0) + 4,
-                bottom: exportPos?.openUp
-                  ? window.innerHeight - (exportPos?.top ?? 0) + 4
-                  : undefined,
-                left: exportPos?.left ?? 0,
-                width: exportPos?.width ?? 160,
-              }}
+      <div className="flex-1">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="plan-run-export-btn"
+              disabled={!run}
+              className="w-full text-[11px] h-7"
             >
-              <button
-                type="button"
-                data-testid="plan-run-export-md"
-                onClick={() => {
-                  setExportOpen(false);
-                  onExportReport?.('markdown');
-                }}
-                className={cn('block w-full px-3 py-1.5 text-left text-[11px]', INTERACTIVE.menuItem)}
-              >
-                Markdown (.md)
-              </button>
-              <button
-                type="button"
-                data-testid="plan-run-export-json"
-                onClick={() => {
-                  setExportOpen(false);
-                  onExportReport?.('json');
-                }}
-                className={cn('block w-full px-3 py-1.5 text-left text-[11px]', INTERACTIVE.menuItem)}
-              >
-                JSON (.json)
-              </button>
-            </div>
-          </>
-        )}
+              <Download className="mr-1 h-3 w-3" />
+              导出报告
+              <ChevronDown className="ml-1 h-3 w-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[140px]">
+            <DropdownMenuItem
+              data-testid="plan-run-export-md"
+              className="text-xs"
+              onSelect={() => onExportReport?.('markdown')}
+            >
+              Markdown (.md)
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              data-testid="plan-run-export-json"
+              className="text-xs"
+              onSelect={() => onExportReport?.('json')}
+            >
+              JSON (.json)
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {isTerminal && onRerun && (

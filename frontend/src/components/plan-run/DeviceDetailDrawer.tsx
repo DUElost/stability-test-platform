@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  X,
-  RotateCw,
-  LogOut,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
   ExternalLink,
-  Loader2,
+  FileText,
   FileWarning,
+  Loader2,
+  LogOut,
+  RotateCw,
+  Sparkles,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -51,6 +57,11 @@ interface Props {
   onOpenReport: (jobId: number) => void;
   isRetryPending?: boolean;
   isExitPending?: boolean;
+  /** U5-3：筛选列表内切机导航（对齐 DevicesPage / HostsPage 标杆抽屉） */
+  devicePosition?: number;
+  totalDevices?: number;
+  onPrevDevice?: () => void;
+  onNextDevice?: () => void;
 }
 
 const BUSY_REASON_LABELS: Record<string, string> = {
@@ -81,8 +92,13 @@ export default function DeviceDetailDrawer({
   onOpenReport,
   isRetryPending = false,
   isExitPending = false,
+  devicePosition,
+  totalDevices,
+  onPrevDevice,
+  onNextDevice,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState<null | 'retry' | 'exit'>(null);
+  const [copiedSerial, setCopiedSerial] = useState(false);
 
   const isOpen = Boolean(device);
   const isTerminal = device ? TERMINAL_DEVICE.includes(device.ui_status) : false;
@@ -109,6 +125,24 @@ export default function DeviceDetailDrawer({
     : !isTerminal;
   const canOpenReport = device?.capabilities?.open_report ?? true;
 
+  const deviceSerialLabel = device?.device_serial || (device ? `Device #${device.device_id}` : '');
+  const logsHref = device?.device_serial
+    ? `/execution/plan-runs/${runId}/logs?q=${encodeURIComponent(device.device_serial)}`
+    : `/execution/plan-runs/${runId}/logs`;
+  const aiDiagnoseHref = device
+    ? `/assistant?prompt=${encodeURIComponent(
+        `请协助诊断 PlanRun #${runId} 中的设备 ${deviceSerialLabel}（Job #${device.job_id}，执行态=${execStatus}，连接态=${linkStatus ?? 'unknown'}${device.status_reason ? `，原因=${device.status_reason}` : ''}）`,
+      )}`
+    : '/assistant';
+
+  const handleCopySerial = () => {
+    if (!device?.device_serial || !navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(device.device_serial).then(() => {
+      setCopiedSerial(true);
+      window.setTimeout(() => setCopiedSerial(false), 1500);
+    });
+  };
+
   return (
     <>
       <Sheet
@@ -120,11 +154,11 @@ export default function DeviceDetailDrawer({
         {device ? (
           <SheetContent
             side="right"
-            size="sm"
+            size="lg"
             hideCloseButton
             overlayTestId="device-drawer-overlay"
             data-testid="device-drawer"
-            aria-label={`设备 ${device.device_serial || `#${device.device_id}`} 详情`}
+            aria-label={`设备 ${deviceSerialLabel} 详情`}
             onEscapeKeyDown={(event) => {
               if (confirmOpen !== null) event.preventDefault();
             }}
@@ -133,28 +167,81 @@ export default function DeviceDetailDrawer({
             }}
           >
             {/* Header */}
-            <header className="flex items-center justify-between border-b px-4 py-3">
+            <header className="flex items-center justify-between gap-3 border-b px-5 py-3.5">
               <div className="min-w-0">
                 <SheetDescription className={cn('truncate text-xs', TEXT.subtitle)}>
                   Job #{device.job_id} · {device.host_id || '—'}
+                  {device.device_model ? ` · ${device.device_model}` : ''}
                 </SheetDescription>
-                <SheetTitle className={cn('truncate font-mono text-base font-semibold', TEXT.heading)}>
-                  {device.device_serial || `Device #${device.device_id}`}
-                </SheetTitle>
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <SheetTitle className={cn('break-all font-mono text-base font-semibold', TEXT.heading)}>
+                    {deviceSerialLabel}
+                  </SheetTitle>
+                  {device.device_serial && (
+                    <button
+                      type="button"
+                      data-testid="device-drawer-copy-serial"
+                      onClick={handleCopySerial}
+                      aria-label="复制设备串号"
+                      title="复制设备串号"
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-border/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      {copiedSerial ? (
+                        <Check className="h-3.5 w-3.5 text-success" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onClose}
-                data-testid="device-drawer-close"
-                aria-label="关闭设备详情"
-              >
-                <X className="h-4 w-4" />
-              </Button>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {totalDevices != null && totalDevices > 1 && devicePosition != null && (
+                  <div
+                    className="inline-flex items-center rounded-md border border-border bg-background"
+                    aria-label="切换设备"
+                  >
+                    <button
+                      type="button"
+                      data-testid="device-drawer-prev"
+                      onClick={onPrevDevice}
+                      disabled={!onPrevDevice}
+                      aria-label="上一台设备"
+                      title="上一台设备"
+                      className="px-1.5 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-35"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="border-x border-border px-2 font-mono text-xs tabular-nums text-muted-foreground">
+                      {devicePosition}/{totalDevices}
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="device-drawer-next"
+                      onClick={onNextDevice}
+                      disabled={!onNextDevice}
+                      aria-label="下一台设备"
+                      title="下一台设备"
+                      className="px-1.5 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-35"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onClose}
+                  data-testid="device-drawer-close"
+                  aria-label="关闭设备详情"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </header>
 
         {/* Body — scrollable */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 text-sm">
+        <div className="flex-1 overflow-y-auto px-5 py-4 text-sm">
           <div
             data-testid="device-drawer-status-pill"
             className="mb-3 flex flex-wrap items-center gap-1.5"
@@ -214,7 +301,7 @@ export default function DeviceDetailDrawer({
                     device.status_reason,
                     false,
                     device.ui_status === 'failed'
-                      ? 'text-destructive font-semibold'
+                      ? 'text-destructive-text font-semibold'
                       : 'text-warning font-semibold',
                     true,
                   ] as KvRow]
@@ -254,7 +341,7 @@ export default function DeviceDetailDrawer({
             <div className={cn('mt-4 rounded-lg border-l-4 border-warning px-3 py-2 text-xs', ALERT_BOX.warning)}>
               <div className="font-semibold">检测到 {device.log_signal_count} 条 Watcher 异常</div>
               <p className="mt-0.5 text-xs opacity-90">
-                明细见上方"业务流时间线"事件流(stage = patrol, severity = 异常)
+                可在「异常与进度」页签的异常仪表盘查看包名归因，或直接查看该设备执行日志。
               </p>
             </div>
           )}
@@ -277,52 +364,71 @@ export default function DeviceDetailDrawer({
         </div>
 
         {/* Footer — actions */}
-        <footer className="grid grid-cols-2 gap-2 border-t bg-muted/50 px-4 py-3">
-          {canManualRetry ? (
-            <Button
-              variant="outline"
-              size="sm"
-              data-testid="device-drawer-retry-btn"
-              disabled={isRetryPending || retryRequested}
-              onClick={() => setConfirmOpen('retry')}
-            >
-              {isRetryPending ? (
-                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RotateCw className="mr-1 h-3.5 w-3.5" />
+        <footer className="space-y-2 border-t bg-muted/50 px-5 py-3">
+          {(canManualRetry || canManualExit) && (
+            <div className="grid grid-cols-2 gap-2">
+              {canManualRetry ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="device-drawer-retry-btn"
+                  disabled={isRetryPending || retryRequested}
+                  onClick={() => setConfirmOpen('retry')}
+                >
+                  {isRetryPending ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCw className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  立即重试
+                </Button>
+              ) : null}
+              {canManualExit && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="device-drawer-exit-btn"
+                  disabled={isExitPending || exitRequested}
+                  onClick={() => setConfirmOpen('exit')}
+                  className="border-destructive/30 text-destructive-text hover:bg-destructive/10"
+                >
+                  {isExitPending ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <LogOut className="mr-1 h-3.5 w-3.5" />
+                  )}
+                  退出该设备
+                </Button>
               )}
-              立即重试
-            </Button>
-          ) : null}
-          {canManualExit && (
-            <Button
-              variant="outline"
-              size="sm"
-              data-testid="device-drawer-exit-btn"
-              disabled={isExitPending || exitRequested}
-              onClick={() => setConfirmOpen('exit')}
-              className="border-destructive/30 text-destructive hover:bg-destructive/10"
-            >
-              {isExitPending ? (
-                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <LogOut className="mr-1 h-3.5 w-3.5" />
-              )}
-              退出该设备
-            </Button>
+            </div>
           )}
-          {canOpenReport && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="col-span-2"
-              data-testid="device-drawer-open-report"
-              onClick={() => onOpenReport(device.job_id)}
-            >
-              <ExternalLink className="mr-1 h-3.5 w-3.5" />
-              查看 Job 报告
-            </Button>
-          )}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" asChild>
+                <a href={aiDiagnoseHref} data-testid="device-drawer-ai-btn">
+                  <Sparkles className="mr-1 h-3.5 w-3.5 text-primary" />
+                  交给 AI 诊断
+                </a>
+              </Button>
+              <Button variant="outline" size="sm" asChild>
+                <a href={logsHref} data-testid="device-drawer-logs-btn">
+                  <FileText className="mr-1 h-3.5 w-3.5" />
+                  单机日志
+                </a>
+              </Button>
+            </div>
+            {canOpenReport && (
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="device-drawer-open-report"
+                onClick={() => onOpenReport(device.job_id)}
+              >
+                <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                查看 Job 报告
+              </Button>
+            )}
+          </div>
         </footer>
           </SheetContent>
         ) : null}
