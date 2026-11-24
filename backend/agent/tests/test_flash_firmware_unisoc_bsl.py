@@ -2528,3 +2528,137 @@ def test_v105_run_passes_usb_port_and_supports_opt_out(
     assert res["metrics"]["require_port_binding"] is False
     assert res["metrics"]["usb_port"] is None
     assert "--usb-port" not in seen_cmds[0]
+
+
+def test_v108_queued_device_waits_for_host_lock_while_peer_holds_download_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4066: peer holding host lock + 1782:4d00 must NOT kill queued sibling before lock."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    # Peer device on 1-5.3.1 is actively flashing (1782:4d00); target SN1 is idle in ADB on 1-5.2.3.
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-5.3.1", "1782", "4d00"),
+            ("1-5.2.3", "18d1", "4ee8", "SN1"),
+        ],
+    )
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "old",
+        },
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+
+    lock_acquired = {"called": False}
+
+    def fake_acquire(progress, timeout_seconds=7200):
+        # Peer finishes flashing and exits 1782:4d00 before releasing the host lock.
+        lock_acquired["called"] = True
+        peer_dir = sysfs_base / "1-5.3.1"
+        for child in peer_dir.iterdir():
+            child.unlink()
+        peer_dir.rmdir()
+        return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+
+    def fake_run_spd_dump(*_a, **_kw):
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "acquire_host_lock", fake_acquire)
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+
+    res = mod.run(
+        {"firmware_dir": str(ver_dir), "verify_root": False},
+        "SN1",
+        mod.Progress(),
+        [],
+    )
+    assert lock_acquired["called"] is True
+    assert res["metrics"]["usb_port"] == "1-5.2.3"
+    assert res["metrics"]["post_version"] == "v36"
+
+
+def test_v108_orphan_download_port_still_rejected_inside_host_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4066: a genuine orphan 1782:4d00 still present AFTER acquiring host lock must fail-closed."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-5.3.1", "1782", "4d00"),
+            ("1-5.2.3", "18d1", "4ee8", "SN1"),
+        ],
+    )
+    lock_file = tmp_path / "host.lock"
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        adb_calls=adb_calls,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+
+    lock_acquired = {"called": False}
+
+    def fake_acquire(progress, timeout_seconds=7200):
+        lock_acquired["called"] = True
+        return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+
+    spd_called = {"n": 0}
+    monkeypatch.setattr(mod, "acquire_host_lock", fake_acquire)
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
+
+    with pytest.raises(mod.FlashRejectedError, match="1782:4d00") as exc_info:
+        mod.run({"firmware_dir": str(ver_dir), "verify_root": False}, "SN1", mod.Progress(), [])
+
+    assert lock_acquired["called"] is True
+    assert exc_info.value.route and exc_info.value.route["version"] == "v36"
+    assert spd_called["n"] == 0
+    assert ["reboot", "autodloader"] not in adb_calls
+
+
+def test_v108_early_exit_spd_dump_captures_stderr_in_log_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4066: spd_dump exiting before adb reboot autodloader must preserve stderr in log_tail."""
+    mod = _load_module()
+    dummy_spd = _make_executable(
+        tmp_path / "missing_lib_spd.py",
+        "import sys; print('error while loading shared libraries: libusb-1.0.so.0', file=sys.stderr, flush=True); sys.exit(127)",
+    )
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(monkeypatch, mod, adb_calls=adb_calls)
+    log: List[str] = []
+
+    with pytest.raises(RuntimeError, match="before adb reboot autodloader") as exc_info:
+        mod.run_spd_dump([sys.executable, str(dummy_spd)], "adb", "SN1", mod.Progress(), log, timeout_seconds=5)
+
+    assert ["reboot", "autodloader"] not in adb_calls
+    assert any("libusb-1.0.so.0" in line for line in log), f"expected stderr in log_tail, got {log!r}"
+    assert "libusb-1.0.so.0" in str(exc_info.value)

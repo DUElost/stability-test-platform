@@ -6,8 +6,8 @@ Implements Scheme 2 flashing inside the STP agent script contract:
    and bind device identity (ro.product.model / device / name) against manifest.json.
 2. Load strict flash specification from source images/plan.json (FDL1/FDL2 files & load
    bases, whitelist-filtered EraseFlash2 list, UserData, writable partitions).
-3. Enforce pre-flash safety gates: battery level (battery_min_level=5, skip_battery=false)
-   and absence of any Unisoc download port (1782:4d00) on the host USB bus.
+3. Enforce pre-flash battery gate (battery_min_level=5, skip_battery=false) and
+   target USB port resolution; `dry_run=true` also runs the USB bus 1782:4d00 gate.
 4. Ensure Agent L1 firmware cache (profile=unisoc_bsl) outside the host flash lock,
    holding LOCK_SH for the flash lifetime; unsealed targets fail-closed with
    firmware_unsealed_not_supported before any host lock or device state change.
@@ -15,10 +15,17 @@ Implements Scheme 2 flashing inside the STP agent script contract:
 5. Acquire host-wide serialization lock (/tmp/stp-flash-firmware.lock, shared with
    flash_firmware and flash_firmware_unisoc), emitting stage=lock-wait PROGRESS stamps
    every 5s so queued devices are not killed by step stall detection.
-6. Switch device to BSL mode via `adb reboot autodloader` and execute `spd_dump` under a
-   bounded total duration timeout, terminating and reaping the child on any failure.
+6. Inside the host lock, verify no residual Unisoc download port (1782:4d00) exists on
+   the USB bus, switch device to BSL mode via `adb reboot autodloader`, and execute
+   `spd_dump` under a bounded total duration timeout, terminating and reaping the child
+   on any failure.
 7. Verify positive reboot evidence and read back manifest.version_prop == manifest.version
    after cold boot, plus optional build_type / incremental / root checks.
+
+v1.0.8（2026-11-24 / #4066）：移除正常刷机路径锁外 `check_no_unisoc_download_port`
+（仅在持主机锁后与 `dry_run` 预检执行），避免同主机 `N > effective_slots` 或跨
+PlanRun 重叠排队设备误判同伴正在使用的 `1782:4d00`；`run_spd_dump` 提前启动
+stdout/stderr 读取线程，确保 `spd_dump` 早退输出完整进入 `metrics.log_tail`。
 
 v1.0.7（2026-11-23 / #4086 U4 / ADR-0064 D4）：退役 /var/tmp/stp_flash 私有缓存与
 主机侧裁剪/锁内拷贝；统一接入 agent.firmware_cache；启动前 fail-closed 校验
@@ -895,20 +902,35 @@ def run_spd_dump(
         except (OSError, ValueError):
             pass
 
+    def _flush_early_tail() -> str:
+        if reader is not None:
+            reader.join(timeout=2)
+        if tail:
+            log.extend(tail[-15:])
+            return f": {' | '.join(tail[-5:])}"
+        return ""
+
     try:
+        # #4066: start stdout/stderr reader before startup wait so an early-exiting
+        # spd_dump (e.g. missing shared library) is captured into metrics.log_tail.
+        reader = threading.Thread(target=_read_stdout, daemon=True)
+        reader.start()
+
         sleep_s = min(1.5, max(0.0, deadline - time.monotonic()))
         if sleep_s > 0:
             try:
                 early_rc = proc.wait(timeout=sleep_s)
+                detail = _flush_early_tail()
                 raise RuntimeError(
-                    f"spd_dump exited prematurely (rc={early_rc}) before adb reboot autodloader"
+                    f"spd_dump exited prematurely (rc={early_rc}) before adb reboot autodloader{detail}"
                 )
             except subprocess.TimeoutExpired:
                 pass
         early_rc = proc.poll()
         if early_rc is not None:
+            detail = _flush_early_tail()
             raise RuntimeError(
-                f"spd_dump exited prematurely (rc={early_rc}) before adb reboot autodloader"
+                f"spd_dump exited prematurely (rc={early_rc}) before adb reboot autodloader{detail}"
             )
         remaining_before_adb = deadline - time.monotonic()
         if remaining_before_adb <= 0:
@@ -921,8 +943,9 @@ def run_spd_dump(
         # reboot into download mode without a flasher waiting.
         final_rc = proc.poll()
         if final_rc is not None:
+            detail = _flush_early_tail()
             raise RuntimeError(
-                f"spd_dump exited before adb reboot autodloader was sent (rc={final_rc})"
+                f"spd_dump exited before adb reboot autodloader was sent (rc={final_rc}){detail}"
             )
         _LAST_REBOOT_SENT_AT["value"] = time.monotonic()
         rc_adb, out_adb, err_adb = run_adb(
@@ -933,9 +956,6 @@ def run_spd_dump(
             raise RuntimeError(f"adb reboot autodloader failed (rc={rc_adb}): {err_adb or out_adb}")
         if time.monotonic() >= deadline:
             raise RuntimeError(f"spd_dump timed out after {timeout_seconds}s")
-
-        reader = threading.Thread(target=_read_stdout, daemon=True)
-        reader.start()
 
         while True:
             remaining = deadline - time.monotonic()
@@ -1131,7 +1151,12 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
         if not skip_battery:
             battery_level = check_battery(adb_bin, serial, battery_min_level, route=route)
 
-        check_no_unisoc_download_port(route=route)
+        is_dry_run = _bool(args.get("dry_run"), False)
+        if is_dry_run:
+            # #4066: dry_run does not acquire the host lock; normal flashing enforces
+            # the 1782:4d00 gate inside /tmp/stp-flash-firmware.lock so queued siblings
+            # do not fail on a peer legitimately flashing on the same host.
+            check_no_unisoc_download_port(route=route)
 
         raw_require_port = args.get("require_port_binding")
         if raw_require_port is None or str(raw_require_port).strip() == "":
@@ -1172,7 +1197,7 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
         if spec["has_super"]:
             partitions.append({"partition": "super", "image": "bsl/super_trimmed.img"})
 
-        if _bool(args.get("dry_run"), False):
+        if is_dry_run:
             dry_super = (
                 os.path.join(fw_dir, "bsl", "super_trimmed.img")
                 if spec["has_super"]
