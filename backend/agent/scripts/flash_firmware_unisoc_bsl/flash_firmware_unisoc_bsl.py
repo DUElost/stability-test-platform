@@ -22,6 +22,11 @@ Implements Scheme 2 flashing inside the STP agent script contract:
 7. Verify positive reboot evidence and read back manifest.version_prop == manifest.version
    after cold boot, plus optional build_type / incremental / root checks.
 
+v1.0.9（2026-11-24 / #3995）：主机锁交接双保险防 `1782:4d00` sysfs 尾影竞态——
+`run_spd_dump` 正常返回后释放 `/tmp/stp-flash-firmware.lock` 前等待自身下载口从
+sysfs 摘除（上限 10s）；锁内 `check_no_unisoc_download_port` 增加短宽限轮询
+（默认 5s，`download_port_clear_wait_seconds` 可配），持续存在仍 fail-closed。
+
 v1.0.8（2026-11-24 / #4066）：移除正常刷机路径锁外 `check_no_unisoc_download_port`
 （仅在持主机锁后与 `dry_run` 预检执行），避免同主机 `N > effective_slots` 或跨
 PlanRun 重叠排队设备误判同伴正在使用的 `1782:4d00`；`run_spd_dump` 提前启动
@@ -65,6 +70,9 @@ _UNISOC_DOWNLOAD_VID = "1782"
 _UNISOC_DOWNLOAD_PID = "4d00"
 _DEFAULT_BATTERY_MIN_LEVEL = 5
 _DEFAULT_SPD_DUMP_TIMEOUT_SECONDS = 3600
+_DEFAULT_DOWNLOAD_PORT_CLEAR_WAIT_SECONDS = 5.0
+_POST_FLASH_PORT_CLEAR_WAIT_SECONDS = 10.0
+_DOWNLOAD_PORT_POLL_INTERVAL = 0.25
 
 _ALLOWED_ERASE_PARTITIONS = frozenset({
     "metadata",
@@ -665,22 +673,65 @@ def find_unisoc_download_ports(base: Optional[str] = None) -> List[str]:
     return hits
 
 
-def check_no_unisoc_download_port(base: Optional[str] = None, route: Optional[dict] = None) -> None:
+def check_no_unisoc_download_port(
+    base: Optional[str] = None,
+    route: Optional[dict] = None,
+    *,
+    wait_seconds: float = 0.0,
+    poll_interval: Optional[float] = None,
+) -> None:
     usb_base = _SYSFS_USB_BASE if base is None else base
-    try:
-        hits = find_unisoc_download_ports(usb_base)
-    except OSError as exc:
-        raise FlashRejectedError(
-            f"USB bus directory unreadable at {usb_base}: {exc} "
-            f"(expected readable sysfs directory with no {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID})",
-            route=route,
-        ) from exc
-    if hits:
-        raise FlashRejectedError(
-            f"Unisoc download port {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID} already present on USB bus "
-            f"(ports={hits}, expected none)",
-            route=route,
-        )
+    interval = _DOWNLOAD_PORT_POLL_INTERVAL if poll_interval is None else poll_interval
+    deadline = time.monotonic() + max(0.0, float(wait_seconds))
+    while True:
+        try:
+            hits = find_unisoc_download_ports(usb_base)
+        except OSError as exc:
+            raise FlashRejectedError(
+                f"USB bus directory unreadable at {usb_base}: {exc} "
+                f"(expected readable sysfs directory with no {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID})",
+                route=route,
+            ) from exc
+        if not hits:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise FlashRejectedError(
+                f"Unisoc download port {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID} already present on USB bus "
+                f"(ports={hits}, expected none)",
+                route=route,
+            )
+        time.sleep(min(interval, remaining))
+
+
+def _wait_download_port_clear(
+    usb_port: Optional[str],
+    log: list,
+    *,
+    timeout_seconds: float = _POST_FLASH_PORT_CLEAR_WAIT_SECONDS,
+    poll_interval: Optional[float] = None,
+    base: Optional[str] = None,
+) -> None:
+    """Wait briefly inside host lock after `spd_dump reset` for own 1782:4d00 to leave sysfs."""
+    usb_base = _SYSFS_USB_BASE if base is None else base
+    interval = _DOWNLOAD_PORT_POLL_INTERVAL if poll_interval is None else poll_interval
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while True:
+        try:
+            hits = find_unisoc_download_ports(usb_base)
+        except OSError:
+            return
+        still_present = (usb_port in hits) if usb_port is not None else bool(hits)
+        if not still_present:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            log.append(
+                f"post-flash 1782:4d00 still visible after {timeout_seconds:.1f}s "
+                f"(target={usb_port!r}, hits={hits!r})"
+            )
+            return
+        time.sleep(min(interval, remaining))
 
 
 def find_usb_ports_for_serial(serial: str, base: Optional[str] = None) -> List[str]:
@@ -1287,7 +1338,12 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                         spd_dump_bin, local_images, cached_super, spec=spec, usb_port=usb_port
                     )
                     pre_reboot = _capture_pre_reboot_evidence(adb_bin, serial)
-                    check_no_unisoc_download_port(route=route)
+                    raw_clear_wait = args.get("download_port_clear_wait_seconds")
+                    if raw_clear_wait is None or str(raw_clear_wait).strip() == "":
+                        clear_wait = _DEFAULT_DOWNLOAD_PORT_CLEAR_WAIT_SECONDS
+                    else:
+                        clear_wait = max(0.0, float(raw_clear_wait))
+                    check_no_unisoc_download_port(route=route, wait_seconds=clear_wait)
                     reboot_anchor = time.monotonic()
                     _LAST_REBOOT_SENT_AT["value"] = None
                     flash_seconds = (
@@ -1314,6 +1370,7 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                     reboot_sent_at = (
                         last_reboot_ts if last_reboot_ts is not None else reboot_anchor
                     )
+                    _wait_download_port_clear(usb_port, log)
                 finally:
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_UN)

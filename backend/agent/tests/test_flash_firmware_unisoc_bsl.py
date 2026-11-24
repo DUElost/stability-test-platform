@@ -2662,3 +2662,195 @@ def test_v108_early_exit_spd_dump_captures_stderr_in_log_tail(
     assert ["reboot", "autodloader"] not in adb_calls
     assert any("libusb-1.0.so.0" in line for line in log), f"expected stderr in log_tail, got {log!r}"
     assert "libusb-1.0.so.0" in str(exc_info.value)
+
+
+def test_v109_post_flash_waits_for_own_download_port_to_clear_before_unlock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3995: after spd_dump reset returns, wait for own 1782:4d00 to leave sysfs before releasing host lock."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [("1-5.4.4", "18d1", "4ee8", "SN1")])
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(mod, "_DOWNLOAD_PORT_POLL_INTERVAL", 0.01)
+
+    events: List[str] = []
+    real_flock = mod.fcntl.flock
+
+    def spy_flock(fd, op):
+        if op == mod.fcntl.LOCK_UN:
+            # Unlock must happen only AFTER 1-5.4.4 is no longer 1782:4d00.
+            remaining = mod.find_unisoc_download_ports(str(sysfs_base))
+            events.append(f"unlock:remaining={remaining}")
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(mod.fcntl, "flock", spy_flock)
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    real_find = mod.find_unisoc_download_ports
+    checks = {"n": 0}
+
+    def transient_after_flash(base=None):
+        hits = real_find(base)
+        if adb_state["rebooted"] and "1-5.4.4" in hits:
+            checks["n"] += 1
+            if checks["n"] >= 3:
+                # Simulate USB disconnect clearing 1782:4d00 after 2 polls.
+                (sysfs_base / "1-5.4.4" / "idVendor").write_text("18d1\n", encoding="utf-8")
+                (sysfs_base / "1-5.4.4" / "idProduct").write_text("4ee8\n", encoding="utf-8")
+                return []
+        return hits
+
+    monkeypatch.setattr(mod, "find_unisoc_download_ports", transient_after_flash)
+
+    def fake_run_spd_dump(*_a, **_kw):
+        # Leave 1-5.4.4 momentarily in 1782:4d00 right as spd_dump reset returns.
+        (sysfs_base / "1-5.4.4" / "idVendor").write_text("1782\n", encoding="utf-8")
+        (sysfs_base / "1-5.4.4" / "idProduct").write_text("4d00\n", encoding="utf-8")
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+
+    res = mod.run({"firmware_dir": str(ver_dir), "verify_root": False}, "SN1", mod.Progress(), [])
+    assert res["metrics"]["post_version"] == "v36"
+    assert checks["n"] >= 3
+    assert "unlock:remaining=[]" in events
+
+
+def test_v109_in_lock_gate_tolerates_transient_peer_reset_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3995 (Run 1656 job 209896): a peer's 1782:4d00 tail clearing within grace window must pass."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-5.4.4", "1782", "4d00"),
+            ("1-5.2.3", "18d1", "4ee8", "SN1"),
+        ],
+    )
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(mod, "_DOWNLOAD_PORT_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    real_find = mod.find_unisoc_download_ports
+    polls = {"n": 0}
+
+    def clearing_find(base=None):
+        polls["n"] += 1
+        if polls["n"] >= 3:
+            peer_dir = sysfs_base / "1-5.4.4"
+            if peer_dir.exists():
+                for child in peer_dir.iterdir():
+                    child.unlink()
+                peer_dir.rmdir()
+        return real_find(base)
+
+    monkeypatch.setattr(mod, "find_unisoc_download_ports", clearing_find)
+
+    def fake_run_spd_dump(*_a, **_kw):
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+
+    res = mod.run(
+        {"firmware_dir": str(ver_dir), "verify_root": False, "download_port_clear_wait_seconds": 1.0},
+        "SN1",
+        mod.Progress(),
+        [],
+    )
+    assert polls["n"] >= 3
+    assert res["metrics"]["post_version"] == "v36"
+
+
+def test_v109_in_lock_gate_still_rejects_persistent_orphan_port_after_grace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3995: a genuine orphan 1782:4d00 persisting beyond the grace window must still fail-closed."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-5.4.4", "1782", "4d00"),
+            ("1-5.2.3", "18d1", "4ee8", "SN1"),
+        ],
+    )
+    lock_file = tmp_path / "host.lock"
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        adb_calls=adb_calls,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(mod, "_DOWNLOAD_PORT_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    spd_called = {"n": 0}
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
+
+    with pytest.raises(mod.FlashRejectedError, match="1782:4d00") as exc_info:
+        mod.run(
+            {"firmware_dir": str(ver_dir), "verify_root": False, "download_port_clear_wait_seconds": 0.05},
+            "SN1",
+            mod.Progress(),
+            [],
+        )
+    assert exc_info.value.route and exc_info.value.route["version"] == "v36"
+    assert spd_called["n"] == 0
+    assert ["reboot", "autodloader"] not in adb_calls
