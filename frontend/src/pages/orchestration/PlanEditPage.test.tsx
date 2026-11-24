@@ -21,7 +21,15 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('@/components/pipeline/PlanChainPanel', () => ({
-  default: () => <div data-testid="plan-chain-panel" />,
+  default: (props: { onCollapse?: () => void }) => (
+    <div data-testid="plan-chain-panel">
+      {props.onCollapse && (
+        <button type="button" onClick={props.onCollapse}>
+          收起执行链面板
+        </button>
+      )}
+    </div>
+  ),
 }));
 
 vi.mock('@/components/pipeline/PlanCanvas', () => ({
@@ -32,6 +40,7 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
     onDescriptionChange: (description: string) => void;
     onSpecialtyKeyChange: (key: string) => void;
     onTimeoutChange: (value: number | null) => void;
+    onSelectStep?: (key: string | null) => void;
     planSettings?: {
       barrierMaxWaitSeconds: number | null;
     };
@@ -47,6 +56,12 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
     <div data-testid="plan-canvas">
       <button onClick={() => props.onTimeoutChange(11)}>草稿时长11</button>
       <button onClick={() => props.onTimeoutChange(22)}>草稿时长22</button>
+      <button type="button" onClick={() => props.onSelectStep?.('step_init_1')}>
+        选中步骤1
+      </button>
+      <button type="button" onClick={() => props.onSelectStep?.('step_patrol_1')}>
+        选中步骤2
+      </button>
       <button
         type="button"
         data-testid="edit-barrier-max-wait"
@@ -86,7 +101,36 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
 }));
 
 vi.mock('@/components/pipeline/PlanStepInspector', () => ({
-  default: () => <div data-testid="plan-step-inspector" />,
+  default: (props: {
+    step?: { step_id?: string } | null;
+    stepPosition?: number;
+    totalSteps?: number;
+    onPrevStep?: () => void;
+    onNextStep?: () => void;
+    onClose?: () => void;
+  }) => (
+    <div data-testid="plan-step-inspector">
+      <span data-testid="inspector-step-id">{props.step?.step_id ?? 'none'}</span>
+      {props.stepPosition != null && props.totalSteps != null && (
+        <span data-testid="inspector-step-pos">{`${props.stepPosition}/${props.totalSteps}`}</span>
+      )}
+      {props.onPrevStep && (
+        <button type="button" onClick={props.onPrevStep}>
+          上一步骤
+        </button>
+      )}
+      {props.onNextStep && (
+        <button type="button" onClick={props.onNextStep}>
+          下一步骤
+        </button>
+      )}
+      {props.onClose && (
+        <button type="button" onClick={props.onClose}>
+          关闭步骤属性
+        </button>
+      )}
+    </div>
+  ),
 }));
 
 vi.mock('@/utils/api', () => ({
@@ -221,9 +265,11 @@ describe('PlanEditPage', () => {
     expect(screen.getByText('待创建')).toBeInTheDocument();
     expect(screen.queryByText('已保存')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /创建/ })).toBeDisabled();
-    expect(screen.getByTestId('plan-chain-panel')).toBeInTheDocument();
+    // U5-4：无链单 Plan 默认折叠执行链面板，且未选中步骤时不渲染步骤属性抽屉
+    expect(screen.queryByTestId('plan-chain-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('expand-plan-chain-btn')).toBeInTheDocument();
     expect(screen.getByTestId('plan-canvas')).toBeInTheDocument();
-    expect(screen.getByTestId('plan-step-inspector')).toBeInTheDocument();
+    expect(screen.queryByTestId('plan-step-inspector')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId('plan-name-input'), { target: { value: 'My Plan' } });
 
@@ -569,5 +615,87 @@ describe('B5 U3 编辑器投影代次与安全保存', () => {
     await waitFor(() => expect(document.querySelector('pre')).not.toHaveTextContent('OLD_GENERATION'));
     expect(document.querySelector('pre')).toHaveTextContent('NEW_GENERATION');
     expect(screen.getByText('L1草稿，未保存')).toBeVisible();
+  });
+
+  it('U5-4：点击步骤弹出右侧 Sheet 抽屉并支持上下步切换与关闭，左侧单/多链按需折叠', async () => {
+    const { fetchAllPlans } = await import('@/utils/api');
+    vi.mocked(fetchAllPlans).mockResolvedValue([
+      {
+        id: 42,
+        name: '安全计划',
+        description: '',
+        next_plan_id: 43,
+        steps: [],
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        id: 43,
+        name: '下游计划',
+        description: '',
+        next_plan_id: null,
+        steps: [],
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      },
+    ]);
+    vi.mocked(api.plans.get).mockResolvedValue({
+      id: 42,
+      name: '安全计划',
+      description: '',
+      next_plan_id: 43,
+      steps: [
+        {
+          id: 1,
+          step_key: 'step_init_1',
+          stage: 'init',
+          sort_order: 1,
+          script_name: 'check_device',
+          script_version: '1.0.0',
+          params: {},
+          timeout_seconds: 30,
+          retry: 0,
+          enabled: true,
+        },
+        {
+          id: 2,
+          step_key: 'step_patrol_1',
+          stage: 'patrol',
+          sort_order: 1,
+          script_name: 'monkey_test',
+          script_version: '1.0.0',
+          params: {},
+          timeout_seconds: 60,
+          retry: 0,
+          enabled: true,
+        },
+      ],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+
+    renderPage('/orchestration/plans/42');
+    await screen.findByText('安全计划');
+
+    // 多节点执行链默认展开，且支持手动收起与重新展开
+    expect(await screen.findByTestId('plan-chain-panel')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '收起执行链面板' }));
+    expect(screen.queryByTestId('plan-chain-panel')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('expand-plan-chain-btn'));
+    expect(screen.getByTestId('plan-chain-panel')).toBeInTheDocument();
+
+    // 默认未选中步骤不弹抽屉；点击步骤 1 弹出抽屉并支持切到步骤 2 及关闭
+    expect(screen.queryByTestId('plan-step-inspector')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '选中步骤1' }));
+    expect(await screen.findByTestId('plan-step-inspector')).toBeInTheDocument();
+    expect(screen.getByTestId('inspector-step-id')).toHaveTextContent('step_init_1');
+    expect(screen.getByTestId('inspector-step-pos')).toHaveTextContent('1/2');
+
+    fireEvent.click(screen.getByRole('button', { name: '下一步骤' }));
+    expect(screen.getByTestId('inspector-step-id')).toHaveTextContent('step_patrol_1');
+    expect(screen.getByTestId('inspector-step-pos')).toHaveTextContent('2/2');
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭步骤属性' }));
+    expect(screen.queryByTestId('plan-step-inspector')).not.toBeInTheDocument();
   });
 });
