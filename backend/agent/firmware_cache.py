@@ -1386,12 +1386,41 @@ def _populate_locked(
             cache_key=cache_key,
             attempt=attempt,
         )
-        _flock_wait(
-            fd,
-            fcntl.LOCK_EX,
-            progress_callback=progress_callback,
-            wait_for="entry-lock-ex",
-        )
+        # 并发冷拉等待期间，若先到者已完成写盘并降级为 LOCK_SH，直接转取 LOCK_SH 命中，
+        # 避免后续持续进场的 reader 持 LOCK_SH 把等 LOCK_EX 的首批同伴饿死到队尾。
+        while not _try_flock(fd, fcntl.LOCK_EX):
+            if (entry_dir / READY_MARKER).is_file() and _try_flock(fd, fcntl.LOCK_SH):
+                if _verify_ready_under_sh(
+                    entry_dir,
+                    content_digest=content_digest,
+                    authoritative_files=files,
+                ):
+                    _touch_last_used(entry_dir)
+                    return (
+                        FirmwareCacheResult(
+                            local_dir=entry_dir,
+                            cache_key=cache_key,
+                            sealed=sealed,
+                            content_digest=content_digest,
+                            profile=profile,
+                            tier=tier_name,
+                            hit=True,
+                            total_bytes=total_bytes,
+                        ),
+                        fd,
+                    )
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            _emit_progress(
+                progress_callback,
+                stage="firmware-stage-wait",
+                wait_for="entry-lock-ex",
+                cache_key=cache_key,
+                attempt=attempt,
+            )
+            time.sleep(_LOCK_WAIT_POLL_SECONDS)
         # 双检：等待期间可能已写好
         if _verify_ready_under_sh(
             entry_dir,
