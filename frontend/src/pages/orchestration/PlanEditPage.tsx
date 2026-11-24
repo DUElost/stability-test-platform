@@ -1,5 +1,6 @@
+import { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, ArrowLeft, AlertCircle } from 'lucide-react';
+import { Loader2, ArrowLeft, AlertCircle, GitBranch, PanelLeftOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -11,6 +12,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 import PlanChainPanel from '@/components/pipeline/PlanChainPanel';
 import PlanCanvas from '@/components/pipeline/PlanCanvas';
 import PlanStepInspector from '@/components/pipeline/PlanStepInspector';
@@ -21,6 +23,7 @@ import { usePlanEditForm } from './usePlanEditForm';
 import { usePlanEditHeaderSlot } from './usePlanEditHeaderSlot';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { ErrorState } from '@/components/ui/error-state';
+import type { PipelinePhase } from '@/utils/api/types';
 
 export default function PlanEditPage() {
   const { id } = useParams<{ id: string }>();
@@ -35,13 +38,62 @@ export default function PlanEditPage() {
   const navigate = useNavigate();
 
   const form = usePlanEditForm(planId);
+  const [chainPanelOverride, setChainPanelOverride] = useState<{
+    planId: number | null;
+    open: boolean;
+  } | null>(null);
+
+  const hasMultiPlanChain = useMemo(() => {
+    if (planId == null || !form.allPlans || form.allPlans.length === 0) return false;
+    const current = form.allPlans.find((p) => p.id === planId);
+    if (current?.next_plan_id != null) return true;
+    return form.allPlans.some((p) => p.next_plan_id === planId);
+  }, [form.allPlans, planId]);
+
+  const chainPanelOpen =
+    chainPanelOverride && chainPanelOverride.planId === planId
+      ? chainPanelOverride.open
+      : hasMultiPlanChain;
+
+  const setChainPanelOpen = (open: boolean) => {
+    setChainPanelOverride({ planId, open });
+  };
+
+  const orderedSteps = useMemo(() => {
+    const list: Array<{ key: string; phase: PipelinePhase; index: number }> = [];
+    (form.lifecycle.lifecycle.init ?? []).forEach((s, idx) => {
+      if (s.step_id) list.push({ key: s.step_id, phase: 'init', index: idx });
+    });
+    (form.lifecycle.lifecycle.patrol?.steps ?? []).forEach((s, idx) => {
+      if (s.step_id) list.push({ key: s.step_id, phase: 'patrol', index: idx });
+    });
+    (form.lifecycle.lifecycle.teardown ?? []).forEach((s, idx) => {
+      if (s.step_id) list.push({ key: s.step_id, phase: 'teardown', index: idx });
+    });
+    return list;
+  }, [form.lifecycle]);
+
+  const currentStepIdx = useMemo(
+    () => (form.selectedStepKey ? orderedSteps.findIndex((item) => item.key === form.selectedStepKey) : -1),
+    [orderedSteps, form.selectedStepKey],
+  );
+
+  const handlePrevStep =
+    currentStepIdx > 0
+      ? () => form.setSelectedStepKey(orderedSteps[currentStepIdx - 1].key)
+      : undefined;
+  const handleNextStep =
+    currentStepIdx >= 0 && currentStepIdx < orderedSteps.length - 1
+      ? () => form.setSelectedStepKey(orderedSteps[currentStepIdx + 1].key)
+      : undefined;
+
   const headerReady = !form.planLoading && !form.planIsError && !form.dependenciesIsError;
   usePlanEditHeaderSlot(form, headerReady);
   useDocumentTitle(form.name || (form.isNew ? '新建 Plan' : '编辑 Plan'));
 
   if (invalidPlanId) {
     return (
-      <div className="space-y-3 p-6">
+      <PageContainer width="content" className="space-y-3">
         <Button
           variant="ghost"
           size="sm"
@@ -53,21 +105,21 @@ export default function PlanEditPage() {
           title="无效的 Plan ID"
           description={`URL 中的 Plan ID「${id}」不是合法数字，无法编辑。`}
         />
-      </div>
+      </PageContainer>
     );
   }
 
   if (!form.isNew && form.planLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
+      <PageContainer width="content" className="flex min-h-[60vh] items-center justify-center">
         <Loader2 className={cn('w-6 h-6 animate-spin', TEXT.caption)} />
-      </div>
+      </PageContainer>
     );
   }
 
   if (!form.isNew && form.planIsError) {
     return (
-      <div className="space-y-3 p-6">
+      <PageContainer width="content" className="space-y-3">
         <Button
           variant="ghost"
           size="sm"
@@ -80,13 +132,13 @@ export default function PlanEditPage() {
           description={(form.planError as Error)?.message || '请检查网络连接或稍后重试'}
           onRetry={() => void form.refetchPlan()}
         />
-      </div>
+      </PageContainer>
     );
   }
 
   if (form.dependenciesIsError) {
     return (
-      <div className="space-y-3 p-6">
+      <PageContainer width="content" className="space-y-3">
         <Button
           variant="ghost"
           size="sm"
@@ -99,12 +151,12 @@ export default function PlanEditPage() {
           description={(form.dependenciesError as Error)?.message || '脚本或 Plan 链数据加载失败'}
           onRetry={form.refetchDependencies}
         />
-      </div>
+      </PageContainer>
     );
   }
 
   return (
-    <PageContainer width="bleed" className="bg-muted/40">
+    <PageContainer width="bleed" scrollable={false} className="flex h-full flex-col bg-muted/40">
       {form.remoteChange && (
         <div
           role="status"
@@ -123,15 +175,48 @@ export default function PlanEditPage() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 auto-rows-max lg:grid-rows-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-y-auto lg:overflow-hidden">
-        <PlanChainPanel
-          plans={form.allPlans || []}
-          currentPlanId={planId}
-          draftStepCounts={form.isNew ? form.draftStepCounts : null}
-          draftPlanName={form.name}
-          onSelectPlan={form.handleSelectChainPlan}
-          onAppendPlan={form.handleAppendChainPlan}
-        />
+      <div
+        className={cn(
+          'flex-1 min-h-0 grid grid-cols-1 auto-rows-max lg:grid-rows-1 overflow-y-auto lg:overflow-hidden',
+          chainPanelOpen
+            ? 'lg:grid-cols-[260px_minmax(0,1fr)]'
+            : 'lg:grid-cols-[44px_minmax(0,1fr)]',
+        )}
+      >
+        {chainPanelOpen ? (
+          <PlanChainPanel
+            plans={form.allPlans || []}
+            currentPlanId={planId}
+            draftStepCounts={form.isNew ? form.draftStepCounts : null}
+            draftPlanName={form.name}
+            onSelectPlan={form.handleSelectChainPlan}
+            onAppendPlan={form.handleAppendChainPlan}
+            onCollapse={() => setChainPanelOpen(false)}
+          />
+        ) : (
+          <div className="flex items-center justify-between border-b border-border bg-card px-3 py-2 lg:flex-col lg:justify-start lg:gap-2 lg:border-b-0 lg:border-r lg:px-1.5 lg:py-3">
+            <button
+              type="button"
+              data-testid="expand-plan-chain-btn"
+              onClick={() => setChainPanelOpen(true)}
+              aria-label="展开执行链"
+              title="展开执行链面板（管理多 Plan 链式触发）"
+              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:flex-col lg:px-1 lg:py-2"
+            >
+              <PanelLeftOpen className="h-4 w-4 shrink-0" />
+              <span className="lg:[writing-mode:vertical-rl] lg:text-[11px] lg:tracking-wider">
+                执行链
+              </span>
+            </button>
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground lg:hidden"
+              aria-hidden="true"
+            >
+              <GitBranch className="h-3 w-3" />
+              单 Plan
+            </span>
+          </div>
+        )}
 
         <PlanCanvas
           settingsMetadata={form.editableProjection}
@@ -172,19 +257,40 @@ export default function PlanEditPage() {
           onSuiteNameChange={form.setSuiteName}
           suites={form.suites || []}
         />
-
-        <PlanStepInspector
-          editableProjection={form.editableProjection}
-          projection={form.projection}
-          projectionUnavailable={form.projectionUnavailable}
-          projectionIsDraft={form.projectionIsDraft}
-          step={form.selectedStep}
-          phase={form.selectedRef.phase}
-          index={form.selectedRef.index >= 0 ? form.selectedRef.index : null}
-          scripts={form.scripts || []}
-          onUpdateStep={form.handleStepUpdate}
-        />
       </div>
+
+      <Sheet
+        open={Boolean(form.selectedStep)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) form.setSelectedStepKey(null);
+        }}
+      >
+        <SheetContent
+          side="right"
+          size="lg"
+          hideCloseButton
+          overlayClassName="bg-foreground/15 backdrop-blur-[1px]"
+          aria-label="步骤属性编辑抽屉"
+        >
+          <PlanStepInspector
+            embeddedInSheet
+            editableProjection={form.editableProjection}
+            projection={form.projection}
+            projectionUnavailable={form.projectionUnavailable}
+            projectionIsDraft={form.projectionIsDraft}
+            step={form.selectedStep}
+            phase={form.selectedRef.phase}
+            index={form.selectedRef.index >= 0 ? form.selectedRef.index : null}
+            scripts={form.scripts || []}
+            onUpdateStep={form.handleStepUpdate}
+            stepPosition={currentStepIdx >= 0 ? currentStepIdx + 1 : undefined}
+            totalSteps={orderedSteps.length}
+            onPrevStep={handlePrevStep}
+            onNextStep={handleNextStep}
+            onClose={() => form.setSelectedStepKey(null)}
+          />
+        </SheetContent>
+      </Sheet>
 
       <AlertDialog open={form.showJson} onOpenChange={form.setShowJson}>
         <AlertDialogContent className="max-w-3xl">
