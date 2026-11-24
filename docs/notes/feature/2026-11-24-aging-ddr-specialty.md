@@ -1,5 +1,8 @@
 # Aging DDR 专项脚本族、模板与巡检提前终态支持
 
+Status: implemented
+Class: feature
+
 ## Decision
 
 1. **新增 Aging DDR 四族平台脚本（ADR-0051 Phase 3 单族源码树模型）**：

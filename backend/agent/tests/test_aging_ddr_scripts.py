@@ -17,6 +17,21 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS_ROOT = REPO_ROOT / "backend" / "agent" / "scripts"
 
 
+def _patch_advancing_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
+    """Replace mod.time.sleep/time so sleep advances a fake clock (no wall wait)."""
+    state = {"now": start}
+
+    def fake_time() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(mod.time, "time", fake_time)
+    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    return state
+
+
 def _load_script_module(family: str, module_name: str) -> ModuleType:
     """隔离加载指定脚本族下的模块（与 Agent 运行时同 cwd/sys.path 语义）。"""
     family_dir = str(SCRIPTS_ROOT / family)
@@ -138,7 +153,7 @@ class TestAgingDdrSetup:
     def test_run_pure_adb_launch_and_dst_entry(self, monkeypatch):
         mod = _load_script_module("aging_ddr_setup", "aging_ddr_setup")
         monkeypatch.setenv("STP_DEVICE_SERIAL", "SER001")
-        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+        _patch_advancing_clock(monkeypatch, mod)
         monkeypatch.setattr(mod, "ensure_adb_root", lambda: True)
         monkeypatch.setattr(
             mod,
@@ -337,7 +352,7 @@ class TestAgingDdrDisarm:
     def test_disarm_stops_clears_and_preserves_completed_status(self, monkeypatch):
         mod = _load_script_module("aging_ddr_disarm", "aging_ddr_disarm")
         monkeypatch.setenv("STP_DEVICE_SERIAL", "SER_DIS")
-        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+        _patch_advancing_clock(monkeypatch, mod)
         monkeypatch.setattr(mod, "_wait_device_online", lambda timeout_s: True)
         monkeypatch.setattr(mod, "adb", lambda *args, timeout=15: (0, "", ""))
         monkeypatch.setattr(mod, "is_root", lambda: True)
@@ -375,7 +390,7 @@ class TestAgingDdrDisarm:
     def test_disarm_does_not_overwrite_terminal_pass_session(self, monkeypatch):
         mod = _load_script_module("aging_ddr_disarm", "aging_ddr_disarm")
         monkeypatch.setenv("STP_DEVICE_SERIAL", "SER_DIS2")
-        monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+        _patch_advancing_clock(monkeypatch, mod)
         monkeypatch.setattr(mod, "_wait_device_online", lambda timeout_s: True)
         monkeypatch.setattr(mod, "adb", lambda *args, timeout=15: (0, "", ""))
         monkeypatch.setattr(mod, "is_root", lambda: True)
