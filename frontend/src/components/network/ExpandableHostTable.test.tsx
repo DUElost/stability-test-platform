@@ -752,4 +752,26 @@ describe('S2：USB / Hub 故障工作台（快捷视图、主行外显、异常�
     expect(within(card).getByText(/疑似硬件 \(fuse_probe_failed\)/)).toBeInTheDocument();
     expect(within(card).getByText(/1 \/ 1 · STP_XHCI_REBIND_PROBE_FAILED/)).toBeInTheDocument();
   });
+
+  it('状态与故障标签（3 个及以上，如在线/降级/USB 空树）保持同一不换行行内排列，避免撑高行高', () => {
+    const multiBadgeHost: HostTableData = {
+      id: 'host-empty-tree',
+      name: 'Host-Empty-Tree',
+      ip: '10.0.15.99',
+      status: 'ONLINE',
+      health_status: 'DEGRADED',
+      health_reasons: ['usb_tree_empty'],
+      device_count: 0,
+      usb_device_count: 0,
+      watcher_admin_active: true,
+    };
+    render(<ExpandableHostTable hosts={[multiBadgeHost]} />);
+
+    const statusLine = screen.getByTestId('host-status-line-host-empty-tree');
+    expect(statusLine).toHaveClass('flex-nowrap', 'whitespace-nowrap');
+    expect(statusLine).not.toHaveClass('flex-wrap');
+    expect(within(statusLine).getByText('在线')).toBeInTheDocument();
+    expect(within(statusLine).getByText('降级')).toBeInTheDocument();
+    expect(within(statusLine).getByText('USB 空树')).toBeInTheDocument();
+  });
 });

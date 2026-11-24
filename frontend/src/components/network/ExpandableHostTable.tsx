@@ -1246,14 +1246,17 @@ export function ExpandableHostTable({
                       ) : null}
                     </TableCell>
 
-                    <TableCell className="px-2.5 py-1.5">
+                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
                       <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-1">
+                        <div
+                          className="flex flex-nowrap items-center gap-1 whitespace-nowrap"
+                          data-testid={`host-status-line-${host.id}`}
+                        >
                           <StatusBadge kind="host" status={host.status} size="sm" />
                           {host.retired_at ? (
                             <span
                               className={cn(
-                                'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium cursor-help',
+                                'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[11px] font-medium cursor-help',
                                 host.status === 'ONLINE'
                                   ? 'bg-warning/10 text-warning'
                                   : 'bg-muted text-muted-foreground',
@@ -1268,7 +1271,7 @@ export function ExpandableHostTable({
                           ) : null}
                           {host.emptied_at ? (
                             <span
-                              className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground cursor-help"
+                              className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground cursor-help"
                               title={`设备面已由人工处置${host.emptied_by ? `（${host.emptied_by}）` : ''}${
                                 host.emptied_reason ? `：${host.emptied_reason}` : ''
                               }——设备面告警（UsbBlind / 批量 offline）豁免中（ADR-0038 D9）`}
@@ -1280,7 +1283,7 @@ export function ExpandableHostTable({
                           {host.health_status && host.health_status !== 'HEALTHY' ? (
                             <span
                               className={cn(
-                                'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium cursor-help',
+                                'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[11px] font-medium cursor-help',
                                 host.health_status === 'UNSCHEDULABLE'
                                   ? 'bg-destructive/10 text-destructive-text'
                                   : 'bg-warning/10 text-warning',
@@ -1290,47 +1293,46 @@ export function ExpandableHostTable({
                               {host.health_status === 'UNSCHEDULABLE' ? '禁调' : '降级'}
                             </span>
                           ) : null}
+                          {visibleFaults.length > 0 ? (
+                            <span
+                              className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap"
+                              data-testid={`host-inline-faults-${host.id}`}
+                            >
+                              {visibleFaults.map((chip) => (
+                                <span
+                                  key={chip.key}
+                                  title={chip.title}
+                                  className={cn(
+                                    'inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-1.5 py-0.5 text-[11px] font-medium leading-tight',
+                                    chip.tone === 'danger'
+                                      ? 'bg-destructive/10 text-destructive-text'
+                                      : chip.tone === 'warning'
+                                        ? 'bg-warning/10 text-warning'
+                                        : 'bg-muted text-muted-foreground',
+                                  )}
+                                >
+                                  {chip.label}
+                                </span>
+                              ))}
+                              {restFaults.length > 0 ? (
+                                <span
+                                  className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-muted px-1.5 py-0.5 text-[11px] leading-tight text-muted-foreground cursor-help"
+                                  title={restFaults.map((c) => c.title || c.label).join('；')}
+                                >
+                                  +{restFaults.length}
+                                </span>
+                              ) : null}
+                            </span>
+                          ) : null}
                         </div>
-
-                        {visibleFaults.length > 0 ? (
-                          <div
-                            className="flex flex-wrap items-center gap-1"
-                            data-testid={`host-inline-faults-${host.id}`}
-                          >
-                            {visibleFaults.map((chip) => (
-                              <span
-                                key={chip.key}
-                                title={chip.title}
-                                className={cn(
-                                  'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight',
-                                  chip.tone === 'danger'
-                                    ? 'bg-destructive/10 text-destructive-text'
-                                    : chip.tone === 'warning'
-                                      ? 'bg-warning/10 text-warning'
-                                      : 'bg-muted text-muted-foreground',
-                                )}
-                              >
-                                {chip.label}
-                              </span>
-                            ))}
-                            {restFaults.length > 0 ? (
-                              <span
-                                className="inline-flex items-center rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground cursor-help"
-                                title={restFaults.map((c) => c.title || c.label).join('；')}
-                              >
-                                +{restFaults.length}
-                              </span>
-                            ) : null}
-                          </div>
-                        ) : null}
 
                         <div
                           className={cn(
-                            'flex items-center gap-1 text-[11px]',
+                            'flex items-center gap-1 whitespace-nowrap text-[11px]',
                             host.watcher_admin_active !== false ? 'text-success' : 'text-destructive-text',
                           )}
                         >
-                          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
                           Watch {host.watcher_admin_active !== false ? '已激活' : '未激活'}
                         </div>
                       </div>
