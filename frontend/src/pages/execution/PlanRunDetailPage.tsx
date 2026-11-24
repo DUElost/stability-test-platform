@@ -469,6 +469,18 @@ export default function PlanRunDetailPage() {
                   isError={watcherQ.isError}
                   timeScope={watcherTimeScope}
                   onTimeScopeChange={setWatcherTimeScope}
+                  onSelectDeviceSerial={(serial) => {
+                    const matched = devicesQ.data?.devices.find(
+                      (d) => d.device_serial === serial,
+                    );
+                    if (matched) {
+                      setSelectedJobId(matched.job_id);
+                    } else {
+                      navigate(
+                        `/execution/plan-runs/${id}/logs?q=${encodeURIComponent(serial)}`,
+                      );
+                    }
+                  }}
                 />
 
                 <ArchiveStatusCard

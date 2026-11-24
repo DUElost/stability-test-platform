@@ -1161,6 +1161,8 @@ class PipelineEngine:
         # same default the retry loop resets to (line ~1892).
         self._last_step_error: str = ""
         self._patrol_cycle_index = 0
+        self._patrol_early_complete: bool = False
+        self._patrol_early_fail: Optional[str] = None
         self._step_trace_uploader = step_trace_uploader  # #483
 
     def set_patrol_cycle_resume(self, checkpoint: dict) -> None:
@@ -1934,6 +1936,12 @@ class PipelineEngine:
                 return bool(result.success)
             if result.success:
                 self._last_step_error = ""
+                if (
+                    phase == "patrol"
+                    and isinstance(result.metadata, dict)
+                    and result.metadata.get("patrol_complete") is True
+                ):
+                    self._patrol_early_complete = True
                 if disarm_step:
                     self._record_disarm_for_step(
                         step,
@@ -1948,6 +1956,15 @@ class PipelineEngine:
                 or (result.output or "")[:2000]
                 or ""
             )
+            if (
+                phase == "patrol"
+                and isinstance(result.metadata, dict)
+                and result.metadata.get("patrol_fail") is True
+            ):
+                self._patrol_early_fail = (
+                    self._last_step_error or "patrol step reported terminal failure"
+                )
+                return False
             if disarm_step:
                 self._record_disarm_for_step(
                     step,
@@ -2319,14 +2336,6 @@ class PipelineEngine:
         stderr = stderr or ""
         combined_output = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
 
-        if proc.returncode != 0:
-            return StepResult(
-                success=False,
-                exit_code=proc.returncode,
-                error_message=(stderr or stdout or "")[:2000],
-                output=_truncate_step_output(combined_output),
-            )
-
         payload = {}
         clean_stdout = stdout.strip()
         if clean_stdout:
@@ -2335,23 +2344,48 @@ class PipelineEngine:
             except json.JSONDecodeError:
                 payload = {}
 
+        if proc.returncode != 0:
+            err_msg = (stderr or stdout or "")[:2000]
+            meta: dict[str, Any] = {}
+            if isinstance(payload, dict):
+                if payload.get("error_message") or payload.get("error"):
+                    err_msg = str(payload.get("error_message") or payload.get("error"))[:2000]
+                if payload.get("patrol_fail") is True:
+                    meta["patrol_fail"] = True
+            return StepResult(
+                success=False,
+                exit_code=proc.returncode,
+                error_message=err_msg,
+                output=_truncate_step_output(combined_output),
+                metrics=payload.get("metrics", {}) or {} if isinstance(payload, dict) else {},
+                metadata=meta,
+            )
+
         # Scripts that print {"success": false} but forget sys.exit(1) must
         # still fail the step — otherwise init continues past real errors.
         if isinstance(payload, dict) and payload.get("success") is False:
             err = payload.get("error_message") or payload.get("error") or "script reported success=false"
+            meta = {"patrol_fail": True} if payload.get("patrol_fail") is True else {}
             return StepResult(
                 success=False,
                 exit_code=proc.returncode if proc.returncode != 0 else 1,
                 error_message=str(err)[:2000],
                 output=_truncate_step_output(combined_output),
                 metrics=payload.get("metrics", {}) or {},
+                metadata=meta,
             )
+        meta = (
+            {"patrol_complete": True}
+            if isinstance(payload, dict) and payload.get("patrol_complete") is True
+            else {}
+        )
         return StepResult(
             success=True,
             metrics=payload.get("metrics", {}) if isinstance(payload, dict) else {},
             skipped=bool(payload.get("skipped")) if isinstance(payload, dict) else False,
             skip_reason=payload.get("skip_reason", "") if isinstance(payload, dict) else "",
             output=_truncate_step_output(combined_output),
+            metadata=meta,
         )
 
     # ------------------------------------------------------------------
@@ -2926,6 +2960,23 @@ class PipelineEngine:
                 ),
             )
 
+            # Explicit patrol early termination requested by a patrol step
+            # (e.g. Aging DDR check observing DONE_PASS / DONE_FAIL): exit
+            # patrol cleanly so lifecycle proceeds to teardown immediately.
+            early_fail = getattr(self, "_patrol_early_fail", None)
+            if early_fail:
+                logger.error(
+                    "[Lifecycle] run=%d — [Patrol #%d] step reported terminal patrol_fail: %s",
+                    self._run_id, iteration, early_fail,
+                )
+                return _end_patrol("patrol_failure", str(early_fail))
+            if not had_failure and getattr(self, "_patrol_early_complete", False):
+                logger.info(
+                    "[Lifecycle] run=%d — [Patrol #%d] step reported patrol_complete, ending patrol early",
+                    self._run_id, iteration,
+                )
+                return _end_patrol("completed", "")
+
             self._persist_patrol_cycle_checkpoint({
                 "cycle": iteration,
                 "failure_streak": failure_streak,
@@ -3008,6 +3059,8 @@ class PipelineEngine:
         success = 0
         failed = 0
         last_failed: Optional[str] = None
+        self._patrol_early_complete = False
+        self._patrol_early_fail = None
         for step in steps or []:
             if self._is_lock_lost() or self._canceled:
                 self._canceled = True
