@@ -1,7 +1,7 @@
+# Track B 规模化分页与 Facets 契约定稿 v1.0（#4117）
+
 Status: implemented
 Class: architecture
-
-# Track B 规模化分页与 Facets 契约定稿 v1.0（#4117）
 
 ## Decision
 
