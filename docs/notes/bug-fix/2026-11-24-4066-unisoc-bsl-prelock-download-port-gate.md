@@ -15,6 +15,7 @@ Class: bug-fix
 3. **涉及文件**：
    - `backend/agent/scripts/flash_firmware_unisoc_bsl/flash_firmware_unisoc_bsl.py`
    - `backend/agent/tests/test_flash_firmware_unisoc_bsl.py`
+   - `backend/schemas/pipeline_templates/flash_unisoc_bsl.json`（模板 pin 追平至 `1.0.8`）
    - `tool_manifest.json`（按 ADR-0051 追加登记 `flash_firmware_unisoc_bsl@1.0.8`）
 
 ## Alternatives
