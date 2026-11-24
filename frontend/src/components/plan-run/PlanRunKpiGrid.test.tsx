@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
 import PlanRunKpiGrid from './PlanRunKpiGrid';
 import type { PlanRunDevicesPayload } from '@/utils/api/types';
 
@@ -93,5 +93,33 @@ describe('PlanRunKpiGrid', () => {
     );
     // 那时 by_status 基于 ui_status，unknown 恰好表示断连
     expect(screen.getByTestId('kpi-link-abnormal').textContent).toContain('2');
+  });
+
+  it('U5-2：点击 KPI 卡片联动筛选并支持再次点击复位', () => {
+    const onSelectStatus = vi.fn();
+    const onSelectLink = vi.fn();
+    const onResetFilters = vi.fn();
+    render(
+      <PlanRunKpiGrid
+        devices={makeDevices(
+          { total: 5, running: 2, completed: 1, failed: 2, unknown: 0, backoff: 0 },
+          { all: 5, online: 3, offline: 2 },
+        )}
+        statusFilter="all"
+        linkFilter="all"
+        onSelectStatus={onSelectStatus}
+        onSelectLink={onSelectLink}
+        onResetFilters={onResetFilters}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('kpi-failed'));
+    expect(onSelectStatus).toHaveBeenCalledWith('failed');
+
+    fireEvent.click(screen.getByTestId('kpi-link-abnormal'));
+    expect(onSelectLink).toHaveBeenCalledWith('offline');
+
+    fireEvent.click(screen.getByTestId('kpi-total'));
+    expect(onResetFilters).toHaveBeenCalledTimes(1);
   });
 });

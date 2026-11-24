@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -707,7 +708,8 @@ describe('PlanRunDetailPage', () => {
     expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
     // Hero should NOT render the abort button on terminal runs.
     expect(screen.queryByTestId('plan-run-abort-btn')).not.toBeInTheDocument();
-    // #529：终态 PlanRun 展示 DLE 归档卡
+    // #529 + U5-2：终态 PlanRun 切至「日志与交付」页签后展示 DLE 归档卡
+    fireEvent.click(screen.getByTestId('plan-run-section-delivery'));
     await waitFor(() => expect(mocks.getLogEvents).toHaveBeenCalled());
     expect(screen.getByTestId('log-events-card')).toBeInTheDocument();
   });
@@ -1225,10 +1227,11 @@ describe('PlanRunDetailPage', () => {
       revokeObjectURL,
     });
 
+    const user = userEvent.setup();
     renderPage();
     await waitFor(() => screen.getByTestId('plan-run-export-btn'));
-    fireEvent.click(screen.getByTestId('plan-run-export-btn'));
-    fireEvent.click(await screen.findByTestId('plan-run-export-md'));
+    await user.click(screen.getByTestId('plan-run-export-btn'));
+    await user.click(await screen.findByTestId('plan-run-export-md'));
 
     await waitFor(() => {
       expect(mocks.exportReport).toHaveBeenCalledWith(12, 'markdown');

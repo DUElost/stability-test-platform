@@ -48,6 +48,8 @@ interface Props {
   onLinkFilterChange?: (s: DeviceLinkStatus | 'all') => void;
   onHostFilterChange?: (h: string | 'all') => void;
   onSelectDevice?: (device: DeviceMatrixItem) => void;
+  /** 当前在右侧 DeviceDetailDrawer 打开的 Job ID，用于在 Minimap 中保留选中高亮框 */
+  selectedJobId?: number | null;
   /** Controlled view mode; falls back to internal state when omitted. */
   viewMode?: 'grid' | 'table';
   onViewModeChange?: (mode: 'grid' | 'table') => void;
@@ -162,9 +164,11 @@ function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
 function DeviceGrid({
   devices,
   onSelect,
+  selectedJobId,
 }: {
   devices: DeviceMatrixItem[];
   onSelect?: (d: DeviceMatrixItem) => void;
+  selectedJobId?: number | null;
 }) {
   return (
     <div className="p-3">
@@ -185,19 +189,36 @@ function DeviceGrid({
           const link = d.device_link_status;
           const linkSuffix =
             link && link !== 'online' ? ` · ${DEVICE_LINK_STATUS[link].label}` : '';
+          const signalCount = d.log_signal_count ?? 0;
+          const signalSuffix = signalCount > 0 ? ` · 异常 ${signalCount}` : '';
+          const isSelected = selectedJobId != null && selectedJobId === d.job_id;
           const label =
             `${d.device_serial || `Device #${d.device_id}`} — ` +
-            `${DEVICE_UI_STATUS[exec].label}${linkSuffix}`;
+            `${DEVICE_UI_STATUS[exec].label}${linkSuffix}${signalSuffix}`;
           return (
             <button
               key={d.job_id}
               type="button"
               data-testid={`minimap-cell-${d.job_id}`}
+              data-selected={isSelected ? 'true' : undefined}
               onClick={() => onSelect?.(d)}
               aria-label={label}
+              aria-pressed={isSelected}
               title={label}
-              className={`aspect-square rounded-sm border border-transparent transition-transform hover:scale-[1.12] hover:ring-2 hover:ring-primary/45 hover:z-10 ${DEVICE_UI_STATUS[exec].cellCls}`}
-            />
+              className={cn(
+                'relative aspect-square rounded-sm border border-transparent transition-transform hover:z-10 hover:scale-[1.12] hover:ring-2 hover:ring-primary/45',
+                DEVICE_UI_STATUS[exec].cellCls,
+                isSelected && 'z-10 scale-[1.08] ring-2 ring-primary ring-offset-1 ring-offset-card',
+              )}
+            >
+              {signalCount > 0 && (
+                <span
+                  aria-hidden="true"
+                  data-testid={`minimap-signal-dot-${d.job_id}`}
+                  className="pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-destructive ring-1 ring-card"
+                />
+              )}
+            </button>
           );
         })}
       </div>
@@ -443,6 +464,7 @@ export default function DeviceOverview({
   onLinkFilterChange,
   onHostFilterChange,
   onSelectDevice,
+  selectedJobId,
   viewMode: controlledViewMode,
   onViewModeChange,
 }: Props) {
@@ -555,11 +577,12 @@ export default function DeviceOverview({
             该过滤条件下暂无设备
           </div>
         ) : viewMode === 'grid' ? (
-          <DeviceGrid devices={devices} onSelect={handleGridSelect} />
+          <DeviceGrid devices={devices} onSelect={handleGridSelect} selectedJobId={selectedJobId} />
         ) : (
           <DeviceTable
             devices={devices}
             onSelect={onSelectDevice}
+            highlightJobId={selectedJobId}
             hostMap={hostMap}
           />
         )}
