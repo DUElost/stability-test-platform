@@ -1,6 +1,14 @@
 import { memo, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, X, ChevronRight } from 'lucide-react';
+import {
+  AlertTriangle,
+  ChevronRight,
+  ExternalLink,
+  Filter,
+  Search,
+  Smartphone,
+  X,
+} from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip, type PieSectorDataItem } from 'recharts';
 import type {
   AeeDashboardSection,
@@ -13,7 +21,9 @@ import type {
 } from '@/utils/api/types';
 import { api } from '@/utils/api';
 import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
+import { Button } from '@/components/ui/button';
 import { InlineEmpty } from '@/components/ui/empty-state';
+import { PaginationBar } from '@/components/ui/pagination-bar';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { StateTabs } from '@/components/ui/state-tabs';
 import {
@@ -22,7 +32,7 @@ import {
   CHART_COLORS,
   DASHBOARD_SUMMARY_CARD,
   DRAWER,
-  INTERACTIVE,
+  FORM,
   KPI_TONE,
   PACKAGE_ROW,
   PANEL,
@@ -30,6 +40,7 @@ import {
   packageRankClass,
 } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatDateTimeShort } from '@/utils/format';
 
 type OriginTab = 'current' | 'preexisting';
 
@@ -40,6 +51,8 @@ interface Props {
   isError?: boolean;
   timeScope?: WatcherTimeScope;
   onTimeScopeChange?: (scope: WatcherTimeScope) => void;
+  /** 点击 Crash 明细中的设备串号时回调，供 PlanRunDetailPage 直接打开单机详情抽屉。 */
+  onSelectDeviceSerial?: (serial: string) => void;
 }
 
 const TIME_SCOPE_OPTIONS: Array<{ value: WatcherTimeScope; label: string }> = [
@@ -200,27 +213,96 @@ function SummaryCard({
   );
 }
 
+function filterCrashDetailsByOrigin(
+  details: CrashDetailEntry[] | undefined,
+  supportsOriginSplit: boolean,
+  origin: OriginTab,
+): CrashDetailEntry[] {
+  if (!Array.isArray(details)) return [];
+  if (!supportsOriginSplit) return details;
+  const expected = origin === 'current' ? 'runtime' : 'baseline';
+  return details.filter((item) => !item.entry_origin || item.entry_origin === expected);
+}
+
+function formatCrashDetectedAt(value: string | null | undefined): string {
+  if (!value) return '—';
+  return formatDateTimeShort(value) || value;
+}
+
 function PackageRankingDrawer({
   open,
   onClose,
+  runId,
+  scopeLabel,
+  timeScope,
+  origin,
+  supportsOriginSplit,
   rankings,
   selectedPackageName,
   onSelectPackage,
+  detailPackageName,
+  onSelectDetailPackage,
+  onSelectDeviceSerial,
 }: {
   open: boolean;
   onClose: () => void;
+  runId: number;
+  scopeLabel: string;
+  timeScope: WatcherTimeScope;
+  origin: OriginTab;
+  supportsOriginSplit: boolean;
   rankings: PackageRanking[];
   selectedPackageName: string | null;
   onSelectPackage: (pkg: string | null) => void;
+  detailPackageName: string | null;
+  onSelectDetailPackage: (pkg: string | null) => void;
+  onSelectDeviceSerial?: (serial: string) => void;
 }) {
-  const [drawerPage, setDrawerPage] = useState(0);
-  const DRAWER_PAGE_SIZE = 20;
+  const [drawerPage, setDrawerPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const [prevOpen, setPrevOpen] = useState(open);
   if (prevOpen !== open) {
     setPrevOpen(open);
-    if (open) setDrawerPage(0);
+    if (open) {
+      setDrawerPage(1);
+      setSearchQuery('');
+    }
   }
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredRankings = useMemo(() => {
+    const indexed = rankings.map((row, idx) => ({ row, rank: idx + 1 }));
+    if (!normalizedQuery) return indexed;
+    return indexed.filter(({ row }) => {
+      const displayName = row.package_name === 'unknown' ? '未知进程 unknown' : row.package_name;
+      return displayName.toLowerCase().includes(normalizedQuery);
+    });
+  }, [rankings, normalizedQuery]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRankings.length / pageSize));
+  const safePage = Math.min(drawerPage, totalPages);
+  const visibleRows = filteredRankings.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  const activeDetailRow = useMemo(
+    () => (detailPackageName ? rankings.find((r) => r.package_name === detailPackageName) ?? null : null),
+    [rankings, detailPackageName],
+  );
+
+  const crashDetailsQ = useQuery({
+    queryKey: ['crash-details', runId, detailPackageName, timeScope],
+    queryFn: () => api.planRuns.getCrashDetails(runId, detailPackageName || undefined, timeScope),
+    enabled: open && Boolean(detailPackageName),
+    staleTime: 30_000,
+  });
+
+  const scopedCrashDetails = useMemo(
+    () => filterCrashDetailsByOrigin(crashDetailsQ.data, supportsOriginSplit, origin),
+    [crashDetailsQ.data, supportsOriginSplit, origin],
+  );
+
+  const timeScopeText = TIME_SCOPE_OPTIONS.find((o) => o.value === timeScope)?.label ?? '全量';
 
   return (
     <Sheet
@@ -231,14 +313,14 @@ function PackageRankingDrawer({
     >
       <SheetContent
         side="right"
-        size="sm"
+        size="lg"
         hideCloseButton
         aria-label="包名榜完整列表"
       >
-        <header className="flex items-center justify-between border-b px-4 py-3">
+        <header className="flex items-center justify-between border-b px-5 py-3.5">
           <div className="min-w-0">
             <SheetDescription className={cn('truncate text-xs', TEXT.subtitle)}>
-              当前范围
+              {scopeLabel} · 时间范围：{timeScopeText}
             </SheetDescription>
             <SheetTitle className={cn('truncate text-base font-semibold', TEXT.heading)}>
               包名榜 · 全部 ({rankings.length})
@@ -249,108 +331,193 @@ function PackageRankingDrawer({
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-4 py-3">
-          <div className="space-y-2">
-            {rankings.slice(drawerPage * DRAWER_PAGE_SIZE, (drawerPage + 1) * DRAWER_PAGE_SIZE).map((row, index) => {
-              const actualIndex = drawerPage * DRAWER_PAGE_SIZE + index;
-              const active = selectedPackageName === row.package_name;
-              const isUnknown = row.package_name === 'unknown';
-              const dominantColor = isUnknown
-                ? CHART_COLORS.muted
-                : packageDominantColor(row);
-              const rankCls = packageRankClass(actualIndex);
+        <div className="border-b bg-muted/20 px-5 py-2.5">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setDrawerPage(1);
+              }}
+              placeholder="搜索包名或未知进程..."
+              aria-label="搜索包名"
+              className={cn(FORM.inputSm, 'h-8 pl-8 pr-8')}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setDrawerPage(1);
+                }}
+                aria-label="清空包名搜索"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <p className={cn('mt-1.5 text-[11px]', TEXT.subtitle)}>
+            点击任意包名直接展开受影响设备与 Crash 事件明细；支持一键跳转单机详情或日志。
+          </p>
+        </div>
 
-              return (
-                <button
-                  key={row.package_name}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => {
-                    onSelectPackage(
-                      row.package_name === selectedPackageName ? null : row.package_name,
-                    );
-                    onClose();
-                  }}
-                  className={cn(
-                    'group flex w-full items-stretch rounded-xl border text-left transition-all duration-200',
-                    active ? PACKAGE_ROW.active
-                      : isUnknown ? PACKAGE_ROW.unknown
-                      : PACKAGE_ROW.default,
-                  )}
-                >
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-3.5">
+          {detailPackageName && (
+            <CrashDetailPanel
+              runId={runId}
+              packageName={detailPackageName}
+              rankingRow={activeDetailRow}
+              details={scopedCrashDetails}
+              isLoading={crashDetailsQ.isLoading}
+              isError={crashDetailsQ.isError}
+              onRetry={() => void crashDetailsQ.refetch()}
+              isPieFiltered={selectedPackageName === detailPackageName}
+              onTogglePieFilter={() => {
+                onSelectPackage(
+                  selectedPackageName === detailPackageName ? null : detailPackageName,
+                );
+              }}
+              onSelectDeviceSerial={(serial) => {
+                if (onSelectDeviceSerial) {
+                  onClose();
+                  onSelectDeviceSerial(serial);
+                }
+              }}
+              onClose={() => onSelectDetailPackage(null)}
+            />
+          )}
+
+          {visibleRows.length === 0 ? (
+            <InlineEmpty className="py-8">未找到匹配「{searchQuery}」的异常包名</InlineEmpty>
+          ) : (
+            <div className="space-y-2">
+              {visibleRows.map(({ row, rank }) => {
+                const isDetailActive = detailPackageName === row.package_name;
+                const isPieActive = selectedPackageName === row.package_name;
+                const isUnknown = row.package_name === 'unknown';
+                const dominantColor = isUnknown
+                  ? CHART_COLORS.muted
+                  : packageDominantColor(row);
+                const rankCls = packageRankClass(rank - 1);
+
+                return (
                   <div
-                    className={`shrink-0 w-1 rounded-l-xl transition-all duration-200 ${
-                      active ? 'w-1.5' : 'group-hover:w-1.5'
-                    }`}
-                    style={{ backgroundColor: dominantColor }}
-                  />
-                  <div className="flex-1 min-w-0 px-3 py-2 flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`font-mono tabular-nums ${rankCls}`}>
-                          #{actualIndex + 1}
-                        </span>
-                        <span
+                    key={row.package_name}
+                    className={cn(
+                      'group flex w-full items-stretch rounded-xl border transition-all duration-200',
+                      isDetailActive
+                        ? PACKAGE_ROW.active
+                        : isUnknown
+                          ? PACKAGE_ROW.unknown
+                          : PACKAGE_ROW.default,
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        'shrink-0 w-1 rounded-l-xl transition-all duration-200',
+                        isDetailActive ? 'w-1.5' : 'group-hover:w-1.5',
+                      )}
+                      style={{ backgroundColor: dominantColor }}
+                    />
+                    <button
+                      type="button"
+                      data-testid={`drawer-pkg-${row.package_name}`}
+                      aria-pressed={isDetailActive}
+                      onClick={() => {
+                        onSelectDetailPackage(isDetailActive ? null : row.package_name);
+                      }}
+                      className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2 text-left"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start gap-2">
+                          <span className={cn('shrink-0 font-mono tabular-nums', rankCls)}>
+                            #{rank}
+                          </span>
+                          <span
+                            className={cn(
+                              'break-all text-sm leading-snug',
+                              isUnknown
+                                ? cn('italic', TEXT.subtitle)
+                                : isDetailActive
+                                  ? cn('font-semibold', TEXT.heading)
+                                  : cn('font-medium', TEXT.body),
+                            )}
+                          >
+                            {isUnknown ? '未知进程' : row.package_name}
+                          </span>
+                        </div>
+                        <div className="mt-1">
+                          <PackageSubtypeDots row={row} active={isDetailActive} />
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div
                           className={cn(
-                            'truncate text-sm',
-                            isUnknown
-                              ? cn('italic', TEXT.subtitle)
-                              : active
-                                ? cn('font-semibold', TEXT.heading)
-                                : cn('font-medium', TEXT.body),
+                            'text-base font-bold tabular-nums transition-colors duration-200',
+                            isDetailActive
+                              ? TEXT.heading
+                              : isUnknown
+                                ? TEXT.subtitle
+                                : TEXT.body,
                           )}
                         >
-                          {isUnknown ? '未知进程' : row.package_name}
-                        </span>
+                          {row.total_count}
+                        </div>
+                        <div className={cn('text-[11px] tabular-nums', isDetailActive ? TEXT.subtitle : 'text-muted-foreground/70')}>
+                          {row.affected_device_count} 台设备
+                        </div>
                       </div>
-                      <div className="mt-1">
-                        <PackageSubtypeDots row={row} active={active} />
+                    </button>
+                    {origin === 'current' && (
+                      <div className="flex shrink-0 items-center border-l border-border/50 px-2">
+                        <button
+                          type="button"
+                          title={isPieActive ? '取消饼图筛选' : '在左侧饼图中筛选此包名'}
+                          aria-label={`筛饼图 ${row.package_name}`}
+                          onClick={() => {
+                            onSelectPackage(isPieActive ? null : row.package_name);
+                          }}
+                          className={cn(
+                            'rounded-md p-1.5 text-xs transition-colors',
+                            isPieActive
+                              ? 'bg-primary/15 text-primary'
+                              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                          )}
+                        >
+                          <Filter className="h-3.5 w-3.5" />
+                        </button>
                       </div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <div
-                        className={cn(
-                          'text-lg font-bold transition-colors duration-200',
-                          active ? TEXT.heading
-                            : isUnknown ? TEXT.subtitle
-                            : TEXT.body,
-                        )}
-                      >
-                        {row.total_count}
-                      </div>
-                      <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
-                        {row.affected_device_count} 台设备
-                      </div>
-                    </div>
+                    )}
                   </div>
-                </button>
-              );
-            })}
-          </div>
-          {rankings.length > DRAWER_PAGE_SIZE && (
-            <div className={cn('flex items-center justify-between border-t px-4 py-2 text-xs', TEXT.subtitle)}>
-              <button
-                type="button"
-                onClick={() => setDrawerPage((p) => Math.max(0, p - 1))}
-                disabled={drawerPage === 0}
-                className={cn('rounded px-2 py-1 disabled:opacity-30', INTERACTIVE.hover)}
-              >
-                上一页
-              </button>
-              <span>
-                {drawerPage + 1}/{Math.ceil(rankings.length / DRAWER_PAGE_SIZE)}
-              </span>
-              <button
-                type="button"
-                onClick={() => setDrawerPage((p) => Math.min(Math.ceil(rankings.length / DRAWER_PAGE_SIZE) - 1, p + 1))}
-                disabled={(drawerPage + 1) * DRAWER_PAGE_SIZE >= rankings.length}
-                className={cn('rounded px-2 py-1 disabled:opacity-30', INTERACTIVE.hover)}
-              >
-                下一页
-              </button>
+                );
+              })}
             </div>
           )}
         </div>
+
+        {filteredRankings.length > pageSize && (
+          <footer className="border-t bg-card px-5 py-2.5">
+            <PaginationBar
+              page={safePage}
+              totalPages={totalPages}
+              total={filteredRankings.length}
+              pageSize={pageSize}
+              canPreviousPage={safePage > 1}
+              canNextPage={safePage < totalPages}
+              onGoToPage={setDrawerPage}
+              onNextPage={() => setDrawerPage((p) => Math.min(totalPages, p + 1))}
+              onPrevPage={() => setDrawerPage((p) => Math.max(1, p - 1))}
+              onChangePageSize={(size) => {
+                setPageSize(size);
+                setDrawerPage(1);
+              }}
+              pageSizeOptions={[10, 20, 50]}
+            />
+          </footer>
+        )}
       </SheetContent>
     </Sheet>
   );
@@ -527,27 +694,32 @@ export default function AnomalyDashboard({
   isError = false,
   timeScope = 'all',
   onTimeScopeChange,
+  onSelectDeviceSerial,
 }: Props) {
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [isPackageDrawerOpen, setPackageDrawerOpen] = useState(false);
+  const [currentDetailPackage, setCurrentDetailPackage] = useState<string | null>(null);
   const [selectedPreexistingPackage, setSelectedPreexistingPackage] = useState<string | null>(null);
   const [isPreexistingDrawerOpen, setPreexistingDrawerOpen] = useState(false);
-  const [crashDetailPackage, setCrashDetailPackage] = useState<string | null>(null);
+  const [preexistingDetailPackage, setPreexistingDetailPackage] = useState<string | null>(null);
   /** 新计划主看本次新增；遗留降为次级 Tab，默认不占首屏 */
   const [originTab, setOriginTab] = useState<OriginTab>('current');
-
-  const crashDetailsQ = useQuery({
-    queryKey: ['crash-details', runId, crashDetailPackage],
-    queryFn: () => api.planRuns.getCrashDetails(runId, crashDetailPackage || undefined),
-    enabled: !!crashDetailPackage,
-    staleTime: 30_000,
-  });
 
   const supportsOriginSplit = data?.supports_origin_split ?? false;
   const currentRun = data?.current_run ?? EMPTY_SECTION;
   const preexisting = data?.preexisting ?? EMPTY_SECTION;
   const platformBuckets = data?.platform_buckets ?? [];
   const primaryLabel = supportsOriginSplit ? '本次新增' : '当前范围';
+
+  const openCurrentPackageDetail = (pkg: string) => {
+    setCurrentDetailPackage(pkg);
+    setPackageDrawerOpen(true);
+  };
+
+  const openPreexistingPackageDetail = (pkg: string) => {
+    setPreexistingDetailPackage(pkg);
+    setPreexistingDrawerOpen(true);
+  };
 
   const selectedPackageRow = useMemo(
     () => currentRun.package_ranking.find((row) => row.package_name === selectedPackage) ?? null,
@@ -763,17 +935,10 @@ export default function AnomalyDashboard({
                         const rankCls = packageRankClass(index);
 
                         return (
-                          <button
+                          <div
                             key={row.package_name}
-                            type="button"
-                            aria-pressed={active}
-                            onClick={() =>
-                              setSelectedPackage((current) =>
-                                current === row.package_name ? null : row.package_name,
-                              )
-                            }
                             className={cn(
-                              'group flex w-full items-stretch rounded-xl border text-left transition-all duration-200',
+                              'group flex w-full items-stretch rounded-xl border transition-all duration-200',
                               active ? PACKAGE_ROW.active
                                 : isUnknown ? PACKAGE_ROW.unknown
                                 : PACKAGE_ROW.default,
@@ -786,8 +951,17 @@ export default function AnomalyDashboard({
                               )}
                               style={{ backgroundColor: dominantColor }}
                             />
-                            <div className="flex-1 min-w-0 px-3 py-2 flex items-start justify-between gap-3">
-                              <div className="min-w-0">
+                            <button
+                              type="button"
+                              aria-pressed={active}
+                              onClick={() =>
+                                setSelectedPackage((current) =>
+                                  current === row.package_name ? null : row.package_name,
+                                )
+                              }
+                              className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2 text-left"
+                            >
+                              <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2">
                                   <span className={cn('font-mono tabular-nums', rankCls)}>
                                     #{index + 1}
@@ -809,10 +983,10 @@ export default function AnomalyDashboard({
                                   <PackageSubtypeDots row={row} active={active} />
                                 </div>
                               </div>
-                              <div className="shrink-0 text-right transition-all duration-300">
+                              <div className="shrink-0 text-right">
                                 <div
                                   className={cn(
-                                    'text-lg font-bold transition-colors duration-200',
+                                    'text-lg font-bold tabular-nums transition-colors duration-200',
                                     active ? TEXT.heading
                                       : isUnknown ? TEXT.subtitle
                                       : TEXT.body,
@@ -820,42 +994,33 @@ export default function AnomalyDashboard({
                                 >
                                   {row.total_count}
                                 </div>
-                                <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
+                                <div className={cn('text-[11px] tabular-nums', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
                                   {row.affected_device_count} 台设备
                                 </div>
-                                <button
-                                  type="button"
-                                  data-testid={`crash-detail-btn-${row.package_name}`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setCrashDetailPackage(
-                                      crashDetailPackage === row.package_name ? null : row.package_name,
-                                    );
-                                  }}
-                                  className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-info hover:text-info/80"
-                                >
-                                  查看 {row.total_count} 条详情
-                                  <ChevronRight className="h-2.5 w-2.5" />
-                                </button>
                               </div>
+                            </button>
+                            <div className="flex shrink-0 items-center border-l border-border/50 px-2.5">
+                              <button
+                                type="button"
+                                data-testid={`crash-detail-btn-${row.package_name}`}
+                                onClick={() => openCurrentPackageDetail(row.package_name)}
+                                className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 py-1 text-[11px] font-medium text-info transition-colors hover:bg-info/10"
+                              >
+                                查看详情
+                                <ChevronRight className="h-3 w-3" />
+                              </button>
                             </div>
-                          </button>
+                          </div>
                         );
                       })}
-
-                      {crashDetailPackage && (
-                        <CrashDetailPanel
-                          packageName={crashDetailPackage}
-                          details={crashDetailsQ.data}
-                          isLoading={crashDetailsQ.isLoading}
-                          onClose={() => setCrashDetailPackage(null)}
-                        />
-                      )}
 
                       {currentRun.package_ranking.length > 5 && (
                         <button
                           type="button"
-                          onClick={() => setPackageDrawerOpen(true)}
+                          onClick={() => {
+                            setCurrentDetailPackage(selectedPackage);
+                            setPackageDrawerOpen(true);
+                          }}
                           className={cn(
                             'w-full rounded-xl border border-dashed py-2 text-xs font-medium transition',
                             TEXT.subtitle,
@@ -938,18 +1103,10 @@ export default function AnomalyDashboard({
                             const rankCls = packageRankClass(index);
 
                             return (
-                              <button
+                              <div
                                 key={row.package_name}
-                                type="button"
-                                aria-pressed={active}
-                                data-testid={`preexisting-pkg-${row.package_name}`}
-                                onClick={() =>
-                                  setSelectedPreexistingPackage((current) =>
-                                    current === row.package_name ? null : row.package_name,
-                                  )
-                                }
                                 className={cn(
-                                  'group flex w-full items-stretch rounded-lg border text-left transition-all duration-200',
+                                  'group flex w-full items-stretch rounded-lg border transition-all duration-200',
                                   active ? PACKAGE_ROW.active
                                     : isUnknown ? PACKAGE_ROW.unknown
                                     : PACKAGE_ROW.default,
@@ -962,7 +1119,17 @@ export default function AnomalyDashboard({
                                   )}
                                   style={{ backgroundColor: dominantColor }}
                                 />
-                                <div className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2">
+                                <button
+                                  type="button"
+                                  aria-pressed={active}
+                                  data-testid={`preexisting-pkg-${row.package_name}`}
+                                  onClick={() =>
+                                    setSelectedPreexistingPackage((current) =>
+                                      current === row.package_name ? null : row.package_name,
+                                    )
+                                  }
+                                  className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2 text-left"
+                                >
                                   <div className="min-w-0 flex-1">
                                     <div className="flex items-start gap-2">
                                       <span className={cn('shrink-0 font-mono tabular-nums', rankCls)}>
@@ -989,7 +1156,7 @@ export default function AnomalyDashboard({
                                   <div className="shrink-0 text-right">
                                     <div
                                       className={cn(
-                                        'text-lg font-bold transition-colors duration-200',
+                                        'text-lg font-bold tabular-nums transition-colors duration-200',
                                         active ? TEXT.heading
                                           : isUnknown ? TEXT.subtitle
                                           : TEXT.body,
@@ -997,18 +1164,32 @@ export default function AnomalyDashboard({
                                     >
                                       {row.total_count}
                                     </div>
-                                    <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
+                                    <div className={cn('text-[11px] tabular-nums', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
                                       {row.affected_device_count} 台设备
                                     </div>
                                   </div>
+                                </button>
+                                <div className="flex shrink-0 items-center border-l border-border/50 px-2.5">
+                                  <button
+                                    type="button"
+                                    data-testid={`preexisting-crash-detail-btn-${row.package_name}`}
+                                    onClick={() => openPreexistingPackageDetail(row.package_name)}
+                                    className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 py-1 text-[11px] font-medium text-info transition-colors hover:bg-info/10"
+                                  >
+                                    查看详情
+                                    <ChevronRight className="h-3 w-3" />
+                                  </button>
                                 </div>
-                              </button>
+                              </div>
                             );
                           })}
                           {preexisting.package_ranking.length > 5 && (
                             <button
                               type="button"
-                              onClick={() => setPreexistingDrawerOpen(true)}
+                              onClick={() => {
+                                setPreexistingDetailPackage(selectedPreexistingPackage);
+                                setPreexistingDrawerOpen(true);
+                              }}
                               className={cn(
                                 'w-full rounded-lg border border-dashed py-2 text-xs font-medium transition',
                                 TEXT.subtitle,
@@ -1037,61 +1218,193 @@ export default function AnomalyDashboard({
       <PackageRankingDrawer
         open={isPackageDrawerOpen}
         onClose={() => setPackageDrawerOpen(false)}
+        runId={runId}
+        scopeLabel={primaryLabel}
+        timeScope={timeScope}
+        origin="current"
+        supportsOriginSplit={supportsOriginSplit}
         rankings={currentRun.package_ranking}
         selectedPackageName={selectedPackage}
         onSelectPackage={setSelectedPackage}
+        detailPackageName={currentDetailPackage}
+        onSelectDetailPackage={setCurrentDetailPackage}
+        onSelectDeviceSerial={onSelectDeviceSerial}
       />
       <PackageRankingDrawer
         open={isPreexistingDrawerOpen}
         onClose={() => setPreexistingDrawerOpen(false)}
+        runId={runId}
+        scopeLabel="运行前遗留"
+        timeScope={timeScope}
+        origin="preexisting"
+        supportsOriginSplit={supportsOriginSplit}
         rankings={preexisting.package_ranking}
         selectedPackageName={selectedPreexistingPackage}
         onSelectPackage={setSelectedPreexistingPackage}
+        detailPackageName={preexistingDetailPackage}
+        onSelectDetailPackage={setPreexistingDetailPackage}
+        onSelectDeviceSerial={onSelectDeviceSerial}
       />
     </>
   );
 }
 
 function CrashDetailPanel({
+  runId,
   packageName,
+  rankingRow,
   details,
   isLoading,
+  isError,
+  onRetry,
+  isPieFiltered,
+  onTogglePieFilter,
+  onSelectDeviceSerial,
   onClose,
 }: {
+  runId: number;
   packageName: string;
-  details?: CrashDetailEntry[];
+  rankingRow: PackageRanking | null;
+  details: CrashDetailEntry[];
   isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  isPieFiltered: boolean;
+  onTogglePieFilter: () => void;
+  onSelectDeviceSerial?: (serial: string) => void;
   onClose: () => void;
 }) {
+  const deviceSummary = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of details) {
+      const serial = item.device_serial || '未知设备';
+      counts.set(serial, (counts.get(serial) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [details]);
+
   return (
     <div
       data-testid="crash-detail-panel"
-      className="rounded-xl border border-info/25 bg-info/5 p-3"
+      className="rounded-xl border border-info/30 bg-info/5 p-3.5"
     >
-      <div className="mb-2 flex items-center justify-between">
-        <span className={cn('text-xs font-semibold', TEXT.body)}>
-          {packageName === 'unknown' ? '未知进程' : packageName} · Crash 详情
-        </span>
-        <button type="button" onClick={onClose} className={DRAWER.closeBtn} aria-label="关闭 Crash 详情">
-          <X className="h-3 w-3" />
-        </button>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className={cn('break-all text-sm font-semibold leading-snug', TEXT.heading)}>
+            {packageName === 'unknown' ? '未知进程' : packageName}
+          </div>
+          <div className={cn('mt-0.5 text-[11px] tabular-nums', TEXT.subtitle)}>
+            Crash 详情 · 命中 {details.length} 条记录
+            {deviceSummary.length > 0 ? ` · ${deviceSummary.length} 台设备` : ''}
+            {rankingRow && rankingRow.total_count !== details.length && !isLoading && !isError
+              ? `（榜计 ${rankingRow.total_count}）`
+              : ''}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant={isPieFiltered ? 'secondary' : 'outline'}
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            onClick={onTogglePieFilter}
+          >
+            <Filter className="mr-1 h-3 w-3" />
+            {isPieFiltered ? '取消筛饼图' : '筛饼图'}
+          </Button>
+          <button
+            type="button"
+            onClick={onClose}
+            className={DRAWER.closeBtn}
+            aria-label="关闭 Crash 详情"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
+
       {isLoading ? (
-        <div className={cn('py-3 text-center text-xs', TEXT.subtitle)}>加载中…</div>
-      ) : !details || details.length === 0 ? (
-        <div className={cn('py-3 text-center text-xs', TEXT.subtitle)}>暂无详情数据</div>
+        <div className={cn('py-4 text-center text-xs', TEXT.subtitle)}>加载 Crash 详情中…</div>
+      ) : isError ? (
+        <div className="mt-2.5 flex items-center justify-between gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive-text">
+          <span>加载 Crash 详情失败，请稍后重试</span>
+          <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-[11px]" onClick={onRetry}>
+            重试
+          </Button>
+        </div>
+      ) : details.length === 0 ? (
+        <div className={cn('py-4 text-center text-xs', TEXT.subtitle)}>当前时间与来源范围内暂无 Crash 明细</div>
       ) : (
-        <div className="max-h-48 space-y-1 overflow-y-auto">
-          {details.map((d, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-2 rounded border bg-card px-2 py-1 text-[11px]"
-            >
-              <span className={cn('font-mono', TEXT.subtitle)}>{d.subtype}</span>
-              <span className="text-muted-foreground/70">{d.device_serial}</span>
-              <span className="text-muted-foreground/50">{d.detected_at}</span>
+        <div className="mt-3 space-y-3">
+          {deviceSummary.length > 0 && (
+            <div data-testid="crash-detail-devices">
+              <div className={cn('mb-1.5 flex items-center gap-1 text-[11px] font-medium', TEXT.subtitle)}>
+                <Smartphone className="h-3 w-3" />
+                <span>受影响设备（点击查看单机详情）</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {deviceSummary.map(([serial, count]) => (
+                  <button
+                    key={serial}
+                    type="button"
+                    data-testid={`crash-device-chip-${serial}`}
+                    onClick={() => onSelectDeviceSerial?.(serial)}
+                    className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 font-mono text-[11px] text-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-primary"
+                  >
+                    <span>{serial}</span>
+                    <span className="rounded bg-muted px-1 text-[10px] tabular-nums text-muted-foreground">
+                      ×{count}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-          ))}
+          )}
+
+          <div className="max-h-60 space-y-1.5 overflow-y-auto pr-0.5">
+            {details.map((d, i) => {
+              const color = aeeSubtypeChartColor(d.subtype || '其他');
+              const label = d.group === 'UNIVIEW' ? `UNIVIEW · ${d.subtype}` : d.subtype;
+              const logsHref = `/execution/plan-runs/${runId}/logs?q=${encodeURIComponent(d.device_serial)}`;
+              return (
+                <div
+                  key={`${d.device_serial}-${d.subtype}-${d.detected_at ?? i}-${i}`}
+                  className="flex items-center justify-between gap-2 rounded-lg border bg-card px-2.5 py-1.5 text-xs"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: color }}
+                    />
+                    <span className={cn('shrink-0 font-mono text-[11px] font-medium', TEXT.body)}>
+                      {label}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onSelectDeviceSerial?.(d.device_serial)}
+                      className="truncate font-mono text-[11px] text-primary hover:underline"
+                      title={`查看设备 ${d.device_serial} 详情`}
+                    >
+                      {d.device_serial}
+                    </button>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {formatCrashDetectedAt(d.detected_at)}
+                    </span>
+                    <a
+                      href={logsHref}
+                      className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-primary"
+                      title={`在执行日志中检索 ${d.device_serial}`}
+                    >
+                      日志
+                      <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

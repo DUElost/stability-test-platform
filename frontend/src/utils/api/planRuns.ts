@@ -221,10 +221,13 @@ export const planRuns = {
     `/api/v1/plan-runs/${runId}/log-events/${eventId}/download`,
 
   // ADR-0025 Sprint 3: crash 详情端点
-  getCrashDetails: (runId: number, packageName?: string) =>
+  getCrashDetails: (runId: number, packageName?: string, timeScope?: WatcherTimeScope) =>
     unwrapApiResponse<CrashDetailEntry[]>(
       apiClient.get(`/plan-runs/${runId}/crash-details`, {
-        params: packageName ? { package_name: packageName } : undefined,
+        params: {
+          ...(packageName ? { package_name: packageName } : {}),
+          ...(timeScope ? { time_scope: timeScope } : {}),
+        },
       }),
     ),
 
