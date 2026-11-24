@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AnomalyDashboard from './AnomalyDashboard';
+import { api } from '@/utils/api';
 import type { WatcherSummary } from '@/utils/api/types';
 
 vi.mock('@/components/charts/StableResponsiveContainer', () => ({
@@ -18,18 +19,17 @@ vi.mock('@/components/charts/StableResponsiveContainer', () => ({
 vi.mock('@/utils/api', () => ({
   api: {
     planRuns: {
-      getCrashDetails: vi.fn().mockResolvedValue({ data: [], total: 0 }),
+      getCrashDetails: vi.fn().mockResolvedValue([]),
     },
   },
 }));
 
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: false, staleTime: 0 } },
-});
-const wrapper = ({ children }: { children: ReactNode }) => (
-  <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-);
-const render_ = (ui: React.ReactElement) => render(ui, { wrapper });
+function render_(ui: React.ReactElement) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 0 } },
+  });
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
 
 function makeSection(overrides: Record<string, unknown> = {}) {
   return {
@@ -362,6 +362,153 @@ describe('AnomalyDashboard', () => {
     it('加载失败时不提示（没有数据就没有结论）', () => {
       render_(<AnomalyDashboard runId={1} isError data={makeData({ watcher_capability: 'unavailable' })} />);
       expect(screen.queryByTestId('watcher-capability-degraded')).toBeNull();
+    });
+  });
+
+  describe('U5-1 包名榜全量 Crash 明细抽屉与口径对齐', () => {
+    beforeEach(() => {
+      vi.mocked(api.planRuns.getCrashDetails).mockReset();
+      vi.mocked(api.planRuns.getCrashDetails).mockResolvedValue([]);
+    });
+
+    it('点击「查看全部」后点击第 6+ 包名可在抽屉内加载并展示报错设备与事件明细', async () => {
+      const ranking = Array.from({ length: 8 }, (_, i) => ({
+        package_name: `com.app.pkg${i + 1}`,
+        total_count: 10 - i,
+        affected_device_count: 2,
+        latest_detected_at: '2026-11-24T04:00:00Z',
+        subtype_breakdown: [{ subtype: 'JE', count: 10 - i }],
+      }));
+      vi.mocked(api.planRuns.getCrashDetails).mockResolvedValue([
+        {
+          package_name: 'com.app.pkg7',
+          subtype: 'JE',
+          group: 'AEE',
+          device_serial: 'SER-701',
+          detected_at: '2026-11-24T03:50:00Z',
+          entry_origin: 'runtime',
+        },
+        {
+          package_name: 'com.app.pkg7',
+          subtype: 'ANR',
+          group: 'AEE',
+          device_serial: 'SER-702',
+          detected_at: '2026-11-24T03:45:00Z',
+          entry_origin: 'runtime',
+        },
+        {
+          // 运行前遗留事件在「本次新增」抽屉中必须被过滤掉
+          package_name: 'com.app.pkg7',
+          subtype: 'NE',
+          group: 'AEE',
+          device_serial: 'SER-LEGACY',
+          detected_at: '2026-11-23T23:00:00Z',
+          entry_origin: 'baseline',
+        },
+      ]);
+
+      const onSelectDeviceSerial = vi.fn();
+      render_(
+        <AnomalyDashboard
+          runId={1594}
+          data={makeData({ current_run: makeSection({ package_ranking: ranking }) })}
+          timeScope="6h"
+          onSelectDeviceSerial={onSelectDeviceSerial}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /查看全部 \(8\)/i }));
+      fireEvent.click(screen.getByTestId('drawer-pkg-com.app.pkg7'));
+
+      await waitFor(() => {
+        expect(api.planRuns.getCrashDetails).toHaveBeenCalledWith(1594, 'com.app.pkg7', '6h');
+      });
+
+      const panel = await screen.findByTestId('crash-detail-panel');
+      expect(panel.textContent).toContain('com.app.pkg7');
+      expect(panel.textContent).toContain('SER-701');
+      expect(panel.textContent).toContain('SER-702');
+      // baseline 来源在「本次新增」抽屉中应过滤掉
+      expect(panel.textContent).not.toContain('SER-LEGACY');
+
+      // 点击受影响设备串号直达单机详情回调
+      fireEvent.click(screen.getByTestId('crash-device-chip-SER-701'));
+      expect(onSelectDeviceSerial).toHaveBeenCalledWith('SER-701');
+    });
+
+    it('支持抽屉内包名搜索过滤与运行前遗留 Tab 查看 baseline 明细', async () => {
+      const ranking = Array.from({ length: 7 }, (_, i) => ({
+        package_name: `com.legacy.mod${i + 1}`,
+        total_count: 7 - i,
+        affected_device_count: 1,
+        latest_detected_at: null,
+        subtype_breakdown: [{ subtype: 'NE', count: 7 - i }],
+      }));
+      vi.mocked(api.planRuns.getCrashDetails).mockResolvedValue([
+        {
+          package_name: 'com.legacy.mod6',
+          subtype: 'NE',
+          group: 'AEE',
+          device_serial: 'SER-BASE-6',
+          detected_at: '2026-11-23T22:00:00Z',
+          entry_origin: 'baseline',
+        },
+        {
+          package_name: 'com.legacy.mod6',
+          subtype: 'JE',
+          group: 'AEE',
+          device_serial: 'SER-RUNTIME-SKIP',
+          detected_at: '2026-11-24T01:00:00Z',
+          entry_origin: 'runtime',
+        },
+      ]);
+
+      render_(
+        <AnomalyDashboard
+          runId={1594}
+          data={makeData({ preexisting: makeSection({ package_ranking: ranking }) })}
+          timeScope="all"
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId('anomaly-tab-preexisting'));
+      fireEvent.click(screen.getByRole('button', { name: /查看全部 \(7\)/i }));
+
+      const searchInput = screen.getByLabelText('搜索包名');
+      fireEvent.change(searchInput, { target: { value: 'mod6' } });
+      expect(screen.queryByTestId('drawer-pkg-com.legacy.mod1')).toBeNull();
+      fireEvent.click(screen.getByTestId('drawer-pkg-com.legacy.mod6'));
+
+      const panel = await screen.findByTestId('crash-detail-panel');
+      await waitFor(() => {
+        expect(panel.textContent).toContain('SER-BASE-6');
+      });
+      expect(panel.textContent).not.toContain('SER-RUNTIME-SKIP');
+    });
+
+    it('Top 5 行不存在无效的 button 嵌套 button，且点击查看详情可直接打开抽屉明细', async () => {
+      vi.mocked(api.planRuns.getCrashDetails).mockResolvedValue([
+        {
+          package_name: 'com.runtime.camera',
+          subtype: 'JE',
+          group: 'AEE',
+          device_serial: 'SER-TOP1',
+          detected_at: '2026-11-24T04:05:00Z',
+          entry_origin: 'runtime',
+        },
+      ]);
+
+      const { container } = render_(
+        <AnomalyDashboard runId={1594} data={makeData()} timeScope="1h" />,
+      );
+      expect(container.querySelectorAll('button button').length).toBe(0);
+
+      fireEvent.click(screen.getByTestId('crash-detail-btn-com.runtime.camera'));
+      await waitFor(() => {
+        expect(api.planRuns.getCrashDetails).toHaveBeenCalledWith(1594, 'com.runtime.camera', '1h');
+      });
+      const panel = await screen.findByTestId('crash-detail-panel');
+      expect(panel.textContent).toContain('SER-TOP1');
     });
   });
 });
