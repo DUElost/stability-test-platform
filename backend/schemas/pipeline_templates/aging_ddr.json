@@ -38,11 +38,11 @@
         {
           "step_id": "aging_ddr_check",
           "action": "script:aging_ddr_check",
-          "version": "1.0.0",
+          "version": "1.0.1",
           "timeout_seconds": 60,
           "retry": 0,
           "params": {
-            "max_offline_seconds": 2400
+            "max_offline_seconds": 14400
           }
         }
       ]
@@ -51,7 +51,7 @@
       {
         "step_id": "aging_ddr_disarm",
         "action": "script:aging_ddr_disarm",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "timeout_seconds": 1860,
         "retry": 1,
         "params": {
@@ -62,7 +62,7 @@
       {
         "step_id": "aging_ddr_finish",
         "action": "script:aging_ddr_finish",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "timeout_seconds": 420,
         "retry": 1,
         "params": {

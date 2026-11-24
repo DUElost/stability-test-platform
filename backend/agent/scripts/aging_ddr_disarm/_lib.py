@@ -11,6 +11,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ DATASTORE_DIR = f"/data/user/0/{PACKAGE}/files/datastore"
 DDR_SERVICE = f"{PACKAGE}/.stage.ddr.service.DdrTestService"
 DDR_STOP_ACTION = f"{PACKAGE}.ddr.action.STOP"
 _ABSENT_SENTINEL = "__STP_AGING_DS_ABSENT__"
+_DENIED_SENTINEL = "__STP_AGING_DS_DENIED__"
 
 DDR_SESSION_INT32_KEYS = frozenset(
     {
@@ -111,6 +113,17 @@ def device_online(timeout: int = 5) -> bool:
 
 def is_root() -> bool:
     return adb_shell("id -u", timeout=10).strip() == "0"
+
+
+def ensure_adb_root() -> bool:
+    if is_root():
+        return True
+    adb("root", timeout=15)
+    for _ in range(5):
+        time.sleep(1.0)
+        if device_online(timeout=5) and is_root():
+            return True
+    return False
 
 
 def ddr_service_state(timeout: int = 10) -> tuple[str, int]:
@@ -281,20 +294,24 @@ def decode_prefs(buf: bytes) -> dict[str, Any]:
 
 def read_datastore_file(filename: str, *, timeout: int = 10) -> tuple[str, dict[str, Any]]:
     remote = f"{DATASTORE_DIR}/{filename}"
-    probe = f"if [ ! -f {remote} ]; then echo {_ABSENT_SENTINEL}; else base64 {remote} 2>&1; fi"
+    probe = (
+        f'if [ "$(id -u)" != "0" ]; then echo {_DENIED_SENTINEL}; '
+        f"elif [ ! -f {remote} ]; then echo {_ABSENT_SENTINEL}; "
+        f"else base64 {remote} 2>&1; fi"
+    )
     rc, out, err = adb("shell", probe, timeout=timeout)
     text = (out or "").strip()
     if rc != 0:
         combined = f"{text}\n{err or ''}"
+        if _DENIED_SENTINEL in combined or "Permission denied" in combined:
+            return "denied", {}
         if _ABSENT_SENTINEL in combined or "No such file" in combined:
             return "absent", {}
-        if "Permission denied" in combined:
-            return "denied", {}
         return "transient", {}
+    if text == _DENIED_SENTINEL or "Permission denied" in text:
+        return "denied", {}
     if text == _ABSENT_SENTINEL or "No such file" in text:
         return "absent", {}
-    if "Permission denied" in text:
-        return "denied", {}
     if not text:
         return "empty", {}
     compact = re.sub(r"\s+", "", text)

@@ -37,6 +37,7 @@ from _lib import (
     ddr_service_state,
     device_online,
     device_serial,
+    ensure_adb_root,
     is_root,
     output_result,
     param_or_env,
@@ -211,6 +212,15 @@ def _run(cfg: dict[str, Any]) -> dict[str, Any]:
                 "evidence": {"online": False, "wait_device_online_seconds": wait_online},
                 "mode": mode,
             }
+        if not ensure_adb_root():
+            return {
+                "success": False,
+                "disarm_result": "failed",
+                "readback": "readback_failed",
+                "readback_summary": f"设备 {serial} 重启后 adb root 恢复失败（uid != 0），无法读写 DataStore",
+                "evidence": {"online": True, "root": False},
+                "mode": mode,
+            }
         action_steps = _stop_and_clear()
         progress_stamp({"phase": "readback_verify", "serial": serial})
         snap = _read_footprint_evidence()
@@ -241,6 +251,7 @@ def _run(cfg: dict[str, Any]) -> dict[str, Any]:
             "evidence": {"online": False},
             "mode": mode,
         }
+    ensure_adb_root()
     snap = _read_footprint_evidence()
     readback = snap["readback"]
     ok = readback == "clear"
