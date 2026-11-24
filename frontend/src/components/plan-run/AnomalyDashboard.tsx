@@ -1,7 +1,8 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
+  ChevronDown,
   ChevronRight,
   ExternalLink,
   Search,
@@ -223,15 +224,27 @@ function PackageRankingDrawer({
   const [drawerPage, setDrawerPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [searchQuery, setSearchQuery] = useState('');
+  const activeRowRef = useRef<HTMLDivElement | null>(null);
 
   const [prevOpen, setPrevOpen] = useState(open);
   if (prevOpen !== open) {
     setPrevOpen(open);
     if (open) {
-      setDrawerPage(1);
       setSearchQuery('');
+      const targetIdx = detailPackageName
+        ? rankings.findIndex((r) => r.package_name === detailPackageName)
+        : -1;
+      setDrawerPage(targetIdx >= 0 ? Math.floor(targetIdx / pageSize) + 1 : 1);
     }
   }
+
+  useEffect(() => {
+    if (!open || !detailPackageName) return;
+    const el = activeRowRef.current;
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [open, detailPackageName]);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredRankings = useMemo(() => {
@@ -246,11 +259,6 @@ function PackageRankingDrawer({
   const totalPages = Math.max(1, Math.ceil(filteredRankings.length / pageSize));
   const safePage = Math.min(drawerPage, totalPages);
   const visibleRows = filteredRankings.slice((safePage - 1) * pageSize, safePage * pageSize);
-
-  const activeDetailRow = useMemo(
-    () => (detailPackageName ? rankings.find((r) => r.package_name === detailPackageName) ?? null : null),
-    [rankings, detailPackageName],
-  );
 
   const crashDetailsQ = useQuery({
     queryKey: ['crash-details', runId, detailPackageName, timeScope],
@@ -322,30 +330,11 @@ function PackageRankingDrawer({
             )}
           </div>
           <p className={cn('mt-1.5 text-[11px]', TEXT.subtitle)}>
-            点击任意包名直接展开受影响设备与 Crash 事件明细；支持一键跳转单机详情或日志。
+            点击任意包名在当前行原地展开受影响设备与 Crash 事件明细；支持一键跳转单机详情或日志。
           </p>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-3.5">
-          {detailPackageName && (
-            <CrashDetailPanel
-              runId={runId}
-              packageName={detailPackageName}
-              rankingRow={activeDetailRow}
-              details={scopedCrashDetails}
-              isLoading={crashDetailsQ.isLoading}
-              isError={crashDetailsQ.isError}
-              onRetry={() => void crashDetailsQ.refetch()}
-              onSelectDeviceSerial={(serial) => {
-                if (onSelectDeviceSerial) {
-                  onClose();
-                  onSelectDeviceSerial(serial);
-                }
-              }}
-              onClose={() => onSelectDetailPackage(null)}
-            />
-          )}
-
+        <div className="flex-1 overflow-y-auto px-5 py-3.5">
           {visibleRows.length === 0 ? (
             <InlineEmpty className="py-8">未找到匹配「{searchQuery}」的异常包名</InlineEmpty>
           ) : (
@@ -361,71 +350,103 @@ function PackageRankingDrawer({
                 return (
                   <div
                     key={row.package_name}
+                    ref={isDetailActive ? activeRowRef : undefined}
+                    data-testid={`drawer-row-${row.package_name}`}
                     className={cn(
-                      'group flex w-full items-stretch rounded-xl border transition-all duration-200',
+                      'group overflow-hidden rounded-xl border transition-all duration-200',
                       isDetailActive
-                        ? PACKAGE_ROW.active
+                        ? 'border-info/40 bg-card shadow-sm'
                         : isUnknown
                           ? PACKAGE_ROW.unknown
                           : PACKAGE_ROW.default,
                     )}
                   >
-                    <div
-                      className={cn(
-                        'shrink-0 w-1 rounded-l-xl transition-all duration-200',
-                        isDetailActive ? 'w-1.5' : 'group-hover:w-1.5',
-                      )}
-                      style={{ backgroundColor: dominantColor }}
-                    />
-                    <button
-                      type="button"
-                      data-testid={`drawer-pkg-${row.package_name}`}
-                      aria-pressed={isDetailActive}
-                      onClick={() => {
-                        onSelectDetailPackage(isDetailActive ? null : row.package_name);
-                      }}
-                      className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2 text-left"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start gap-2">
-                          <span className={cn('shrink-0 font-mono tabular-nums', rankCls)}>
-                            #{rank}
-                          </span>
-                          <span
+                    <div className="flex w-full items-stretch">
+                      <div
+                        className={cn(
+                          'shrink-0 w-1 transition-all duration-200',
+                          isDetailActive ? 'w-1.5' : 'group-hover:w-1.5',
+                        )}
+                        style={{ backgroundColor: dominantColor }}
+                      />
+                      <button
+                        type="button"
+                        data-testid={`drawer-pkg-${row.package_name}`}
+                        aria-expanded={isDetailActive}
+                        aria-pressed={isDetailActive}
+                        onClick={() => {
+                          onSelectDetailPackage(isDetailActive ? null : row.package_name);
+                        }}
+                        className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2 text-left"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start gap-2">
+                            <span className={cn('shrink-0 font-mono tabular-nums', rankCls)}>
+                              #{rank}
+                            </span>
+                            <span
+                              className={cn(
+                                'break-all text-sm leading-snug',
+                                isUnknown
+                                  ? cn('italic', TEXT.subtitle)
+                                  : isDetailActive
+                                    ? cn('font-semibold', TEXT.heading)
+                                    : cn('font-medium', TEXT.body),
+                              )}
+                            >
+                              {isUnknown ? '未知进程' : row.package_name}
+                            </span>
+                          </div>
+                          <div className="mt-1">
+                            <PackageSubtypeDots row={row} active={isDetailActive} />
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <div className="text-right">
+                            <div
+                              className={cn(
+                                'text-base font-bold tabular-nums transition-colors duration-200',
+                                isDetailActive
+                                  ? TEXT.heading
+                                  : isUnknown
+                                    ? TEXT.subtitle
+                                    : TEXT.body,
+                              )}
+                            >
+                              {row.total_count}
+                            </div>
+                            <div className={cn('text-[11px] tabular-nums', isDetailActive ? TEXT.subtitle : 'text-muted-foreground/70')}>
+                              {row.affected_device_count} 台设备
+                            </div>
+                          </div>
+                          <ChevronDown
                             className={cn(
-                              'break-all text-sm leading-snug',
-                              isUnknown
-                                ? cn('italic', TEXT.subtitle)
-                                : isDetailActive
-                                  ? cn('font-semibold', TEXT.heading)
-                                  : cn('font-medium', TEXT.body),
+                              'h-4 w-4 text-muted-foreground/60 transition-transform duration-200',
+                              isDetailActive && 'rotate-180 text-info',
                             )}
-                          >
-                            {isUnknown ? '未知进程' : row.package_name}
-                          </span>
+                          />
                         </div>
-                        <div className="mt-1">
-                          <PackageSubtypeDots row={row} active={isDetailActive} />
-                        </div>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <div
-                          className={cn(
-                            'text-base font-bold tabular-nums transition-colors duration-200',
-                            isDetailActive
-                              ? TEXT.heading
-                              : isUnknown
-                                ? TEXT.subtitle
-                                : TEXT.body,
-                          )}
-                        >
-                          {row.total_count}
-                        </div>
-                        <div className={cn('text-[11px] tabular-nums', isDetailActive ? TEXT.subtitle : 'text-muted-foreground/70')}>
-                          {row.affected_device_count} 台设备
-                        </div>
-                      </div>
-                    </button>
+                      </button>
+                    </div>
+
+                    {isDetailActive && (
+                      <CrashDetailPanel
+                        runId={runId}
+                        packageName={row.package_name}
+                        rankingRow={row}
+                        details={scopedCrashDetails}
+                        isLoading={crashDetailsQ.isLoading}
+                        isError={crashDetailsQ.isError}
+                        onRetry={() => void crashDetailsQ.refetch()}
+                        onSelectDeviceSerial={(serial) => {
+                          if (onSelectDeviceSerial) {
+                            onClose();
+                            onSelectDeviceSerial(serial);
+                          }
+                        }}
+                        onClose={() => onSelectDetailPackage(null)}
+                      />
+                    )}
                   </div>
                 );
               })}
@@ -516,11 +537,11 @@ const DonutChart = memo(function DonutChart({
       data-testid={chartTestId}
       data-chart-type="recharts-donut"
       aria-label="异常细分类型占比饼图"
-      className="grid grid-cols-1 items-center gap-5 sm:grid-cols-[196px_minmax(0,1fr)]"
+      className="grid w-full grid-cols-1 items-center gap-6 sm:grid-cols-[216px_minmax(0,1fr)]"
     >
       {/* 左侧紧凑环形图 + 动态圆心数值 */}
-      <div className="relative mx-auto h-[196px] w-[196px] shrink-0">
-        <StableResponsiveContainer className="h-[196px] min-h-[196px] w-[196px]">
+      <div className="relative mx-auto h-[216px] w-[216px] shrink-0">
+        <StableResponsiveContainer className="h-[216px] min-h-[216px] w-[216px]">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Tooltip
@@ -548,8 +569,8 @@ const DonutChart = memo(function DonutChart({
                 data={chartData}
                 cx="50%"
                 cy="50%"
-                innerRadius={58}
-                outerRadius={84}
+                innerRadius={64}
+                outerRadius={92}
                 startAngle={90}
                 endAngle={-270}
                 paddingAngle={chartData.length > 1 ? 2 : 0}
@@ -879,24 +900,29 @@ export default function AnomalyDashboard({
               )}
 
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-                <div className={DASHBOARD_SUMMARY_CARD.panel}>
-                  <div className={cn('mb-4 text-sm font-semibold', TEXT.heading)}>
+                <div
+                  data-testid="current-run-pie-panel"
+                  className={cn(DASHBOARD_SUMMARY_CARD.panel, 'flex flex-col')}
+                >
+                  <div className={cn('mb-3 text-sm font-semibold', TEXT.heading)}>
                     {`${primaryLabel} · 细分类型占比`}
                   </div>
-                  {currentRun.total_events > 0 ? (
-                    <DonutChart
-                      items={chartDistribution}
-                      total={chartTotal}
-                      tone={KPI_TONE.default.value}
-                      chartTestId="current-run-pie-chart"
-                    />
-                  ) : (
-                    <InlineEmpty chart>
-                      {supportsOriginSplit
-                        ? '当前范围内未发现新增 AEE / Vendor AEE / UNIVIEW 异常'
-                        : '当前范围内未发现 AEE / Vendor AEE / UNIVIEW 异常'}
-                    </InlineEmpty>
-                  )}
+                  <div className="flex flex-1 items-center justify-center py-2">
+                    {currentRun.total_events > 0 ? (
+                      <DonutChart
+                        items={chartDistribution}
+                        total={chartTotal}
+                        tone={KPI_TONE.default.value}
+                        chartTestId="current-run-pie-chart"
+                      />
+                    ) : (
+                      <InlineEmpty chart className="w-full">
+                        {supportsOriginSplit
+                          ? '当前范围内未发现新增 AEE / Vendor AEE / UNIVIEW 异常'
+                          : '当前范围内未发现 AEE / Vendor AEE / UNIVIEW 异常'}
+                      </InlineEmpty>
+                    )}
+                  </div>
                 </div>
 
                 <div className={DASHBOARD_SUMMARY_CARD.panel}>
@@ -1031,16 +1057,21 @@ export default function AnomalyDashboard({
                   </div>
 
                   <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-                    <div className={DASHBOARD_SUMMARY_CARD.panel}>
+                    <div
+                      data-testid="preexisting-pie-panel"
+                      className={cn(DASHBOARD_SUMMARY_CARD.panel, 'flex flex-col')}
+                    >
                       <div className={cn('mb-3 text-sm font-semibold', TEXT.heading)}>
                         运行前遗留 · 细分类型占比
                       </div>
-                      <DonutChart
-                        items={preexistingDistribution}
-                        total={preexistingTotal}
-                        tone={KPI_TONE.default.value}
-                        chartTestId="preexisting-pie-chart"
-                      />
+                      <div className="flex flex-1 items-center justify-center py-2">
+                        <DonutChart
+                          items={preexistingDistribution}
+                          total={preexistingTotal}
+                          tone={KPI_TONE.default.value}
+                          chartTestId="preexisting-pie-chart"
+                        />
+                      </div>
                     </div>
 
                     <div className={DASHBOARD_SUMMARY_CARD.panel}>
@@ -1211,26 +1242,26 @@ function CrashDetailPanel({
   return (
     <div
       data-testid="crash-detail-panel"
-      className="rounded-xl border border-info/30 bg-info/5 p-3.5"
+      className="border-t border-info/25 bg-info/5 px-3.5 py-3"
     >
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className={cn('break-all text-sm font-semibold leading-snug', TEXT.heading)}>
-            {packageName === 'unknown' ? '未知进程' : packageName}
-          </div>
-          <div className={cn('mt-0.5 text-[11px] tabular-nums', TEXT.subtitle)}>
+          <div className={cn('text-[11px] font-medium tabular-nums', TEXT.subtitle)}>
             Crash 详情 · 命中 {details.length} 条记录
             {deviceSummary.length > 0 ? ` · ${deviceSummary.length} 台设备` : ''}
             {rankingRow && rankingRow.total_count !== details.length && !isLoading && !isError
               ? `（榜计 ${rankingRow.total_count}）`
               : ''}
+            <span className="sr-only">
+              {packageName === 'unknown' ? '未知进程' : packageName}
+            </span>
           </div>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className={DRAWER.closeBtn}
-          aria-label="关闭 Crash 详情"
+          className={cn(DRAWER.closeBtn, 'h-6 w-6')}
+          aria-label="收起 Crash 详情"
         >
           <X className="h-3.5 w-3.5" />
         </button>
