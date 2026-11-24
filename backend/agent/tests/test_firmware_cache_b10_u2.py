@@ -1786,3 +1786,103 @@ def test_firmware_cache_settings_hot_reload(monkeypatch):
     assert get_firmware_cache_settings().stp_firmware_cache_reserve_gb == 25.0
     monkeypatch.delenv("STP_FIRMWARE_CACHE_RESERVE_GB", raising=False)
     reset_agent_settings_caches()
+
+
+def test_concurrent_cold_pull_waiter_switches_to_sh_without_starving(
+    tmp_path, monkeypatch
+):
+    """回归（2026-11-24 Run 1655/1656 实证）：
+    首批并发冷拉中，首台写完降级为 LOCK_SH 后持续持有 LOCK_SH（模拟源源不断的
+    后续 reader），原本在 _populate_locked 等待 LOCK_EX 的同伴必须在数个 poll
+    周期内转取 LOCK_SH 并以 hit=True 返回，不得被 LOCK_SH 饿死。
+    """
+    import backend.agent.firmware_cache as fc
+
+    primary = tmp_path / "cache"
+    _mount_ok(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_aee_local_root",
+        lambda: tmp_path / "aee",
+    )
+    (tmp_path / "aee").mkdir()
+    monkeypatch.setattr(
+        "backend.agent.firmware_cache.get_disk_usage", lambda _p: _disk()
+    )
+    monkeypatch.setattr("backend.agent.firmware_cache._st_dev", lambda _p: 1)
+    monkeypatch.setenv("STP_AGENT_INSTALL_DIR", str(tmp_path / "install"))
+    (tmp_path / "install").mkdir()
+    monkeypatch.setattr(fc, "_LOCK_WAIT_POLL_SECONDS", 0.02)
+
+    cfg = _settings(stp_firmware_cache_dir=str(primary))
+    src = _sealed_source(tmp_path / "src", {PROFILE_MTK: [("fw.bin", b"payload-data")]})
+
+    ex_entered = threading.Event()
+    allow_copy_finish = threading.Event()
+    waiter_entered_ex_loop = threading.Event()
+    release_first_sh = threading.Event()
+
+    orig_populate = fc._populate_entry
+
+    def slow_populate(*args, **kwargs):
+        ex_entered.set()
+        assert allow_copy_finish.wait(timeout=5.0)
+        return orig_populate(*args, **kwargs)
+
+    monkeypatch.setattr(fc, "_populate_entry", slow_populate)
+
+    first_res: list = []
+    second_res: list = []
+    errors: list = []
+
+    def worker_first():
+        try:
+            with ensure_firmware(
+                src, PROFILE_MTK, permit_client=_fake_permit(), settings=cfg
+            ) as r:
+                first_res.append(r)
+                # 模拟正在刷机：持续持 LOCK_SH 不释放，直到 second 已命中返回
+                assert release_first_sh.wait(timeout=5.0)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(("first", exc))
+
+    def worker_second():
+        try:
+            def _on_progress(**fields):
+                if fields.get("wait_for") == "entry-lock-ex":
+                    waiter_entered_ex_loop.set()
+
+            with ensure_firmware(
+                src,
+                PROFILE_MTK,
+                permit_client=_fake_permit(),
+                settings=cfg,
+                progress_callback=_on_progress,
+            ) as r:
+                second_res.append(r)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(("second", exc))
+
+    t1 = threading.Thread(target=worker_first)
+    t2 = threading.Thread(target=worker_second)
+    t1.start()
+    assert ex_entered.wait(timeout=5.0), "first worker did not enter _populate_entry"
+
+    # 启动第二台：此时尚无 READY_MARKER，且 first 持 LOCK_EX → 必然进入 _populate_locked 等待 LOCK_EX
+    t2.start()
+    assert waiter_entered_ex_loop.wait(timeout=5.0), "second worker did not enter LOCK_EX wait"
+
+    # 放行第一台完成写盘并降级为 LOCK_SH，但保持第一台不释放 LOCK_SH
+    allow_copy_finish.set()
+
+    # 若发生 LOCK_SH 饿死 LOCK_EX，t2 将一直阻塞至 join 超时
+    t2.join(timeout=3.0)
+    alive_after_join = t2.is_alive()
+    release_first_sh.set()
+    t1.join(timeout=5.0)
+    if alive_after_join:
+        t2.join(timeout=5.0)
+
+    assert not errors, f"unexpected worker errors: {errors}"
+    assert not alive_after_join, "second worker starved waiting for LOCK_EX while first held LOCK_SH"
+    assert len(first_res) == 1 and first_res[0].hit is False
+    assert len(second_res) == 1 and second_res[0].hit is True
