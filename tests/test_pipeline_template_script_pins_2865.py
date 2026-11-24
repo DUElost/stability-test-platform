@@ -33,6 +33,10 @@ SCRIPTS_DIR = REPO_ROOT / "backend/agent/scripts"  # 族树（Phase 3 后无版�
 # 脚本族进模板时必须同步加行——漏加会被 test_template_script_actions_covered
 # 抓住，见文件底部）。
 PINNED_SCRIPTS: dict[str, str] = {
+    "script:aging_ddr_check": "aging_ddr_check",
+    "script:aging_ddr_disarm": "aging_ddr_disarm",
+    "script:aging_ddr_finish": "aging_ddr_finish",
+    "script:aging_ddr_setup": "aging_ddr_setup",
     "script:check_device": "check_device",
     "script:ensure_root": "ensure_root",
     "script:flash_firmware_unisoc": "flash_firmware_unisoc",
