@@ -116,6 +116,14 @@
           "retired": false,
           "script": "aging_ddr_check.py",
           "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/aging_ddr_check/1.0.1.tar.gz",
+          "package_sha256": "094317ba9e9fefbe5e049497fa0c8be65012ed731308860caa2965b1ac55ca82",
+          "python": null,
+          "retired": false,
+          "script": "aging_ddr_check.py",
+          "version": "1.0.1"
         }
       ]
     },
@@ -129,6 +137,14 @@
           "retired": false,
           "script": "aging_ddr_disarm.py",
           "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/aging_ddr_disarm/1.0.1.tar.gz",
+          "package_sha256": "525b7a573b9883fc65093e34d3199251db36512e61b527a7fcc0ab4793e2a1f3",
+          "python": null,
+          "retired": false,
+          "script": "aging_ddr_disarm.py",
+          "version": "1.0.1"
         }
       ]
     },
@@ -142,6 +158,14 @@
           "retired": false,
           "script": "aging_ddr_finish.py",
           "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/aging_ddr_finish/1.0.1.tar.gz",
+          "package_sha256": "1ff2417e8d49750eba408181e13633c141464facd0e15fc3862f0f4ae50b0fca",
+          "python": null,
+          "retired": false,
+          "script": "aging_ddr_finish.py",
+          "version": "1.0.1"
         }
       ]
     },

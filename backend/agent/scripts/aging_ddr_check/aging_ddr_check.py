@@ -43,6 +43,7 @@ from _lib import (
     ddr_service_alive,
     device_online,
     device_serial,
+    ensure_adb_root,
     env,
     output_result,
     param_or_env,
@@ -51,7 +52,8 @@ from _lib import (
     read_datastore_file,
 )
 
-_DEFAULT_MAX_OFFLINE_SECONDS = 2400
+# P525AA 实机测量单轮 REBOOT_DST 离线耗时约 2h47m–2h51m（~10,300s），默认预算 4h（14400s）。
+_DEFAULT_MAX_OFFLINE_SECONDS = 14400
 _DEFAULT_DEAD_GRACE_CYCLES = 2
 _DEFAULT_ONLINE_STALL_CYCLES = 20
 
@@ -218,6 +220,24 @@ def _evaluate(cfg: dict[str, Any], *, now_fn=time.time) -> tuple[bool, dict[str,
                 "boot_completed": boot_completed,
                 "state": "booting",
             }
+        }
+
+    # 2.5 重启后 adbd 会掉回 uid=2000，读取 DataStore 前自动重提 adb root
+    if not ensure_adb_root():
+        if not device_online(timeout=5):
+            state["last_state"] = "offline"
+            state["offline_since"] = now
+            _save_state(serial, state)
+            return True, {
+                "progress": {
+                    "online": False,
+                    "state": "adbd_restarting_for_root",
+                }
+            }
+        _save_state(serial, state)
+        return False, {
+            "error_message": "设备在线但 adb root 恢复失败（uid != 0），无法读取 FacAging DataStore",
+            "progress": {"online": True, "state": "root_denied"},
         }
 
     # 3. 读取三份核心 DataStore 与服务状态

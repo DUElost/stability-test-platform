@@ -226,7 +226,42 @@ class TestAgingDdrCheck:
         monkeypatch.setenv("STP_DEVICE_SERIAL", serial)
         monkeypatch.setenv("STP_JOB_ID", job_id)
         monkeypatch.setattr(mod, "_state_file", lambda s: tmp_path / f"state_{s}.json")
+        monkeypatch.setattr(mod, "ensure_adb_root", lambda: True)
         return mod
+
+    def test_default_offline_budget_covers_3h_dst(self, monkeypatch, tmp_path):
+        mod = self._setup_check(monkeypatch, tmp_path, job_id="3001")
+        monkeypatch.setattr(mod, "device_online", lambda timeout=10: False)
+        ok1, _ = mod._evaluate({}, now_fn=lambda: 1000.0)
+        assert ok1 is True
+        # 实机 P525AA 单轮 REBOOT_DST ~10300s，默认 14400s 内必须放行
+        ok2, p2 = mod._evaluate({}, now_fn=lambda: 11500.0)
+        assert ok2 is True
+        assert p2["progress"]["max_offline_seconds"] == 14400
+        assert p2["progress"]["offline_elapsed_seconds"] == 10500
+
+    def test_non_root_datastore_read_classified_as_denied_not_absent(self, monkeypatch):
+        mod = _load_script_module("aging_ddr_check", "aging_ddr_check")
+        lib = mod._loaded_lib
+        monkeypatch.setattr(
+            lib,
+            "adb",
+            lambda *args, timeout=10: (0, "__STP_AGING_DS_DENIED__\n", ""),
+        )
+        kind, data = lib.read_datastore_file("aging_pipeline_session.preferences_pb")
+        assert kind == "denied"
+        assert data == {}
+
+    def test_check_reroot_failure_and_adbd_restart_handling(self, monkeypatch, tmp_path):
+        mod = self._setup_check(monkeypatch, tmp_path, job_id="3002")
+        monkeypatch.setattr(mod, "device_online", lambda timeout=10: True)
+        monkeypatch.setattr(mod, "adb_shell", lambda cmd, timeout=10: "1")
+        monkeypatch.setattr(mod, "ensure_adb_root", lambda: False)
+
+        ok, payload = mod._evaluate({}, now_fn=lambda: 2000.0)
+        assert ok is False
+        assert "adb root" in payload["error_message"]
+        assert payload["progress"]["state"] == "root_denied"
 
     def test_offline_budget_then_timeout_and_job_isolation(self, monkeypatch, tmp_path):
         mod = self._setup_check(monkeypatch, tmp_path, job_id="2001")
@@ -359,6 +394,7 @@ class TestAgingDdrDisarm:
         monkeypatch.setenv("STP_DEVICE_SERIAL", "SER_DIS")
         _patch_advancing_clock(monkeypatch, mod)
         monkeypatch.setattr(mod, "_wait_device_online", lambda timeout_s: True)
+        monkeypatch.setattr(mod, "ensure_adb_root", lambda: True)
         monkeypatch.setattr(mod, "adb", lambda *args, timeout=15: (0, "", ""))
         monkeypatch.setattr(mod, "is_root", lambda: True)
         monkeypatch.setattr(mod, "ddr_service_state", lambda timeout=10: ("stopped", 0))
@@ -397,6 +433,7 @@ class TestAgingDdrDisarm:
         monkeypatch.setenv("STP_DEVICE_SERIAL", "SER_DIS2")
         _patch_advancing_clock(monkeypatch, mod)
         monkeypatch.setattr(mod, "_wait_device_online", lambda timeout_s: True)
+        monkeypatch.setattr(mod, "ensure_adb_root", lambda: True)
         monkeypatch.setattr(mod, "adb", lambda *args, timeout=15: (0, "", ""))
         monkeypatch.setattr(mod, "is_root", lambda: True)
         monkeypatch.setattr(mod, "ddr_service_state", lambda timeout=10: ("stopped", 0))
@@ -431,6 +468,7 @@ class TestAgingDdrFinish:
         monkeypatch.setenv("STP_DEVICE_SERIAL", "SER_FIN")
         monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
         monkeypatch.setattr(mod, "_wait_device_online", lambda wait_s: True)
+        monkeypatch.setattr(mod, "ensure_adb_root", lambda: True)
         monkeypatch.setattr(mod, "device_online", lambda timeout=5: True)
 
         ds_map = {

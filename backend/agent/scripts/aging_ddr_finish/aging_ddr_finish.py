@@ -37,6 +37,7 @@ from _lib import (
     adb_shell,
     device_online,
     device_serial,
+    ensure_adb_root,
     output_result,
     param_or_env,
     params,
@@ -149,6 +150,8 @@ def _pull_csv(remote_csv: str) -> Path | None:
 
 
 def _collect_once() -> dict[str, Any]:
+    if not ensure_adb_root():
+        raise RuntimeError("设备在线但 adb root 恢复失败（uid != 0），无法读取 FacAging DataStore")
     pipe_kind, pipe = read_datastore_file("aging_pipeline_session.preferences_pb", timeout=15)
     ddr_kind, ddr = read_datastore_file("ddr_test_session.preferences_pb", timeout=15)
     rep_kind, rep = read_datastore_file("ddr_test_report.preferences_pb", timeout=15)
