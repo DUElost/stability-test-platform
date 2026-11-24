@@ -252,6 +252,10 @@ describe('AnomalyDashboard', () => {
     );
     const pieChart = screen.getByTestId('current-run-pie-chart');
     expect(pieChart.getAttribute('data-chart-type')).toBe('recharts-donut');
+    // 饼图卡片采用纵向 flex 居中承载，避免右侧包名榜撑高后左卡下半部大片留白
+    const piePanel = screen.getByTestId('current-run-pie-panel');
+    expect(piePanel.className).toContain('flex-col');
+    expect(pieChart.parentElement?.className).toContain('items-center');
     expect(screen.getByTestId('current-run-pie-chart-legend')).toHaveAttribute(
       'data-legend-position',
       'right',
@@ -432,6 +436,9 @@ describe('AnomalyDashboard', () => {
       });
 
       const panel = await screen.findByTestId('crash-detail-panel');
+      const targetRow = screen.getByTestId('drawer-row-com.app.pkg7');
+      // 详情在所点击包名所在行原地展开，而非固定渲染在列表顶部
+      expect(targetRow.contains(panel)).toBe(true);
       expect(panel.textContent).toContain('com.app.pkg7');
       expect(panel.textContent).toContain('SER-701');
       expect(panel.textContent).toContain('SER-702');
