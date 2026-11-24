@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Plan } from '@/utils/api';
-import { ArrowDown, Plus } from 'lucide-react';
+import { ArrowDown, PanelLeftClose, Plus } from 'lucide-react';
 import { PIPELINE_EDITOR, STATUS_CHIP, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +21,8 @@ interface PlanChainPanelProps {
   draftPlanName: string;
   onSelectPlan: (planId: number) => void;
   onAppendPlan: () => void;
+  /** 可选收起回调：由 PlanEditPage 在单/多链折叠交互中注入 */
+  onCollapse?: () => void;
 }
 
 function countByStage(plan: Plan) {
@@ -115,6 +117,7 @@ export default function PlanChainPanel({
   draftPlanName,
   onSelectPlan,
   onAppendPlan,
+  onCollapse,
 }: PlanChainPanelProps) {
   const chain = useMemo(
     () => buildChainNodes(plans, currentPlanId, draftStepCounts, draftPlanName),
@@ -125,11 +128,24 @@ export default function PlanChainPanel({
 
   return (
     <aside className={cn('flex flex-col min-h-0 overflow-hidden bg-card border-border border-r')}>
-      <header className={cn('flex items-center justify-between gap-3 px-4 py-3', PIPELINE_EDITOR.panelHeader)}>
-        <span className={cn('text-sm font-bold', TEXT.heading)}>执行链</span>
-        <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold', STATUS_CHIP.primary)}>
-          {chain.length} {chain.length === 1 ? 'Plan' : 'Plans'}
-        </span>
+      <header className={cn('flex items-center justify-between gap-2 px-4 py-3', PIPELINE_EDITOR.panelHeader)}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={cn('text-sm font-bold', TEXT.heading)}>执行链</span>
+          <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold', STATUS_CHIP.primary)}>
+            {chain.length} {chain.length === 1 ? 'Plan' : 'Plans'}
+          </span>
+        </div>
+        {onCollapse && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            aria-label="收起执行链面板"
+            title="收起执行链面板"
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+        )}
       </header>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
