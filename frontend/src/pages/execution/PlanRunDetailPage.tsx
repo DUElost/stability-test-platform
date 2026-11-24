@@ -404,30 +404,6 @@ export default function PlanRunDetailPage() {
               selectedJobId={selectedJobId}
             />
 
-            {/* 准入预检与派发故障摘要条始终可见，避免门禁报错被二级页签隐藏 */}
-            {showDispatchGate && (
-              <section data-testid="dispatch-gate-section" className="space-y-2">
-                {precheck && (
-                  <PrecheckSummaryRow
-                    precheck={precheck}
-                    expanded={showDiag}
-                    onToggle={() => setDiagOpen((v) => !v)}
-                    gateFailed={gateFailed}
-                  />
-                )}
-                <div className={!precheck || showDiag ? '' : 'hidden'}>
-                  <DispatchGateCard
-                    precheck={precheck}
-                    dispatchState={dispatchState}
-                    isTerminal={isTerminal}
-                    onRetryDispatch={() => retryDispatchMut.mutate()}
-                    isRetrying={retryDispatchMut.isPending}
-                    retryable={runQ.data?.capabilities?.retry_dispatch}
-                  />
-                </div>
-              </section>
-            )}
-
             <StateTabs
               variant="underline"
               ariaLabel="执行详情分区"
@@ -437,7 +413,7 @@ export default function PlanRunDetailPage() {
               items={[
                 {
                   key: 'monitoring',
-                  label: '异常与进度',
+                  label: '异常与归档',
                   panelId: 'plan-run-panel-monitoring',
                   testId: 'plan-run-section-monitoring',
                 },
@@ -490,12 +466,6 @@ export default function PlanRunDetailPage() {
                   isError={watcherQ.isError}
                   onRetry={() => void watcherQ.refetch()}
                 />
-
-                <BusinessFlowStepper
-                  timeline={timelineQ.data}
-                  isLoading={timelineQ.isLoading}
-                  isError={timelineQ.isError}
-                />
               </div>
             )}
 
@@ -526,6 +496,39 @@ export default function PlanRunDetailPage() {
                 id="plan-run-panel-diagnostics"
                 className="space-y-3"
               >
+                <BusinessFlowStepper
+                  timeline={timelineQ.data}
+                  isLoading={timelineQ.isLoading}
+                  isError={timelineQ.isError}
+                />
+
+                {showDispatchGate ? (
+                  <section data-testid="dispatch-gate-section" className="space-y-2">
+                    {precheck && (
+                      <PrecheckSummaryRow
+                        precheck={precheck}
+                        expanded={showDiag}
+                        onToggle={() => setDiagOpen((v) => !v)}
+                        gateFailed={gateFailed}
+                      />
+                    )}
+                    <div className={!precheck || showDiag ? '' : 'hidden'}>
+                      <DispatchGateCard
+                        precheck={precheck}
+                        dispatchState={dispatchState}
+                        isTerminal={isTerminal}
+                        onRetryDispatch={() => retryDispatchMut.mutate()}
+                        isRetrying={retryDispatchMut.isPending}
+                        retryable={runQ.data?.capabilities?.retry_dispatch}
+                      />
+                    </div>
+                  </section>
+                ) : (
+                  <div className={cn(PANEL.root, 'p-4 text-xs', TEXT.subtitle)}>
+                    当前 PlanRun 无需额外的派发门禁诊断信息。
+                  </div>
+                )}
+
                 <div className={cn(PANEL.root, 'flex flex-wrap items-center justify-between gap-3 p-4')}>
                   <div className="min-w-0">
                     <div className={cn('text-sm font-semibold', TEXT.heading)}>
@@ -546,27 +549,6 @@ export default function PlanRunDetailPage() {
                     打开计划快照
                   </Button>
                 </div>
-
-                {showDispatchGate ? (
-                  <DispatchGateCard
-                    precheck={precheck}
-                    dispatchState={dispatchState}
-                    isTerminal={isTerminal}
-                    onRetryDispatch={() => retryDispatchMut.mutate()}
-                    isRetrying={retryDispatchMut.isPending}
-                    retryable={runQ.data?.capabilities?.retry_dispatch}
-                  />
-                ) : (
-                  <div className={cn(PANEL.root, 'p-4 text-xs', TEXT.subtitle)}>
-                    当前 PlanRun 无需额外的派发门禁诊断信息。
-                  </div>
-                )}
-
-                <BusinessFlowStepper
-                  timeline={timelineQ.data}
-                  isLoading={timelineQ.isLoading}
-                  isError={timelineQ.isError}
-                />
               </div>
             )}
           </div>

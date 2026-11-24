@@ -559,6 +559,30 @@ function KvList({ rows }: { rows: KvRow[] }) {
 }
 
 const CRASH_ARTIFACT_TYPES = ['aee_crash', 'vendor_aee_crash', 'bugreport'];
+const AEE_ARTIFACT_TYPES = new Set(['aee_crash', 'vendor_aee_crash']);
+const NON_ISSUE_AEE_EXACT_NAMES = new Set([
+  'aee.lck',
+  'db_history',
+  'file_tree.txt',
+  'swt_jbt_traces',
+  'temp',
+]);
+const NON_ISSUE_AEE_SUFFIXES = ['.lck', '.lock', '.tmp', '.temp'];
+
+function isNonIssueAeeArtifactFilename(filename: string | null | undefined): boolean {
+  if (!filename) return false;
+  const base = filename.split('/').pop()?.trim() ?? '';
+  if (!base) return false;
+  const normalized = base.replace(/^(?:\d+_)+/, '').toLowerCase();
+  if (!normalized) return false;
+  if (NON_ISSUE_AEE_EXACT_NAMES.has(normalized)) return true;
+  if (NON_ISSUE_AEE_SUFFIXES.some((suffix) => normalized.endsWith(suffix))) return true;
+  if (normalized.startsWith('db_history.') || normalized.startsWith('swt_jbt_traces')) {
+    return true;
+  }
+  return false;
+}
+
 const ARTIFACT_LABELS: Record<string, string> = {
   aee_crash: 'AEE',
   vendor_aee_crash: 'Vendor AEE',
@@ -573,9 +597,13 @@ function CrashArtifactsBlock({ runId, jobId }: { runId: number; jobId: number })
     staleTime: 30_000,
   });
 
-  const crashArtifacts = (data || []).filter(
-    (a) => CRASH_ARTIFACT_TYPES.includes(a.artifact_type),
-  );
+  const crashArtifacts = (data || []).filter((a) => {
+    if (!CRASH_ARTIFACT_TYPES.includes(a.artifact_type)) return false;
+    if (AEE_ARTIFACT_TYPES.has(a.artifact_type) && isNonIssueAeeArtifactFilename(a.filename)) {
+      return false;
+    }
+    return true;
+  });
 
   if (isLoading) {
     return (

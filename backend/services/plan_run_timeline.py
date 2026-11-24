@@ -41,12 +41,17 @@ def _stage_status_from_steps(
     succeeded: int,
     failed: int,
     has_running_jobs: bool,
+    skipped: int = 0,
+    has_active_stage_jobs: Optional[bool] = None,
+    has_next_stage_started: bool = False,
+    has_stage_started: Optional[bool] = None,
+    has_required_steps: bool = True,
 ) -> str:
     """从 step_trace 聚合派生 stage 整体状态。
 
-    init 阶段:任意 step 失败 → failed;全部 step ok 且 patrol 已启动 → completed;否则 running/pending
+    init 阶段:任意 step 失败 → failed;无活跃设备停留在 init 且已推进(含跳过/进入 patrol) → completed;否则 running/pending
     teardown 阶段:终态 PlanRun 时若有 step_trace → completed; 否则 pending/skipped(manual_exit)
-    patrol 阶段:running 时 → running; 终态时 → completed (或 failed)
+    patrol 阶段:未启动前 → pending; running 时 → running; 终态时 → completed (或 failed)
     """
     if pr_status in _TERMINAL_PR_STATUSES:
         if stage == "teardown":
@@ -58,10 +63,23 @@ def _stage_status_from_steps(
     if stage == "init":
         if failed > 0:
             return "failed"
-        if succeeded >= job_total:
+        if not has_required_steps and (has_next_stage_started or has_running_jobs):
             return "completed"
-        return "running" if has_running_jobs else "pending"
+        if job_total > 0 and (succeeded + skipped) >= job_total:
+            return "completed"
+        if has_active_stage_jobs is False and (
+            succeeded > 0 or skipped > 0 or has_next_stage_started
+        ):
+            return "completed"
+        is_running = (
+            has_active_stage_jobs
+            if has_active_stage_jobs is not None
+            else has_running_jobs
+        )
+        return "running" if is_running else "pending"
     if stage == "patrol":
+        if has_stage_started is False and succeeded == 0 and failed == 0:
+            return "pending"
         if succeeded == 0 and failed == 0 and not has_running_jobs:
             return "pending"
         return "running"
@@ -190,6 +208,7 @@ def build_plan_run_timeline(db: Session, pr: PlanRun) -> PlanRunTimelineOut:
         for stage in ("init", "patrol", "teardown")
     }
     job_step_results: dict[tuple[int, str, str], set[str]] = {}
+    jobs_past_init_by_trace: set[int] = set()
     if job_ids:
         result_rows = db.execute(
             select(
@@ -200,10 +219,13 @@ def build_plan_run_timeline(db: Session, pr: PlanRun) -> PlanRunTimelineOut:
                 StepTrace.status,
             ).where(
                 StepTrace.job_id.in_(job_ids),
-                StepTrace.event_type != "STARTED",
             )
         ).all()
         for job_id, stage, step_id, event_type, status in result_rows:
+            if stage in {"patrol", "teardown"}:
+                jobs_past_init_by_trace.add(job_id)
+            if event_type == "STARTED":
+                continue
             result = None
             if event_type == "COMPLETED" and status == "COMPLETED":
                 result = "succeeded"
@@ -268,6 +290,27 @@ def build_plan_run_timeline(db: Session, pr: PlanRun) -> PlanRunTimelineOut:
     elif stage_ts["init"]["started_at"]:
         current_stage = "init"
 
+    has_patrol_started = bool(
+        stage_ts["patrol"]["started_at"] or patrol_cycle_index or patrol_active
+    )
+    init_required = required_steps_by_stage["init"]
+    has_init_active_jobs = any(
+        job.status == JobStatus.RUNNING.value
+        and job.id not in jobs_past_init_by_trace
+        and not (job.patrol_cycle_count or 0)
+        and job.last_patrol_heartbeat_at is None
+        and not job.current_patrol_step
+        and bool(init_required)
+        and not all(
+            bool(
+                job_step_results.get((job.id, "init", step_id), set())
+                & {"succeeded", "skipped"}
+            )
+            for step_id in init_required
+        )
+        for job in jobs
+    )
+
     stages_out: list[StageOut] = []
     for stage_name in ("init", "patrol", "teardown"):
         steps = stages_def.get(stage_name, [])
@@ -278,7 +321,12 @@ def build_plan_run_timeline(db: Session, pr: PlanRun) -> PlanRunTimelineOut:
             job_total=job_total,
             succeeded=succeeded,
             failed=failed,
+            skipped=skipped,
             has_running_jobs=has_running,
+            has_active_stage_jobs=has_init_active_jobs if stage_name == "init" else None,
+            has_next_stage_started=has_patrol_started if stage_name == "init" else False,
+            has_stage_started=has_patrol_started if stage_name == "patrol" else None,
+            has_required_steps=bool(required_steps_by_stage[stage_name]),
         )
         s_at = stage_ts[stage_name]["started_at"]
         e_at = stage_ts[stage_name]["ended_at"] if st in {"completed", "failed", "skipped"} else None

@@ -156,10 +156,11 @@ describe('AnomalyDashboard', () => {
     expect(screen.getAllByText('com.android.camera2').length).toBeGreaterThan(0);
   });
 
-  it('renders preexisting package ranking rows and toggles selection', () => {
+  it('renders preexisting package ranking rows and opens crash detail drawer on click', async () => {
     render_(
       <AnomalyDashboard
         {...({
+          runId: 1,
           data: makeData({
             preexisting: makeSection({
               total_events: 4,
@@ -190,7 +191,7 @@ describe('AnomalyDashboard', () => {
     expect(rowA).toBeTruthy();
     expect(screen.getByText('com.preexisting.b')).toBeTruthy();
     fireEvent.click(rowA);
-    expect(rowA.getAttribute('aria-pressed')).toBe('true');
+    expect(await screen.findByTestId('crash-detail-panel')).toBeTruthy();
   });
 
   it('opens the preexisting full package drawer', () => {
@@ -253,11 +254,12 @@ describe('AnomalyDashboard', () => {
     expect(pieChart.getAttribute('data-chart-type')).toBe('recharts-donut');
     expect(screen.getByTestId('current-run-pie-chart-legend')).toHaveAttribute(
       'data-legend-position',
-      'below',
+      'right',
     );
-    // Legend shows both subtypes (truncation info on fullLabel is in legend text)
+    // Right-side breakdown list shows both subtypes with counts and shares
     const legend = screen.getByTestId('current-run-pie-chart-legend');
     expect(legend.textContent).toContain('HWT');
+    expect(legend.textContent).toContain('66.7%');
     expect(pieChart.querySelector('[data-center-total="true"]')?.textContent).toBe('3');
   });
 
@@ -287,12 +289,17 @@ describe('AnomalyDashboard', () => {
     ).toBeTruthy();
   });
 
-  it('filters the pie-chart legend when a package row is selected', () => {
-    render_(<AnomalyDashboard {...({ data: makeData(), timeScope: 'all' } as any)} />);
-    expect(screen.getAllByText('HWT').length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole('button', { name: /com\.runtime\.camera/i }));
-    expect(screen.queryAllByText('HWT')).toHaveLength(0);
-    expect(screen.getAllByText('JE').length).toBeGreaterThan(0);
+  it('does not filter the pie chart by package name and opens crash details directly on package click', async () => {
+    render_(<AnomalyDashboard {...({ runId: 1, data: makeData(), timeScope: 'all' } as any)} />);
+    const legend = screen.getByTestId('current-run-pie-chart-legend');
+    expect(legend.textContent).toContain('HWT');
+    expect(screen.queryByText(/点击包名筛选饼图/)).toBeNull();
+    fireEvent.click(screen.getByTestId('crash-detail-btn-com.runtime.camera'));
+    expect(await screen.findByTestId('crash-detail-panel')).toBeTruthy();
+    // 饼图不受包名点击筛选，仍保留 HWT 与 JE
+    expect(legend.textContent).toContain('HWT');
+    expect(legend.textContent).toContain('JE');
+    expect(screen.queryByText(/筛饼图/)).toBeNull();
   });
 
   it('calls onTimeScopeChange when time-scope button is clicked', () => {

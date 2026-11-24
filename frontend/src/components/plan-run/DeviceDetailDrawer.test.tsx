@@ -13,6 +13,7 @@ vi.mock('@/utils/api', () => ({
 }));
 
 import DeviceDetailDrawer from './DeviceDetailDrawer';
+import { api } from '@/utils/api';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 0 } },
@@ -423,5 +424,65 @@ describe('DeviceDetailDrawer — 解除结果（ADR-0061 D1.2 / U6）', () => {
       '/assistant?prompt=',
     );
     expect(screen.queryByText(/上方"业务流时间线"/)).toBeNull();
+  });
+
+  it('过滤 AEE 非问题元数据/锁文件，仅展示真正的 Crash 产物', async () => {
+    vi.mocked(api.planRuns.listJobArtifacts).mockResolvedValueOnce([
+      {
+        id: 1,
+        job_id: 3009,
+        filename: '1795192503706_aee.lck',
+        artifact_type: 'aee_crash',
+        size_bytes: 16,
+        checksum: null,
+        created_at: '2026-11-24T05:00:00Z',
+      },
+      {
+        id: 2,
+        job_id: 3009,
+        filename: '1795192503709_db_history',
+        artifact_type: 'aee_crash',
+        size_bytes: 512,
+        checksum: null,
+        created_at: '2026-11-24T05:00:01Z',
+      },
+      {
+        id: 3,
+        job_id: 3009,
+        filename: '1795192503731_file_tree.txt',
+        artifact_type: 'vendor_aee_crash',
+        size_bytes: 1024,
+        checksum: null,
+        created_at: '2026-11-24T05:00:02Z',
+      },
+      {
+        id: 4,
+        job_id: 3009,
+        filename: '1795322515947_SWT_JBT_TRACES',
+        artifact_type: 'aee_crash',
+        size_bytes: 2048,
+        checksum: null,
+        created_at: '2026-11-24T05:00:03Z',
+      },
+      {
+        id: 5,
+        job_id: 3009,
+        filename: '1795322515999_db.01.NE.dbg',
+        artifact_type: 'aee_crash',
+        size_bytes: 4096,
+        checksum: null,
+        created_at: '2026-11-24T05:00:04Z',
+      },
+    ]);
+
+    render_(<DeviceDetailDrawer device={makeDevice({ job_id: 3009 })} {...handlers} />);
+
+    const block = await screen.findByTestId('crash-artifacts-block');
+    expect(block).toHaveTextContent('Crash 产物（1）');
+    expect(block).toHaveTextContent('1795322515999_db.01.NE.dbg');
+    expect(block).not.toHaveTextContent('aee.lck');
+    expect(block).not.toHaveTextContent('db_history');
+    expect(block).not.toHaveTextContent('file_tree.txt');
+    expect(block).not.toHaveTextContent('SWT_JBT_TRACES');
   });
 });

@@ -210,15 +210,7 @@ function DeviceGrid({
                 DEVICE_UI_STATUS[exec].cellCls,
                 isSelected && 'z-10 scale-[1.08] ring-2 ring-primary ring-offset-1 ring-offset-card',
               )}
-            >
-              {signalCount > 0 && (
-                <span
-                  aria-hidden="true"
-                  data-testid={`minimap-signal-dot-${d.job_id}`}
-                  className="pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-destructive ring-1 ring-card"
-                />
-              )}
-            </button>
+            />
           );
         })}
       </div>

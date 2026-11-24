@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   ChevronRight,
   ExternalLink,
-  Filter,
   Search,
   Smartphone,
   X,
@@ -14,7 +13,6 @@ import type {
   AeeDashboardSection,
   CrashDetailEntry,
   PackageRanking,
-  PackageSubtypeCount,
   SubtypeDistribution,
   WatcherSummary,
   WatcherTimeScope,
@@ -72,16 +70,6 @@ const EMPTY_SECTION: AeeDashboardSection = {
   package_ranking: [],
 };
 
-const VENDOR_SUBTYPES = new Set([
-  'System API Dump',
-  'HWT',
-  'HANG',
-  'KE',
-  'HW Reboot',
-  'Modem EE',
-  'OCP Reboot',
-]);
-
 /** #1956：展锐（UNIVIEW）与 AEE 家族会出现同名 subtype（如 ANR），标签带来源前缀以区分。 */
 function subtypeLabel(item: Pick<SubtypeDistribution, 'subtype' | 'group'>): string {
   if (item.group === 'UNIVIEW') return `UNIVIEW · ${item.subtype}`;
@@ -107,15 +95,6 @@ function formatSharePercent(share: number): string {
   return fixed.replace(/\.?0+$/, '');
 }
 
-/** #1956：优先采用后端给出的 group；仅在缺失时按 subtype 兜底推断。 */
-function inferSubtypeGroup(
-  subtype: string,
-  group?: string,
-): 'AEE' | 'VENDOR_AEE' | 'UNIVIEW' {
-  if (group === 'UNIVIEW' || group === 'VENDOR_AEE' || group === 'AEE') return group;
-  return VENDOR_SUBTYPES.has(subtype) ? 'VENDOR_AEE' : 'AEE';
-}
-
 function collapseDistribution(items: SubtypeDistribution[]): SubtypeDistribution[] {
   if (items.length <= 6) return items;
   const total = items.reduce((sum, item) => sum + item.count, 0);
@@ -131,19 +110,6 @@ function collapseDistribution(items: SubtypeDistribution[]): SubtypeDistribution
       share: total > 0 ? trailingCount / total : 0,
     },
   ];
-}
-
-function buildPackageDistribution(breakdown: PackageSubtypeCount[]): SubtypeDistribution[] {
-  const total = breakdown.reduce((sum, item) => sum + item.count, 0);
-  return breakdown
-    .filter((item) => item.count > 0)
-    .map((item) => ({
-      subtype: item.subtype,
-      group: inferSubtypeGroup(item.subtype, item.group),
-      count: item.count,
-      share: total > 0 ? item.count / total : 0,
-    }))
-    .sort((a, b) => b.count - a.count || subtypeLabel(a).localeCompare(subtypeLabel(b), 'zh-CN'));
 }
 
 function packageDominantColor(row: PackageRanking): string {
@@ -238,8 +204,6 @@ function PackageRankingDrawer({
   origin,
   supportsOriginSplit,
   rankings,
-  selectedPackageName,
-  onSelectPackage,
   detailPackageName,
   onSelectDetailPackage,
   onSelectDeviceSerial,
@@ -252,8 +216,6 @@ function PackageRankingDrawer({
   origin: OriginTab;
   supportsOriginSplit: boolean;
   rankings: PackageRanking[];
-  selectedPackageName: string | null;
-  onSelectPackage: (pkg: string | null) => void;
   detailPackageName: string | null;
   onSelectDetailPackage: (pkg: string | null) => void;
   onSelectDeviceSerial?: (serial: string) => void;
@@ -374,12 +336,6 @@ function PackageRankingDrawer({
               isLoading={crashDetailsQ.isLoading}
               isError={crashDetailsQ.isError}
               onRetry={() => void crashDetailsQ.refetch()}
-              isPieFiltered={selectedPackageName === detailPackageName}
-              onTogglePieFilter={() => {
-                onSelectPackage(
-                  selectedPackageName === detailPackageName ? null : detailPackageName,
-                );
-              }}
               onSelectDeviceSerial={(serial) => {
                 if (onSelectDeviceSerial) {
                   onClose();
@@ -396,7 +352,6 @@ function PackageRankingDrawer({
             <div className="space-y-2">
               {visibleRows.map(({ row, rank }) => {
                 const isDetailActive = detailPackageName === row.package_name;
-                const isPieActive = selectedPackageName === row.package_name;
                 const isUnknown = row.package_name === 'unknown';
                 const dominantColor = isUnknown
                   ? CHART_COLORS.muted
@@ -471,26 +426,6 @@ function PackageRankingDrawer({
                         </div>
                       </div>
                     </button>
-                    {origin === 'current' && (
-                      <div className="flex shrink-0 items-center border-l border-border/50 px-2">
-                        <button
-                          type="button"
-                          title={isPieActive ? '取消饼图筛选' : '在左侧饼图中筛选此包名'}
-                          aria-label={`筛饼图 ${row.package_name}`}
-                          onClick={() => {
-                            onSelectPackage(isPieActive ? null : row.package_name);
-                          }}
-                          className={cn(
-                            'rounded-md p-1.5 text-xs transition-colors',
-                            isPieActive
-                              ? 'bg-primary/15 text-primary'
-                              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                          )}
-                        >
-                          <Filter className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -565,7 +500,7 @@ const DonutChart = memo(function DonutChart({
         cx={cx}
         cy={cy}
         innerRadius={innerRadius}
-        outerRadius={outerRadius + 8}
+        outerRadius={outerRadius + 6}
         startAngle={startAngle}
         endAngle={endAngle}
         fill={fill}
@@ -574,15 +509,18 @@ const DonutChart = memo(function DonutChart({
     );
   };
 
+  const activeItem = activeIndex != null ? chartData[activeIndex] ?? null : null;
+
   return (
     <div
       data-testid={chartTestId}
       data-chart-type="recharts-donut"
       aria-label="异常细分类型占比饼图"
+      className="grid grid-cols-1 items-center gap-5 sm:grid-cols-[196px_minmax(0,1fr)]"
     >
-      {/* Donut ring + center total */}
-      <div className="relative mx-auto w-full max-w-[320px]">
-        <StableResponsiveContainer className="h-[290px] min-h-[290px] w-full">
+      {/* 左侧紧凑环形图 + 动态圆心数值 */}
+      <div className="relative mx-auto h-[196px] w-[196px] shrink-0">
+        <StableResponsiveContainer className="h-[196px] min-h-[196px] w-[196px]">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Tooltip
@@ -592,14 +530,14 @@ const DonutChart = memo(function DonutChart({
                   const item = payload[0].payload as (typeof chartData)[number];
                   return (
                     <div className="rounded-xl border bg-card/95 px-3 py-2 shadow-lg backdrop-blur">
-                      <div className={cn('flex items-center gap-2 text-sm font-semibold', TEXT.body)}>
+                      <div className={cn('flex items-center gap-2 text-xs font-semibold', TEXT.body)}>
                         <span
-                          className="h-2.5 w-2.5 rounded-full"
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
                           style={{ backgroundColor: item.color }}
                         />
                         <span>{item.fullLabel}</span>
                       </div>
-                      <div className={cn('mt-1 text-xs', TEXT.subtitle)}>
+                      <div className={cn('mt-1 text-xs tabular-nums', TEXT.subtitle)}>
                         {`${item.count} 次 · ${formatSharePercent(item.share)}%`}
                       </div>
                     </div>
@@ -610,17 +548,17 @@ const DonutChart = memo(function DonutChart({
                 data={chartData}
                 cx="50%"
                 cy="50%"
-                innerRadius={55}
-                outerRadius={90}
+                innerRadius={58}
+                outerRadius={84}
                 startAngle={90}
                 endAngle={-270}
                 paddingAngle={chartData.length > 1 ? 2 : 0}
                 dataKey="count"
                 stroke="hsl(var(--card))"
-                strokeWidth={1}
+                strokeWidth={1.5}
                 cornerRadius={3}
                 animationBegin={0}
-                animationDuration={600}
+                animationDuration={450}
                 animationEasing="ease-out"
                 isAnimationActive
                 activeShape={renderActiveShape}
@@ -628,58 +566,112 @@ const DonutChart = memo(function DonutChart({
                 onMouseLeave={() => setActiveIndex(null)}
                 label={false}
               >
-                {chartData.map((item) => (
+                {chartData.map((item, index) => (
                   <Cell
                     key={item.key}
                     fill={item.color}
-                    style={{
-                      filter: 'drop-shadow(0 2px 4px rgba(15, 23, 42, 0.12))',
-                    }}
+                    fillOpacity={activeIndex === null || activeIndex === index ? 1 : 0.35}
+                    style={{ transition: 'fill-opacity 150ms ease' }}
                   />
                 ))}
               </Pie>
             </PieChart>
           </ResponsiveContainer>
         </StableResponsiveContainer>
-        {/* Center total */}
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-            异常总数
-          </div>
-          <div
-            data-center-total="true"
-            className={`mt-0.5 text-[26px] font-bold leading-none ${tone}`}
-          >
-            {total}
-          </div>
+        {/* 圆心：默认显示总计，悬浮某类型时平滑展示当前项 */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-4 text-center">
+          {activeItem ? (
+            <>
+              <div
+                className="max-w-[96px] truncate text-[11px] font-medium text-muted-foreground"
+                title={activeItem.fullLabel}
+              >
+                {activeItem.fullLabel}
+              </div>
+              <div
+                data-center-total="true"
+                className="mt-0.5 text-[24px] font-bold leading-none tabular-nums"
+                style={{ color: activeItem.color }}
+              >
+                {activeItem.count}
+              </div>
+              <div className="mt-1 text-[11px] font-medium tabular-nums text-muted-foreground">
+                {formatSharePercent(activeItem.share)}%
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-[11px] tracking-[0.12em] text-muted-foreground">
+                异常总数
+              </div>
+              <div
+                data-center-total="true"
+                className={`mt-1 text-[26px] font-bold leading-none tabular-nums ${tone}`}
+              >
+                {total}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Compact legend below */}
+      {/* 右侧结构化明细排行表（色点 + 类型 + 次数 + 百分比 + 迷你占比条） */}
       <div
         data-testid={`${chartTestId}-legend`}
-        data-legend-position="below"
-        className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-1"
+        data-legend-position="right"
+        className="min-w-0 space-y-1.5"
       >
         {chartData.map((item, index) => {
           const isActive = index === activeIndex;
+          const pct = Math.max(0, Math.min(100, item.share * 100));
           return (
-            <span
+            <div
               key={`legend-${item.key}`}
-              className={cn(
-                'inline-flex items-center gap-1 text-xs cursor-pointer transition rounded px-1.5 py-0.5',
-                isActive ? 'bg-muted text-foreground' : cn(TEXT.subtitle, 'hover:text-foreground'),
-              )}
               onMouseEnter={() => setActiveIndex(index)}
               onMouseLeave={() => setActiveIndex(null)}
+              className={cn(
+                'cursor-default rounded-lg border px-2.5 py-1.5 transition-colors',
+                isActive
+                  ? 'border-border bg-muted/60'
+                  : 'border-transparent hover:border-border/60 hover:bg-muted/35',
+              )}
             >
-              <span
-                className="h-2 w-2 shrink-0 rounded-full"
-                style={{ backgroundColor: item.color }}
-              />
-              <span className="font-medium">{item.fullLabel}</span>
-              <span className="tabular-nums">{formatSharePercent(item.share)}%</span>
-            </span>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span
+                    className={cn(
+                      'truncate font-medium',
+                      isActive ? TEXT.heading : TEXT.body,
+                    )}
+                    title={item.fullLabel}
+                  >
+                    {item.fullLabel}
+                  </span>
+                </div>
+                <div className="flex shrink-0 items-baseline gap-2 tabular-nums">
+                  <span className={cn('font-semibold', TEXT.heading)}>
+                    {item.count}
+                  </span>
+                  <span className={cn('w-11 text-right text-[11px]', TEXT.subtitle)}>
+                    {formatSharePercent(item.share)}%
+                  </span>
+                </div>
+              </div>
+              <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted/70">
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${Math.max(pct, pct > 0 ? 3 : 0)}%`,
+                    backgroundColor: item.color,
+                    opacity: activeIndex === null || isActive ? 1 : 0.4,
+                  }}
+                />
+              </div>
+            </div>
           );
         })}
       </div>
@@ -696,10 +688,8 @@ export default function AnomalyDashboard({
   onTimeScopeChange,
   onSelectDeviceSerial,
 }: Props) {
-  const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [isPackageDrawerOpen, setPackageDrawerOpen] = useState(false);
   const [currentDetailPackage, setCurrentDetailPackage] = useState<string | null>(null);
-  const [selectedPreexistingPackage, setSelectedPreexistingPackage] = useState<string | null>(null);
   const [isPreexistingDrawerOpen, setPreexistingDrawerOpen] = useState(false);
   const [preexistingDetailPackage, setPreexistingDetailPackage] = useState<string | null>(null);
   /** 新计划主看本次新增；遗留降为次级 Tab，默认不占首屏 */
@@ -721,15 +711,7 @@ export default function AnomalyDashboard({
     setPreexistingDrawerOpen(true);
   };
 
-  const selectedPackageRow = useMemo(
-    () => currentRun.package_ranking.find((row) => row.package_name === selectedPackage) ?? null,
-    [currentRun.package_ranking, selectedPackage],
-  );
-  const focusedDistribution = useMemo(() => {
-    if (!selectedPackageRow) return currentRun.subtype_distribution;
-    return buildPackageDistribution(selectedPackageRow.subtype_breakdown);
-  }, [currentRun.subtype_distribution, selectedPackageRow]);
-  const chartDistribution = collapseDistribution(focusedDistribution);
+  const chartDistribution = collapseDistribution(currentRun.subtype_distribution);
   const chartTotal = chartDistribution.reduce((sum, item) => sum + item.count, 0);
   const preexistingDistribution = collapseDistribution(preexisting.subtype_distribution);
   const preexistingTotal = preexistingDistribution.reduce((sum, item) => sum + item.count, 0);
@@ -921,13 +903,12 @@ export default function AnomalyDashboard({
                   <div className={cn('mb-1 text-sm font-semibold', TEXT.heading)}>
                     {`${primaryLabel} · 包名榜`}
                   </div>
-                  <div className={cn('mb-4 text-[11px]', TEXT.subtitle)}>
-                    点击包名筛选饼图
+                  <div className={cn('mb-3 text-[11px]', TEXT.subtitle)}>
+                    点击任意包名查看受影响设备与 Crash 明细
                   </div>
                   {currentRun.package_ranking.length > 0 ? (
                     <div className="space-y-2">
                       {currentRun.package_ranking.slice(0, 5).map((row, index) => {
-                        const active = selectedPackageRow?.package_name === row.package_name;
                         const isUnknown = row.package_name === 'unknown';
                         const dominantColor = isUnknown
                           ? CHART_COLORS.muted
@@ -935,32 +916,21 @@ export default function AnomalyDashboard({
                         const rankCls = packageRankClass(index);
 
                         return (
-                          <div
+                          <button
                             key={row.package_name}
+                            type="button"
+                            data-testid={`crash-detail-btn-${row.package_name}`}
+                            onClick={() => openCurrentPackageDetail(row.package_name)}
                             className={cn(
-                              'group flex w-full items-stretch rounded-xl border transition-all duration-200',
-                              active ? PACKAGE_ROW.active
-                                : isUnknown ? PACKAGE_ROW.unknown
-                                : PACKAGE_ROW.default,
+                              'group flex w-full items-stretch rounded-xl border text-left transition-all duration-200',
+                              isUnknown ? PACKAGE_ROW.unknown : PACKAGE_ROW.default,
                             )}
                           >
                             <div
-                              className={cn(
-                                'shrink-0 w-1 rounded-l-xl transition-all duration-200',
-                                active ? 'w-1.5' : 'group-hover:w-1.5',
-                              )}
+                              className="w-1 shrink-0 rounded-l-xl transition-all duration-200 group-hover:w-1.5"
                               style={{ backgroundColor: dominantColor }}
                             />
-                            <button
-                              type="button"
-                              aria-pressed={active}
-                              onClick={() =>
-                                setSelectedPackage((current) =>
-                                  current === row.package_name ? null : row.package_name,
-                                )
-                              }
-                              className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2 text-left"
-                            >
+                            <div className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2">
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2">
                                   <span className={cn('font-mono tabular-nums', rankCls)}>
@@ -971,46 +941,34 @@ export default function AnomalyDashboard({
                                       'truncate text-sm',
                                       isUnknown
                                         ? cn('italic', TEXT.subtitle)
-                                        : active
-                                          ? cn('font-semibold', TEXT.heading)
-                                          : cn('font-medium', TEXT.body),
+                                        : cn('font-medium', TEXT.body),
                                     )}
                                   >
                                     {isUnknown ? '未知进程' : row.package_name}
                                   </span>
                                 </div>
                                 <div className="mt-1">
-                                  <PackageSubtypeDots row={row} active={active} />
+                                  <PackageSubtypeDots row={row} active={false} />
                                 </div>
                               </div>
-                              <div className="shrink-0 text-right">
-                                <div
-                                  className={cn(
-                                    'text-lg font-bold tabular-nums transition-colors duration-200',
-                                    active ? TEXT.heading
-                                      : isUnknown ? TEXT.subtitle
-                                      : TEXT.body,
-                                  )}
-                                >
-                                  {row.total_count}
+                              <div className="flex shrink-0 items-center gap-2">
+                                <div className="text-right">
+                                  <div
+                                    className={cn(
+                                      'text-lg font-bold tabular-nums transition-colors duration-200',
+                                      isUnknown ? TEXT.subtitle : TEXT.body,
+                                    )}
+                                  >
+                                    {row.total_count}
+                                  </div>
+                                  <div className="text-[11px] tabular-nums text-muted-foreground/70">
+                                    {row.affected_device_count} 台设备
+                                  </div>
                                 </div>
-                                <div className={cn('text-[11px] tabular-nums', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
-                                  {row.affected_device_count} 台设备
-                                </div>
+                                <ChevronRight className="h-4 w-4 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-info" />
                               </div>
-                            </button>
-                            <div className="flex shrink-0 items-center border-l border-border/50 px-2.5">
-                              <button
-                                type="button"
-                                data-testid={`crash-detail-btn-${row.package_name}`}
-                                onClick={() => openCurrentPackageDetail(row.package_name)}
-                                className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 py-1 text-[11px] font-medium text-info transition-colors hover:bg-info/10"
-                              >
-                                查看详情
-                                <ChevronRight className="h-3 w-3" />
-                              </button>
                             </div>
-                          </div>
+                          </button>
                         );
                       })}
 
@@ -1018,7 +976,7 @@ export default function AnomalyDashboard({
                         <button
                           type="button"
                           onClick={() => {
-                            setCurrentDetailPackage(selectedPackage);
+                            setCurrentDetailPackage(null);
                             setPackageDrawerOpen(true);
                           }}
                           className={cn(
@@ -1090,12 +1048,11 @@ export default function AnomalyDashboard({
                         运行前遗留 · 包名榜
                       </div>
                       <div className={cn('mb-3 text-[11px]', TEXT.subtitle)}>
-                        点击包名查看类型分布点
+                        点击任意包名查看受影响设备与遗留 Crash 明细
                       </div>
                       {preexisting.package_ranking.length > 0 ? (
                         <div className="space-y-2">
                           {preexisting.package_ranking.slice(0, 5).map((row, index) => {
-                            const active = selectedPreexistingPackage === row.package_name;
                             const isUnknown = row.package_name === 'unknown';
                             const dominantColor = isUnknown
                               ? CHART_COLORS.muted
@@ -1103,33 +1060,21 @@ export default function AnomalyDashboard({
                             const rankCls = packageRankClass(index);
 
                             return (
-                              <div
+                              <button
                                 key={row.package_name}
+                                type="button"
+                                data-testid={`preexisting-pkg-${row.package_name}`}
+                                onClick={() => openPreexistingPackageDetail(row.package_name)}
                                 className={cn(
-                                  'group flex w-full items-stretch rounded-lg border transition-all duration-200',
-                                  active ? PACKAGE_ROW.active
-                                    : isUnknown ? PACKAGE_ROW.unknown
-                                    : PACKAGE_ROW.default,
+                                  'group flex w-full items-stretch rounded-lg border text-left transition-all duration-200',
+                                  isUnknown ? PACKAGE_ROW.unknown : PACKAGE_ROW.default,
                                 )}
                               >
                                 <div
-                                  className={cn(
-                                    'w-1 shrink-0 rounded-l-lg transition-all duration-200',
-                                    active ? 'w-1.5' : 'group-hover:w-1.5',
-                                  )}
+                                  className="w-1 shrink-0 rounded-l-lg transition-all duration-200 group-hover:w-1.5"
                                   style={{ backgroundColor: dominantColor }}
                                 />
-                                <button
-                                  type="button"
-                                  aria-pressed={active}
-                                  data-testid={`preexisting-pkg-${row.package_name}`}
-                                  onClick={() =>
-                                    setSelectedPreexistingPackage((current) =>
-                                      current === row.package_name ? null : row.package_name,
-                                    )
-                                  }
-                                  className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2 text-left"
-                                >
+                                <div className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2">
                                   <div className="min-w-0 flex-1">
                                     <div className="flex items-start gap-2">
                                       <span className={cn('shrink-0 font-mono tabular-nums', rankCls)}>
@@ -1140,9 +1085,7 @@ export default function AnomalyDashboard({
                                           'break-all text-sm leading-snug',
                                           isUnknown
                                             ? cn('italic', TEXT.subtitle)
-                                            : active
-                                              ? cn('font-semibold', TEXT.heading)
-                                              : cn('font-medium', TEXT.body),
+                                            : cn('font-medium', TEXT.body),
                                         )}
                                         title={isUnknown ? '未知进程' : row.package_name}
                                       >
@@ -1150,44 +1093,34 @@ export default function AnomalyDashboard({
                                       </span>
                                     </div>
                                     <div className="mt-1">
-                                      <PackageSubtypeDots row={row} active={active} />
+                                      <PackageSubtypeDots row={row} active={false} />
                                     </div>
                                   </div>
-                                  <div className="shrink-0 text-right">
-                                    <div
-                                      className={cn(
-                                        'text-lg font-bold tabular-nums transition-colors duration-200',
-                                        active ? TEXT.heading
-                                          : isUnknown ? TEXT.subtitle
-                                          : TEXT.body,
-                                      )}
-                                    >
-                                      {row.total_count}
+                                  <div className="flex shrink-0 items-center gap-2">
+                                    <div className="text-right">
+                                      <div
+                                        className={cn(
+                                          'text-lg font-bold tabular-nums transition-colors duration-200',
+                                          isUnknown ? TEXT.subtitle : TEXT.body,
+                                        )}
+                                      >
+                                        {row.total_count}
+                                      </div>
+                                      <div className="text-[11px] tabular-nums text-muted-foreground/70">
+                                        {row.affected_device_count} 台设备
+                                      </div>
                                     </div>
-                                    <div className={cn('text-[11px] tabular-nums', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
-                                      {row.affected_device_count} 台设备
-                                    </div>
+                                    <ChevronRight className="h-4 w-4 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-info" />
                                   </div>
-                                </button>
-                                <div className="flex shrink-0 items-center border-l border-border/50 px-2.5">
-                                  <button
-                                    type="button"
-                                    data-testid={`preexisting-crash-detail-btn-${row.package_name}`}
-                                    onClick={() => openPreexistingPackageDetail(row.package_name)}
-                                    className="inline-flex items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 py-1 text-[11px] font-medium text-info transition-colors hover:bg-info/10"
-                                  >
-                                    查看详情
-                                    <ChevronRight className="h-3 w-3" />
-                                  </button>
                                 </div>
-                              </div>
+                              </button>
                             );
                           })}
                           {preexisting.package_ranking.length > 5 && (
                             <button
                               type="button"
                               onClick={() => {
-                                setPreexistingDetailPackage(selectedPreexistingPackage);
+                                setPreexistingDetailPackage(null);
                                 setPreexistingDrawerOpen(true);
                               }}
                               className={cn(
@@ -1224,8 +1157,6 @@ export default function AnomalyDashboard({
         origin="current"
         supportsOriginSplit={supportsOriginSplit}
         rankings={currentRun.package_ranking}
-        selectedPackageName={selectedPackage}
-        onSelectPackage={setSelectedPackage}
         detailPackageName={currentDetailPackage}
         onSelectDetailPackage={setCurrentDetailPackage}
         onSelectDeviceSerial={onSelectDeviceSerial}
@@ -1239,8 +1170,6 @@ export default function AnomalyDashboard({
         origin="preexisting"
         supportsOriginSplit={supportsOriginSplit}
         rankings={preexisting.package_ranking}
-        selectedPackageName={selectedPreexistingPackage}
-        onSelectPackage={setSelectedPreexistingPackage}
         detailPackageName={preexistingDetailPackage}
         onSelectDetailPackage={setPreexistingDetailPackage}
         onSelectDeviceSerial={onSelectDeviceSerial}
@@ -1257,8 +1186,6 @@ function CrashDetailPanel({
   isLoading,
   isError,
   onRetry,
-  isPieFiltered,
-  onTogglePieFilter,
   onSelectDeviceSerial,
   onClose,
 }: {
@@ -1269,8 +1196,6 @@ function CrashDetailPanel({
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
-  isPieFiltered: boolean;
-  onTogglePieFilter: () => void;
   onSelectDeviceSerial?: (serial: string) => void;
   onClose: () => void;
 }) {
@@ -1301,26 +1226,14 @@ function CrashDetailPanel({
               : ''}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            type="button"
-            variant={isPieFiltered ? 'secondary' : 'outline'}
-            size="sm"
-            className="h-7 px-2 text-[11px]"
-            onClick={onTogglePieFilter}
-          >
-            <Filter className="mr-1 h-3 w-3" />
-            {isPieFiltered ? '取消筛饼图' : '筛饼图'}
-          </Button>
-          <button
-            type="button"
-            onClick={onClose}
-            className={DRAWER.closeBtn}
-            aria-label="关闭 Crash 详情"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className={DRAWER.closeBtn}
+          aria-label="关闭 Crash 详情"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {isLoading ? (

@@ -507,6 +507,30 @@ class DeviceLogWatcher:
     # 内部回调（由 EventBatcher 在 flusher 线程中调用）
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_non_issue_aee_filename(name: Optional[str]) -> bool:
+        """过滤 /data/[vendor/]aee_exp 下伴生的锁/索引/非崩溃元数据文件。"""
+        if not name:
+            return False
+        base = str(name).rsplit("/", 1)[-1].strip()
+        if not base:
+            return False
+        # 剥离 LogPuller 添加的前导 `<timestamp>_` 前缀（兼容直接传原文件名或本地拉取路径）
+        parts = base.split("_")
+        idx = 0
+        while idx < len(parts) - 1 and parts[idx].isdigit():
+            idx += 1
+        normalized = "_".join(parts[idx:]).lower()
+        if not normalized:
+            return False
+        if normalized in {"aee.lck", "db_history", "file_tree.txt", "swt_jbt_traces", "temp"}:
+            return True
+        if normalized.endswith((".lck", ".lock", ".tmp", ".temp")):
+            return True
+        if normalized.startswith(("db_history.", "swt_jbt_traces")):
+            return True
+        return False
+
     def _on_immediate(self, event: WatcherEvent) -> None:
         """AEE / VENDOR_AEE 类直通：若注入 puller 则走异步 pull + 富化；否则直接 emit。
 
@@ -521,6 +545,12 @@ class DeviceLogWatcher:
         （reconciler 独占拉取，双拉会烧 host 提取预算 #740）。
         """
         if self._route_unisoc_wake(event):
+            return
+        if event.category in ("AEE", "VENDOR_AEE") and self._is_non_issue_aee_filename(event.filename):
+            logger.debug(
+                "device_log_watcher_skip_non_issue_aee_file serial=%s job=%d cat=%s file=%s",
+                self._serial, self._job_id, event.category, event.filename,
+            )
             return
         if self._puller is not None:
             self._puller.submit(event)
@@ -577,6 +607,14 @@ class DeviceLogWatcher:
         }
         artifact_type = cat_to_type.get(event.category)
         if artifact_type is None:
+            return
+        if self._is_non_issue_aee_filename(event.filename) or self._is_non_issue_aee_filename(
+            str(artifact_uri)
+        ):
+            logger.debug(
+                "device_log_watcher_artifact_skip_non_issue serial=%s job=%d file=%s uri=%s",
+                self._serial, self._job_id, event.filename, artifact_uri,
+            )
             return
         try:
             if Path(str(artifact_uri)).is_dir():
