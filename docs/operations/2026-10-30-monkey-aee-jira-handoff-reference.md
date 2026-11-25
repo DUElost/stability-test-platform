@@ -257,6 +257,7 @@ PlanRun 终态
 - 日志链全局语义与易混概念：[`2026-log-chain-global-semantics.md`](../design/2026-log-chain-global-semantics.md)
 - Scan / Upload / Merge 跨进程契约：[`2026-scan-upload-merge-contract.md`](../design/2026-scan-upload-merge-contract.md)
 - 存储角色与别称：[`2026-storage-roles-and-aliases.md`](../design/2026-storage-roles-and-aliases.md)
+- `Result_MergeFiles_org.xls` 中 `CurProcessNone` / `*_temp` 占位行释义与溯源：[`2026-11-25-curprocessnone-temp-org-rows.md`](../notes/process/2026-11-25-curprocessnone-temp-org-rows.md)
 - 设备日志领域重构规划（#3800）：<https://github.com/DUElost/stability-test-platform/issues/3800>
 - Jira 自动化工具：<https://github.com/DUElost/automation-toolkit/tree/main/python-tools/stability_Jira-Automation/Tinno_Jira_Tool_20260520>
 
