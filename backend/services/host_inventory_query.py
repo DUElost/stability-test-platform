@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.api.schemas.host import (
@@ -27,7 +28,7 @@ from backend.api.schemas.host import (
     HostOut,
     HostSelectionPreviewOut,
 )
-from backend.models.host import Host
+from backend.models.host import Device, Host
 from backend.services.agent_version_info import build_host_version_view
 from backend.services.inventory_status import effective_host_status
 
@@ -106,12 +107,31 @@ def sanitize_host_extra(raw_extra: Any) -> Dict[str, Any]:
     return extra
 
 
+def load_host_ledger_device_counts(
+    db: Session,
+    host_ids: Optional[Sequence[str]] = None,
+) -> Dict[str, int]:
+    """只读统计各主机在册（未退役）设备台账行数。"""
+    query = (
+        db.query(Device.host_id, func.count(Device.id))
+        .filter(Device.retired_at.is_(None), Device.host_id.is_not(None))
+    )
+    if host_ids is not None:
+        id_list = [str(hid) for hid in host_ids]
+        if not id_list:
+            return {}
+        query = query.filter(Device.host_id.in_(id_list))
+    rows = query.group_by(Device.host_id).all()
+    return {str(hid): int(cnt) for hid, cnt in rows if hid is not None}
+
+
 def build_host_out_readonly(
     host: Host,
     *,
     desired_artifact_digest: Optional[str] = None,
     now: Optional[datetime] = None,
     host_key_trust: Optional[str] = None,
+    ledger_device_count: Optional[int] = None,
 ) -> HostOut:
     """只读构造 ``HostOut``（不含 DB 查询；不修改 ORM 对象）。"""
     out = HostOut.model_validate(host)
@@ -123,6 +143,8 @@ def build_host_out_readonly(
     out.health_probe = extra.get("health_probe") if isinstance(extra.get("health_probe"), dict) else None
     out.self_heal = extra.get("self_heal") if isinstance(extra.get("self_heal"), dict) else None
     out.host_key_trust = host_key_trust
+    if ledger_device_count is not None:
+        out.ledger_device_count = int(ledger_device_count)
     installed, installed_at = derive_agent_installed(host)
     out.agent_installed = installed
     out.agent_installed_at = installed_at
@@ -140,12 +162,25 @@ def build_host_out_readonly(
     return out
 
 
+def _cap_int(mapping: Any, key: str) -> int:
+    if not isinstance(mapping, dict):
+        return 0
+    raw = mapping.get(key)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return max(0, int(raw))
+    return 0
+
+
 def host_usb_fault_priority(out: HostOut) -> int:
     """计算主机 USB/Hub/探针故障优先级（3=严重需人工 2=劣化/未豁免空树 1=待办/闲置半枚举 0=正常）。
 
     与前端 ``ExpandableHostTable.tsx::hostUsbFaultPriority`` 严格保持同口径：
     - 退役主机恒为 0；
-    - 置位设备面意图（``emptied_at`` 非空）豁免 ``usb_tree_empty``。
+    - 硬件硬证据（主控死亡、PCI xHCI 失绑、根口禁用、过流、在用总线 Hub 半枚举、
+      Hub 口禁用、端口卡死 ``default``）不受 ``emptied_at`` 或空台账豁免；
+    - 纯 ``usb_tree_empty`` 仅在未置位 ``emptied_at`` 且台账仍有设备
+      （``ledger_device_count != 0``）时计入 P2（对齐 ``StabilityHostUsbBlind``，
+      避免无设备空柜淹没真实故障）。
     """
     if out.retired_at is not None:
         return 0
@@ -155,16 +190,20 @@ def host_usb_fault_priority(out: HostOut) -> int:
 
     cap = out.capacity if isinstance(out.capacity, dict) else {}
     topo = cap.get("usb_hub_topology") if isinstance(cap.get("usb_hub_topology"), dict) else None
-    unbound_hubs = 0
-    unbound_idle = 0
-    if topo is not None:
-        uh = topo.get("unbound_hubs")
-        ui = topo.get("unbound_idle_bus_hubs")
-        if isinstance(uh, (int, float)) and not isinstance(uh, bool):
-            unbound_hubs = int(uh)
-        if isinstance(ui, (int, float)) and not isinstance(ui, bool):
-            unbound_idle = int(ui)
+    unbound_hubs = _cap_int(topo, "unbound_hubs")
+    unbound_idle = _cap_int(topo, "unbound_idle_bus_hubs")
     active_unbound_hubs = max(0, unbound_hubs - unbound_idle)
+
+    ctrl = (
+        cap.get("usb_controller_health")
+        if isinstance(cap.get("usb_controller_health"), dict)
+        else None
+    )
+    unbound_xhci = _cap_int(ctrl, "unbound_xhci_controllers")
+    disabled_root_ports = _cap_int(ctrl, "disabled_root_ports")
+    disabled_hub_ports = _cap_int(ctrl, "disabled_hub_ports")
+    over_current_ports = _cap_int(ctrl, "over_current_ports")
+    stuck_default_ports = _cap_int(ctrl, "stuck_default_ports")
 
     probe = out.health_probe if isinstance(out.health_probe, dict) else {}
     self_heal = out.self_heal if isinstance(out.self_heal, dict) else {}
@@ -174,15 +213,27 @@ def host_usb_fault_priority(out: HostOut) -> int:
         or probe.get("strike_open") is True
         or self_heal.get("fuse_open") is True
         or active_unbound_hubs > 0
+        or unbound_xhci > 0
+        or disabled_root_ports > 0
+        or over_current_ports > 0
     ):
         return 3
     if (
         "usb_link_degraded" in reasons
-        or ("usb_tree_empty" in reasons and out.emptied_at is None)
+        or (
+            "usb_tree_empty" in reasons
+            and out.emptied_at is None
+            and out.ledger_device_count != 0
+        )
         or "adb_multiple_servers" in reasons
+        or disabled_hub_ports > 0
     ):
         return 2
-    if "adb_interfaces_missing" in reasons or unbound_hubs > 0:
+    if (
+        "adb_interfaces_missing" in reasons
+        or unbound_hubs > 0
+        or stuck_default_ports > 0
+    ):
         return 1
     return 0
 
@@ -450,11 +501,16 @@ def _load_base_host_outs(
     if not include_retired:
         query = query.filter(Host.retired_at.is_(None))
     hosts = query.order_by(Host.id).all()
+    ledger_counts = load_host_ledger_device_counts(
+        db,
+        [str(h.id) for h in hosts],
+    )
     return [
         build_host_out_readonly(
             h,
             desired_artifact_digest=desired_artifact_digest,
             now=now,
+            ledger_device_count=ledger_counts.get(str(h.id), 0),
         )
         for h in hosts
     ]

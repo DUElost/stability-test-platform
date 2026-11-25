@@ -770,6 +770,16 @@ export function HostDetailDrawer({
                       {host.device_count ?? 0}
                     </span>
                   </div>
+                  {host.ledger_device_count != null ? (
+                    <div className="flex justify-between gap-2">
+                      <span className="shrink-0 whitespace-nowrap text-muted-foreground">
+                        台账在册设备
+                      </span>
+                      <span className="font-mono text-foreground">
+                        {host.ledger_device_count}
+                      </span>
+                    </div>
+                  ) : null}
                   {host.adb_state_counts ? (
                     <div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
                       <span>device {host.adb_state_counts.device ?? 0}</span>
@@ -823,6 +833,44 @@ export function HostDetailDrawer({
                         </div>
                       ) : null}
                     </>
+                  ) : (
+                    <div className="text-muted-foreground">待 Agent 升级后上报</div>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <div className="font-medium text-muted-foreground">主控与端口体检（sysfs）</div>
+                  {host.usb_controller_health ? (
+                    (() => {
+                      const c = host.usb_controller_health;
+                      const items: Array<{ label: string; count: number; danger: boolean }> = [
+                        { label: 'xHCI 失绑', count: c.unbound_xhci_controllers, danger: true },
+                        { label: '根口禁用', count: c.disabled_root_ports, danger: true },
+                        { label: '过流端口', count: c.over_current_ports, danger: true },
+                        { label: 'Hub 口禁用', count: c.disabled_hub_ports, danger: false },
+                        { label: '卡死(default)', count: c.stuck_default_ports, danger: false },
+                      ].filter((item) => item.count > 0);
+                      if (items.length === 0) {
+                        return <div className="text-success">主控与端口状态正常</div>;
+                      }
+                      return (
+                        <div className="flex flex-wrap gap-1.5">
+                          {items.map((item) => (
+                            <span
+                              key={item.label}
+                              className={cn(
+                                'rounded px-1.5 py-0.5 font-mono text-[11px]',
+                                item.danger
+                                  ? 'bg-destructive/10 text-destructive-text'
+                                  : 'bg-warning/10 text-warning',
+                              )}
+                            >
+                              {item.label}: {item.count}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()
                   ) : (
                     <div className="text-muted-foreground">待 Agent 升级后上报</div>
                   )}

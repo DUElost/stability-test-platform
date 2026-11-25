@@ -109,6 +109,8 @@ export interface HostTableData {
   resources?: HostResources;
   mount_status?: MountStatus[];
   device_count?: number;
+  /** 台账在册（未退役）设备数；0 表示无在册设备（纯空置主机），null/undefined 表示未下发 */
+  ledger_device_count?: number | null;
   /**
    * lsusb 枚举到的疑似 Android 设备数（物理 USB 侧，与 device_count 的 adb 口径
    * 并排对照）。null / undefined = 未采集到，渲染为「—」而非 0。
@@ -139,6 +141,14 @@ export interface HostTableData {
     resets: number;
     enum_errors: number;
     hub_port_errors: number;
+  } | null;
+  /** 零权限 sysfs USB 主控与端口硬件异常体检（不依赖内核日志权限，重启不洗白） */
+  usb_controller_health?: {
+    unbound_xhci_controllers: number;
+    disabled_root_ports: number;
+    disabled_hub_ports: number;
+    over_current_ports: number;
+    stuck_default_ports: number;
   } | null;
   /** #2983：控制面 SSH 拓扑对账探针摘要 */
   health_probe?: {
@@ -314,24 +324,39 @@ function hostUsbFaultPriority(host: HostTableData): number {
   const activeUnboundHubs = topo
     ? Math.max(0, topo.unbound_hubs - topo.unbound_idle_bus_hubs)
     : 0;
+  const ctrl = host.usb_controller_health;
+  const unboundXhci = ctrl?.unbound_xhci_controllers ?? 0;
+  const disabledRootPorts = ctrl?.disabled_root_ports ?? 0;
+  const disabledHubPorts = ctrl?.disabled_hub_ports ?? 0;
+  const overCurrentPorts = ctrl?.over_current_ports ?? 0;
+  const stuckDefaultPorts = ctrl?.stuck_default_ports ?? 0;
   if (
     reasons.has('usb_host_controller_dead') ||
     host.health_probe?.strike_open === true ||
     host.self_heal?.fuse_open === true ||
-    activeUnboundHubs > 0
+    activeUnboundHubs > 0 ||
+    unboundXhci > 0 ||
+    disabledRootPorts > 0 ||
+    overCurrentPorts > 0
   ) {
     return 3;
   }
+  const hasUnemptiedLedgerEmptyTree =
+    reasons.has('usb_tree_empty') &&
+    !host.emptied_at &&
+    host.ledger_device_count !== 0;
   if (
     reasons.has('usb_link_degraded') ||
-    (reasons.has('usb_tree_empty') && !host.emptied_at) ||
-    reasons.has('adb_multiple_servers')
+    hasUnemptiedLedgerEmptyTree ||
+    reasons.has('adb_multiple_servers') ||
+    disabledHubPorts > 0
   ) {
     return 2;
   }
   if (
     reasons.has('adb_interfaces_missing') ||
-    (topo != null && topo.unbound_hubs > 0)
+    (topo != null && topo.unbound_hubs > 0) ||
+    stuckDefaultPorts > 0
   ) {
     return 1;
   }
@@ -341,6 +366,49 @@ function hostUsbFaultPriority(host: HostTableData): number {
 /** 主行外显的紧凑故障芯片（常态静音，仅故障主机外显 ≤2 个芯片）。 */
 function buildInlineFaultChips(host: HostTableData): InlineFaultChip[] {
   const chips: InlineFaultChip[] = [];
+  const ctrl = host.usb_controller_health;
+  if (ctrl) {
+    if (ctrl.unbound_xhci_controllers > 0) {
+      chips.push({
+        key: 'unbound_xhci',
+        label: 'xHCI 驱动失绑',
+        tone: 'danger',
+        title: `PCI xHCI 主控未绑定驱动（${ctrl.unbound_xhci_controllers} 个），需排查 probe -110 或重启主机`,
+      });
+    }
+    if (ctrl.disabled_root_ports > 0) {
+      chips.push({
+        key: 'disabled_root_ports',
+        label: `主控端口禁用(${ctrl.disabled_root_ports})`,
+        tone: 'danger',
+        title: `Root Hub 有 ${ctrl.disabled_root_ports} 个端口处于 disable=1（常见于 xHCI 死亡后的永久失明态）`,
+      });
+    }
+    if (ctrl.over_current_ports > 0) {
+      chips.push({
+        key: 'over_current_ports',
+        label: `USB 过流(${ctrl.over_current_ports})`,
+        tone: 'danger',
+        title: `检测到 ${ctrl.over_current_ports} 个 USB 端口存在过流计数（over_current_count > 0）`,
+      });
+    }
+    if (ctrl.disabled_hub_ports > 0) {
+      chips.push({
+        key: 'disabled_hub_ports',
+        label: `Hub 端口禁用(${ctrl.disabled_hub_ports})`,
+        tone: 'warning',
+        title: `外接级联 Hub 有 ${ctrl.disabled_hub_ports} 个端口处于 disable=1（可能为 VBUS 断电残留或 EMI 禁用）`,
+      });
+    }
+    if (ctrl.stuck_default_ports > 0) {
+      chips.push({
+        key: 'stuck_default_ports',
+        label: `端口卡死(${ctrl.stuck_default_ports})`,
+        tone: 'warning',
+        title: `外接级联 Hub 有 ${ctrl.stuck_default_ports} 个端口停在 state=default 且无设备节点（疑似坏线/无法枚举）`,
+      });
+    }
+  }
   const reasons = host.health_reasons ?? [];
   for (const reason of reasons) {
     const label = REASON_LABELS[reason] || reason;
@@ -349,11 +417,18 @@ function buildInlineFaultChips(host: HostTableData): InlineFaultChip[] {
     } else if (reason === 'usb_link_degraded') {
       chips.push({ key: reason, label: 'USB 链路劣化', tone: 'warning', title: label });
     } else if (reason === 'usb_tree_empty') {
+      const zeroLedger = !host.emptied_at && host.ledger_device_count === 0;
       chips.push({
         key: reason,
-        label: host.emptied_at ? 'USB 空树(已处置)' : 'USB 空树',
-        tone: host.emptied_at ? 'muted' : 'danger',
-        title: label,
+        label: host.emptied_at
+          ? 'USB 空树(已处置)'
+          : zeroLedger
+            ? '未接设备'
+            : 'USB 空树',
+        tone: host.emptied_at || zeroLedger ? 'muted' : 'danger',
+        title: zeroLedger
+          ? 'USB 总线空树且台账无在册设备（空置/未接线，不计入 USB/Hub 异常）'
+          : label,
       });
     } else if (reason === 'adb_interfaces_missing') {
       chips.push({ key: reason, label: '无 ADB 接口', tone: 'warning', title: label });

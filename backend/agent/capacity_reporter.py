@@ -58,6 +58,7 @@ def compute_capacity(
     usb_power_slots: Optional[dict] = None,
     usb_hub_topology: Optional[dict] = None,
     usb_kernel_errors_1h: Optional[dict] = None,
+    usb_controller_health: Optional[dict] = None,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
@@ -142,6 +143,9 @@ def compute_capacity(
         capacity["usb_hub_topology"] = usb_hub_topology
     if usb_kernel_errors_1h is not None:
         capacity["usb_kernel_errors_1h"] = usb_kernel_errors_1h
+    # 零权限 sysfs 主控/端口硬件异常体检（纯观测，不参与槽位/门禁）
+    if usb_controller_health is not None:
+        capacity["usb_controller_health"] = usb_controller_health
 
     return {"capacity": capacity, "health": health}
 
@@ -272,14 +276,17 @@ def _usb_tree_empty(
     故障形态恰好是唯一不告警的形态**（.63 与 8.87 实测）。本判据补上这一格：
 
     - 两个计数都**可判定**（None = 采集失败，不据此报警）；
-    - ``usb_device_count <= usb_root_hub_count``（lsusb 里只有 1d6b 系控制器）；
+    - ``usb_device_count == 0``（``parse_lsusb_output`` 已排除 root hub，此前写成
+      ``<= usb_root_hub_count`` 会把 1~2 台非 ADB 手机误判为空树，与
+      ``xhci_auto_rebind.is_usb_tree_verifiably_empty`` 口径对齐）；
+    - ``usb_root_hub_count > 0``（至少读到 1 个 root hub，否则视为采集空输出）；
     - 且 ``total_devices == 0``（agent 一台设备都没发现）。
 
     warning 级（DEGRADED）：空树时没有设备可调度，无需打闸，但必须在页面上可见。
     """
     if usb_device_count is None or usb_root_hub_count is None:
         return False
-    return usb_device_count <= usb_root_hub_count and total_devices == 0
+    return usb_root_hub_count > 0 and usb_device_count == 0 and total_devices == 0
 
 
 def _adb_interfaces_missing(
