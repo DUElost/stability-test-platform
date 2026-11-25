@@ -2622,6 +2622,19 @@
         }
       ]
     },
+    "sync_device_time": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/sync_device_time/1.0.0.tar.gz",
+          "package_sha256": "8bdee338a2182f337298e0bd6c13c7695a8e15427d17ef31404790fd8cc513c0",
+          "python": null,
+          "retired": false,
+          "script": "sync_device_time.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
     "unisoc_probe": {
       "kind": "script",
       "versions": [
