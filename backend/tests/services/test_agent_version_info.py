@@ -109,6 +109,34 @@ def test_build_host_version_view_from_extra(monkeypatch):
     assert view["agent_code_sync_status"] == "matched"
 
 
+def test_build_host_version_view_reuses_precomputed_expected_revision(monkeypatch):
+    """调用方显式传 expected_code_revision（含空串）时不得重复触发 get_agent_code_version。"""
+    def _boom():
+        raise AssertionError("must not call get_agent_code_version when precomputed")
+
+    monkeypatch.setattr(
+        "backend.services.agent_version_info.get_agent_code_version",
+        _boom,
+    )
+    view_nonempty = build_host_version_view(
+        {},
+        agent_artifact_digest=DIGEST_NEW,
+        desired_artifact_digest=DIGEST_NEW,
+        expected_code_revision="4afb332bc",
+    )
+    assert view_nonempty["expected_code_revision"] == "4afb332bc"
+    assert view_nonempty["agent_code_sync_status"] == "matched"
+
+    view_empty = build_host_version_view(
+        {},
+        agent_artifact_digest=DIGEST_NEW,
+        desired_artifact_digest=DIGEST_NEW,
+        expected_code_revision="",
+    )
+    assert view_empty["expected_code_revision"] is None
+    assert view_empty["agent_code_sync_status"] == "matched"
+
+
 # ── #1907 / ADR-0040 D2/D5/D6：finalize 统一记录通道 ──
 
 import types

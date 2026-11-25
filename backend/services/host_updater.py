@@ -565,20 +565,27 @@ def get_agent_code_version() -> str:
     """
     import subprocess
 
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(_AGENT_SOURCE_DIR), "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        if completed.returncode == 0:
-            short = completed.stdout.strip()
-            if short:
-                return short
-    except Exception:
-        logger.debug("agent_code_version_lookup_failed", exc_info=True)
+    # bundle / release 布局（无 .git）跳过注定失败的 git subprocess fork，直接读 VERSION；
+    # 仓库布局（.git 为目录或 worktree 文件）仍保持 git 优先。
+    has_git_context = any(
+        (parent / ".git").exists()
+        for parent in (_AGENT_SOURCE_DIR, *_AGENT_SOURCE_DIR.parents)
+    )
+    if has_git_context:
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(_AGENT_SOURCE_DIR), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if completed.returncode == 0:
+                short = completed.stdout.strip()
+                if short:
+                    return short
+        except Exception:
+            logger.debug("agent_code_version_lookup_failed", exc_info=True)
 
     try:
         value = (_AGENT_SOURCE_DIR / "VERSION").read_text(encoding="utf-8").strip()

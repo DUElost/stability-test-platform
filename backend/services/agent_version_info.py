@@ -70,20 +70,23 @@ def build_host_version_view(
     *,
     agent_artifact_digest: str | None = None,
     desired_artifact_digest: str | None = None,
+    expected_code_revision: str | None = None,
 ) -> dict:
     """Derive top-level HostOut version fields from host.extra.
 
-    `desired_artifact_digest` 由调用方传入以便列表场景只算一次（desired 现算 +
-    进程缓存，但缓存键仍需 stat 输入集）。#2320 起**三态分明**：
+    `desired_artifact_digest` 与 `expected_code_revision` 均由调用方传入以便列表场景
+    在请求外层只算一次。#2320 起两者均保持三态分明：
 
     - ``None``（未传）→ 本函数自算，且自算失败只降级不抛；
-    - ``""``（调用方**显式**说「算不出」，如列表页的降级路径）→ 判据 ``unknown``；
-      旧写法 `(desired or "").strip() or 自算` 会把空串当成「没传」而**回头自算**，
-      于是列表页的降级意图被下游覆盖成 ``drift``/``matched``——一个假判据；
-    - 非空 → 用它比对。
+    - ``""``（调用方**显式**说「算不出」或「该场景不消费此字段」，如 facets/preview）→
+      不触发回退自算，对应返回 ``unknown`` / ``None``；
+    - 非空 → 直接复用调用方结果。
     """
     data = extra if isinstance(extra, dict) else {}
-    expected = get_agent_code_version() or None
+    if expected_code_revision is None:
+        expected = get_agent_code_version() or None
+    else:
+        expected = expected_code_revision.strip() or None
     if desired_artifact_digest is None:
         desired = _self_computed_desired_digest()
     else:
