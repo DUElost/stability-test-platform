@@ -254,6 +254,7 @@ UNC 写作 `\\172.21.x.x\jxtinno\sonic_tinno\<folder>\`（脱敏形态，实际�
 - **合并输入表与 Jira 表单的第 13 列不是同一字段**：合并输入 `_org.xls` 是 `DeviceId`（串号），Jira 表单是 `DeviceCount`（整数设备数）。回填时改的是 Jira 表单；写错列会把串号写进设备数。
 - **「仅基线」问题只标注建议，执行者不得自动剔除**。运行前遗留的 V56/V78 事件是否交付、是否提交 Jira 由 Owner 决定；基线拆分以首轮 run 开始时间为界，2010 类占位时间回退 `detected_at`。
 - **扫描报表里不在 DLE 登记内的 `*_temp` / 预分析 / baseline 目录不得纳入**（2026-11-05 有 109 条）。纳入会把往期遗留问题重复计入本专项。
+- **`Result_MergeFiles_org.xls`（及 host `*_org.xls`）里的 `CurProcessNone` 不是进程名**。它与 `ExpClassNone` / `ExpTypeNone` / `PackageNone` 同属扫描工具在解析失败时写入的占位串；Path 常为事件目录 `*_temp`，解密中间名常为 `db.<随机>` 而非 `db.00.<TYPE>.dbg.DEC`。执行者必须把交付与计数对准去重后的 `Result_MergeFiles.xls`（其中通常无此类行），不得把 org 占位行当独立问题；溯源步骤与 PlanRun 1594 实证见 [`docs/notes/process/2026-11-25-curprocessnone-temp-org-rows.md`](../../../docs/notes/process/2026-11-25-curprocessnone-temp-org-rows.md)。
 - **表单 `Path` 必须使用厂商机挂载路径** `/home/jxtinno/sonic_tinno/...`；本机校验时映射到 `/mnt/jxtinno-sonic/...`。执行者不得把本机挂载路径写进 Jira 表单。
 - **执行者不得把内网主机 IP 全地址写进文档、PR 正文、issue 评论或脚本注释**；用 `.NN` 短后缀或 `172.21.x.x` 脱敏形态。
 - **执行者不得把 PG 连接串、口令或 token 写入脚本、命令行、文档与 PR diff**；查库按 `prod-db-readonly-diagnose` skill 走只读角色与站点配置。
