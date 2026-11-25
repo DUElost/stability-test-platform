@@ -352,12 +352,111 @@ class DeviceMatrixItem(BaseModel):
 class PlanRunDevicesOut(BaseModel):
     plan_run_id: int
     total: int
+    # #83 / #4117 B2-3：当前筛选条件下的精确匹配数（严禁覆盖 total 的 PlanRun 全集口径）
+    filtered_total: int = 0
     # Job 执行投影(与设备连接正交):{all/completed/running/failed/unknown/backoff/pending/aborted: int}
     by_status: dict
     # 设备 ADB / Host 可达性:{all/online/offline/adb_error/host_offline/unknown: int}
     by_link_status: dict = {}
     by_host: dict                      # {host_id: int}
     devices: list[DeviceMatrixItem]
+
+
+class PlanRunMinimapDeviceOut(BaseModel):
+    """#83 / #4117 B2-3：Minimap 轻量 7 字段设备投影（不含 ui_status / disarm_results）。"""
+
+    job_id: int
+    device_id: int
+    device_serial: Optional[str] = None
+    host_id: Optional[str] = None
+    job_exec_status: str
+    device_link_status: str
+    log_signal_count: int = 0
+
+
+class PlanRunMinimapFacetsOut(BaseModel):
+    """#83 / #4117 B2-3：Minimap 全集聚合计数。"""
+
+    total: int = 0
+    by_status: dict = Field(default_factory=dict)
+    by_link_status: dict = Field(default_factory=dict)
+    by_host: dict = Field(default_factory=dict)
+
+
+class PlanRunDevicesMinimapOut(BaseModel):
+    """``GET /api/v1/plan-runs/{run_id}/devices/minimap`` 响应模型。"""
+
+    plan_run_id: int
+    facets: PlanRunMinimapFacetsOut
+    hosts: dict = Field(default_factory=dict)
+    stuck_job_ids: list[int] = Field(default_factory=list)
+    devices: list[PlanRunMinimapDeviceOut] = Field(default_factory=list)
+
+
+class PlanRunJobDetailOut(DeviceMatrixItem):
+    """``GET /api/v1/plan-runs/{run_id}/jobs/{job_id}`` 单机完整详情模型。"""
+
+    plan_run_id: int
+    host_name: Optional[str] = None
+    watcher_capability: Optional[str] = None
+    execution_state: Optional[str] = None
+    last_execution_heartbeat_at: Optional[str] = None
+    last_progress_at: Optional[str] = None
+    step_trace_count: int = 0
+    artifact_count: int = 0
+
+
+class PlanRunJobTraceItemOut(BaseModel):
+    """单 Job 阶段时间线条目（有上限子查询，不返回整段 output 日志）。"""
+
+    id: int
+    stage: str
+    step_id: str
+    event_type: str
+    status: str
+    exit_code: Optional[int] = None
+    error_message: Optional[str] = None
+    script_name: Optional[str] = None
+    script_version: Optional[str] = None
+    original_ts: str
+    created_at: str
+
+
+class PlanRunJobTimelineOut(BaseModel):
+    """``GET /api/v1/plan-runs/{run_id}/jobs/{job_id}/timeline`` 响应模型。"""
+
+    plan_run_id: int
+    job_id: int
+    total: int
+    skip: int
+    limit: int
+    items: list[PlanRunJobTraceItemOut] = Field(default_factory=list)
+
+
+class PlanRunJobWatcherSignalItemOut(BaseModel):
+    """单 Job Watcher 异常明细条目（有上限子查询，不含原始日志全文）。"""
+
+    id: int
+    seq_no: int
+    category: str
+    source: str
+    detected_at: str
+    received_at: str
+    path_on_device: str
+    artifact_uri: Optional[str] = None
+    device_log_event_id: Optional[str] = None
+    size_bytes: Optional[int] = None
+
+
+class PlanRunJobWatcherSignalsOut(BaseModel):
+    """``GET /api/v1/plan-runs/{run_id}/jobs/{job_id}/watcher-signals`` 响应模型。"""
+
+    plan_run_id: int
+    job_id: int
+    total: int
+    skip: int
+    limit: int
+    items: list[PlanRunJobWatcherSignalItemOut] = Field(default_factory=list)
 
 
 class WatcherCategoryOut(BaseModel):

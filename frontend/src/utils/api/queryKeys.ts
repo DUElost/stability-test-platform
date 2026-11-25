@@ -98,6 +98,29 @@ export const planRunKeys = {
     hostId?: number | string | null,
     linkStatus?: string,
   ) => ['plan-run-devices', id, status, hostId, linkStatus] as const,
+  /** #83 / #4117 B2-3：Minimap 轻量全集键（独立于表格分页键，挂在 devicesByRun 前缀下同步失效）。 */
+  devicesMinimap: (id: number) => ['plan-run-devices', id, 'minimap'] as const,
+  /** #83 / #4117 B2-3：表格真分页键（含筛选、搜索、页码与排序）。 */
+  devicesPage: (id: number, params: Record<string, unknown>) =>
+    ['plan-run-devices', id, 'page', params] as const,
+  /** #83 / #4117 B2-3：单 Job 详情与延迟子查询键（按 (runId, jobId) 严格隔离）。 */
+  jobDetail: (runId: number, jobId: number) => ['plan-run-job', runId, jobId, 'detail'] as const,
+  jobTimeline: (runId: number, jobId: number, opts?: { skip?: number; limit?: number }) =>
+    ['plan-run-job', runId, jobId, 'timeline', opts?.skip ?? 0, opts?.limit ?? 100] as const,
+  jobWatcherSignals: (
+    runId: number,
+    jobId: number,
+    opts?: { skip?: number; limit?: number; category?: string },
+  ) =>
+    [
+      'plan-run-job',
+      runId,
+      jobId,
+      'watcher-signals',
+      opts?.skip ?? 0,
+      opts?.limit ?? 100,
+      opts?.category ?? null,
+    ] as const,
   /** Partial key — invalidates all device queries for a PlanRun. */
   devicesByRun: (id: number) => ['plan-run-devices', id] as const,
   watcher: (id: number, scope?: string) => ['plan-run-watcher', id, scope] as const,

@@ -52,7 +52,7 @@ from backend.services.plan_run_catalog import (
     build_plan_run_list_page,
 )
 from backend.services.plan_run_chain import build_plan_run_chain
-from backend.services.plan_run_devices import build_plan_run_devices
+from backend.services.plan_run_devices import PlanRunDevicesQueryError, build_plan_run_devices
 from backend.services.plan_run_event_feed import build_plan_run_events
 from backend.services.plan_run_export import (
     build_plan_run_export,
@@ -329,25 +329,28 @@ def get_plan_run_events(
 @router.get("/plan-runs/{run_id}/devices", response_model=ApiResponse[PlanRunDevicesOut])
 def get_plan_run_devices(
     run_id: int,
-    status: Optional[str] = Query(None, description="job_exec_status 过滤(可选)"),
-    link_status: Optional[str] = Query(None, description="device_link_status 过滤(可选)"),
-    host_id: Optional[str] = Query(None, description="host_id 过滤(可选)"),
+    status: Optional[str] = Query(None),
+    link_status: Optional[str] = Query(None),
+    host_id: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, max_length=256),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: Optional[str] = Query(None),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=500),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """C5a₂ 设备矩阵（``plan_run_devices``）；facet 基于未过滤全集。"""
+    """C5a₂ 设备矩阵（``plan_run_devices``）；未传分页返回全量，facet 基于全集。"""
     t0 = time.perf_counter()
     try:
         pr = _require_plan_run(db, run_id)
         return ok(build_plan_run_devices(
-            db,
-            run_id,
-            status=status,
-            link_status=link_status,
-            host_id=host_id,
-            # #3350（ADR-0023 D2）：复用已加载的 pr（不新增查询）派生脚本身份
+            db, run_id, status=status, link_status=link_status, host_id=host_id,
+            q=q, sort_by=sort_by, sort_dir=sort_dir, skip=skip, limit=limit,
             plan_snapshot=pr.plan_snapshot,
         ))
+    except PlanRunDevicesQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
     finally:
         record_plan_run_devices_query_duration(time.perf_counter() - t0)
 

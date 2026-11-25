@@ -2531,12 +2531,100 @@ export interface DeviceMatrixItem {
 export interface PlanRunDevicesPayload {
   plan_run_id: number;
   total: number;
+  /** #83 / #4117 B2-3：当前筛选条件下的精确匹配条数（不覆盖 total 全集数） */
+  filtered_total?: number;
   /** Facet over `job_exec_status` (执行维度). Includes 'all'. */
   by_status: Record<string, number>;
   /** Facet over `device_link_status` (连接维度). Includes 'all'. */
   by_link_status?: Record<string, number>;
   by_host: Record<string, number>;
   devices: DeviceMatrixItem[];
+}
+
+/** #83 / #4117 B2-3：Minimap 轻量 7 字段设备投影（无 ui_status / disarm_results）。 */
+export interface PlanRunMinimapDevice {
+  job_id: number;
+  device_id: number;
+  device_serial: string | null;
+  host_id: string | null;
+  job_exec_status: DeviceUiStatus;
+  device_link_status: DeviceLinkStatus;
+  log_signal_count: number;
+}
+
+export interface PlanRunMinimapFacets {
+  total: number;
+  by_status: Record<string, number>;
+  by_link_status: Record<string, number>;
+  by_host: Record<string, number>;
+}
+
+/** `GET /plan-runs/{runId}/devices/minimap` 响应模型。 */
+export interface PlanRunDevicesMinimapPayload {
+  plan_run_id: number;
+  facets: PlanRunMinimapFacets;
+  hosts: Record<string, string>;
+  stuck_job_ids: number[];
+  devices: PlanRunMinimapDevice[];
+}
+
+/** `GET /plan-runs/{runId}/jobs/{jobId}` 单机完整详情模型。 */
+export interface PlanRunJobDetail extends DeviceMatrixItem {
+  plan_run_id: number;
+  host_name?: string | null;
+  watcher_capability?: string | null;
+  execution_state?: string | null;
+  last_execution_heartbeat_at?: string | null;
+  last_progress_at?: string | null;
+  step_trace_count: number;
+  artifact_count: number;
+}
+
+export interface PlanRunJobTraceItem {
+  id: number;
+  stage: string;
+  step_id: string;
+  event_type: string;
+  status: string;
+  exit_code?: number | null;
+  error_message?: string | null;
+  script_name?: string | null;
+  script_version?: string | null;
+  original_ts: string;
+  created_at: string;
+}
+
+/** `GET /plan-runs/{runId}/jobs/{jobId}/timeline` 响应模型。 */
+export interface PlanRunJobTimelinePayload {
+  plan_run_id: number;
+  job_id: number;
+  total: number;
+  skip: number;
+  limit: number;
+  items: PlanRunJobTraceItem[];
+}
+
+export interface PlanRunJobWatcherSignalItem {
+  id: number;
+  seq_no: number;
+  category: string;
+  source: string;
+  detected_at: string;
+  received_at: string;
+  path_on_device: string;
+  artifact_uri?: string | null;
+  device_log_event_id?: string | null;
+  size_bytes?: number | null;
+}
+
+/** `GET /plan-runs/{runId}/jobs/{jobId}/watcher-signals` 响应模型。 */
+export interface PlanRunJobWatcherSignalsPayload {
+  plan_run_id: number;
+  job_id: number;
+  total: number;
+  skip: number;
+  limit: number;
+  items: PlanRunJobWatcherSignalItem[];
 }
 
 export interface WatcherCategory {

@@ -12,6 +12,10 @@ import type {
   PlanRunTimeline,
   PlanRunEventsPayload,
   PlanRunDevicesPayload,
+  PlanRunDevicesMinimapPayload,
+  PlanRunJobDetail,
+  PlanRunJobTimelinePayload,
+  PlanRunJobWatcherSignalsPayload,
   WatcherSummary,
   WatcherTimeScope,
   PlanRunLogEventsPayload,
@@ -40,12 +44,27 @@ export interface ListPlanRunEventsParams {
   offset?: number;
 }
 
+export type PlanRunDeviceSortBy =
+  | 'device_id'
+  | 'serial'
+  | 'status'
+  | 'link_status'
+  | 'host_id'
+  | 'log_signal_count'
+  | 'patrol_cycle_count';
+
 export interface ListPlanRunDevicesParams {
-  /** 执行维度 — 过滤 `job_exec_status`。 */
-  status?: DeviceUiStatus | 'all';
-  /** 连接维度 — 过滤 `device_link_status`。与 `status` 正交，可叠加。 */
-  link_status?: DeviceLinkStatus | 'all';
+  /** 执行维度 — 过滤 `job_exec_status`（支持单值、逗号并集或 `lost_or_backoff`）。 */
+  status?: DeviceUiStatus | 'all' | 'lost_or_backoff' | string;
+  /** 连接维度 — 过滤 `device_link_status`（支持单值、逗号并集或 `abnormal` / `not_online`）。 */
+  link_status?: DeviceLinkStatus | 'all' | 'abnormal' | 'not_online' | string;
   host_id?: string | 'all';
+  /** 按设备串号字面子串过滤（大小写不敏感）。 */
+  q?: string;
+  sort_by?: PlanRunDeviceSortBy;
+  sort_dir?: 'asc' | 'desc';
+  skip?: number;
+  limit?: number;
 }
 
 export interface ListPlanRunsParams {
@@ -152,6 +171,36 @@ export const planRuns = {
   getDevices: (runId: number, params: ListPlanRunDevicesParams = {}) =>
     unwrapApiResponse<PlanRunDevicesPayload>(
       apiClient.get(`/plan-runs/${runId}/devices`, { params: cleanParams(params) }),
+    ),
+
+  /** #83 / #4117 B2-3：独立轻量全集 Minimap（7 字段设备格子 + 全局 facets/hosts/stuck）。 */
+  getDevicesMinimap: (runId: number) =>
+    unwrapApiResponse<PlanRunDevicesMinimapPayload>(
+      apiClient.get(`/plan-runs/${runId}/devices/minimap`),
+    ),
+
+  /** #83 / #4117 B2-3：单 Job 完整详情（含 `(runId, jobId)` 归属校验）。 */
+  getJobDetail: (runId: number, jobId: number) =>
+    unwrapApiResponse<PlanRunJobDetail>(
+      apiClient.get(`/plan-runs/${runId}/jobs/${jobId}`),
+    ),
+
+  /** #83 / #4117 B2-3：单 Job 延迟加载有上限阶段时间线。 */
+  getJobTimeline: (runId: number, jobId: number, params: { skip?: number; limit?: number } = {}) =>
+    unwrapApiResponse<PlanRunJobTimelinePayload>(
+      apiClient.get(`/plan-runs/${runId}/jobs/${jobId}/timeline`, { params: cleanParams(params) }),
+    ),
+
+  /** #83 / #4117 B2-3：单 Job 延迟加载有上限 Watcher 异常明细。 */
+  getJobWatcherSignals: (
+    runId: number,
+    jobId: number,
+    params: { skip?: number; limit?: number; category?: string } = {},
+  ) =>
+    unwrapApiResponse<PlanRunJobWatcherSignalsPayload>(
+      apiClient.get(`/plan-runs/${runId}/jobs/${jobId}/watcher-signals`, {
+        params: cleanParams(params),
+      }),
     ),
 
   getWatcherSummary: (runId: number, timeScope: WatcherTimeScope = 'all') =>
