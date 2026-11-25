@@ -206,6 +206,48 @@ class HostLiteOut(ORMBaseModel):
     status: str
 
 
+class HostFacetsOut(BaseModel):
+    """#496 / #4117 B2-2：``GET /api/v1/hosts/facets`` 10 项全局计数模型。"""
+
+    all: int = 0
+    online: int = 0
+    degraded: int = 0
+    offline: int = 0
+    usb_anomaly: int = 0
+    upgrade_pending: int = 0
+    health_anomaly: int = 0
+    mount_anomaly: int = 0
+    aligned_agent_count: int = 0
+    trackable_agent_count: int = 0
+
+
+class HostSelectionPreviewIn(BaseModel):
+    """#496 / #4117 B2-2：``POST /api/v1/hosts/selection-preview`` 跨页选择预览请求体。"""
+
+    include_retired: bool = False
+    status: Optional[str] = Field(default=None, max_length=32)
+    health_status: Optional[str] = Field(default=None, max_length=32)
+    sync_status: Optional[str] = Field(default=None, max_length=32)
+    usb_anomaly: Optional[bool] = None
+    mount_anomaly: Optional[bool] = None
+    q: Optional[str] = Field(default=None, max_length=256)
+
+
+class HostSelectionPreviewOut(BaseModel):
+    """#496 / #4117 B2-2：``POST /api/v1/hosts/selection-preview`` 跨页选择预览响应体。"""
+
+    total_matched: int = 0
+    host_ids: List[str] = Field(default_factory=list)
+    online_count: int = 0
+    offline_count: int = 0
+    degraded_count: int = 0
+    retired_count: int = 0
+    first_install_count: int = 0
+    reinstall_count: int = 0
+    hot_update_count: int = 0
+    flash_prereqs_count: int = 0
+
+
 class HeartbeatIn(BaseModel):
     host_id: str
     status: Literal["ONLINE", "OFFLINE", "DEGRADED"]

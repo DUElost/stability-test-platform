@@ -40,6 +40,10 @@ export const hostKeys = {
   retiredPeek: () => ['hosts', { retiredPeek: true }] as const,
   /** Host 详情（含 active_jobs 占用明细，仅 GET /hosts/{id} 返回）。 */
   detail: (id: string | number) => ['host', String(id)] as const,
+  /** #496 / #4117 B2-2：主机服务端分页列表键（独立分键，不得把 PaginatedResponse 写入 ['hosts']）。 */
+  page: (params: Record<string, unknown>) => ['hosts', 'page', params] as const,
+  /** #496 / #4117 B2-2：主机独立 Facets 键（仅含 includeRetired，不受页码/排序/搜索影响）。 */
+  facets: (includeRetired = false) => ['hosts', 'facets', { includeRetired }] as const,
 } as const;
 
 /** Bulk active-job occupancy (GET /jobs/active-by-device). */

@@ -8,8 +8,9 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from typing import Any, List, Union
+from typing import Any, List, Optional, Union
 
+from backend.api.response import ApiResponse, ok
 from backend.services.audit_writer import record_audit
 from backend.core.database import get_db
 from backend.core.host_identity import allocate_host_id
@@ -28,8 +29,11 @@ from backend.api.schemas import (
     HostActiveJob,
     HostCreate,
     HostDeviceIntentIn,
+    HostFacetsOut,
     HostInstallIn,
     HostRetireIn,
+    HostSelectionPreviewIn,
+    HostSelectionPreviewOut,
     HostUnretireIn,
     HostUpdate,
     HostOut,
@@ -72,9 +76,17 @@ from backend.services.artifact_digest import (
     plan_convergence,
 )
 from backend.services.agent_version_info import finalize_hot_update_outcome
+from backend.services.host_inventory_query import (
+    HostQueryError,
+    build_host_facets,
+    build_host_out_readonly,
+    build_host_selection_preview,
+    derive_agent_installed,
+    normalize_host_filters,
+    query_hosts_page,
+    validate_host_sort_params,
+)
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
-from backend.services.agent_version_info import build_host_version_view
-from backend.services.inventory_status import effective_host_status
 from backend.services.run_console import RunConsole
 
 logger = logging.getLogger(__name__)
@@ -96,26 +108,8 @@ def _get_syncable_agent_secret() -> str:
 
 
 def _derive_agent_installed(h: Host) -> tuple[bool, str | None]:
-    """推断 Agent 是否曾安装成功（与 ONLINE/OFFLINE 正交）。
-
-    信号优先级：extra.agent_installed → agent_version → last_heartbeat 非空。
-    """
-    extra = h.extra if isinstance(h.extra, dict) else {}
-    raw_at = extra.get("agent_installed_at")
-    installed_at = str(raw_at) if raw_at else None
-    if extra.get("agent_installed") is True:
-        return True, installed_at
-    if extra.get("agent_version"):
-        return True, installed_at
-    if h.last_heartbeat is not None:
-        if not installed_at:
-            installed_at = (
-                h.last_heartbeat.isoformat()
-                if hasattr(h.last_heartbeat, "isoformat")
-                else str(h.last_heartbeat)
-            )
-        return True, installed_at
-    return False, None
+    """推断 Agent 是否曾安装成功（与 ONLINE/OFFLINE 正交）。"""
+    return derive_agent_installed(h)
 
 
 #: #2320：desired digest 现算要对输入集全量 `os.stat` + 逐文件读（`artifact_digest`
@@ -168,31 +162,12 @@ def _host_to_out(
 
     若提供 ``db``，会一并查询 host 上的活跃 Job 列表（ADR-0021 hot-update gate）。
     """
-    out = HostOut.model_validate(h)
-    out.status = effective_host_status(h, now=now)
-    extra = dict(h.extra or {})
-    for key in ("ssh_password", "ssh_key_path", "password", "secret", "token", "private_key"):
-        extra.pop(key, None)
-    out.extra = extra
-    out.capacity = extra.get("capacity")
-    out.health = extra.get("health")
-    out.health_probe = extra.get("health_probe") if isinstance(extra.get("health_probe"), dict) else None
-    out.self_heal = extra.get("self_heal") if isinstance(extra.get("self_heal"), dict) else None
-    out.host_key_trust = host_key_trust
-    installed, installed_at = _derive_agent_installed(h)
-    out.agent_installed = installed
-    out.agent_installed_at = installed_at
-    version_view = build_host_version_view(
-        extra,
-        agent_artifact_digest=getattr(h, "agent_artifact_digest", None),
+    out = build_host_out_readonly(
+        h,
         desired_artifact_digest=desired_artifact_digest,
+        now=now,
+        host_key_trust=host_key_trust,
     )
-    out.agent_protocol_version = version_view["agent_protocol_version"]
-    out.agent_code_revision = version_view["agent_code_revision"]
-    out.expected_code_revision = version_view["expected_code_revision"]
-    out.agent_code_deployed = version_view["agent_code_deployed"]
-    out.agent_code_deployed_at = version_view["agent_code_deployed_at"]
-    out.agent_code_sync_status = version_view["agent_code_sync_status"]
 
     if db is not None:
         from backend.models.plan_run import PlanRun
@@ -394,26 +369,146 @@ def list_hosts(
     include_retired: bool = Query(
         False, description="ADR-0038 D5：默认隐藏退役主机，显式置 true 才显示",
     ),
+    status: Optional[str] = Query(
+        None,
+        description="连通态筛选：ONLINE | DEGRADED | OFFLINE（有效状态口径）",
+    ),
+    health_status: Optional[str] = Query(
+        None,
+        description="健康态筛选：HEALTHY | DEGRADED | UNSCHEDULABLE | unhealthy",
+    ),
+    sync_status: Optional[str] = Query(
+        None,
+        description="Agent 同步筛选：upgrade_pending (ONLINE && agent_installed && drift) | drift | matched | pending | unknown",
+    ),
+    usb_anomaly: Optional[bool] = Query(
+        None,
+        description="USB/Hub/探针故障筛选（沿用既有 3/2/1/0 优先级与退役/emptied 豁免规则）",
+    ),
+    mount_anomaly: Optional[bool] = Query(
+        None,
+        description="挂载异常筛选（空 mount_status 不计为故障）",
+    ),
+    q: Optional[str] = Query(
+        None,
+        max_length=256,
+        description="空白分词 AND 搜索（覆盖主机 ID、名称、IP、健康原因、Agent 版本）",
+    ),
+    sort_by: Optional[str] = Query(
+        None,
+        description="排序字段白名单：default/priority（USB 故障优先）| id | name | devices | cpu | ram | disk | heartbeat",
+    ),
+    sort_dir: Optional[str] = Query(
+        None,
+        description="排序方向：asc | desc（所有排序均以 Host.id ASC 为尾键）",
+    ),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
     # ADR-0038 D5（不变量 1）：退役主机默认不出现在列表；详情页仍可见
     # （GET /hosts/{id} 不过滤——退役是历史终态，详情要能查退役痕迹）。
     now = datetime.now(timezone.utc)
-    query = db.query(Host)
-    if not include_retired:
-        query = query.filter(Host.retired_at.is_(None))
-    query = query.order_by(Host.id)
-    total = query.count()
-    hosts = query.offset(skip).limit(limit).all()
+    try:
+        filters = normalize_host_filters(
+            include_retired=include_retired,
+            status=status,
+            health_status=health_status,
+            sync_status=sync_status,
+            usb_anomaly=usb_anomaly,
+            mount_anomaly=mount_anomaly,
+            q=q,
+        )
+        norm_sort_by, norm_sort_dir = validate_host_sort_params(sort_by, sort_dir)
+    except HostQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
     # desired digest 现算一次复用（列表 N 台不重复 stat 输入集）
     # #2320：它是**展示面**判据，读失败必须降级而不是把整页打成 500。
     desired = _list_desired_artifact_digest()
-    items = [_host_to_out(h, desired_artifact_digest=desired, now=now) for h in hosts]
+
+    has_query_extensions = any(
+        (
+            filters.status is not None,
+            filters.health_status is not None,
+            filters.sync_status is not None,
+            filters.usb_anomaly is not None,
+            filters.mount_anomaly is not None,
+            filters.q is not None,
+            norm_sort_by is not None,
+            norm_sort_dir is not None,
+        )
+    )
+    if not has_query_extensions:
+        query = db.query(Host)
+        if not include_retired:
+            query = query.filter(Host.retired_at.is_(None))
+        query = query.order_by(Host.id)
+        total = query.count()
+        hosts = query.offset(skip).limit(limit).all()
+        items = [_host_to_out(h, desired_artifact_digest=desired, now=now) for h in hosts]
+    else:
+        items, total = query_hosts_page(
+            db,
+            filters,
+            skip=skip,
+            limit=limit,
+            sort_by=norm_sort_by,
+            sort_dir=norm_sort_dir,
+            desired_artifact_digest=desired,
+            now=now,
+        )
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
+
+
+@router.get("/facets", response_model=ApiResponse[HostFacetsOut])
+def get_host_facets(
+    include_retired: bool = Query(False, description="是否包含已退役主机"),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """#496 / #4117 B2-2：独立只读 10 项 Agent host 聚合计数（不受搜索与翻页影响）。"""
+    desired = _list_desired_artifact_digest()
+    return ok(
+        build_host_facets(
+            db,
+            include_retired=include_retired,
+            desired_artifact_digest=desired,
+            now=datetime.now(timezone.utc),
+        )
+    )
+
+
+@router.post("/selection-preview", response_model=ApiResponse[HostSelectionPreviewOut])
+def preview_host_selection(
+    payload: HostSelectionPreviewIn,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """#496 / #4117 B2-2：跨页主机批量选择预览（只读，冻结匹配 host_id 与操作计数）。"""
+    try:
+        filters = normalize_host_filters(
+            include_retired=payload.include_retired,
+            status=payload.status,
+            health_status=payload.health_status,
+            sync_status=payload.sync_status,
+            usb_anomaly=payload.usb_anomaly,
+            mount_anomaly=payload.mount_anomaly,
+            q=payload.q,
+        )
+    except HostQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    desired = _list_desired_artifact_digest()
+    return ok(
+        build_host_selection_preview(
+            db,
+            filters,
+            desired_artifact_digest=desired,
+            now=datetime.now(timezone.utc),
+        )
+    )
 
 
 @router.get("/{host_id}", response_model=HostOut)

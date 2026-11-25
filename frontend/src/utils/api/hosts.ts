@@ -3,11 +3,30 @@ import { fetchAllPages } from './paginate';
 import type {
   ApiResponseEnvelope,
   Host,
+  HostFacets,
+  HostFilterQueryParams,
+  HostListPageQueryParams,
   HostScriptPresence,
+  HostSelectionPreview,
+  HostSelectionPreviewRequest,
   PaginatedResponse,
   ScriptPresenceRefreshResult,
   ScriptPresenceSummary,
 } from './types';
+
+function compactHostFilterParams(
+  params: HostFilterQueryParams,
+): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  if (params.include_retired) out.include_retired = true;
+  if (params.status && params.status !== 'all') out.status = params.status;
+  if (params.health_status && params.health_status !== 'all') out.health_status = params.health_status;
+  if (params.sync_status && params.sync_status !== 'all') out.sync_status = params.sync_status;
+  if (params.usb_anomaly !== undefined) out.usb_anomaly = params.usb_anomaly;
+  if (params.mount_anomaly !== undefined) out.mount_anomaly = params.mount_anomaly;
+  if (params.q && params.q.trim()) out.q = params.q.trim();
+  return out;
+}
 
 export interface HostMutationInput {
   name: string;
@@ -52,6 +71,34 @@ export const hosts = {
     id: number | string,
     data: { watcher_admin_active: boolean },
   ) => apiClient.patch<Host>(`/hosts/${id}/watcher-admin-state`, data).then(r => r.data),
+  /** #496 / #4117 B2-2：服务端分页主机列表（支持筛选、全局 USB 优先级与显式排序）。 */
+  listPage: (params: HostListPageQueryParams = {}) => {
+    const queryParams: Record<string, string | number | boolean> = {
+      ...compactHostFilterParams(params),
+      skip: params.skip ?? 0,
+      limit: params.limit ?? 50,
+    };
+    if (params.sort_by) queryParams.sort_by = params.sort_by;
+    if (params.sort_dir) queryParams.sort_dir = params.sort_dir;
+    return apiClient
+      .get<PaginatedResponse<Host>>('/hosts', { params: queryParams })
+      .then(r => r.data);
+  },
+  /** #496 / #4117 B2-2：独立只读 10 项主机 Facets（不受搜索与翻页影响）。 */
+  facets: (includeRetired = false) =>
+    unwrapApiResponse(
+      apiClient.get<ApiResponseEnvelope<HostFacets>>('/hosts/facets', {
+        params: includeRetired ? { include_retired: true } : undefined,
+      }),
+    ),
+  /** #496 / #4117 B2-2：跨页主机批量选择预览（冻结匹配 host_id 与操作计数摘要）。 */
+  selectionPreview: (body: HostSelectionPreviewRequest = {}) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<HostSelectionPreview>>(
+        '/hosts/selection-preview',
+        body,
+      ),
+    ),
 };
 
 /**

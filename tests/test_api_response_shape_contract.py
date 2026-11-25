@@ -640,6 +640,19 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "Host",
     ),
+    # #496 / #4117 B2-2：Agent host 独立 Facets（10 键）与跨页选择预览。
+    (
+        "backend/api/schemas/host.py",
+        "HostFacetsOut",
+        "frontend/src/utils/api/types.ts",
+        "HostFacets",
+    ),
+    (
+        "backend/api/schemas/host.py",
+        "HostSelectionPreviewOut",
+        "frontend/src/utils/api/types.ts",
+        "HostSelectionPreview",
+    ),
     # #2187 opt-in devices.py：设备目录行 MATCH 登记（该文件多数端点仍走
     # 裸 DeviceOut/无信封的 #2129 前遗产，信封化属独立面，不在本台账内扩张）。
     (

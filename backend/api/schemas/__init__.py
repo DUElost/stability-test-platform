@@ -11,6 +11,9 @@ from backend.api.schemas.host import (
     HostOut,
     HostLiteOut,
     HostActiveJob,
+    HostFacetsOut,
+    HostSelectionPreviewIn,
+    HostSelectionPreviewOut,
     HeartbeatIn,
 )
 from backend.api.schemas.device import (
@@ -139,6 +142,9 @@ __all__ = [
     "HostOut",
     "HostLiteOut",
     "HostActiveJob",
+    "HostFacetsOut",
+    "HostSelectionPreviewIn",
+    "HostSelectionPreviewOut",
     "HeartbeatIn",
     "DeviceCreate",
     "DeviceOut",
