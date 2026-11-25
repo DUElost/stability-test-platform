@@ -26,7 +26,7 @@ Class: process
 | 最终表 | `Result_MergeFiles.xls` 115 行，`CurProcessNone=0` |
 | 中心映射 | mapping 常为 `mapped=false`；`devices/<run>/` 下通常无对应 `*_temp` 目录 |
 
-单行溯源样本（合并 org 第 3 行，`DeviceId=AHFFNX6930000182`，事件
+单行溯源样本（合并 org 第 3 行，`DeviceId=AHFFNX69****0182`，事件
 `1795524594934_temp`）：
 
 1. 来源 host：`.85` 当日 `*_org.xls` 同行；mapping path 指向
