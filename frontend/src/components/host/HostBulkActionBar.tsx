@@ -17,6 +17,11 @@ export interface BulkActionCounts {
 interface Props {
   counts: BulkActionCounts;
   isAdmin: boolean;
+  /** B3-2：显式区分当前页勾选与跨页筛选冻结集合（契约 §4.8） */
+  selectionScope?: 'page' | 'all_filtered';
+  filteredTotal?: number;
+  crossPagePreviewLoading?: boolean;
+  onSelectAllFiltered?: () => void;
   installPending?: boolean;
   hotUpdatePending?: boolean;
   flashPrereqsPending?: boolean;
@@ -31,6 +36,10 @@ interface Props {
 export default function HostBulkActionBar({
   counts,
   isAdmin,
+  selectionScope = 'page',
+  filteredTotal,
+  crossPagePreviewLoading = false,
+  onSelectAllFiltered,
   installPending,
   hotUpdatePending = false,
   flashPrereqsPending = false,
@@ -50,9 +59,14 @@ export default function HostBulkActionBar({
       : counts.reinstall > 0 && counts.firstInstall === 0
         ? `重新安装 (${counts.reinstall})`
         : `首次安装 (${counts.firstInstall})`;
-  const busy = Boolean(installPending || hotUpdatePending || flashPrereqsPending);
+  const busy = Boolean(installPending || hotUpdatePending || flashPrereqsPending || crossPagePreviewLoading);
   const canHotUpdate = counts.hotUpdate > 0 && !!onHotUpdate && !busy;
   const canFlashPrereqs = counts.flashPrereqs > 0 && !!onFlashPrereqs && !busy;
+  const canOfferCrossPage =
+    selectionScope === 'page' &&
+    typeof filteredTotal === 'number' &&
+    filteredTotal > counts.selected &&
+    Boolean(onSelectAllFiltered);
   const hotUpdateDisabledReason = counts.hotUpdate === 0
     ? '选中的主机当前不在线，无法热更新'
     : busy
@@ -77,8 +91,38 @@ export default function HostBulkActionBar({
             <CheckCheck className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-sm font-medium text-foreground">
-              已选择 <span className="font-mono text-primary">{counts.selected}</span> 台主机
+            <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-foreground">
+              <span>
+                已选择 <span className="font-mono text-primary">{counts.selected}</span> 台主机
+              </span>
+              {selectionScope === 'all_filtered' ? (
+                <span
+                  data-testid="host-bulk-scope-badge"
+                  className="inline-flex items-center rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+                >
+                  跨页已冻结
+                </span>
+              ) : typeof filteredTotal === 'number' && filteredTotal > counts.selected ? (
+                <span
+                  data-testid="host-bulk-scope-badge"
+                  className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                >
+                  仅当前页
+                </span>
+              ) : null}
+              {canOfferCrossPage ? (
+                <button
+                  type="button"
+                  data-testid="host-bulk-select-all-filtered"
+                  disabled={busy}
+                  onClick={onSelectAllFiltered}
+                  className="text-xs font-medium text-primary underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {crossPagePreviewLoading
+                    ? '冻结筛选结果中…'
+                    : `选中全部筛选结果 (${filteredTotal})`}
+                </button>
+              ) : null}
             </div>
             <div className="truncate text-[11px] text-muted-foreground">
               {breakdown || '可执行删除或取消选择'}

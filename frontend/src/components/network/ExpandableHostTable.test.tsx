@@ -775,3 +775,77 @@ describe('S2：USB / Hub 故障工作台（快捷视图、主行外显、异常�
     expect(within(statusLine).getByText('USB 空树')).toBeInTheDocument();
   });
 });
+
+describe('B3-2 服务端分页模式（serverMode + 10 项 Facets + upgrade_pending）', () => {
+  it('消费独立 10 项 serverFacets、渲染分页条、委托排序且「待热更新」触发 upgrade_pending', () => {
+    const onSyncFilterChange = vi.fn();
+    const onPageChange = vi.fn();
+    const onPageSizeChange = vi.fn();
+    const onSortChange = vi.fn();
+    render(
+      <ExpandableHostTable
+        hosts={[host]}
+        serverMode
+        serverFacets={{
+          all: 150,
+          online: 120,
+          degraded: 10,
+          offline: 20,
+          usb_anomaly: 4,
+          upgrade_pending: 9,
+          health_anomaly: 7,
+          mount_anomaly: 2,
+          aligned_agent_count: 111,
+          trackable_agent_count: 120,
+        }}
+        serverFilteredTotal={150}
+        page={1}
+        pageSize={50}
+        onSyncFilterChange={onSyncFilterChange}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+        onSortChange={onSortChange}
+      />,
+    );
+
+    expect(screen.getByTestId('host-agent-alignment-summary')).toHaveTextContent(
+      'Agent 已对齐 111/120 · 9 台待热更新',
+    );
+    expect(screen.getByTestId('hosts-pagination-bar')).toHaveTextContent('第 1–1 / 共 150 台');
+    expect(screen.getByTestId('hosts-page-indicator')).toHaveTextContent('1 / 3');
+
+    fireEvent.click(screen.getByRole('button', { name: /待热更新/ }));
+    expect(onSyncFilterChange).toHaveBeenCalledWith('upgrade_pending');
+
+    fireEvent.click(screen.getByTestId('hosts-next-page'));
+    expect(onPageChange).toHaveBeenCalledWith(2);
+
+    fireEvent.click(screen.getByTestId('hosts-page-size-100'));
+    expect(onPageSizeChange).toHaveBeenCalledWith(100);
+
+    fireEvent.click(screen.getByRole('button', { name: '主机' }));
+    expect(onSortChange).toHaveBeenCalledWith('name', 'asc');
+  });
+
+  it('通过 drawerHostOverride 独立打开不在当前页的主机详情抽屉', () => {
+    const offPageHost: HostTableData = {
+      ...host,
+      id: 'host-999',
+      name: '跨页深链主机-999',
+      ip: '10.9.9.9',
+    };
+    render(
+      <MemoryRouter>
+        <ExpandableHostTable
+          hosts={[host]}
+          serverMode
+          activeDrawerHostId="host-999"
+          drawerHostOverride={offPageHost}
+        />
+      </MemoryRouter>,
+    );
+
+    const drawer = screen.getByTestId('fleet-host-drawer');
+    expect(within(drawer).getByText('跨页深链主机-999')).toBeInTheDocument();
+  });
+});

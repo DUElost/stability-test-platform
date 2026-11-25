@@ -45,7 +45,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { formatLocalTime, parseIsoToDate } from '@/utils/format';
-import type { HostScriptPresence } from '@/utils/api/types';
+import type { HostFacets, HostScriptPresence } from '@/utils/api/types';
 import { HostDetailDrawer, type HostPresenceLoad } from '@/components/host/HostDetailDrawer';
 
 export interface HostResources {
@@ -69,10 +69,17 @@ export interface MountStatus {
 export type AgentCodeSyncStatus = 'unknown' | 'matched' | 'drift' | 'pending';
 
 export type HostHealthFilter = 'all' | 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE' | 'unhealthy';
-export type HostSyncFilter = 'all' | 'drift' | 'matched' | 'mount_error' | 'usb_fault';
+export type HostSyncFilter =
+  | 'all'
+  | 'upgrade_pending'
+  | 'drift'
+  | 'matched'
+  | 'mount_error'
+  | 'usb_fault';
 
-type HostSortKey = 'default' | 'name' | 'devices' | 'cpu' | 'ram' | 'disk' | 'heartbeat';
-type SortDirection = 'asc' | 'desc';
+export type HostSortKey = 'default' | 'name' | 'devices' | 'cpu' | 'ram' | 'disk' | 'heartbeat';
+export type HostSortDirection = 'asc' | 'desc';
+type SortDirection = HostSortDirection;
 
 export interface HostTableData {
   id: string | number;
@@ -223,6 +230,21 @@ interface ExpandableHostTableProps {
   onNavigateToDevices?: (hostId: string | number) => void;
   onFilteredHostsChange?: (hosts: HostTableData[]) => void;
   extraHeaderRight?: ReactNode;
+  /** B3-2：服务端分页模式（关闭前端全集过滤/排序，消费独立 10 项 Facets 与分页条） */
+  serverMode?: boolean;
+  serverFacets?: HostFacets;
+  serverFilteredTotal?: number;
+  page?: number;
+  pageSize?: number;
+  pageSizeOptions?: readonly number[];
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (pageSize: number) => void;
+  sortKey?: HostSortKey;
+  sortDirection?: HostSortDirection;
+  onSortChange?: (key: HostSortKey, dir: HostSortDirection) => void;
+  /** 跨页 `?drawer=<id>` 深链独立加载出的主机详情 */
+  drawerHostOverride?: HostTableData | null;
+  isFetchingPage?: boolean;
 }
 
 function getResourceColor(percentage: number): string {
@@ -481,14 +503,27 @@ export function ExpandableHostTable({
   onNavigateToDevices,
   onFilteredHostsChange,
   extraHeaderRight,
+  serverMode = false,
+  serverFacets,
+  serverFilteredTotal,
+  page = 1,
+  pageSize = 50,
+  pageSizeOptions = [50, 100, 200],
+  onPageChange,
+  onPageSizeChange,
+  sortKey: controlledSortKey,
+  sortDirection: controlledSortDirection,
+  onSortChange,
+  drawerHostOverride,
+  isFetchingPage = false,
 }: ExpandableHostTableProps) {
   const [localStatusFilter, setLocalStatusFilter] = useState<'all' | HostTableData['status']>('all');
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [localHealthFilter, setLocalHealthFilter] = useState<HostHealthFilter>('all');
   const [localSyncFilter, setLocalSyncFilter] = useState<HostSyncFilter>('all');
   const [localDrawerHostId, setLocalDrawerHostId] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<HostSortKey>('default');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [localSortKey, setLocalSortKey] = useState<HostSortKey>('default');
+  const [localSortDirection, setLocalSortDirection] = useState<SortDirection>('desc');
 
   const statusFilter = controlledStatusFilter ?? localStatusFilter;
   const setStatusFilter = onStatusFilterChange ?? setLocalStatusFilter;
@@ -498,6 +533,8 @@ export function ExpandableHostTable({
   const setHealthFilter = onHealthFilterChange ?? setLocalHealthFilter;
   const syncFilter = controlledSyncFilter ?? localSyncFilter;
   const setSyncFilter = onSyncFilterChange ?? setLocalSyncFilter;
+  const sortKey = controlledSortKey ?? localSortKey;
+  const sortDirection = controlledSortDirection ?? localSortDirection;
   const activeDrawerHostId =
     controlledDrawerHostId !== undefined ? controlledDrawerHostId : localDrawerHostId;
   const setActiveDrawerHostId = useCallback(
@@ -576,6 +613,9 @@ export function ExpandableHostTable({
     Boolean(host.mount_status?.some((m) => !m.mounted));
 
   const filteredHosts = useMemo(() => {
+    if (serverMode) {
+      return hosts;
+    }
     const q = searchQuery.trim().toLowerCase();
     const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
     const matched = hosts.filter((host) => {
@@ -587,6 +627,12 @@ export function ExpandableHostTable({
         } else if (effectiveHealth !== healthFilter) {
           return false;
         }
+      }
+      if (
+        syncFilter === 'upgrade_pending' &&
+        !(host.status === 'ONLINE' && Boolean(host.agent_installed) && host.agent_code_sync_status === 'drift')
+      ) {
+        return false;
       }
       if (syncFilter === 'drift' && host.agent_code_sync_status !== 'drift') return false;
       if (syncFilter === 'matched' && host.agent_code_sync_status !== 'matched') return false;
@@ -639,29 +685,41 @@ export function ExpandableHostTable({
       }
       return cmp * dir;
     });
-  }, [hosts, statusFilter, healthFilter, syncFilter, searchQuery, sortKey, sortDirection]);
+  }, [serverMode, hosts, statusFilter, healthFilter, syncFilter, searchQuery, sortKey, sortDirection]);
 
   const handleSort = (nextKey: Exclude<HostSortKey, 'default'>) => {
+    let resolvedKey: HostSortKey;
+    let resolvedDir: SortDirection;
     if (sortKey !== nextKey) {
-      setSortKey(nextKey);
-      setSortDirection(nextKey === 'name' ? 'asc' : 'desc');
+      resolvedKey = nextKey;
+      resolvedDir = nextKey === 'name' ? 'asc' : 'desc';
     } else if (sortDirection === 'desc') {
-      setSortDirection('asc');
+      resolvedKey = nextKey;
+      resolvedDir = 'asc';
     } else {
-      setSortKey('default');
-      setSortDirection('desc');
+      resolvedKey = 'default';
+      resolvedDir = 'desc';
+    }
+    if (onSortChange) {
+      onSortChange(resolvedKey, resolvedDir);
+    } else {
+      setLocalSortKey(resolvedKey);
+      setLocalSortDirection(resolvedDir);
     }
   };
 
   // 右侧详情抽屉当前主机 & 上下切换索引
   const activeDrawerHost = useMemo(() => {
     if (!activeDrawerHostId) return null;
-    return (
+    const matched =
       filteredHosts.find((h) => String(h.id) === activeDrawerHostId) ??
-      hosts.find((h) => String(h.id) === activeDrawerHostId) ??
-      null
-    );
-  }, [activeDrawerHostId, filteredHosts, hosts]);
+      hosts.find((h) => String(h.id) === activeDrawerHostId);
+    if (matched) return matched;
+    if (drawerHostOverride && String(drawerHostOverride.id) === activeDrawerHostId) {
+      return drawerHostOverride;
+    }
+    return null;
+  }, [activeDrawerHostId, filteredHosts, hosts, drawerHostOverride]);
 
   const activeDrawerIndex = useMemo(() => {
     if (!activeDrawerHost) return -1;
@@ -755,6 +813,20 @@ export function ExpandableHostTable({
   };
 
   const stats = useMemo(() => {
+    if (serverMode && serverFacets) {
+      return {
+        total: serverFacets.all,
+        online: serverFacets.online,
+        offline: serverFacets.offline,
+        degraded: serverFacets.degraded,
+        agentAligned: serverFacets.aligned_agent_count,
+        agentDrift: serverFacets.upgrade_pending,
+        agentTrackable: serverFacets.trackable_agent_count,
+        mountErrorCount: serverFacets.mount_anomaly,
+        usbFaultCount: serverFacets.usb_anomaly,
+        unhealthyCount: serverFacets.health_anomaly,
+      };
+    }
     const onlineHosts = hosts.filter((h) => h.status === 'ONLINE' && h.agent_installed);
     const aligned = onlineHosts.filter((h) => h.agent_code_sync_status === 'matched').length;
     return {
@@ -772,7 +844,7 @@ export function ExpandableHostTable({
         (h) => h.health_status === 'DEGRADED' || h.health_status === 'UNSCHEDULABLE',
       ).length,
     };
-  }, [hosts]);
+  }, [serverMode, serverFacets, hosts]);
 
   // 只为「更多筛选」内部专属且未在顶层直接展示的条件渲染 Chip
   const hiddenChips = useMemo<ActiveFilterChip[]>(() => {
@@ -782,6 +854,13 @@ export function ExpandableHostTable({
         key: 'sync',
         label: 'Agent 同步',
         value: '已对齐',
+        onRemove: () => setSyncFilter('all'),
+      });
+    } else if (syncFilter === 'drift') {
+      chips.push({
+        key: 'sync',
+        label: 'Agent 同步',
+        value: '内容漂移 (全部)',
         onRemove: () => setSyncFilter('all'),
       });
     }
@@ -808,7 +887,13 @@ export function ExpandableHostTable({
     onShowRetiredChange?.(false);
   };
 
-  const moreActiveCount = (syncFilter === 'matched' ? 1 : 0) + (showRetired ? 1 : 0);
+  const moreActiveCount =
+    (syncFilter === 'matched' || syncFilter === 'drift' ? 1 : 0) + (showRetired ? 1 : 0);
+  const totalMatched = serverMode ? (serverFilteredTotal ?? hosts.length) : filteredHosts.length;
+  const totalPages = serverMode ? Math.max(1, Math.ceil(totalMatched / Math.max(1, pageSize))) : 1;
+  const currentPage = serverMode ? Math.min(Math.max(1, page), totalPages) : 1;
+  const rangeStart = totalMatched === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const rangeEnd = totalMatched === 0 ? 0 : Math.min(totalMatched, (currentPage - 1) * pageSize + filteredHosts.length);
   const hasAnyActiveFilter =
     statusFilter !== 'all' ||
     healthFilter !== 'all' ||
@@ -944,11 +1029,11 @@ export function ExpandableHostTable({
 
       <button
         type="button"
-        aria-pressed={syncFilter === 'drift'}
-        onClick={() => setSyncFilter(syncFilter === 'drift' ? 'all' : 'drift')}
+        aria-pressed={syncFilter === 'upgrade_pending'}
+        onClick={() => setSyncFilter(syncFilter === 'upgrade_pending' ? 'all' : 'upgrade_pending')}
         className={cn(
           'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
-          syncFilter === 'drift'
+          syncFilter === 'upgrade_pending'
             ? 'border-warning/40 bg-warning/10 font-medium text-warning'
             : 'border-transparent text-muted-foreground hover:bg-muted/40 hover:text-foreground',
         )}
@@ -1036,7 +1121,11 @@ export function ExpandableHostTable({
           hiddenChips={hiddenChips}
           hasAnyActiveFilter={hasAnyActiveFilter}
           onResetAll={handleResetAll}
-          matchSummary={`显示 ${filteredHosts.length} / ${hosts.length} 台主机`}
+          matchSummary={
+            serverMode
+              ? `匹配 ${totalMatched} / ${stats.total} 台主机`
+              : `显示 ${filteredHosts.length} / ${hosts.length} 台主机`
+          }
           chipsTestId="hosts-filter-chips"
         >
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:flex-nowrap">
@@ -1072,7 +1161,8 @@ export function ExpandableHostTable({
                   value={syncFilter}
                   onChange={(v) => setSyncFilter(v as HostSyncFilter)}
                   options={[
-                    { value: 'drift', label: '待热更新 (drift)' },
+                    { value: 'upgrade_pending', label: '待热更新 (在线+漂移)' },
+                    { value: 'drift', label: '内容漂移 (全部 drift)' },
                     { value: 'matched', label: '已对齐 (matched)' },
                     { value: 'mount_error', label: '存储挂载异常' },
                     { value: 'usb_fault', label: 'USB / Hub 异常' },
@@ -1115,7 +1205,7 @@ export function ExpandableHostTable({
                       type="checkbox"
                       checked={allFilteredSelected}
                       onChange={toggleAll}
-                      aria-label="选择全部主机"
+                      aria-label={serverMode ? '选择本页主机' : '选择全部主机'}
                       className="h-4 w-4 rounded border-border accent-primary"
                     />
                   </TableHead>
@@ -1647,12 +1737,78 @@ export function ExpandableHostTable({
 
               {filteredHosts.length === 0 ? (
                 <TableEmptyRow colSpan={visibleColumnCount}>
-                  {hosts.length === 0 ? '暂无主机' : '没有符合当前筛选条件的主机'}
+                  {serverMode
+                    ? (hasAnyActiveFilter ? '没有符合当前筛选条件的主机' : '暂无主机')
+                    : (hosts.length === 0 ? '暂无主机' : '没有符合当前筛选条件的主机')}
                 </TableEmptyRow>
               ) : null}
             </TableBody>
           </Table>
         </div>
+
+        {/* B3-2 服务端分页栏 */}
+        {serverMode && onPageChange ? (
+          <div
+            data-testid="hosts-pagination-bar"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+          >
+            <div className="flex items-center gap-2">
+              <span className="font-mono tabular-nums">
+                {totalMatched === 0
+                  ? '共 0 台主机'
+                  : `第 ${rangeStart}–${rangeEnd} / 共 ${totalMatched} 台`}
+              </span>
+              {isFetchingPage ? <span className="text-muted-foreground/70">刷新中…</span> : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {onPageSizeChange ? (
+                <div className="inline-flex items-center gap-1" role="group" aria-label="每页显示条数">
+                  <span>每页</span>
+                  {pageSizeOptions.map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      data-testid={`hosts-page-size-${size}`}
+                      aria-pressed={pageSize === size}
+                      onClick={() => onPageSizeChange(size)}
+                      className={cn(
+                        'rounded border px-2 py-0.5 font-mono text-xs transition-colors',
+                        pageSize === size
+                          ? 'border-primary bg-primary/10 font-medium text-primary'
+                          : 'border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                      )}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="inline-flex items-center gap-1.5">
+                <button
+                  type="button"
+                  data-testid="hosts-prev-page"
+                  disabled={currentPage <= 1}
+                  onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+                  className="rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  上一页
+                </button>
+                <span className="font-mono tabular-nums text-foreground" data-testid="hosts-page-indicator">
+                  {currentPage} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  data-testid="hosts-next-page"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+                  className="rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  下一页
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* 右侧标准化主机详情抽屉（D2 / #465 / #4117 U3-1） */}
         <HostDetailDrawer
