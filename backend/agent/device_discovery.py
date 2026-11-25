@@ -689,6 +689,132 @@ def inspect_usb_hub_topology(
     }
 
 
+_SYSFS_PCI_DEVICES = "/sys/bus/pci/devices"
+_PCI_CLASS_XHCI = "0x0c0330"
+
+
+def _read_sysfs_text(path: str) -> Optional[str]:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def _iter_non_recursive_port_dirs(sysfs_usb_root: str) -> Tuple[List[str], List[str]]:
+    """非递归收集 root hub 端口与外接级联 Hub 端口目录（绝不使用 followlinks 递归，防 peer 环路）。"""
+    root_ports: List[str] = []
+    hub_ports: List[str] = []
+    seen_hub_ports: set[str] = set()
+
+    try:
+        top_entries = os.listdir(sysfs_usb_root)
+    except OSError:
+        return root_ports, hub_ports
+
+    for entry in top_entries:
+        entry_path = os.path.join(sysfs_usb_root, entry)
+        if not os.path.isdir(entry_path):
+            continue
+        # 1) Root hub 目录 usb1 / usb2 → usb1/1-0:1.0/usb1-port*
+        if entry.startswith("usb") and entry[3:].isdigit():
+            bus_num = entry[3:]
+            rh_iface = os.path.join(entry_path, f"{bus_num}-0:1.0")
+            try:
+                sub_names = os.listdir(rh_iface)
+            except OSError:
+                sub_names = []
+            for sub in sub_names:
+                if "-port" in sub and sub.startswith("usb"):
+                    p = os.path.join(rh_iface, sub)
+                    if os.path.isdir(p):
+                        root_ports.append(p)
+            continue
+
+        # 2) 外接级联 Hub 接口目录（形如 1-5:1.0 / 1-5.1:1.0）→ <iface>/<hub>-port*
+        if ":" in entry and not entry.split(":", 1)[0].endswith("-0"):
+            try:
+                sub_names = os.listdir(entry_path)
+            except OSError:
+                sub_names = []
+            for sub in sub_names:
+                if "-port" in sub and not sub.startswith("usb"):
+                    p = os.path.join(entry_path, sub)
+                    if p not in seen_hub_ports and os.path.isdir(p):
+                        seen_hub_ports.add(p)
+                        hub_ports.append(p)
+
+    return root_ports, hub_ports
+
+
+def inspect_usb_controller_health(
+    sysfs_usb_root: str = _SYSFS_USB_DEVICES,
+    sysfs_pci_root: str = _SYSFS_PCI_DEVICES,
+) -> Optional[Dict[str, int]]:
+    """零权限 sysfs USB 主控与端口硬件异常体检（不依赖内核日志权限，重启不洗白）。
+
+    用于把「设备真实连接但主控/端口硬件失效」与「正常未连接设备的空置主机」硬区分开：
+    - ``unbound_xhci_controllers``：PCI 类别 ``0x0c0330``（xHCI）缺少 ``driver`` 链接数
+      （覆盖 ``probe with driver xhci_hcd failed -110`` 场景；不单看 ``enable==0``，
+      避免对手动 rebind 后 ``enable==0`` 但 ``driver=xhci_hcd`` 在位的正常主机误报）；
+    - ``disabled_root_ports``：root hub 端口 ``disable == "1"`` 计数（覆盖 ``HC died``
+      后整树被禁用且 Agent 重启洗掉 1h journal latch 的场景）；
+    - ``disabled_hub_ports``：外接级联 Hub 端口 ``disable == "1"`` 计数（覆盖 VBUS 切电
+      遗留 ``0000 off`` 或 EMI 禁用）；
+    - ``over_current_ports``：root / 级联 Hub 端口 ``over_current_count > 0`` 计数；
+    - ``stuck_default_ports``：级联 Hub 端口停在 ``state == "default"`` 且无 ``device``
+      链接数（覆盖无法完成枚举的单口卡死/坏线态）。
+
+    ``sysfs_usb_root`` 不可读时返回 ``None``（未知 ≠ 0）。
+    """
+    if not os.path.isdir(sysfs_usb_root):
+        return None
+
+    unbound_xhci = 0
+    try:
+        pci_entries = os.listdir(sysfs_pci_root)
+    except OSError:
+        pci_entries = []
+    for bdf in pci_entries:
+        pci_dir = os.path.join(sysfs_pci_root, bdf)
+        cls = _read_sysfs_text(os.path.join(pci_dir, "class"))
+        if cls is None or cls.lower() != _PCI_CLASS_XHCI:
+            continue
+        if not os.path.exists(os.path.join(pci_dir, "driver")):
+            unbound_xhci += 1
+
+    root_ports, hub_ports = _iter_non_recursive_port_dirs(sysfs_usb_root)
+
+    disabled_root_ports = 0
+    over_current_ports = 0
+    for port_dir in root_ports:
+        if _read_sysfs_text(os.path.join(port_dir, "disable")) == "1":
+            disabled_root_ports += 1
+        oc_raw = _read_sysfs_text(os.path.join(port_dir, "over_current_count"))
+        if oc_raw is not None and oc_raw.isdigit() and int(oc_raw) > 0:
+            over_current_ports += 1
+
+    disabled_hub_ports = 0
+    stuck_default_ports = 0
+    for port_dir in hub_ports:
+        if _read_sysfs_text(os.path.join(port_dir, "disable")) == "1":
+            disabled_hub_ports += 1
+        oc_raw = _read_sysfs_text(os.path.join(port_dir, "over_current_count"))
+        if oc_raw is not None and oc_raw.isdigit() and int(oc_raw) > 0:
+            over_current_ports += 1
+        state = _read_sysfs_text(os.path.join(port_dir, "state"))
+        if state == "default" and not os.path.exists(os.path.join(port_dir, "device")):
+            stuck_default_ports += 1
+
+    return {
+        "unbound_xhci_controllers": unbound_xhci,
+        "disabled_root_ports": disabled_root_ports,
+        "disabled_hub_ports": disabled_hub_ports,
+        "over_current_ports": over_current_ports,
+        "stuck_default_ports": stuck_default_ports,
+    }
+
+
 def bucket_adb_states(devices: List[Dict[str, Any]]) -> Dict[str, int]:
     """按 `adb devices` 的 state 给设备分桶（纯函数，#2902）。
 

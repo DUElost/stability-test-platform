@@ -342,12 +342,12 @@ def _cap(**overrides):
 
 
 def test_usb_tree_empty_degrades_healthy_looking_host():
-    """整树死亡形态：lsusb 只剩 root hub、agent 一台设备都没发现。
+    """整树死亡形态：lsusb 只剩 root hub（疑似手机数为 0）、agent 一台设备都没发现。
 
     旧门禁在这一形态下恒显 HEALTHY（`adb_low_healthy_devices` 要求 total>0）——
     最严重的故障形态恰好是唯一不告警的形态（#2902 的核心缺口）。
     """
-    result = _cap(usb_device_count=2, usb_root_hub_count=2)
+    result = _cap(usb_device_count=0, usb_root_hub_count=2)
 
     assert result["health"]["status"] == "DEGRADED"
     assert "usb_tree_empty" in result["health"]["reasons"]
@@ -355,29 +355,33 @@ def test_usb_tree_empty_degrades_healthy_looking_host():
 
 def test_usb_tree_empty_not_fired_when_devices_discovered():
     result = _cap(total_devices=16, online_healthy_devices=16,
-                  usb_device_count=2, usb_root_hub_count=2)
+                  usb_device_count=0, usb_root_hub_count=2)
     assert "usb_tree_empty" not in result["health"]["reasons"]
 
 
 def test_usb_tree_empty_not_fired_when_usb_has_peripherals():
-    """USB 上还有外设（设备数 > root hub 数）→ 不是空树。"""
-    result = _cap(usb_device_count=16, usb_root_hub_count=2)
-    assert "usb_tree_empty" not in result["health"]["reasons"]
+    """USB 上还有外设（哪怕仅 1~2 台非 ADB 态手机）→ 不是空树。"""
+    assert "usb_tree_empty" not in _cap(usb_device_count=16, usb_root_hub_count=2)["health"]["reasons"]
+    assert "usb_tree_empty" not in _cap(usb_device_count=2, usb_root_hub_count=2)["health"]["reasons"]
+    assert "usb_tree_empty" not in _cap(usb_device_count=1, usb_root_hub_count=2)["health"]["reasons"]
 
 
 def test_usb_tree_empty_not_fired_when_probe_failed():
-    """采集失败（None）不得据以报警——未知 ≠ 空。"""
+    """采集失败（None 或 root hub 数为 0）不得据以报警——未知 ≠ 空。"""
     assert "usb_tree_empty" not in _cap(
         usb_device_count=None, usb_root_hub_count=None
     )["health"]["reasons"]
     assert "usb_tree_empty" not in _cap(
-        usb_device_count=2, usb_root_hub_count=None
+        usb_device_count=0, usb_root_hub_count=None
+    )["health"]["reasons"]
+    assert "usb_tree_empty" not in _cap(
+        usb_device_count=0, usb_root_hub_count=0
     )["health"]["reasons"]
 
 
 def test_usb_tree_empty_is_warning_level_not_blocking():
     """warning 级：空树不进 UNSCHEDULABLE（此时本就没有设备可调度）。"""
-    health = _cap(usb_device_count=2, usb_root_hub_count=2)["health"]
+    health = _cap(usb_device_count=0, usb_root_hub_count=2)["health"]
     assert health["status"] == "DEGRADED"
     assert health["adb_ok"] is True
 

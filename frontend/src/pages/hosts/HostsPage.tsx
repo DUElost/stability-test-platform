@@ -117,6 +117,25 @@ function mapHostToTableData(host: Host): HostTableData {
           hub_port_errors: kerrRaw.hub_port_errors,
         }
       : null;
+  const ctrlRaw =
+    capRaw.usb_controller_health && typeof capRaw.usb_controller_health === 'object'
+      ? (capRaw.usb_controller_health as Record<string, unknown>)
+      : null;
+  const usbControllerHealth =
+    ctrlRaw &&
+    typeof ctrlRaw.unbound_xhci_controllers === 'number' &&
+    typeof ctrlRaw.disabled_root_ports === 'number' &&
+    typeof ctrlRaw.disabled_hub_ports === 'number' &&
+    typeof ctrlRaw.over_current_ports === 'number' &&
+    typeof ctrlRaw.stuck_default_ports === 'number'
+      ? {
+          unbound_xhci_controllers: ctrlRaw.unbound_xhci_controllers,
+          disabled_root_ports: ctrlRaw.disabled_root_ports,
+          disabled_hub_ports: ctrlRaw.disabled_hub_ports,
+          over_current_ports: ctrlRaw.over_current_ports,
+          stuck_default_ports: ctrlRaw.stuck_default_ports,
+        }
+      : null;
   const adbStatesRaw =
     capRaw.adb_state_counts && typeof capRaw.adb_state_counts === 'object'
       ? (capRaw.adb_state_counts as Record<string, unknown>)
@@ -223,12 +242,14 @@ function mapHostToTableData(host: Host): HostTableData {
         })
       : [],
     device_count: onlineDevices,
+    ledger_device_count: optionalNumber(host.ledger_device_count) ?? null,
     usb_device_count: optionalNumber(host.capacity?.usb_device_count) ?? null,
     adb_interface_count: optionalNumber(capRaw.adb_interface_count) ?? null,
     adb_state_counts: adbStateCounts,
     usb_kernel_log: usbKernelLog,
     usb_hub_topology: usbHubTopology,
     usb_kernel_errors_1h: usbKernelErrors1h,
+    usb_controller_health: usbControllerHealth,
     health_probe: healthProbe,
     self_heal: selfHeal,
     claim_hint: claimHint,
