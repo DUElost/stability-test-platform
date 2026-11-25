@@ -19,6 +19,7 @@ DEVICE_FILTER_BAR = (
     "frontend/src/components/execution/plan-execute/DeviceFilterBar.tsx"
 )
 EXPANDABLE_DEVICE_TABLE = "frontend/src/components/device/ExpandableDeviceTable.tsx"
+DEVICES_PAGE = "frontend/src/pages/devices/DevicesPage.tsx"
 PLAN_EXECUTE_PAGE = "frontend/src/pages/execution/PlanExecutePage.tsx"
 
 
@@ -45,18 +46,22 @@ def test_unified_filter_components_avoid_native_select_regression():
 
 
 def test_device_and_plan_execute_filter_options_respect_active_status_scope():
-    """Dropdown options in Devices and PlanExecute pages must stay scoped to active status/readiness."""
-    device_table = (
-        SourceGuard.of_repo_path(EXPANDABLE_DEVICE_TABLE)
-        .anchored("const devicesInStatusAndTagScope = useMemo(")
+    """Dropdown options in Devices (server facets) and PlanExecute (readiness scope) stay scoped."""
+    devices_page = (
+        SourceGuard.of_repo_path(DEVICES_PAGE)
+        .anchored("export default function DevicesPage()")
     )
-    device_table.assert_present(
-        "devicesInStatusAndTagScope",
-        why="设备页下拉选项必须先收口到 status/tag 作用域",
+    devices_page.assert_present(
+        "api.devices.facets",
+        why="设备页必须消费服务端独立 GET /api/v1/devices/facets 生成三级作用域候选项与状态计数",
     )
-    device_table.assert_present(
-        "devicesInOptionScope",
-        why="设备页下拉选项必须再收口到 host 作用域",
+    devices_page.assert_present(
+        "api.devices.listPage",
+        why="设备页必须走服务端单页分页接口，不得继续轮询拉全量",
+    )
+    devices_page.assert_absent(
+        "fetchAllDevicePages",
+        why="设备页切换服务端分页后不得继续调用 fetchAllDevicePages 轮询全量",
     )
 
     plan_execute = (
