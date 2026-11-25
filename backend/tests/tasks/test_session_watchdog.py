@@ -234,3 +234,204 @@ async def test_complete_committed_before_watchdog_locks_is_not_overwritten():
     assert jobs_unknown == 0, "已提交终态不得再转 UNKNOWN"
     job = _get_job(seed["job_id"])
     assert job.status == JobStatus.COMPLETED.value, "已提交终态被 watchdog 覆写"
+
+
+def _get_device(device_id: int) -> Device:
+    db = SessionLocal()
+    try:
+        d = db.get(Device, device_id)
+        db.expunge(d)
+        return d
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_watchdog_cascades_devices_without_any_get_and_preserves_facts():
+    """#3325 B1：无任何 GET 访问时 watchdog 持久化主机与设备离线，并保留 ADB/退役事实且不影响无主设备。"""
+    now = datetime.now(timezone.utc)
+    old_hb = now - timedelta(seconds=600)
+    last_seen_at = now - timedelta(hours=2)
+    retired_at = now - timedelta(days=1)
+    suffix = uuid4().hex[:8]
+    host_id = f"wd-cas-{suffix}"
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id,
+            hostname=f"hc-{suffix}",
+            status=HostStatus.ONLINE.value,
+            last_heartbeat=old_hb,
+            created_at=now,
+        )
+        dev_normal = Device(
+            serial=f"SC-NORM-{suffix}",
+            host_id=host_id,
+            status="ONLINE",
+            adb_state="device",
+            adb_connected=True,
+            last_seen=last_seen_at,
+            tags=[],
+            created_at=now,
+        )
+        dev_retired = Device(
+            serial=f"SC-RET-{suffix}",
+            host_id=host_id,
+            status="ONLINE",
+            adb_state="unauthorized",
+            adb_connected=False,
+            last_seen=last_seen_at,
+            retired_at=retired_at,
+            retired_by="admin",
+            retire_reason="broken",
+            tags=[],
+            created_at=now,
+        )
+        dev_orphan = Device(
+            serial=f"SC-ORPH-{suffix}",
+            host_id=None,
+            status="ONLINE",
+            tags=[],
+            created_at=now,
+        )
+        db.add_all([host, dev_normal, dev_retired, dev_orphan])
+        db.commit()
+        ids = (dev_normal.id, dev_retired.id, dev_orphan.id)
+    finally:
+        db.close()
+
+    await async_engine.dispose()
+    await session_watchdog_once(now=now)
+
+    assert _get_host(host_id).status == HostStatus.OFFLINE.value
+
+    d_norm = _get_device(ids[0])
+    assert d_norm.status == "OFFLINE"
+    assert d_norm.adb_state == "device"
+    assert d_norm.adb_connected is True
+    assert d_norm.last_seen is not None
+
+    d_ret = _get_device(ids[1])
+    assert d_ret.status == "OFFLINE"
+    assert d_ret.adb_state == "unauthorized"
+    assert d_ret.retired_at is not None
+    assert d_ret.retired_by == "admin"
+    assert d_ret.retire_reason == "broken"
+
+    # 无主设备不受主机级联影响
+    assert _get_device(ids[2]).status == "ONLINE"
+
+
+@pytest.mark.asyncio
+async def test_watchdog_reconciles_null_degraded_and_existing_offline_hosts():
+    """#3325 B1：覆盖 NULL 心跳、新鲜/过期 DEGRADED 与存量 OFFLINE 主机关联设备修补。"""
+    from prometheus_client import REGISTRY
+
+    now = datetime.now(timezone.utc)
+    fresh_hb = now - timedelta(seconds=30)
+    expired_hb = now - timedelta(seconds=600)
+    suffix = uuid4().hex[:8]
+
+    h_null_id = f"wd-null-{suffix}"
+    h_deg_fresh_id = f"wd-degf-{suffix}"
+    h_deg_exp_id = f"wd-dege-{suffix}"
+    h_off_id = f"wd-off-{suffix}"
+
+    db = SessionLocal()
+    try:
+        hosts = [
+            Host(id=h_null_id, hostname=h_null_id, status=HostStatus.ONLINE.value, last_heartbeat=None, created_at=now),
+            Host(id=h_deg_fresh_id, hostname=h_deg_fresh_id, status=HostStatus.DEGRADED.value, last_heartbeat=fresh_hb, created_at=now),
+            Host(id=h_deg_exp_id, hostname=h_deg_exp_id, status=HostStatus.DEGRADED.value, last_heartbeat=expired_hb, created_at=now),
+            Host(id=h_off_id, hostname=h_off_id, status=HostStatus.OFFLINE.value, last_heartbeat=expired_hb, created_at=now),
+        ]
+        devs = [
+            Device(serial=f"D-NULL-{suffix}", host_id=h_null_id, status="ONLINE", tags=[], created_at=now),
+            Device(serial=f"D-DEGF-{suffix}", host_id=h_deg_fresh_id, status="ONLINE", tags=[], created_at=now),
+            Device(serial=f"D-DEGE-{suffix}", host_id=h_deg_exp_id, status="BUSY", tags=[], created_at=now),
+            Device(serial=f"D-OFF-{suffix}", host_id=h_off_id, status="ONLINE", tags=[], created_at=now),
+        ]
+        db.add_all(hosts + devs)
+        db.commit()
+        dev_ids = [d.id for d in devs]
+    finally:
+        db.close()
+
+    await async_engine.dispose()
+    await session_watchdog_once(now=now)
+
+    # 1. NULL 心跳 ONLINE 主机 → 离线 + 设备离线
+    assert _get_host(h_null_id).status == HostStatus.OFFLINE.value
+    assert _get_device(dev_ids[0]).status == "OFFLINE"
+
+    # 2. 新鲜 DEGRADED 不等于离线 → 主机与设备均保持原状态
+    assert _get_host(h_deg_fresh_id).status == HostStatus.DEGRADED.value
+    assert _get_device(dev_ids[1]).status == "ONLINE"
+
+    # 3. 过期 DEGRADED → 离线 + 设备离线
+    assert _get_host(h_deg_exp_id).status == HostStatus.OFFLINE.value
+    assert _get_device(dev_ids[2]).status == "OFFLINE"
+
+    # 4. 存量 OFFLINE 主机 → 残留设备被修补为 OFFLINE，不误记新的 host_heartbeat_missed
+    assert _get_host(h_off_id).status == HostStatus.OFFLINE.value
+    assert _get_device(dev_ids[3]).status == "OFFLINE"
+    assert REGISTRY.get_sample_value("stability_host_heartbeat_missed_total", {"host_id": h_off_id}) is None
+
+
+@pytest.mark.asyncio
+async def test_watchdog_heartbeat_recovery_race_skips_recovered_host():
+    """#3325 B1：候选后、落库前若心跳恢复为新鲜 ONLINE，锁行复验必须跳过而不覆盖。"""
+    from backend.core.database import AsyncSessionLocal
+    from backend.tasks.session_watchdog import _reconcile_host_heartbeat_timeouts
+
+    now = datetime.now(timezone.utc)
+    expired_hb = now - timedelta(seconds=600)
+    suffix = uuid4().hex[:8]
+    host_id = f"wd-race-{suffix}"
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id,
+            hostname=host_id,
+            status=HostStatus.ONLINE.value,
+            last_heartbeat=expired_hb,
+            created_at=now,
+        )
+        dev = Device(
+            serial=f"D-RACE-{suffix}",
+            host_id=host_id,
+            status="ONLINE",
+            tags=[],
+            created_at=now,
+        )
+        db.add_all([host, dev])
+        db.commit()
+        dev_id = dev.id
+    finally:
+        db.close()
+
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as adb:
+        # 先让过期行进入 identity map，再由另一连接模拟心跳恢复提交
+        stale_cached = await adb.get(Host, host_id)
+        assert stale_cached is not None
+
+        sync_db = SessionLocal()
+        try:
+            h = sync_db.get(Host, host_id)
+            h.last_heartbeat = now - timedelta(seconds=5)
+            h.status = HostStatus.ONLINE.value
+            sync_db.commit()
+        finally:
+            sync_db.close()
+
+        hosts_off, jobs_unk, devs_off = await _reconcile_host_heartbeat_timeouts(adb, now=now)
+        await adb.rollback()
+
+    assert hosts_off == 0
+    assert jobs_unk == 0
+    assert devs_off == 0
+    assert _get_host(host_id).status == HostStatus.ONLINE.value
+    assert _get_device(dev_id).status == "ONLINE"

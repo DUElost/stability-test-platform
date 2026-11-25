@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 import logging
 
@@ -6,12 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import cast, func, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager, joinedload
 from typing import List, Optional, Union
 
 from backend.core.database import get_db
+from backend.core.device_lifecycle import is_retire_suggested, is_stale
 from backend.services.audit_writer import record_audit
-from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS  # noqa: F401
 from backend.models.host import Host, Device
 from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel
@@ -38,6 +39,10 @@ from backend.services.device_lease_emergency_release import release_terminal_job
 from backend.services.device_return import apply_override_sync, open_debts_for_device_sync
 from backend.core.metrics import record_device_return_override
 from backend.services.device_lifecycle import not_stale_condition
+from backend.services.inventory_status import (
+    device_effective_status_expr,
+    effective_device_status,
+)
 from backend.services.vbus_usb_presence import powered_off_slot_keys, usb_presence_for
 from backend.services.device_retirement import (
     retire_device,
@@ -62,55 +67,21 @@ _DEVICE_LIST_MAX_LIMIT = 1200
 logger = logging.getLogger(__name__)
 
 
-def _ensure_host_online_for_device(device: Device) -> bool:
-    """Mark device as OFFLINE if its host is OFFLINE or heartbeat has expired.
-    Returns True if device status was changed, False otherwise.
-    """
-    host = device.host
-    if not host:
-        return False
-
-    # Check if host is offline
-    if host.status != "ONLINE":
-        if device.status != "OFFLINE":
-            device.status = "OFFLINE"
-            logger.info(
-                "device_offline_by_host_status",
-                extra={
-                    "device_id": device.id,
-                    "device_serial": device.serial,
-                    "host_id": host.id,
-                    "host_status": host.status,
-                },
-            )
-            return True
-        return False
-
-    # Check host heartbeat timeout
-    now = datetime.now(timezone.utc)
-    offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
-    last_heartbeat = host.last_heartbeat
-    if last_heartbeat and last_heartbeat.tzinfo is None:
-        # 兼容历史/测试数据中的 naive 时间
-        last_heartbeat = last_heartbeat.replace(tzinfo=timezone.utc)
-
-    if last_heartbeat is None or last_heartbeat < offline_deadline:
-        if device.status != "OFFLINE":
-            device.status = "OFFLINE"
-            host.status = "OFFLINE"
-            logger.info(
-                "device_offline_by_host_heartbeat_timeout",
-                extra={
-                    "device_id": device.id,
-                    "device_serial": device.serial,
-                    "host_id": host.id,
-                    "host_last_heartbeat": last_heartbeat.isoformat() if last_heartbeat else None,
-                },
-            )
-            return True
-        return False
-
-    return False
+def _serialize_device_readonly(
+    device: Device,
+    model_to_project: dict,
+    *,
+    now: datetime,
+) -> DeviceOut:
+    """只读构造 DeviceOut：以请求内统一时间基准派生有效状态、陈旧度与在位信息，不改写 ORM。"""
+    eff_status = effective_device_status(device, device.host, now=now)
+    out = DeviceOut.model_validate(device)
+    out.status = eff_status
+    out.is_stale = is_stale(eff_status, device.last_seen, now=now)
+    out.retire_suggested = is_retire_suggested(eff_status, device.last_seen, now=now)
+    _fill_project_key(device, out, model_to_project)
+    out.usb_presence = usb_presence_for(device.host, device.serial, now=now)
+    return out
 
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
@@ -421,38 +392,37 @@ def list_devices(
     # 跨请求间也稳定。**不要在此引入任何被心跳重写的遥测列**（last_seen / battery_level /
     # temperature / status…），否则本缺陷原样复现。「最近活跃」由 last_seen 列自身与
     # 状态筛选卡片承载，不需要靠排序表达。
+    # 统一请求内时间基准与有效状态 SQL 谓词（#3325 / #4117 B1）：
+    # - 始终单次 LEFT OUTER JOIN Host 并经 contains_eager 预加载，消除逐行懒加载 N+1；
+    # - 筛选、计数、陈旧度与响应序列化全部共享同一套有效状态口径，零写库零 COMMIT。
+    now = datetime.now(timezone.utc)
+    eff_status = device_effective_status_expr(now=now)
     query = (
         db.query(Device)
+        .outerjoin(Host, Device.host_id == Host.id)
+        .options(contains_eager(Device.host))
         .order_by(Device.host_id.asc().nullslast(), Device.id.asc())
     )
 
     # ADR-0038 D5 不变量 1「退役不再是容量」落到**设备派生库存**（#1805 验收矩阵
-    # 「统计、容量与设备库存」行）：设备库存是经 `Device.host_id` 派生的活跃容量，
-    # 退役主机不再是容量，其设备默认不出现在活跃库存里。
-    #
-    # 口径与 ③ 切片（#1804）在 hosts/stats/metrics 上完全一致：默认隐藏 +
-    # `include_retired=true` 显式查看；`total` 与列表同口径——`query.count()` 在
-    # 过滤之后执行且共用同一 query，故自动同步，不会出现「列表 8 条、total 10」。
-    #
-    # 为什么用 outerjoin 而不是 `host_id.in_(...)` 子查询：`Device.host_id` 可为
-    # NULL（未归属主机的设备），outerjoin 后 `Host.retired_at IS NULL` 对无主设备
-    # 恒真、得以保留；子查询形式会因 NULL 不在集合中而把它们误删。
+    # 「统计、容量与设备库存」行）：outerjoin 后 `Host.retired_at IS NULL` 对无主设备
+    # 恒真、得以保留；与 `Device.retired_at IS NULL`（ADR-0057 D4）共用同一开关。
     if not include_retired:
-        query = query.outerjoin(Host, Device.host_id == Host.id).filter(
+        query = query.filter(
             Host.retired_at.is_(None),
-            # ADR-0057 D4 第 4 面：与主机退役同一开关——设备退役同样是
-            # 「不再是容量」，默认列表不再显示（`include_retired=true` 显式查看）。
             Device.retired_at.is_(None),
         )
 
     # #2962 A：陈旧度默认隐藏（与退役同一读侧惯例：默认隐藏 + 显式开关）。
-    # 陈旧是现算的派生事实（device_lifecycle），不做任何写回；容量/链选/指标
-    # 各面共用同一判据函数，避免各拼谓词。
+    # 传入有效状态表达式，确保账面非 OFFLINE 但所属主机已超时的设备在筛选与派生字段上同口径。
     if not include_stale:
-        stale_filter = not_stale_condition()
+        stale_filter = not_stale_condition(now=now, status_expr=eff_status)
         # ADR-0063 D7 / #3918：在线 vbus 主机报告为关机态（0e8d:2046）的映射设备在物理上就在槽位上，
         # 关机多久都不算陈旧；否则关机超过 7 天的设备在派发页里永远选不到。
-        powered_off = powered_off_slot_keys(db.query(Host).filter(Host.retired_at.is_(None)).all())
+        powered_off = powered_off_slot_keys(
+            db.query(Host).filter(Host.retired_at.is_(None)).all(),
+            now=now,
+        )
         if powered_off:
             stale_filter = or_(stale_filter, tuple_(Device.host_id, Device.serial).in_(sorted(powered_off)))
         query = query.filter(stale_filter)
@@ -493,9 +463,9 @@ def list_devices(
             or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
         )
 
-    # Filter by status if provided
+    # Filter by effective status if provided
     if status:
-        query = query.filter(Device.status == status)
+        query = query.filter(eff_status == status)
     if product is not None:
         query = query.filter(Device.product == product)
 
@@ -507,20 +477,8 @@ def list_devices(
 
     total = query.count()
     devices = query.offset(skip).limit(limit).all()
-    # Update device status based on host status
-    needs_commit = False
-    for device in devices:
-        if _ensure_host_online_for_device(device):
-            needs_commit = True
-    if needs_commit:
-        db.commit()
     model_to_project = _model_to_project_map(db)
-    items = []
-    for d in devices:
-        out = DeviceOut.model_validate(d)
-        _fill_project_key(d, out, model_to_project)
-        out.usb_presence = usb_presence_for(d.host, d.serial)
-        items.append(out)
+    items = [_serialize_device_readonly(d, model_to_project, now=now) for d in devices]
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
@@ -533,15 +491,16 @@ def get_device(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    device = db.get(Device, device_id)
+    now = datetime.now(timezone.utc)
+    device = (
+        db.query(Device)
+        .options(joinedload(Device.host))
+        .filter(Device.id == device_id)
+        .first()
+    )
     if not device:
         raise HTTPException(status_code=404, detail="device not found")
-    if _ensure_host_online_for_device(device):
-        db.commit()
-    out = DeviceOut.model_validate(device)
-    _fill_project_key(device, out, _model_to_project_map(db))
-    out.usb_presence = usb_presence_for(device.host, device.serial)
-    return out
+    return _serialize_device_readonly(device, _model_to_project_map(db), now=now)
 
 
 @router.get("/{device_id}/return-debts", response_model=ApiResponse[List[DeviceReturnDebtOut]])
