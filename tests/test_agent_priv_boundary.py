@@ -30,6 +30,7 @@ WRAPPER = REPO_ROOT / "backend/agent/stp_agent_priv.py"
 SMOKE = REPO_ROOT / "tools/dev/stp_agent_priv_smoke.sh"
 INSTALL_SCRIPT = REPO_ROOT / "backend/agent/install_agent.sh"
 UPDATE_PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/update_agent.yml"
+PRIV_WRAPPER_TASKS = REPO_ROOT / "tools/ansible/roles/agent_deploy/tasks/priv_wrapper.yml"
 ROLE_DEFAULTS = REPO_ROOT / "tools/ansible/roles/agent_deploy/defaults/main.yml"
 
 #: 被扫的两个真源（wrapper 与安装脚本都会随部署链搬家）——否定断言前必须先锚定语义位。
@@ -188,12 +189,18 @@ def test_install_script_deploys_wrapper_and_drops_broad_rules():
 
 def test_update_playbook_migrates_existing_hosts():
     plays = yaml.safe_load(UPDATE_PLAYBOOK.read_text(encoding="utf-8"))
-    task_names = {
-        task.get("name")
+    included = [
+        task
         for play in plays
         for task in play.get("tasks", [])
-    }
-    text = UPDATE_PLAYBOOK.read_text(encoding="utf-8")
+        if "agent_deploy/tasks/priv_wrapper.yml"
+        in str(task.get("ansible.builtin.include_tasks", ""))
+    ]
+    assert len(included) == 1, "update_agent.yml 必须 include 共享 priv_wrapper.yml"
+
+    shared_tasks = yaml.safe_load(PRIV_WRAPPER_TASKS.read_text(encoding="utf-8"))
+    task_names = {task.get("name") for task in shared_tasks}
+    text = PRIV_WRAPPER_TASKS.read_text(encoding="utf-8")
 
     assert "Install agent privilege wrapper" in task_names
     assert "Bootstrap privilege wrapper (conf + sudoers)" in task_names
