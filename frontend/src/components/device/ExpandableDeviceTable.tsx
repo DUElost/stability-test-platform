@@ -1,5 +1,10 @@
 import { deviceProductText } from '@/utils/deviceProduct';
-import type { DeviceUsbPresence } from '@/utils/api/types';
+import type {
+  DeviceFacets,
+  DeviceListSortBy,
+  DeviceListSortDir,
+  DeviceUsbPresence,
+} from '@/utils/api/types';
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '@/lib/utils';
@@ -174,6 +179,18 @@ interface ExpandableDeviceTableProps {
   /** 可选受控右侧详情抽屉设备 ID（由 DevicesPage 同步至 URL ?drawer=） */
   drawerDeviceId?: number | null;
   onDrawerDeviceIdChange?: (deviceId: number | null) => void;
+  /** #496 / #4117 B3-1：服务端分页模式（关闭前端全量过滤/排序/切片，消费独立 Facets）。 */
+  serverMode?: boolean;
+  serverFacets?: DeviceFacets;
+  serverFilteredTotal?: number;
+  pageSize?: number;
+  pageSizeOptions?: readonly number[];
+  onPageSizeChange?: (nextSize: number) => void;
+  serverSortBy?: DeviceListSortBy;
+  serverSortDir?: DeviceListSortDir;
+  onServerSortChange?: (sortBy?: DeviceListSortBy, sortDir?: DeviceListSortDir) => void;
+  /** `?drawer=` 深链指向非当前页设备时，由父页经 GET /devices/{id} 独立加载后注入。 */
+  drawerDeviceOverride?: DeviceTableData | null;
 }
 
 type SortKey = 'serial' | 'status' | 'battery_level' | 'temperature' | 'host_name' | 'last_seen';
@@ -233,6 +250,16 @@ export function ExpandableDeviceTable({
   onNavigateToHost,
   drawerDeviceId: controlledDrawerDeviceId,
   onDrawerDeviceIdChange,
+  serverMode = false,
+  serverFacets,
+  serverFilteredTotal,
+  pageSize: controlledPageSize,
+  pageSizeOptions = [50, 100, 200],
+  onPageSizeChange,
+  serverSortBy,
+  serverSortDir,
+  onServerSortChange,
+  drawerDeviceOverride = null,
 }: ExpandableDeviceTableProps) {
   const [localDrawerDeviceId, setLocalDrawerDeviceId] = useState<number | null>(null);
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; dir: SortDir } | null>(null);
@@ -267,7 +294,7 @@ export function ExpandableDeviceTable({
   const setCurrentPage = onPageChange ?? setLocalCurrentPage;
   const selectPageRef = useRef<HTMLInputElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
-  const pageSize = 50;
+  const pageSize = controlledPageSize ?? 50;
   const selectable = !!onSelectionChange;
 
   // 网络/存储列：全空时不渲染（B7——生产 515 台无 latency，白占 ~15% 宽）；
@@ -289,6 +316,9 @@ export function ExpandableDeviceTable({
   );
 
   const hostOptions = useMemo(() => {
+    if (serverMode) {
+      return serverFacets?.options.hosts ?? [];
+    }
     const byKey = new Map<string, string>();
     for (const device of devicesInStatusAndTagScope) {
       const key = hostFilterKey(device);
@@ -298,12 +328,14 @@ export function ExpandableDeviceTable({
     return Array.from(byKey.entries())
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
-  }, [devicesInStatusAndTagScope]);
+  }, [devicesInStatusAndTagScope, serverFacets?.options.hosts, serverMode]);
 
   const effectiveHostFilter =
-    hostFilter !== 'all' && !hostOptions.some((opt) => opt.value === hostFilter)
-      ? 'all'
-      : hostFilter;
+    serverMode
+      ? hostFilter
+      : hostFilter !== 'all' && !hostOptions.some((opt) => opt.value === hostFilter)
+        ? 'all'
+        : hostFilter;
 
   const devicesInOptionScope = useMemo(
     () =>
@@ -315,57 +347,87 @@ export function ExpandableDeviceTable({
 
   const modelOptions = useMemo(
     () =>
-      Array.from(new Set(devicesInOptionScope.map((device) => device.model).filter(Boolean))).sort((a, b) =>
-        a.localeCompare(b, 'zh-CN'),
-      ),
-    [devicesInOptionScope],
+      serverMode
+        ? (serverFacets?.options.models ?? [])
+        : Array.from(new Set(devicesInOptionScope.map((device) => device.model).filter(Boolean))).sort((a, b) =>
+            a.localeCompare(b, 'zh-CN'),
+          ),
+    [devicesInOptionScope, serverFacets?.options.models, serverMode],
   );
 
   const productOptions = useMemo(
     () =>
-      Array.from(
-        new Set(devicesInOptionScope.map((device) => device.product).filter((value): value is string => Boolean(value))),
-      ).sort(),
-    [devicesInOptionScope],
+      serverMode
+        ? (serverFacets?.options.products ?? [])
+        : Array.from(
+            new Set(devicesInOptionScope.map((device) => device.product).filter((value): value is string => Boolean(value))),
+          ).sort(),
+    [devicesInOptionScope, serverFacets?.options.products, serverMode],
   );
 
   const versionOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          devicesInOptionScope
-            .map((device) => device.build_display_id)
-            .filter((value): value is string => Boolean(value)),
-        ),
-      ).sort((a, b) => a.localeCompare(b, 'zh-CN')),
-    [devicesInOptionScope],
+      serverMode
+        ? (serverFacets?.options.versions ?? [])
+        : Array.from(
+            new Set(
+              devicesInOptionScope
+                .map((device) => device.build_display_id)
+                .filter((value): value is string => Boolean(value)),
+            ),
+          ).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [devicesInOptionScope, serverFacets?.options.versions, serverMode],
   );
 
   const effectiveModelFilter =
-    modelFilter !== 'all' && !modelOptions.includes(modelFilter) ? 'all' : modelFilter;
+    serverMode
+      ? modelFilter
+      : modelFilter !== 'all' && !modelOptions.includes(modelFilter)
+        ? 'all'
+        : modelFilter;
   const effectiveProductFilter =
-    productFilter !== 'all' && !productOptions.includes(productFilter) ? 'all' : productFilter;
+    serverMode
+      ? productFilter
+      : productFilter !== 'all' && !productOptions.includes(productFilter)
+        ? 'all'
+        : productFilter;
   const effectiveVersionFilter =
-    versionFilter !== 'all' && !versionOptions.includes(versionFilter) ? 'all' : versionFilter;
+    serverMode
+      ? versionFilter
+      : versionFilter !== 'all' && !versionOptions.includes(versionFilter)
+        ? 'all'
+        : versionFilter;
 
-  // 将失效子选项清理放入 effect，禁止在 render 期调用 setSearchParams（#4117 U2-1a）
+  // 本地模式：将失效子选项清理放入 effect，禁止在 render 期调用 setSearchParams（#4117 U2-1a）；
+  // 服务端分页模式下由父页在匹配且成功返回的 Facets 上严格执行归一（契约 §3.3 规则 7）。
   useEffect(() => {
-    if (hostFilter !== effectiveHostFilter) setHostFilter('all');
-  }, [hostFilter, effectiveHostFilter, setHostFilter]);
-
-  useEffect(() => {
-    if (modelFilter !== effectiveModelFilter) setModelFilter('all');
-  }, [modelFilter, effectiveModelFilter, setModelFilter]);
-
-  useEffect(() => {
-    if (productFilter !== effectiveProductFilter) setProductFilter('all');
-  }, [productFilter, effectiveProductFilter, setProductFilter]);
+    if (!serverMode && hostFilter !== effectiveHostFilter) setHostFilter('all');
+  }, [serverMode, hostFilter, effectiveHostFilter, setHostFilter]);
 
   useEffect(() => {
-    if (versionFilter !== effectiveVersionFilter) setVersionFilter('all');
-  }, [versionFilter, effectiveVersionFilter, setVersionFilter]);
+    if (!serverMode && modelFilter !== effectiveModelFilter) setModelFilter('all');
+  }, [serverMode, modelFilter, effectiveModelFilter, setModelFilter]);
+
+  useEffect(() => {
+    if (!serverMode && productFilter !== effectiveProductFilter) setProductFilter('all');
+  }, [serverMode, productFilter, effectiveProductFilter, setProductFilter]);
+
+  useEffect(() => {
+    if (!serverMode && versionFilter !== effectiveVersionFilter) setVersionFilter('all');
+  }, [serverMode, versionFilter, effectiveVersionFilter, setVersionFilter]);
 
   const toggleSort = (key: SortKey) => {
+    if (serverMode) {
+      if (key !== 'serial' || !onServerSortChange) return;
+      if (serverSortBy !== 'serial') {
+        onServerSortChange('serial', 'asc');
+      } else if (serverSortDir === 'asc') {
+        onServerSortChange('serial', 'desc');
+      } else {
+        onServerSortChange(undefined, undefined);
+      }
+      return;
+    }
     setSortConfig((prev) => {
       if (!prev || prev.key !== key) return { key, dir: key === 'last_seen' ? 'desc' : 'asc' };
       if (prev.dir === 'asc') return { key, dir: 'desc' };
@@ -374,6 +436,7 @@ export function ExpandableDeviceTable({
   };
 
   const filteredDevices = useMemo(() => {
+    if (serverMode) return devices;
     return devices.filter(device => {
       if (!matchesStatusFilter(device.status, statusFilter)) return false;
       if (effectiveHostFilter !== 'all' && hostFilterKey(device) !== effectiveHostFilter) return false;
@@ -395,6 +458,7 @@ export function ExpandableDeviceTable({
       return true;
     });
   }, [
+    serverMode,
     devices,
     statusFilter,
     effectiveHostFilter,
@@ -406,7 +470,7 @@ export function ExpandableDeviceTable({
   ]);
 
   const sortedDevices = useMemo(() => {
-    if (!sortConfig) return filteredDevices;
+    if (serverMode || !sortConfig) return filteredDevices;
     const { key, dir } = sortConfig;
     const factor = dir === 'asc' ? 1 : -1;
     return [...filteredDevices].sort((a, b) => {
@@ -434,7 +498,7 @@ export function ExpandableDeviceTable({
         }
       }
     });
-  }, [filteredDevices, sortConfig]);
+  }, [serverMode, filteredDevices, sortConfig]);
 
   const activeDrawerIndex = useMemo(
     () => (drawerDeviceId == null ? -1 : sortedDevices.findIndex((d) => d.id === drawerDeviceId)),
@@ -443,8 +507,13 @@ export function ExpandableDeviceTable({
   const activeDrawerDevice = useMemo(() => {
     if (drawerDeviceId == null) return null;
     if (activeDrawerIndex >= 0) return sortedDevices[activeDrawerIndex];
-    return devices.find((d) => d.id === drawerDeviceId) ?? null;
-  }, [activeDrawerIndex, devices, drawerDeviceId, sortedDevices]);
+    const inDevices = devices.find((d) => d.id === drawerDeviceId);
+    if (inDevices) return inDevices;
+    if (drawerDeviceOverride && drawerDeviceOverride.id === drawerDeviceId) {
+      return drawerDeviceOverride;
+    }
+    return null;
+  }, [activeDrawerIndex, devices, drawerDeviceId, drawerDeviceOverride, sortedDevices]);
 
   // Reset to page 1 when filter or search changes (in effect, never during render)
   const pageResetKey = JSON.stringify([
@@ -460,11 +529,14 @@ export function ExpandableDeviceTable({
   useEffect(() => {
     if (prevPageResetKeyRef.current !== pageResetKey) {
       prevPageResetKeyRef.current = pageResetKey;
-      if (currentPage !== 1) setCurrentPage(1);
+      if (!serverMode && currentPage !== 1) setCurrentPage(1);
     }
-  }, [pageResetKey, currentPage, setCurrentPage]);
+  }, [serverMode, pageResetKey, currentPage, setCurrentPage]);
 
-  const totalPages = Math.max(1, Math.ceil(sortedDevices.length / pageSize));
+  const effectiveFilteredCount = serverMode
+    ? (serverFilteredTotal ?? totalCount ?? sortedDevices.length)
+    : sortedDevices.length;
+  const totalPages = Math.max(1, Math.ceil(effectiveFilteredCount / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
   useEffect(() => {
     if (safeCurrentPage !== currentPage) {
@@ -472,8 +544,11 @@ export function ExpandableDeviceTable({
     }
   }, [safeCurrentPage, currentPage, setCurrentPage]);
   const paginatedDevices = useMemo(
-    () => sortedDevices.slice((safeCurrentPage - 1) * pageSize, safeCurrentPage * pageSize),
-    [sortedDevices, safeCurrentPage, pageSize],
+    () =>
+      serverMode
+        ? sortedDevices
+        : sortedDevices.slice((safeCurrentPage - 1) * pageSize, safeCurrentPage * pageSize),
+    [serverMode, sortedDevices, safeCurrentPage, pageSize],
   );
 
   // D5 Phase 1 虚拟化：在固定高度滚动容器内按需渲染可见行，降低 DOM 节点数
@@ -544,15 +619,33 @@ export function ExpandableDeviceTable({
     onSelectionChange(next);
   };
 
-  const truncated = totalCount != null && devices.length < totalCount;
-  const stats = useMemo(() => ({
-    // 真实总数优先：拿已加载条数当总数会在越过单次响应护栏时静默少报（#3131）
-    total: totalCount ?? devices.length,
-    idle: devices.filter(d => d.status === 'idle').length,
-    testing: devices.filter(d => d.status === 'testing').length,
-    offline: devices.filter(d => d.status === 'offline').length,
-    error: devices.filter(d => d.status === 'error').length,
-  }), [devices, totalCount]);
+  const truncated = !serverMode && totalCount != null && devices.length < totalCount;
+  const stats = useMemo(() => {
+    if (serverMode && serverFacets) {
+      const sc = serverFacets.status_counts;
+      return {
+        total: sc.all,
+        idle: sc.ONLINE,
+        testing: sc.BUSY,
+        offline: sc.OFFLINE,
+        error: sc.ERROR,
+        attention: sc.need_attention,
+        tagged: sc.tagged,
+      };
+    }
+    const offline = devices.filter(d => d.status === 'offline').length;
+    const error = devices.filter(d => d.status === 'error').length;
+    return {
+      // 真实总数优先：拿已加载条数当总数会在越过单次响应护栏时静默少报（#3131）
+      total: totalCount ?? devices.length,
+      idle: devices.filter(d => d.status === 'idle').length,
+      testing: devices.filter(d => d.status === 'testing').length,
+      offline,
+      error,
+      attention: offline + error,
+      tagged: devices.filter((d) => d.tags && d.tags.length > 0).length,
+    };
+  }, [devices, serverFacets, serverMode, totalCount]);
 
   const handlePageChange = (updater: (prev: number) => number) => {
     setCurrentPage(updater(safeCurrentPage));
@@ -635,8 +728,8 @@ export function ExpandableDeviceTable({
           onIncludeRetiredChange?.(false);
         };
 
-        const taggedCount = devices.filter((d) => d.tags && d.tags.length > 0).length;
-        const attentionCount = stats.offline + stats.error;
+        const taggedCount = stats.tagged;
+        const attentionCount = stats.attention;
 
         const unifiedStatusViews = (
           <div
@@ -794,7 +887,7 @@ export function ExpandableDeviceTable({
             hiddenChips={hiddenChips}
             hasAnyActiveFilter={hasAnyActiveFilter}
             onResetAll={handleResetAll}
-            matchSummary={`匹配 ${filteredDevices.length} / ${devices.length} 台设备`}
+            matchSummary={`匹配 ${effectiveFilteredCount} / ${stats.total} 台设备`}
             chipsTestId="devices-filter-chips"
           >
             <div className="flex flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center xl:flex-nowrap">
@@ -904,8 +997,8 @@ export function ExpandableDeviceTable({
               )}
               <TableHead
                 aria-sort={
-                  sortConfig?.key === 'serial'
-                    ? sortConfig.dir === 'asc'
+                  (serverMode ? serverSortBy === 'serial' : sortConfig?.key === 'serial')
+                    ? (serverMode ? serverSortDir : sortConfig?.dir) === 'asc'
                       ? 'ascending'
                       : 'descending'
                     : 'none'
@@ -921,8 +1014,8 @@ export function ExpandableDeviceTable({
                   className="inline-flex items-center gap-1 hover:text-foreground"
                 >
                   <span>设备</span>
-                  {sortConfig?.key === 'serial' ? (
-                    sortConfig.dir === 'asc' ? (
+                  {(serverMode ? serverSortBy === 'serial' : sortConfig?.key === 'serial') ? (
+                    (serverMode ? serverSortDir : sortConfig?.dir) === 'asc' ? (
                       <ArrowUp className="h-3 w-3 text-primary" />
                     ) : (
                       <ArrowDown className="h-3 w-3 text-primary" />
@@ -933,144 +1026,159 @@ export function ExpandableDeviceTable({
                 </button>
               </TableHead>
               <TableHead className="min-w-[64px] font-medium">版本</TableHead>
-              <TableHead
-                aria-sort={
-                  sortConfig?.key === 'status'
-                    ? sortConfig.dir === 'asc'
-                      ? 'ascending'
-                      : 'descending'
-                    : 'none'
-                }
-                className="min-w-[112px] font-medium"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleSort('status')}
-                  className="inline-flex items-center gap-1 hover:text-foreground"
-                >
-                  <span>状态</span>
-                  {sortConfig?.key === 'status' ? (
-                    sortConfig.dir === 'asc' ? (
-                      <ArrowUp className="h-3 w-3 text-primary" />
-                    ) : (
-                      <ArrowDown className="h-3 w-3 text-primary" />
-                    )
-                  ) : (
-                    <ArrowUpDown className="h-3 w-3 opacity-40" />
-                  )}
-                </button>
-              </TableHead>
-              <TableHead
-                aria-sort={
-                  sortConfig?.key === 'battery_level'
-                    ? sortConfig.dir === 'asc'
-                      ? 'ascending'
-                      : 'descending'
-                    : 'none'
-                }
-                className="min-w-[76px] font-medium"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleSort('battery_level')}
-                  className="inline-flex items-center gap-1 hover:text-foreground"
-                >
-                  <span>电量</span>
-                  {sortConfig?.key === 'battery_level' ? (
-                    sortConfig.dir === 'asc' ? (
-                      <ArrowUp className="h-3 w-3 text-primary" />
-                    ) : (
-                      <ArrowDown className="h-3 w-3 text-primary" />
-                    )
-                  ) : (
-                    <ArrowUpDown className="h-3 w-3 opacity-40" />
-                  )}
-                </button>
-              </TableHead>
-              <TableHead
-                aria-sort={
-                  sortConfig?.key === 'temperature'
-                    ? sortConfig.dir === 'asc'
-                      ? 'ascending'
-                      : 'descending'
-                    : 'none'
-                }
-                className="min-w-[60px] font-medium"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleSort('temperature')}
-                  className="inline-flex items-center gap-1 hover:text-foreground"
-                >
-                  <span>温度</span>
-                  {sortConfig?.key === 'temperature' ? (
-                    sortConfig.dir === 'asc' ? (
-                      <ArrowUp className="h-3 w-3 text-primary" />
-                    ) : (
-                      <ArrowDown className="h-3 w-3 text-primary" />
-                    )
-                  ) : (
-                    <ArrowUpDown className="h-3 w-3 opacity-40" />
-                  )}
-                </button>
-              </TableHead>
-              {hasDiskData && <TableHead className="min-w-[88px] font-medium">存储</TableHead>}
-              {hasNetworkData && <TableHead className="min-w-[60px] font-medium">网络</TableHead>}
-              <TableHead className="min-w-[84px] font-medium">标签</TableHead>
-              <TableHead
-                aria-sort={
-                  sortConfig?.key === 'host_name'
-                    ? sortConfig.dir === 'asc'
-                      ? 'ascending'
-                      : 'descending'
-                    : 'none'
-                }
-                className="min-w-[88px] font-medium"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleSort('host_name')}
-                  className="inline-flex items-center gap-1 hover:text-foreground"
-                >
-                  <span>所属主机</span>
-                  {sortConfig?.key === 'host_name' ? (
-                    sortConfig.dir === 'asc' ? (
-                      <ArrowUp className="h-3 w-3 text-primary" />
-                    ) : (
-                      <ArrowDown className="h-3 w-3 text-primary" />
-                    )
-                  ) : (
-                    <ArrowUpDown className="h-3 w-3 opacity-40" />
-                  )}
-                </button>
-              </TableHead>
-              <TableHead
-                aria-sort={
-                  sortConfig?.key === 'last_seen'
-                    ? sortConfig.dir === 'asc'
-                      ? 'ascending'
-                      : 'descending'
-                    : 'none'
-                }
-                className="min-w-[96px] font-medium text-right"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleSort('last_seen')}
-                  className="ml-auto inline-flex items-center gap-1 hover:text-foreground"
-                >
-                  <span>最后活跃</span>
-                  {sortConfig?.key === 'last_seen' ? (
-                    sortConfig.dir === 'asc' ? (
-                      <ArrowUp className="h-3 w-3 text-primary" />
-                    ) : (
-                      <ArrowDown className="h-3 w-3 text-primary" />
-                    )
-                  ) : (
-                    <ArrowUpDown className="h-3 w-3 opacity-40" />
-                  )}
-                </button>
-              </TableHead>
+              {serverMode ? (
+                <>
+                  <TableHead className="min-w-[112px] font-medium">状态</TableHead>
+                  <TableHead className="min-w-[76px] font-medium">电量</TableHead>
+                  <TableHead className="min-w-[60px] font-medium">温度</TableHead>
+                  {hasDiskData && <TableHead className="min-w-[88px] font-medium">存储</TableHead>}
+                  {hasNetworkData && <TableHead className="min-w-[60px] font-medium">网络</TableHead>}
+                  <TableHead className="min-w-[84px] font-medium">标签</TableHead>
+                  <TableHead className="min-w-[88px] font-medium">所属主机</TableHead>
+                  <TableHead className="min-w-[96px] font-medium text-right">最后活跃</TableHead>
+                </>
+              ) : (
+                <>
+                  <TableHead
+                    aria-sort={
+                      sortConfig?.key === 'status'
+                        ? sortConfig.dir === 'asc'
+                          ? 'ascending'
+                          : 'descending'
+                        : 'none'
+                    }
+                    className="min-w-[112px] font-medium"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('status')}
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                    >
+                      <span>状态</span>
+                      {sortConfig?.key === 'status' ? (
+                        sortConfig.dir === 'asc' ? (
+                          <ArrowUp className="h-3 w-3 text-primary" />
+                        ) : (
+                          <ArrowDown className="h-3 w-3 text-primary" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead
+                    aria-sort={
+                      sortConfig?.key === 'battery_level'
+                        ? sortConfig.dir === 'asc'
+                          ? 'ascending'
+                          : 'descending'
+                        : 'none'
+                    }
+                    className="min-w-[76px] font-medium"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('battery_level')}
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                    >
+                      <span>电量</span>
+                      {sortConfig?.key === 'battery_level' ? (
+                        sortConfig.dir === 'asc' ? (
+                          <ArrowUp className="h-3 w-3 text-primary" />
+                        ) : (
+                          <ArrowDown className="h-3 w-3 text-primary" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead
+                    aria-sort={
+                      sortConfig?.key === 'temperature'
+                        ? sortConfig.dir === 'asc'
+                          ? 'ascending'
+                          : 'descending'
+                        : 'none'
+                    }
+                    className="min-w-[60px] font-medium"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('temperature')}
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                    >
+                      <span>温度</span>
+                      {sortConfig?.key === 'temperature' ? (
+                        sortConfig.dir === 'asc' ? (
+                          <ArrowUp className="h-3 w-3 text-primary" />
+                        ) : (
+                          <ArrowDown className="h-3 w-3 text-primary" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  {hasDiskData && <TableHead className="min-w-[88px] font-medium">存储</TableHead>}
+                  {hasNetworkData && <TableHead className="min-w-[60px] font-medium">网络</TableHead>}
+                  <TableHead className="min-w-[84px] font-medium">标签</TableHead>
+                  <TableHead
+                    aria-sort={
+                      sortConfig?.key === 'host_name'
+                        ? sortConfig.dir === 'asc'
+                          ? 'ascending'
+                          : 'descending'
+                        : 'none'
+                    }
+                    className="min-w-[88px] font-medium"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('host_name')}
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                    >
+                      <span>所属主机</span>
+                      {sortConfig?.key === 'host_name' ? (
+                        sortConfig.dir === 'asc' ? (
+                          <ArrowUp className="h-3 w-3 text-primary" />
+                        ) : (
+                          <ArrowDown className="h-3 w-3 text-primary" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead
+                    aria-sort={
+                      sortConfig?.key === 'last_seen'
+                        ? sortConfig.dir === 'asc'
+                          ? 'ascending'
+                          : 'descending'
+                        : 'none'
+                    }
+                    className="min-w-[96px] font-medium text-right"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('last_seen')}
+                      className="ml-auto inline-flex items-center gap-1 hover:text-foreground"
+                    >
+                      <span>最后活跃</span>
+                      {sortConfig?.key === 'last_seen' ? (
+                        sortConfig.dir === 'asc' ? (
+                          <ArrowUp className="h-3 w-3 text-primary" />
+                        ) : (
+                          <ArrowDown className="h-3 w-3 text-primary" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                </>
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1352,32 +1460,56 @@ export function ExpandableDeviceTable({
         </Table>
 
         {/* Pagination */}
-        {sortedDevices.length > pageSize && (
-          <div className="p-3 border-t border-border flex items-center justify-between">
+        {(effectiveFilteredCount > pageSize || (serverMode && effectiveFilteredCount > 0)) && (
+          <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs text-muted-foreground">
-              显示第 {(safeCurrentPage - 1) * pageSize + 1} - {Math.min(safeCurrentPage * pageSize, sortedDevices.length)} 条，
-              共 {sortedDevices.length} 条设备
+              显示第 {(safeCurrentPage - 1) * pageSize + 1} - {Math.min(safeCurrentPage * pageSize, effectiveFilteredCount)} 条，
+              共 {effectiveFilteredCount} 条设备
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => handlePageChange((p) => Math.max(1, p - 1))}
-                disabled={safeCurrentPage === 1}
-                aria-label="上一页"
-                className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ChevronLeft className="w-4 h-4 text-muted-foreground" />
-              </button>
-              <span className="text-xs text-muted-foreground">
-                {safeCurrentPage} / {totalPages}
-              </span>
-              <button
-                onClick={() => handlePageChange((p) => Math.min(totalPages, p + 1))}
-                disabled={safeCurrentPage === totalPages}
-                aria-label="下一页"
-                className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ChevronRight className="w-4 h-4 text-muted-foreground" />
-              </button>
+            <div className="flex items-center gap-3">
+              {serverMode && onPageSizeChange && (
+                <div className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="device-page-size-group">
+                  <span>每页</span>
+                  {pageSizeOptions.map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      data-testid={`device-page-size-${size}`}
+                      aria-pressed={pageSize === size}
+                      onClick={() => onPageSizeChange(size)}
+                      className={cn(
+                        'rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors',
+                        pageSize === size
+                          ? 'border-primary bg-primary/10 font-medium text-primary'
+                          : 'border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                      )}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handlePageChange((p) => Math.max(1, p - 1))}
+                  disabled={safeCurrentPage === 1}
+                  aria-label="上一页"
+                  className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-4 h-4 text-muted-foreground" />
+                </button>
+                <span className="text-xs font-mono tabular-nums text-muted-foreground">
+                  {safeCurrentPage} / {totalPages}
+                </span>
+                <button
+                  onClick={() => handlePageChange((p) => Math.min(totalPages, p + 1))}
+                  disabled={safeCurrentPage === totalPages}
+                  aria-label="下一页"
+                  className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </div>
             </div>
           </div>
         )}
