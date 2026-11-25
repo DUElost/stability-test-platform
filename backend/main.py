@@ -65,6 +65,7 @@ from backend.services.transfer_permit import (
 # ADR-0020: Plan-based orchestration
 from backend.api.routes.plans import router as plans_router
 from backend.api.routes.plan_runs import router as plan_runs_router
+from backend.api.routes.plan_run_devices_v2 import router as plan_run_devices_v2_router
 from backend.api.routes.dedup import router as dedup_router
 from backend.api.routes.dedup import scan_router as dedup_scan_router
 # P0: MTBF 工具 API（runtask.xml 预览/校验，ADR-0030 / docs/operations/mtbf-api.md）
@@ -515,6 +516,7 @@ _fastapi_app.include_router(resource_pools_router)
 # ADR-0020: Plan-based orchestration
 _fastapi_app.include_router(plans_router)
 _fastapi_app.include_router(plan_runs_router)
+_fastapi_app.include_router(plan_run_devices_v2_router)
 _fastapi_app.include_router(dedup_router)
 _fastapi_app.include_router(dedup_scan_router)
 _fastapi_app.include_router(mtbf_router)

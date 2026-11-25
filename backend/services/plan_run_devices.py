@@ -1,24 +1,31 @@
-"""PlanRun 设备执行矩阵（#1520 垂直切片：plan_runs /devices）。
+"""PlanRun 设备执行矩阵、轻量全集 Minimap 与真分页（#1520 / #83 / #4117 B2-3）。
 
-``GET /plan-runs/{id}/devices``：Job×Device×Host×ACTIVE JOB lease 联表，
-派生 ui_status / job_exec_status / link / busy / heartbeat deadline，
-再按 status/link_status/host_id 过滤；facets 始终基于全集。
-
-路由退化为计时包装 + ``_require_plan_run`` + ``ok(build_plan_run_devices(...))``。
+- ``GET /plan-runs/{id}/devices/minimap``：直接以窄投影构建全量 7 字段设备格子、
+  全集 facets、按主机去重显示名映射（含退役机与无主机桶）与全局 ``stuck_job_ids``，
+  绝不先构造重 ``DeviceMatrixItem`` 再裁剪；
+- ``GET /plan-runs/{id}/devices``：保留不传分页参数返回全量与既有 ``total``（PlanRun 全集数）
+  的向后兼容行为；支持 ``skip`` / ``limit`` / ``q`` / ``sort_by`` / ``sort_dir`` 与聚合 KPI 并集筛选
+  （``status=lost_or_backoff`` / 逗号分隔并集；``link_status=abnormal`` / ``not_online`` / 逗号分隔），
+  新增 ``filtered_total`` 不覆盖 ``total``，且仅对当前页构造重 ``DeviceMatrixItem``。
 """
 
 from __future__ import annotations
 
-from backend.services.device_return import job_guard_deadline
-
-import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+import os
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
-from backend.api.schemas.plan_run import DeviceMatrixItem, PlanRunDevicesOut
+from backend.api.schemas.plan_run import (
+    DeviceMatrixItem,
+    PlanRunDevicesMinimapOut,
+    PlanRunDevicesOut,
+    PlanRunMinimapDeviceOut,
+    PlanRunMinimapFacetsOut,
+)
 from backend.core.job_timeout_config import (
     DISPATCHED_TIMEOUT_SECONDS,
     EXECUTING_DISARM,
@@ -31,6 +38,7 @@ from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatu
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRunHost
+from backend.services.device_return import job_guard_deadline
 from backend.services.plan_run_queries import (
     derive_device_link_status,
     device_currently_disconnected,
@@ -44,7 +52,39 @@ from backend.services.plan_run_read_common import (
 
 FAILED_JOB_STATUSES = {JobStatus.FAILED.value}
 
-def job_exec_status_for_job(j: JobInstance, now: datetime) -> str:
+UNASSIGNED_HOST_KEY = "unassigned"
+UNASSIGNED_HOST_LABEL = "未分配"
+
+# 聚合 KPI 并集哨兵（契约 §5.2 规则 3）
+STATUS_UNION_ALIASES: Dict[str, frozenset[str]] = {
+    "lost_or_backoff": frozenset({"unknown", "backoff"}),
+    "unknown_or_backoff": frozenset({"unknown", "backoff"}),
+    "stalled": frozenset({"unknown", "backoff"}),
+}
+LINK_STATUS_ABNORMAL_ALIASES = frozenset({"abnormal", "not_online"})
+
+ALLOWED_DEVICE_SORT_BY = frozenset({
+    "device_id",
+    "serial",
+    "status",
+    "link_status",
+    "host_id",
+    "log_signal_count",
+    "patrol_cycle_count",
+})
+ALLOWED_SORT_DIR = frozenset({"asc", "desc"})
+
+
+class PlanRunDevicesQueryError(Exception):
+    """PlanRun 设备查询参数校验错误（由路由层转为 HTTPException，遵守 C2 分层契约）。"""
+
+    def __init__(self, status_code: int, detail: Any):
+        super().__init__(str(detail))
+        self.status_code = status_code
+        self.detail = detail
+
+
+def job_exec_status_for_job(j: Any, now: datetime) -> str:
     s = j.status
     if s == JobStatus.COMPLETED.value:
         return "completed"
@@ -142,7 +182,7 @@ def pending_claim_deadline(j: JobInstance) -> Optional[datetime]:
     return base + timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
 
 
-def not_reported_liveness_anchor(j: JobInstance) -> Optional[datetime]:
+def not_reported_liveness_anchor(j: Any) -> Optional[datetime]:
     """Dispatch-time anchor for jobs whose liveness signal never arrived.
 
     Mirrors ``recycler._not_reported_anchor`` (#993 / ADR-0026 §3).
@@ -164,20 +204,12 @@ COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS = int(
 
 
 def running_heartbeat_deadline(
-    j: JobInstance,
+    j: Any,
     coord_heartbeat_by_host: Optional[dict[str, datetime]] = None,
     *, db: Optional[Session] = None, now: Optional[datetime] = None,
 ) -> Optional[datetime]:
     """Projected stuck deadline for a RUNNING job — aligned with
     ``recycler._running_liveness_anchor`` (#993 / ADR-0026 §3).
-
-    ``updated_at`` is deliberately NOT a liveness signal: lease renewals must
-    not be able to fake liveness (#288), so a job waiting for an execution
-    slot (WAITING_EXECUTION_SLOT / PATROL_SLEEP / WAITING_BARRIER) stays
-    non-stuck as long as its host's coordinator heartbeat is fresh — waiting
-    is legal (invariant ②), only a dead coordinator counts.  Jobs whose
-    liveness signal never arrived are anchored at dispatch time so they still
-    age out after one full window.
     """
     if j.status != JobStatus.RUNNING.value:
         return None
@@ -242,19 +274,385 @@ def derive_busy_reason(
     return None, None
 
 
-def build_plan_run_devices(
+@dataclass(frozen=True)
+class _LightweightDeviceStub:
+    """供 ``derive_device_link_status`` 复用的轻量设备视图（避免加载整行 Device）。"""
+
+    adb_state: Optional[str]
+    adb_connected: Optional[bool]
+    status: Optional[str]
+
+
+@dataclass(frozen=True)
+class _LightPlanRunRow:
+    """窄投影中间行：驱动 Minimap 响应与表格过滤/排序/切片，避免先构造重对象。"""
+
+    job_id: int
+    device_id: int
+    device_serial: Optional[str]
+    host_id: Optional[str]
+    host_display_name: Optional[str]
+    job_exec_status: str
+    device_link_status: str
+    log_signal_count: int
+    patrol_cycle_count: int
+    is_stuck: bool
+
+
+def _load_coord_heartbeats(db: Session, run_id: int) -> dict[str, datetime]:
+    coord_rows = db.execute(
+        select(PlanRunHost.host_id, PlanRunHost.coordinator_heartbeat_at)
+        .where(PlanRunHost.plan_run_id == run_id)
+    ).all()
+    return {
+        host_id: aware(hb)
+        for host_id, hb in coord_rows
+        if hb is not None
+    }
+
+
+def _host_display_name(
+    host_id: Optional[str],
+    host_name: Optional[str],
+    host_ip: Optional[str],
+) -> Optional[str]:
+    if not host_id:
+        return None
+    name_clean = (host_name or "").strip()
+    if name_clean:
+        return name_clean
+    ip_clean = (host_ip or "").strip()
+    if ip_clean:
+        return ip_clean
+    return host_id
+
+
+def _load_lightweight_plan_run_rows(
     db: Session,
     run_id: int,
     *,
-    status: Optional[str] = None,
-    link_status: Optional[str] = None,
-    host_id: Optional[str] = None,
-    plan_snapshot: Optional[dict] = None,
-) -> PlanRunDevicesOut:
-    # #3350（ADR-0023 D2）：脚本身份从调用方已加载的 plan_snapshot 派生（不新增查询）。
+    now: datetime,
+) -> Tuple[List[_LightPlanRunRow], Dict[str, int], Dict[str, int], Dict[str, int], Dict[str, str], List[int]]:
+    """一次窄列联表扫描生成全集轻量投影、facets、主机显示名映射与全局 ``stuck_job_ids``。"""
+    raw_rows = db.execute(
+        select(
+            JobInstance.id.label("job_id"),
+            JobInstance.device_id.label("device_id"),
+            JobInstance.host_id.label("host_id"),
+            JobInstance.status.label("status"),
+            JobInstance.manual_action.label("manual_action"),
+            JobInstance.next_retry_at.label("next_retry_at"),
+            JobInstance.log_signal_count.label("log_signal_count"),
+            JobInstance.patrol_cycle_count.label("patrol_cycle_count"),
+            JobInstance.execution_state.label("execution_state"),
+            JobInstance.last_execution_heartbeat_at.label("last_execution_heartbeat_at"),
+            JobInstance.started_at.label("started_at"),
+            JobInstance.created_at.label("created_at"),
+            JobInstance.disarm_guard.label("disarm_guard"),
+            Device.id.label("dev_pk"),
+            Device.serial.label("device_serial"),
+            Device.status.label("device_status"),
+            Device.adb_state.label("adb_state"),
+            Device.adb_connected.label("adb_connected"),
+            Host.status.label("host_status"),
+            Host.name.label("host_name"),
+            Host.ip.label("host_ip"),
+        )
+        .select_from(JobInstance)
+        .outerjoin(Device, Device.id == JobInstance.device_id)
+        .outerjoin(Host, Host.id == JobInstance.host_id)
+        .where(JobInstance.plan_run_id == run_id)
+        .order_by(JobInstance.device_id.asc(), JobInstance.id.asc())
+    ).all()
+
+    by_status: Dict[str, int] = {"all": 0}
+    by_link_status: Dict[str, int] = {"all": 0}
+    by_host: Dict[str, int] = {}
+    hosts_map: Dict[str, str] = {}
+    stuck_job_ids: List[int] = []
+
+    if not raw_rows:
+        return [], by_status, by_link_status, by_host, hosts_map, stuck_job_ids
+
+    coord_heartbeat_by_host = _load_coord_heartbeats(db, run_id)
+    light_rows: List[_LightPlanRunRow] = []
+
+    for row in raw_rows:
+        dev_stub = (
+            _LightweightDeviceStub(
+                adb_state=row.adb_state,
+                adb_connected=row.adb_connected,
+                status=row.device_status,
+            )
+            if row.dev_pk is not None
+            else None
+        )
+        exec_status = job_exec_status_for_job(row, now)
+        link_status = derive_device_link_status(dev_stub, row.host_status)
+        hb_deadline = running_heartbeat_deadline(
+            row, coord_heartbeat_by_host, db=db, now=now,
+        )
+        stuck = bool(hb_deadline and now >= hb_deadline)
+        if stuck:
+            stuck_job_ids.append(int(row.job_id))
+
+        host_label = _host_display_name(row.host_id, row.host_name, row.host_ip)
+        light_rows.append(
+            _LightPlanRunRow(
+                job_id=int(row.job_id),
+                device_id=int(row.device_id),
+                device_serial=row.device_serial,
+                host_id=row.host_id,
+                host_display_name=host_label,
+                job_exec_status=exec_status,
+                device_link_status=link_status,
+                log_signal_count=int(row.log_signal_count or 0),
+                patrol_cycle_count=int(row.patrol_cycle_count or 0),
+                is_stuck=stuck,
+            )
+        )
+
+        by_status["all"] += 1
+        by_status[exec_status] = by_status.get(exec_status, 0) + 1
+        by_link_status["all"] += 1
+        by_link_status[link_status] = by_link_status.get(link_status, 0) + 1
+        if row.host_id:
+            by_host[row.host_id] = by_host.get(row.host_id, 0) + 1
+            if row.host_id not in hosts_map:
+                hosts_map[row.host_id] = host_label or row.host_id
+        else:
+            by_host[UNASSIGNED_HOST_KEY] = by_host.get(UNASSIGNED_HOST_KEY, 0) + 1
+            hosts_map[UNASSIGNED_HOST_KEY] = UNASSIGNED_HOST_LABEL
+
+    return light_rows, by_status, by_link_status, by_host, hosts_map, stuck_job_ids
+
+
+def build_plan_run_devices_minimap(
+    db: Session,
+    run_id: int,
+    *,
+    now: Optional[datetime] = None,
+) -> PlanRunDevicesMinimapOut:
+    """构建独立轻量全集 Minimap 响应（严格 7 字段 DTO，绝不先构造重对象）。"""
+    ref_now = now or datetime.now(timezone.utc)
+    light_rows, by_status, by_link_status, by_host, hosts_map, stuck_job_ids = (
+        _load_lightweight_plan_run_rows(db, run_id, now=ref_now)
+    )
+    devices = [
+        PlanRunMinimapDeviceOut(
+            job_id=row.job_id,
+            device_id=row.device_id,
+            device_serial=row.device_serial,
+            host_id=row.host_id,
+            job_exec_status=row.job_exec_status,
+            device_link_status=row.device_link_status,
+            log_signal_count=row.log_signal_count,
+        )
+        for row in light_rows
+    ]
+    return PlanRunDevicesMinimapOut(
+        plan_run_id=run_id,
+        facets=PlanRunMinimapFacetsOut(
+            total=len(light_rows),
+            by_status=by_status,
+            by_link_status=by_link_status,
+            by_host=by_host,
+        ),
+        hosts=hosts_map,
+        stuck_job_ids=stuck_job_ids,
+        devices=devices,
+    )
+
+
+def _validate_sort(
+    sort_by: Optional[str],
+    sort_dir: Optional[str],
+) -> Tuple[Optional[str], str]:
+    norm_by = sort_by.strip().lower() if isinstance(sort_by, str) and sort_by.strip() else None
+    if norm_by is not None and norm_by not in ALLOWED_DEVICE_SORT_BY:
+        raise PlanRunDevicesQueryError(
+            status_code=422,
+            detail={
+                "code": "INVALID_SORT_BY",
+                "message": f"sort_by must be one of {sorted(ALLOWED_DEVICE_SORT_BY)}",
+                "allowed": sorted(ALLOWED_DEVICE_SORT_BY),
+            },
+        )
+    norm_dir = sort_dir.strip().lower() if isinstance(sort_dir, str) and sort_dir.strip() else "asc"
+    if norm_dir not in ALLOWED_SORT_DIR:
+        raise PlanRunDevicesQueryError(
+            status_code=422,
+            detail={
+                "code": "INVALID_SORT_DIR",
+                "message": "sort_dir must be 'asc' or 'desc'",
+                "allowed": sorted(ALLOWED_SORT_DIR),
+            },
+        )
+    return norm_by, norm_dir
+
+
+def _matches_status_filter(exec_status: str, status: Optional[str]) -> bool:
+    if not status or status.strip().lower() == "all":
+        return True
+    raw = status.strip().lower()
+    if raw in STATUS_UNION_ALIASES:
+        return exec_status in STATUS_UNION_ALIASES[raw]
+    tokens = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    if not tokens or "all" in tokens:
+        return True
+    expanded: set[str] = set()
+    for tok in tokens:
+        if tok in STATUS_UNION_ALIASES:
+            expanded.update(STATUS_UNION_ALIASES[tok])
+        else:
+            expanded.add(tok)
+    return exec_status in expanded
+
+
+def _matches_link_status_filter(link_status: str, filter_val: Optional[str]) -> bool:
+    if not filter_val or filter_val.strip().lower() == "all":
+        return True
+    raw = filter_val.strip().lower()
+    if raw in LINK_STATUS_ABNORMAL_ALIASES:
+        return link_status != "online"
+    tokens = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    if not tokens or "all" in tokens:
+        return True
+    if tokens & LINK_STATUS_ABNORMAL_ALIASES:
+        return link_status != "online"
+    return link_status in tokens
+
+
+def _matches_host_filter(row_host_id: Optional[str], host_id: Optional[str]) -> bool:
+    if not host_id or host_id.strip().lower() == "all":
+        return True
+    target = host_id.strip()
+    if target == UNASSIGNED_HOST_KEY:
+        return row_host_id is None
+    return row_host_id == target
+
+
+def _sort_light_rows(
+    rows: List[_LightPlanRunRow],
+    *,
+    sort_by: Optional[str],
+    sort_dir: str,
+) -> List[_LightPlanRunRow]:
+    # 默认序：(device_id ASC, job_id ASC)
+    base = sorted(rows, key=lambda r: (r.device_id, r.job_id))
+    if sort_by is None or sort_by == "device_id":
+        if sort_dir == "desc":
+            return sorted(base, key=lambda r: r.device_id, reverse=True)
+        return base
+
+    reverse = sort_dir == "desc"
+    extractors: Dict[str, Callable[[_LightPlanRunRow], Any]] = {
+        "serial": lambda r: (r.device_serial or "").lower(),
+        "status": lambda r: r.job_exec_status,
+        "link_status": lambda r: r.device_link_status,
+        "host_id": lambda r: (r.host_id or "~"),
+        "log_signal_count": lambda r: r.log_signal_count,
+        "patrol_cycle_count": lambda r: r.patrol_cycle_count,
+    }
+    return sorted(base, key=extractors[sort_by], reverse=reverse)
+
+
+def build_device_matrix_item(
+    j: JobInstance,
+    dev: Optional[Device],
+    host_st: Optional[str],
+    lease_job_id: Optional[int],
+    *,
+    coord_heartbeat_by_host: Dict[str, datetime],
+    script_index: Dict[Any, Any],
+    db: Session,
+    now: datetime,
+) -> DeviceMatrixItem:
+    """构造单台设备的完整 ``DeviceMatrixItem``（供分页当页与单 Job 详情复用）。"""
+    serial = dev.serial if dev else None
+    model = dev.model if dev else None
+    ui = ui_status_for_job(j, now, dev, host_st)
+    cur_stage = current_stage_for_job(j)
+    pending_deadline = pending_claim_deadline(j)
+    heartbeat_deadline = running_heartbeat_deadline(
+        j, coord_heartbeat_by_host, db=db, now=now,
+    )
+    busy_reason, busy_lease_job_id = derive_busy_reason(dev, host_st, lease_job_id)
+    link = derive_device_link_status(dev, host_st)
+    exec_status = job_exec_status_for_job(j, now)
+    disconnected = device_currently_disconnected(dev, host_st)
+    manual_retry_allowed = (
+        j.status == JobStatus.RUNNING.value and not disconnected
+    )
+    cur_step_name, cur_step_version = resolve_step_script(
+        script_index, stage="patrol", step_key=j.current_patrol_step,
+    )
+    return DeviceMatrixItem(
+        device_id=j.device_id,
+        device_serial=serial,
+        device_model=model,
+        host_id=j.host_id,
+        job_id=j.id,
+        job_status=j.status,
+        ui_status=ui,
+        current_stage=cur_stage,
+        current_step=j.current_patrol_step,
+        patrol_cycle_count=j.patrol_cycle_count or 0,
+        patrol_success_cycle_count=j.patrol_success_cycle_count or 0,
+        patrol_failed_cycle_count=j.patrol_failed_cycle_count or 0,
+        current_failure_streak=j.current_failure_streak or 0,
+        next_retry_at=iso(j.next_retry_at),
+        manual_action=j.manual_action,
+        log_signal_count=j.log_signal_count or 0,
+        last_heartbeat_at=iso(j.last_patrol_heartbeat_at),
+        started_at=iso(j.started_at),
+        created_at=iso(j.created_at),
+        ended_at=iso(j.ended_at),
+        status_reason=j.status_reason,
+        grace_remaining_seconds=grace_remaining_seconds(j, now),
+        pending_claim_remaining_seconds=pending_claim_remaining_seconds(j, now),
+        pending_claim_deadline_at=iso(pending_deadline),
+        heartbeat_deadline_at=iso(heartbeat_deadline),
+        is_stuck=bool(heartbeat_deadline and now >= heartbeat_deadline),
+        busy_reason=busy_reason,
+        busy_lease_job_id=busy_lease_job_id,
+        device_link_status=link,
+        job_exec_status=exec_status,
+        adb_state=dev.adb_state if dev else None,
+        adb_connected=dev.adb_connected if dev else None,
+        disarm_results=j.disarm_results,
+        capabilities={
+            "manual_retry": manual_retry_allowed,
+            "manual_exit": j.status == JobStatus.RUNNING.value,
+            "manual_retry_blocked_reason": (
+                "device_disconnected"
+                if j.status == JobStatus.RUNNING.value and disconnected
+                else None
+            ),
+            "open_report": j.status in {
+                JobStatus.COMPLETED.value,
+                JobStatus.FAILED.value,
+                JobStatus.ABORTED.value,
+            },
+        },
+        current_script_name=cur_step_name,
+        current_script_version=cur_step_version,
+    )
+
+
+def _hydrate_device_matrix_items(
+    db: Session,
+    run_id: int,
+    ordered_job_ids: Sequence[int],
+    *,
+    plan_snapshot: Optional[dict],
+    now: datetime,
+) -> List[DeviceMatrixItem]:
+    """仅对指定 ``ordered_job_ids``（当页切片）加载重字段并构造 ``DeviceMatrixItem``。"""
+    if not ordered_job_ids:
+        return []
     script_index = snapshot_step_scripts(plan_snapshot)
-    # ADR-0026 P2-3: single JOIN for jobs + device + host + ACTIVE JOB lease
-    # (was 4 sequential SELECTs; matters at ~1000 devices / PlanRun).
+    coord_heartbeat_by_host = _load_coord_heartbeats(db, run_id)
     joined = db.execute(
         select(
             JobInstance,
@@ -273,128 +671,99 @@ def build_plan_run_devices(
                 DeviceLease.lease_type == LeaseType.JOB.value,
             ),
         )
-        .where(JobInstance.plan_run_id == run_id)
-        .order_by(JobInstance.device_id.asc(), JobInstance.id.asc())
-    ).all()
-    if not joined:
-        return PlanRunDevicesOut(
-            plan_run_id=run_id, total=0,
-            by_status={"all": 0}, by_link_status={"all": 0},
-            by_host={}, devices=[],
+        .where(
+            JobInstance.plan_run_id == run_id,
+            JobInstance.id.in_(ordered_job_ids),
         )
-
-    now = datetime.now(timezone.utc)
-    items: list[DeviceMatrixItem] = []
-    by_status: dict[str, int] = {"all": 0}
-    by_link_status: dict[str, int] = {"all": 0}
-    by_host: dict[str, int] = {}
-
-    # #993: WAITING_* 存活判据需要每 host coordinator 心跳（recycler 同源）。
-    coord_rows = db.execute(
-        select(PlanRunHost.host_id, PlanRunHost.coordinator_heartbeat_at)
-        .where(PlanRunHost.plan_run_id == run_id)
     ).all()
-    coord_heartbeat_by_host: dict[str, datetime] = {
-        host_id: aware(hb)
-        for host_id, hb in coord_rows
-        if hb is not None
-    }
-
+    by_job_id: Dict[int, DeviceMatrixItem] = {}
     for j, dev, host_st, lease_job_id in joined:
-        serial = dev.serial if dev else None
-        model = dev.model if dev else None
-        ui = ui_status_for_job(j, now, dev, host_st)
-        cur_stage = current_stage_for_job(j)
-        pending_deadline = pending_claim_deadline(j)
-        heartbeat_deadline = running_heartbeat_deadline(
-            j, coord_heartbeat_by_host, db=db, now=now,
+        by_job_id[int(j.id)] = build_device_matrix_item(
+            j,
+            dev,
+            host_st,
+            lease_job_id,
+            coord_heartbeat_by_host=coord_heartbeat_by_host,
+            script_index=script_index,
+            db=db,
+            now=now,
         )
-        busy_reason, busy_lease_job_id = derive_busy_reason(dev, host_st, lease_job_id)
-        link = derive_device_link_status(dev, host_st)
-        exec_status = job_exec_status_for_job(j, now)
-        disconnected = device_currently_disconnected(dev, host_st)
-        manual_retry_allowed = (
-            j.status == JobStatus.RUNNING.value and not disconnected
-        )
-        # #3350（ADR-0023 D2）：current_step 来自巡检心跳（patrol 段语义），
-        # 查不到 → 两个字段都为 None（含 legacy 快照与 __job__ 之外的所有步骤）
-        cur_step_name, cur_step_version = resolve_step_script(
-            script_index, stage="patrol", step_key=j.current_patrol_step,
-        )
-        items.append(DeviceMatrixItem(
-            device_id=j.device_id,
-            device_serial=serial,
-            device_model=model,
-            host_id=j.host_id,
-            job_id=j.id,
-            job_status=j.status,
-            ui_status=ui,
-            current_stage=cur_stage,
-            current_step=j.current_patrol_step,
-            patrol_cycle_count=j.patrol_cycle_count or 0,
-            patrol_success_cycle_count=j.patrol_success_cycle_count or 0,
-            patrol_failed_cycle_count=j.patrol_failed_cycle_count or 0,
-            current_failure_streak=j.current_failure_streak or 0,
-            next_retry_at=iso(j.next_retry_at),
-            manual_action=j.manual_action,
-            log_signal_count=j.log_signal_count or 0,
-            last_heartbeat_at=iso(j.last_patrol_heartbeat_at),
-            started_at=iso(j.started_at),
-            created_at=iso(j.created_at),
-            ended_at=iso(j.ended_at),
-            status_reason=j.status_reason,
-            grace_remaining_seconds=grace_remaining_seconds(j, now),
-            pending_claim_remaining_seconds=pending_claim_remaining_seconds(j, now),
-            pending_claim_deadline_at=iso(pending_deadline),
-            heartbeat_deadline_at=iso(heartbeat_deadline),
-            is_stuck=bool(heartbeat_deadline and now >= heartbeat_deadline),
-            busy_reason=busy_reason,
-            busy_lease_job_id=busy_lease_job_id,
-            device_link_status=link,
-            job_exec_status=exec_status,
-            adb_state=dev.adb_state if dev else None,
-            adb_connected=dev.adb_connected if dev else None,
-            disarm_results=j.disarm_results,
-            capabilities={
-                "manual_retry": manual_retry_allowed,
-                "manual_exit": j.status == JobStatus.RUNNING.value,
-                "manual_retry_blocked_reason": (
-                    "device_disconnected"
-                    if j.status == JobStatus.RUNNING.value and disconnected
-                    else None
-                ),
-                "open_report": j.status in {
-                    JobStatus.COMPLETED.value,
-                    JobStatus.FAILED.value,
-                    JobStatus.ABORTED.value,
-                },
-            },
-            current_script_name=cur_step_name,
-            current_script_version=cur_step_version,
-        ))
-        by_status["all"] += 1
-        by_status[exec_status] = by_status.get(exec_status, 0) + 1
-        by_link_status["all"] += 1
-        by_link_status[link] = by_link_status.get(link, 0) + 1
-        if j.host_id:
-            by_host[j.host_id] = by_host.get(j.host_id, 0) + 1
+    return [by_job_id[jid] for jid in ordered_job_ids if jid in by_job_id]
 
-    # 过滤(facets 已经基于全集)
-    filtered = items
-    if status and status.lower() != "all":
-        filtered = [d for d in filtered if d.job_exec_status == status.lower()]
-    if link_status and link_status.lower() != "all":
-        filtered = [d for d in filtered if d.device_link_status == link_status.lower()]
-    if host_id and host_id.lower() != "all":
-        filtered = [d for d in filtered if d.host_id == host_id]
 
+def build_plan_run_devices(
+    db: Session,
+    run_id: int,
+    *,
+    status: Optional[str] = None,
+    link_status: Optional[str] = None,
+    host_id: Optional[str] = None,
+    q: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: Optional[str] = None,
+    skip: Optional[int] = None,
+    limit: Optional[int] = None,
+    plan_snapshot: Optional[dict] = None,
+) -> PlanRunDevicesOut:
+    norm_sort_by, norm_sort_dir = _validate_sort(sort_by, sort_dir)
+    now = datetime.now(timezone.utc)
+    light_rows, by_status, by_link_status, by_host, _hosts_map, _stuck = (
+        _load_lightweight_plan_run_rows(db, run_id, now=now)
+    )
+    if not light_rows:
+        return PlanRunDevicesOut(
+            plan_run_id=run_id,
+            total=0,
+            filtered_total=0,
+            by_status={"all": 0},
+            by_link_status={"all": 0},
+            by_host={},
+            devices=[],
+        )
+
+    # 保持历史 by_host 兼容性：无主机行不破坏既有 by_host 键（仅保留非空 host_id 计数）
+    legacy_by_host = {k: v for k, v in by_host.items() if k != UNASSIGNED_HOST_KEY}
+
+    q_lower = q.strip().lower() if isinstance(q, str) and q.strip() else None
+    filtered_rows = [
+        row
+        for row in light_rows
+        if _matches_status_filter(row.job_exec_status, status)
+        and _matches_link_status_filter(row.device_link_status, link_status)
+        and _matches_host_filter(row.host_id, host_id)
+        and (q_lower is None or q_lower in (row.device_serial or "").lower())
+    ]
+    filtered_total = len(filtered_rows)
+    ordered_rows = _sort_light_rows(
+        filtered_rows,
+        sort_by=norm_sort_by,
+        sort_dir=norm_sort_dir,
+    )
+
+    # 真分页切片：仅传 skip 或 limit 时切片；未传时保持全量向后兼容
+    if skip is not None or limit is not None:
+        eff_skip = max(0, skip or 0)
+        eff_limit = max(1, limit or 50)
+        page_rows = ordered_rows[eff_skip : eff_skip + eff_limit]
+    else:
+        page_rows = ordered_rows
+
+    # 仅对当前页的 job_id 构造重 DeviceMatrixItem
+    page_items = _hydrate_device_matrix_items(
+        db,
+        run_id,
+        [row.job_id for row in page_rows],
+        plan_snapshot=plan_snapshot,
+        now=now,
+    )
     return PlanRunDevicesOut(
         plan_run_id=run_id,
-        total=len(items),
+        total=len(light_rows),
+        filtered_total=filtered_total,
         by_status=by_status,
         by_link_status=by_link_status,
-        by_host=by_host,
-        devices=filtered,
+        by_host=legacy_by_host,
+        devices=page_items,
     )
 
 

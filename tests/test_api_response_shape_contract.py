@@ -444,6 +444,55 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "PlanRunDevicesPayload",
     ),
+    # #83 / #4117 B2-3：PlanRun Minimap 轻量全集 + 单 Job 详情与延迟子查询
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunMinimapDeviceOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunMinimapDevice",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunMinimapFacetsOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunMinimapFacets",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunDevicesMinimapOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunDevicesMinimapPayload",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunJobDetailOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunJobDetail",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunJobTraceItemOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunJobTraceItem",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunJobTimelineOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunJobTimelinePayload",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunJobWatcherSignalItemOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunJobWatcherSignalItem",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunJobWatcherSignalsOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunJobWatcherSignalsPayload",
+    ),
     (
         "backend/api/schemas/plan_run.py",
         "PlanRunEventsOut",
@@ -956,6 +1005,7 @@ _MODEL_BLINDSPOT: dict[str, set[str]] = {
     # 剩余具名模型逐个对拍前按台账显式豁免（下方 `_MODEL_UNREGISTERED`），
     # 三个仍 `ApiResponse[dict]` 的写侧摘要在此认领盲区。
     "backend/api/routes/plan_runs.py": set(),
+    "backend/api/routes/plan_run_devices_v2.py": set(),
     # ^ #1520 写侧摘要刀（2026-09-18）：三个 ApiResponse[dict] 全部升具名模型，
     # 本文件的 dict 盲区清零；typed 端点台账见 _MODEL_PAIRS / _MODEL_UNREGISTERED。
     "backend/api/routes/dedup.py": {
