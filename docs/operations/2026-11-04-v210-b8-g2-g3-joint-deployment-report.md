@@ -1,8 +1,8 @@
 # Start-Log-Scan v2.1.0 与 B8 G2/G3 联合部署报告（2026-11-04）
 
-> 状态：**执行中止并已回退**。本报告记录一次按计划执行到金丝雀即触发安全停止的部署；当前生产仍在 BASE 版本，工具仍为旧版，影子开关关闭。
-> 对应计划：`docs/operations/2026-11-04-v210-b8-g2-g3-joint-deployment-plan.md`（v1.0）。
-> 执行时间：2026-11-04 18:00–18:33（Asia/Shanghai）。
+> 状态：**v1.14 复测后按 Owner 决定回退收口（77/77 BASE）**。第一次 v1.14 尝试曾回退；Owner 手动 AEE 复测的 Run 1213 首扫 V5 通过、终态 V6 因工具 failed-dbg 项目目录名失败；随后按 Owner 决定暂停补齐 9 台、回退 68 台新代码，当前控制面/机队均为 eeab11d8，影子关闭；工具端修复单元与新版本为下一步（详见 §12）。
+> 对应计划：`docs/operations/2026-11-04-v210-b8-g2-g3-joint-deployment-plan.md`（v1.0；v1.14 复测见 §12）。
+> 执行时间：2026-11-04 18:00–18:33；v1.14 复测 2026-11-05 14:00–18:00（Asia/Shanghai）。
 
 ## 1. 结论
 
@@ -143,3 +143,101 @@
 ---
 
 _本报告只记录实际执行过的动作；未执行项均标 pending。_
+
+## 11. v1.14 重试与回退（2026-11-05）
+
+### 11.1 基线与 TARGET
+
+- TARGET：main `4d98d47a310915621a827606549c0cd1fbe76475`；`eeab11d8..4d98d47` 无新增迁移、无脚本族/manifest 变化，前端仅依赖文件。
+- 新 bundle：`/home/debian13/stp-releases/4d98d47-20261105`；agent-code `sha256:ba95121300e4bd7611a881d743789bd846a1906c799b4a3816399b078f135cbb`，control-plane `sha256:b95b1b518bbfc87f04d66ea62ed51a6083f243c1da05efd7599357c047020020`，schema `b8g1c4a7d2e9`。
+- 工具：复用 v2.1.0 双版本 venv + 生产 pkglist 覆盖；release.json 版本/commit/178 文件哈希复核，唯一 overlay 为 `config/pkglist.txt`。
+- 窗口前离线回放（TARGET `report_mapping`）：Run 1179/1189/1190/1193 的 MTK 21 份 org + 21 份 dedup **全部通过**；Unisoc 5 次 `outside_run`（1179 1、1189 1、1190 1、1193 2），按 #3884 已知限制单独记录。
+
+### 11.2 执行
+
+- 控制面切到 `4d98d47`：健康 200、schema 在 head、影子关闭、工具解析新目录、G3r 代码在位。
+- 15.102 与 15.101 依次热更新到 `4d98d47`：`matched`、xlrd 2.0.2、工具路径新目录、心跳正常。
+- 金丝雀：
+  - Run 1205（1507，V33）：init `ensure_root` 失败（`adbd cannot run as root in production builds`），PARTIAL_SUCCESS。
+  - Run 1206（1463，V143）：1105 目录含旧日志，最终扫描 org 第 2 行触发 MTK `outside_run`，拒绝 2 次（15.102 计数器=2），未上传；FAILED。（1213 复现表明实际为项目目录名；1463 待复核）
+  - Run 1207（1396，V143，干净 1105）：monkey 跑满 1h 无 AEE 日志、DLE=0；终态自动扫描无 org；FAILED（abort）。
+  - Run 1210（1396，延长）：继续约 1h 仍无 AEE 日志；abort 后无 org；FAILED。
+- 机队滚动未开始；75 台保持 BASE。
+
+### 11.3 回退
+
+- 站点 env 恢复 `env.backend.bak-20261105-v210-v14`；`current` 指回 `eeab11d8-20261103`；17:02:15 重启，健康 200、schema `b8g1c4a7d2e9`。
+- 15.101/15.102 强制热更新旧代码：`eeab11d8`、digest `1067e716…`、env 旧路径、matched。
+- 机队 77/77 全部 `eeab11d8`；新 bundle、两侧 2.1.0 工具目录、失败 run/日志/证据保留。
+
+### 11.4 V5/V6
+
+- **V5 未通过**：1207/1210 无 org/上传；1206 org 被 MTK 拒绝；1205 未进入扫描。
+- **V6 MTK**：15.102 计数器 2（1206 测试轮两次扫描）；15.101 为 0；回退后旧代码无该计数器，机队 V6 未测量。
+- **V6 Unisoc**：回放的 5 次拒绝按 #3884 单独记录，未与 MTK 混算。
+
+### 11.5 归因
+
+- 主因在**设备/数据/金丝雀设计**：V33 无 root；1463 的 1105 旧日志需按 1213 口径复核（更可能是工具 failed-dbg 项目目录名，不是 ADDYNX）；1396 新 monkey run 1h 无 AEE 事件。1213 终态 row 3 已复现为项目目录名；1127 的 ADDYNX 是真实串号，二者不同。
+- **平台端无回归**：G3 的 `outside_run` 硬失败与计数器是设计行为；#3879/G3r 的 `None` 哨兵修复有效（MTK 回放 21/21），但不覆盖 1213/1206 的 failed-dbg 项目目录名；1127 的 ADDYNX 是真实串号。
+- **工具端**：failed-dbg 兜底把项目目录名当设备号（1213 复现）；mode 0 不按 run 串号过滤是既有缺口（旧工具同样），不是 v2.1.0 回归；merge 已复核为 14 个问题、xls/org/stats 逐字节一致。
+- **最近修改**：G3/PR #3873 引入强制执行（预期），不是脏数据来源；#3879/G3r 未引入本轮失败。`preview` 未把 Plan 115 的 V143 前置变成机器校验，是平台/计划校验缺口。
+
+### 11.6 未完成项
+
+1. 金丝雀 V5：1213 首扫已通过；终态 V6 因工具 failed-dbg 项目目录名失败，需工具修复后重跑。
+2. 工具端 failed-dbg 兜底使用路径串号/None；mode 0 serial 过滤（长期）；1105 旧日志清理/隔离（数据卫生）。
+3. 机队 68/77 已到 4d98d47；9 台忙碌旧代码 pending；xlrd/tool 逐台复核与 V6 全量测量未完成。
+4. G2/G3 与工具 v2.1.0 已在 68 台生效；9 台 pending；影子保持关闭。
+
+## 12. v1.14 复测（Run 1213，Owner 手动 AEE）与当前状态
+
+### 12.1 Run 1213
+
+- 15.101 / 设备 1396 `AYCGNX66****0305`（V143），Plan 115 单设备；30min；Owner 手动触发 AEE。
+- **17:20 第一次现行扫描：V5 通过**。org+dedup 上传，`scan_artifacts_registered count=2 manifest=2 legacy=0`，MTK merge=ok、extract=done，MTK 拒绝 0。
+- **17:43 30min 终态扫描：V6 失败**。org 6 行；row 3/4 `DeviceId`/Detail = `MLD-LX2_16_261010V143_1105_MonkeyAEEinfo`（项目目录名），来自新增 `1793871130516_db.01.NE` / `2026_1022_133239_000_db.01.NE`；G3 `outside_run`；15.101 计数器 1；终态 org 未上传。
+- 复现（15.101 的 1105 临时副本 + v2.1.0）：row 2 `None`，row 3/4 项目目录名，row 5/6 `discard_device_id`。`ADDYNX66****0055` **不在 1213**；它是 15.101 的 1491 行（V45）和 1127 的真实串号。更正见 #3879 评论：https://github.com/DUElost/stability-test-platform/issues/3879#issuecomment-6655038052 。
+- 根因：工具 `_get_failed_dbg_device_root_and_id` failed-dbg 兜底把扫描根第一级目录名当 `Device_id`；#3879「不在本单元」第 3 条曾称只见过 8 月 run 122–132，本次复现。修复归工具端：用路径串号目录/`None`/`discard_device_id`，不得写项目目录名；G3 硬校验保留。
+- 1206 的 1463 旧日志 row 2 需按同一口径复核；1127 的 `ADDYNX` 是真实串号/设备身份问题，与 1213 的 folder-name 不同。
+
+### 12.2 回退前机队
+
+- 控制面 `4d98d47`；工具 v2.1.0；影子 0。
+- `batch_hot_update --direct --force`：`SUMMARY ok=67 converged=0 fail=0 skipped=10`。
+- 15.101 被跳过（canary 运行中，但已是 4d98d47）；15.102 已更新 4d98d47；9 台忙碌旧代码 pending：15.56/59/60/83/84/85/86/88/92。
+- 回退前 68 台 4d98d47 + 9 台 eeab11d8 = 77；15.101 `scan_report_mapping_rejected_total=1`，15.102=0。回退后见 §12.6。
+- 17 台 Ubuntu 22.04/Python 3.10 在 batch 中均 `OK deps_refreshed=True`；15.33 工具 venv 3.10 已实测；15.101/15.102 3.13 已实测；其余 3.10 主机的工具 import 逐台复核仍为 pending。
+
+### 12.3 V5/V6
+
+- **V5**：1213 首扫通过（org/mapping/上传/manifest/merge/extract）。
+- **V6 MTK**：15.101 终态扫描 1 次 `outside_run`（failed-dbg 项目目录名）；15.102 0；回退前 68 台新代码中仅 15.101 有该次测试拒绝；9 台旧代码 pending。回退后 77/77 BASE，旧代码无该计数器。
+- **V6 Unisoc**：回放 5 次 `outside_run`（1179 1、1189 1、1190 1、1193 2），按 #3884 已知限制单独记录；1213 无 Unisoc 设备，`skip_unisoc_no_devices`。
+- 按用户“MTK 必须为 0”，当前未通过；需工具端 failed-dbg 修复后重跑，或用路径串号/None 输出；G3 硬校验不放松。
+
+### 12.4 归因更正
+
+- 1213 只执行 1396/AYCGNX；`ADDYNX66****0055` 与 1213 无关；此前归因错误，已更正。
+- 1213 终态 row 3/4 是项目目录名；1206 的 1463 旧日志待复核；1127 的 `ADDYNX` 是真实串号。
+- 不是平台回归，也不是 #3879 `None` 哨兵修复失效；是工具 failed-dbg 兜底的另一个串号来源。
+
+### 12.5 未完成
+
+1. 工具端 failed-dbg 兜底修复（新工具版本/tag）；1213 失败样本离线回放；再新建单主机 run 在线复验，首扫+终扫 MTK 拒绝 0。
+2. 9 台忙碌主机保持 BASE，等待自然空闲；新工具版本通过后另行安排补齐。
+3. 新工具版本的 1213 离线回放、新单主机 run 首扫+终扫、V5/V6 全量测量。
+4. 影子保持关闭；激活未开始。
+
+### 12.6 按 Owner 决定回退收口（2026-11-05）
+
+- Owner 决定：暂停补齐 9 台、影子保持关闭；按既定 SOP 回退收口；忙碌主机等待自然空闲。
+- 回退：站点 env 恢复 `env.backend.bak-20261105-before-canary2`；`current` 指回 `eeab11d8-20261103`；重启健康 200、schema `b8g1c4a7d2e9`。
+- 旧发布根 `batch_hot_update --direct --force`：`SUMMARY ok=68 converged=0 fail=0 skipped=9`；68 台新代码回退到 `eeab11d8`；9 台忙碌保持 BASE（15.56/59/60/83/84/85/86/88/92）。
+- 机队核验：77/77 `eeab11d8`、77/77 matched；控制面旧工具；影子关闭。
+- 保留：新 bundle `4d98d47-20261105`、两侧 2.1.0 工具目录、Run 1213 的 1105 样本/日志/失败证据；不删除。
+- 当前状态：**未完成部署**；工具端 failed-dbg 修复单元/新版本、1213 离线回放、新单主机 run 首扫+终扫为下一步。
+
+---
+
+_本报告保留第一次尝试、v1.14 第一次回退、v1.14 复测与按 Owner 决定的第二次回退；当前控制面 eeab11d8、机队 77/77 BASE、影子关闭；Run 1213 证据保留，工具端 failed-dbg 修复与新版本待办；未完成部署。_
