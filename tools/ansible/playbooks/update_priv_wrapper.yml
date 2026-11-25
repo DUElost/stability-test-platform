@@ -1,0 +1,42 @@
+---
+# ADR-0037（#1250）：独立下发并自检提权边界 wrapper（/usr/local/sbin/stp-agent-priv）。
+#
+# 适用场景：新增 wrapper 能力（如 xhci-rebind、sync-env/retired-keys）后，
+# 按 1 → 5 → 全量安全铺开新版 wrapper；不执行代码 rsync、不获取 upgrade-gate、
+# 不重启 Agent（与 ADR-0037 收窄后移除 NOPASSWD rsync 的现场完全兼容）。
+#
+# 默认覆盖 agent_config 组（linux_hosts + agent_legacy）；需覆盖全队（含
+# agent_candidates）时显式传入 `-e priv_wrapper_hosts=all -l <host_or_group>`。
+#
+# 用法示例：
+#   ansible-playbook playbooks/update_priv_wrapper.yml -l <host>
+#   ansible-playbook playbooks/update_priv_wrapper.yml -e priv_wrapper_hosts=all -l <host>
+- name: Update agent privilege wrapper (ADR-0037)
+  hosts: "{{ priv_wrapper_hosts | default('agent_config') }}"
+  gather_facts: false
+  serial: "20%"
+  max_fail_percentage: 0
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Check agent install directory exists before updating wrapper
+      become: true
+      tags: ["priv_wrapper"]
+      ansible.builtin.stat:
+        path: "{{ agent_install_dir }}"
+      register: agent_install_dir_stat
+
+    - name: Fail when agent is not installed on target host
+      tags: ["priv_wrapper"]
+      ansible.builtin.assert:
+        that:
+          - agent_install_dir_stat.stat.exists
+          - agent_install_dir_stat.stat.isdir
+        fail_msg: >-
+          Agent install dir {{ agent_install_dir }} is missing on {{ inventory_hostname }}.
+          Run install_agent.yml first.
+
+  tasks:
+    - name: Install and verify agent privilege wrapper (ADR-0037)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../roles/agent_deploy/tasks/priv_wrapper.yml"
+      tags: ["priv_wrapper"]

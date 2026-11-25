@@ -1,5 +1,6 @@
-# 注：ansible_become* / agent_install_dir / agent_logrotate_* 等跨面共享变量
-# 已移至 group_vars/all.yml（#2218：linux_hosts 部署面 + agent_config 配置面共用）。
+# 注：ansible_become* / agent_install_dir / agent_service_name / agent_user /
+# agent_group / stp_repo_root / agent_logrotate_* 等跨面共享变量已移至
+# group_vars/all.yml（#2218 + ADR-0037 窄通道共用）。
 
 agent_check_strict: true
 agent_status_require_active: true
@@ -9,10 +10,7 @@ agent_status_require_active: true
 # 本文件不再内置任何地址默认值：部署/更新必须通过 -e agent_api_url 或
 # vault 提供真实控制面地址，否则 install_agent.sh 会因 API_URL 为空而失败。
 agent_api_url: ""
-agent_service_name: "stability-test-agent"
 agent_remote_tmp_dir: "/tmp/stability-test-agent-ansible"
-agent_user: "android"
-agent_group: "android"
 # UI 触发安装时由 saq_tasks 通过 -e agent_host_id=<UUID> 注入，使 agent 心跳
 # 能匹配 DB host 记录。手动跑 playbook 不传则回退 install_agent.sh 自动生成。
 agent_host_id: ""
@@ -61,11 +59,7 @@ agent_secret_placeholder_values:
 
 agent_secret_from_vault: "{{ vault_agent_secret | default('', true) | trim }}"
 agent_secret_from_env: "{{ lookup('ansible.builtin.env', 'AGENT_SECRET') | default('', true) | trim }}"
-# 锚定 playbook_dir 而不是 inventory_dir：真实 inventory 常放在仓库外
-# （如 /home/debian13/hosts.ini），那时 inventory_dir 相对路径会指到仓库外，
-# 兜底静默失效。playbook_dir 恒为 <repo>/tools/ansible/playbooks。
-# 需要时用 -e stp_repo_root=/path/to/repo 覆盖。
-stp_repo_root: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+# stp_repo_root 已上移至 group_vars/all.yml（锚定 playbook_dir，跨面共享）。
 agent_secret_from_env_backend: >-
   {{
     lookup(
