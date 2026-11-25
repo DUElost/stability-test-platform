@@ -25,12 +25,20 @@ from pathlib import Path
 
 import yaml
 
+from tools.dev.source_anchor import SourceGuard
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLAYBOOK_UPDATE = REPO_ROOT / "tools/ansible/playbooks/update_agent.yml"
 PLAYBOOK_PRIV = REPO_ROOT / "tools/ansible/playbooks/update_priv_wrapper.yml"
 SHARED_TASK = REPO_ROOT / "tools/ansible/roles/agent_deploy/tasks/priv_wrapper.yml"
 GROUP_VARS_ALL = REPO_ROOT / "tools/ansible/group_vars/all.yml"
 GROUP_VARS_LINUX = REPO_ROOT / "tools/ansible/group_vars/linux_hosts.yml"
+
+_PRIV_PLAYBOOK_REL = "tools/ansible/playbooks/update_priv_wrapper.yml"
+_SHARED_TASK_REL = "tools/ansible/roles/agent_deploy/tasks/priv_wrapper.yml"
+#: 真源锚点：窄 playbook / 共享 task 仍承载「只装 wrapper」语义（#2639）。
+_PRIV_PLAY_ANCHOR = "Update agent privilege wrapper (ADR-0037)"
+_SHARED_TASK_ANCHOR = "Install agent privilege wrapper"
 
 _FORBIDDEN_UPDATE_VERBS = (
     "rsync",
@@ -126,16 +134,33 @@ def test_narrow_playbook_targeting_and_fail_fast_semantics():
         assert "priv_wrapper" in (task.get("tags") or [])
 
 
+def _non_comment_body(text: str) -> str:
+    """注释可说明边界（与 #2218 配置面同款）；形态断言只扫无注释正文。"""
+    return "\n".join(
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    )
+
+
 def test_narrow_playbook_and_shared_tasks_exclude_update_and_restart_verbs():
-    """范围隔离：窄 wrapper 通道不得夹带代码 rsync、服务重启或升级门禁。"""
-    for path in (PLAYBOOK_PRIV, SHARED_TASK):
-        code = "\n".join(
-            line
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        )
+    """范围隔离：窄 wrapper 通道不得夹带代码 rsync、服务重启或升级门禁。
+
+    旧写法是裸 `assert 词 not in code`：YAML 一旦改名或这段逻辑搬走，它会**恒真**
+    而继续报绿（#2639）。先以任务名证明扫的还是那段实现，再判退役形态。
+    注释允许说明「不碰 rsync / upgrade-gate」等边界，故形态断言扫无注释正文。
+    """
+    for rel, anchor in (
+        (_PRIV_PLAYBOOK_REL, _PRIV_PLAY_ANCHOR),
+        (_SHARED_TASK_REL, _SHARED_TASK_ANCHOR),
+    ):
+        live = SourceGuard.of_repo_path(rel).anchored(anchor)
+        guard = SourceGuard(_non_comment_body(live.text), origin=rel).anchored(anchor)
         for verb in _FORBIDDEN_UPDATE_VERBS:
-            assert verb not in code, f"{path.name} 出现越界更新动词：{verb}"
+            guard.assert_absent(
+                verb,
+                why=f"窄 wrapper 通道不得夹带更新/重启动词：{verb}",
+            )
 
 
 def test_priv_wrapper_shared_vars_single_definition_in_all_group_vars():
