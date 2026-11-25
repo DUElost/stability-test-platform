@@ -1,16 +1,13 @@
 from datetime import datetime, timezone
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import cast, func, or_, select, tuple_
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
-from sqlalchemy.orm import Session, contains_eager, joinedload
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Union
 
 from backend.core.database import get_db
-from backend.core.device_lifecycle import is_retire_suggested, is_stale
 from backend.services.audit_writer import record_audit
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS  # noqa: F401
 from backend.models.host import Host, Device
@@ -22,12 +19,16 @@ from backend.api.schemas.device import (
     BulkProjectAssignIn,
     BulkSwipeTrailIn,
     BulkSwipeTrailOut,
+    DeviceFacetsOut,
     DeviceLeaseReleaseIn,
     DeviceLeaseReleaseOut,
+    DeviceListItemOut,
     DeviceRetireBatchIn,
     DeviceRetireBatchOut,
     DeviceRetireBatchResult,
     DeviceRetireIn,
+    DeviceSelectionPreviewIn,
+    DeviceSelectionPreviewOut,
     DeviceUnretireIn,
     DeviceRebindIn,
     DeviceReturnDebtOut,
@@ -35,15 +36,22 @@ from backend.api.schemas.device import (
     DeviceReturnOverrideOut,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.services.device_inventory_query import (
+    DeviceQueryError,
+    DeviceQueryFilters,
+    build_device_facets,
+    build_device_selection_preview,
+    build_filtered_device_query,
+    enforce_bulk_write_limit,
+    serialize_device_full_readonly,
+    serialize_device_list_item,
+    validate_projection,
+    validate_sort_params,
+)
 from backend.services.device_lease_emergency_release import release_terminal_job_lease
 from backend.services.device_return import apply_override_sync, open_debts_for_device_sync
 from backend.core.metrics import record_device_return_override
-from backend.services.device_lifecycle import not_stale_condition
-from backend.services.inventory_status import (
-    device_effective_status_expr,
-    effective_device_status,
-)
-from backend.services.vbus_usb_presence import powered_off_slot_keys, usb_presence_for
+from backend.services.vbus_usb_presence import usb_presence_for
 from backend.services.device_retirement import (
     retire_device,
     retire_devices_batch,
@@ -51,10 +59,6 @@ from backend.services.device_retirement import (
 )
 from backend.services.device_rebind import rebind_device
 from backend.services.device_swipe_trail import bulk_set_swipe_trail
-
-# 与 backend/api/routes/projects.py 的库存口径一致（ADR-0029 v2.5）：
-# SEED 项目成员不算真实归属映射。
-_USER_SOURCE = "USER"
 
 # `GET /devices` 的**单次响应** limit 护栏。它是体积护栏，**不是 fleet 总量**：
 # 48 host × 25 台 = 1200 已把本值压满，而 ADR-0026 的规模目标是 60+ host / 1000+
@@ -67,6 +71,13 @@ _DEVICE_LIST_MAX_LIMIT = 1200
 logger = logging.getLogger(__name__)
 
 
+def _enforce_bulk_limit_http(device_ids: List[int], *, action: str) -> None:
+    try:
+        enforce_bulk_write_limit(device_ids, action=action)
+    except DeviceQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+
 def _serialize_device_readonly(
     device: Device,
     model_to_project: dict,
@@ -74,14 +85,7 @@ def _serialize_device_readonly(
     now: datetime,
 ) -> DeviceOut:
     """只读构造 DeviceOut：以请求内统一时间基准派生有效状态、陈旧度与在位信息，不改写 ORM。"""
-    eff_status = effective_device_status(device, device.host, now=now)
-    out = DeviceOut.model_validate(device)
-    out.status = eff_status
-    out.is_stale = is_stale(eff_status, device.last_seen, now=now)
-    out.retire_suggested = is_retire_suggested(eff_status, device.last_seen, now=now)
-    _fill_project_key(device, out, model_to_project)
-    out.usb_presence = usb_presence_for(device.host, device.serial, now=now)
-    return out
+    return serialize_device_full_readonly(device, model_to_project, now=now)
 
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
@@ -156,6 +160,7 @@ def bulk_assign_project(
         )
     if not payload.device_ids:
         raise HTTPException(status_code=422, detail="device_ids must not be empty")
+    _enforce_bulk_limit_http(payload.device_ids, action="assign_project")
 
     devices = (
         db.query(Device)
@@ -273,6 +278,7 @@ async def bulk_swipe_trail(
     """
     if not payload.device_ids:
         raise HTTPException(status_code=422, detail="device_ids must not be empty")
+    _enforce_bulk_limit_http(payload.device_ids, action="swipe_trail")
 
     out = await bulk_set_swipe_trail(
         db,
@@ -357,12 +363,31 @@ def _fill_project_key(device: Device, out, model_to_project: dict[str, int]) -> 
     )
 
 
-@router.get("", response_model=Union[List[DeviceOut], PaginatedResponse])
+@router.get("", response_model=Union[List[DeviceOut], List[DeviceListItemOut], PaginatedResponse])
 def list_devices(
     request: Request,
-    tags: Optional[str] = Query(None, description="Comma-separated tag filter"),
-    status: Optional[str] = Query(None, description="Filter by device status (ONLINE, OFFLINE, BUSY)"),
+    q: Optional[str] = Query(
+        None,
+        max_length=256,
+        description="不区分大小写的字面子串搜索（覆盖串号、展示型号、展示 Product、build_display_id、主机展示名、任一标签）",
+    ),
+    tags: Optional[str] = Query(None, description="Comma-separated tag filter (AND)"),
+    has_tags: Optional[bool] = Query(
+        None,
+        description="标签存在性三态筛选：省略不限、true 非空数组、false 无标签",
+    ),
+    status: Optional[str] = Query(
+        None,
+        description="Filter by effective status (ONLINE/BUSY/OFFLINE/ERROR, lowercase aliases, or need_attention)",
+    ),
+    host_id: Optional[str] = Query(
+        None,
+        max_length=64,
+        description="Exact host_id filter; use 'unassigned' for devices without host (host_id IS NULL)",
+    ),
+    model: Optional[str] = Query(None, max_length=128, description="Exact device model filter"),
     product: Optional[str] = Query(None, min_length=1, max_length=128, description="Exact ADB product filter"),
+    version: Optional[str] = Query(None, max_length=256, description="Exact build_display_id filter"),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     unassigned: bool = Query(False, description="ADR-0029 P0: only devices with no project (project_id IS NULL)"),
     include_retired: bool = Query(
@@ -379,110 +404,136 @@ def list_devices(
             "显式置 true 才显示"
         ),
     ),
+    sort_by: Optional[str] = Query(
+        None,
+        description="排序列白名单：serial | host_id（缺省为 host_id NULLS LAST, id）",
+    ),
+    sort_dir: Optional[str] = Query(
+        None,
+        description="排序方向：asc | desc（缺省 asc）",
+    ),
+    projection: Optional[str] = Query(
+        None,
+        description="响应投影：full（默认兼容 DeviceOut）或 list（有界 DeviceListItemOut，不含无界 extra）",
+    ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=_DEVICE_LIST_MAX_LIMIT),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    # 稳定次序：排序列**只能由恒定身份列构成**。#537 只补了 tie-breaker，主键仍是
-    # last_seen——而该列每次设备心跳都被重写（routes/heartbeat.py），于是「组内顺序
-    # 确定」并不等于「跨时刻顺序稳定」：列值一变，全序就整体重排。生产实测 862 台、
-    # 10s 窗口内前 50 行 0% 重合、位置中位移动 250 行，前端每 10s 轮询一次即整页换人
-    # （#3123）。改为 (host_id, id)：同主机设备成片，`id` 唯一保证全序，offset 分页在
-    # 跨请求间也稳定。**不要在此引入任何被心跳重写的遥测列**（last_seen / battery_level /
-    # temperature / status…），否则本缺陷原样复现。「最近活跃」由 last_seen 列自身与
-    # 状态筛选卡片承载，不需要靠排序表达。
-    # 统一请求内时间基准与有效状态 SQL 谓词（#3325 / #4117 B1）：
-    # - 始终单次 LEFT OUTER JOIN Host 并经 contains_eager 预加载，消除逐行懒加载 N+1；
-    # - 筛选、计数、陈旧度与响应序列化全部共享同一套有效状态口径，零写库零 COMMIT。
-    now = datetime.now(timezone.utc)
-    eff_status = device_effective_status_expr(now=now)
-    query = (
-        db.query(Device)
-        .outerjoin(Host, Device.host_id == Host.id)
-        .options(contains_eager(Device.host))
-        .order_by(Device.host_id.asc().nullslast(), Device.id.asc())
-    )
-
-    # ADR-0038 D5 不变量 1「退役不再是容量」落到**设备派生库存**（#1805 验收矩阵
-    # 「统计、容量与设备库存」行）：outerjoin 后 `Host.retired_at IS NULL` 对无主设备
-    # 恒真、得以保留；与 `Device.retired_at IS NULL`（ADR-0057 D4）共用同一开关。
-    if not include_retired:
-        query = query.filter(
-            Host.retired_at.is_(None),
-            Device.retired_at.is_(None),
+    # 稳定次序（#3123 / #496）：排序白名单仅允许恒定身份列 {serial, host_id}，
+    # 固定 NULLS LAST + Device.id ASC 尾键，严禁引入心跳遥测列避免跨页漂移。
+    try:
+        norm_sort_by, norm_sort_dir = validate_sort_params(sort_by, sort_dir)
+        norm_projection = validate_projection(projection)
+        now = datetime.now(timezone.utc)
+        filters = DeviceQueryFilters(
+            q=q,
+            status=status,
+            host_id=host_id,
+            model=model,
+            product=product,
+            version=version,
+            tags=tags,
+            has_tags=has_tags,
+            project_key=project_key,
+            unassigned=unassigned,
+            include_stale=include_stale,
+            include_retired=include_retired,
         )
-
-    # #2962 A：陈旧度默认隐藏（与退役同一读侧惯例：默认隐藏 + 显式开关）。
-    # 传入有效状态表达式，确保账面非 OFFLINE 但所属主机已超时的设备在筛选与派生字段上同口径。
-    if not include_stale:
-        stale_filter = not_stale_condition(now=now, status_expr=eff_status)
-        # ADR-0063 D7 / #3918：在线 vbus 主机报告为关机态（0e8d:2046）的映射设备在物理上就在槽位上，
-        # 关机多久都不算陈旧；否则关机超过 7 天的设备在派发页里永远选不到。
-        powered_off = powered_off_slot_keys(
-            db.query(Host).filter(Host.retired_at.is_(None)).all(),
+        query = build_filtered_device_query(
+            db,
+            filters,
             now=now,
+            sort_by=norm_sort_by,
+            sort_dir=norm_sort_dir,
+            eager_host=True,
         )
-        if powered_off:
-            stale_filter = or_(stale_filter, tuple_(Device.host_id, Device.serial).in_(sorted(powered_off)))
-        query = query.filter(stale_filter)
-
-    # ADR-0029 P0：未归属筛选——与 project_key 互斥（「某项目里未归属」无意义）；
-    # 参数组合错误优先于 key 存在性校验
-    if unassigned and project_key:
-        raise HTTPException(
-            status_code=400,
-            detail="unassigned and project_key are mutually exclusive",
-        )
-
-    # ADR-0029 v2.5：归属筛选派生（device.model ⋈ project_model 活跃成员行）
-    if project_key:
-        # 未知 key 一律 404（与 projects 路由同语义；防「拼错 key 静默空列表」）
-        project = db.query(TestProject).filter(TestProject.project_key == project_key).first()
-        if project is None:
-            raise HTTPException(status_code=404, detail="project not found")
-        query = query.join(ProjectModel, Device.model == ProjectModel.match_value) \
-                     .filter(
-                         ProjectModel.project_id == project.id,
-                         ProjectModel.is_active.is_(True),
-                     )
-
-    if unassigned:
-        # #952: 与项目 inventory 严格未映射口径一致（ADR-0029 v2.5）——
-        # 只认 **USER** 项目的活跃成员行，SEED 成员不算映射；否则含 SEED
-        # 时「统计显示待归属、待归属列表找不到」。
-        mapped_models = (
-            select(ProjectModel.match_value)
-            .join(TestProject, TestProject.id == ProjectModel.project_id)
-            .where(
-                ProjectModel.is_active.is_(True),
-                TestProject.source == _USER_SOURCE,
-            )
-        )
-        query = query.filter(
-            or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
-        )
-
-    # Filter by effective status if provided
-    if status:
-        query = query.filter(eff_status == status)
-    if product is not None:
-        query = query.filter(Device.product == product)
-
-    # Filter by tags using JSONB @> operator
-    if tags:
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        for tag in tag_list:
-            query = query.filter(Device.tags.op('@>')(cast(json.dumps([tag]), PG_JSONB)))
-
+    except DeviceQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
     total = query.count()
     devices = query.offset(skip).limit(limit).all()
     model_to_project = _model_to_project_map(db)
-    items = [_serialize_device_readonly(d, model_to_project, now=now) for d in devices]
+    if norm_projection == "list":
+        items = [serialize_device_list_item(d, model_to_project, now=now) for d in devices]
+    else:
+        items = [_serialize_device_readonly(d, model_to_project, now=now) for d in devices]
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
+
+
+@router.get("/facets", response_model=ApiResponse[DeviceFacetsOut])
+def get_device_facets(
+    q: Optional[str] = Query(None, max_length=256),
+    tags: Optional[str] = Query(None),
+    has_tags: Optional[bool] = Query(None),
+    status: Optional[str] = Query(None),
+    host_id: Optional[str] = Query(None, max_length=64),
+    model: Optional[str] = Query(None, max_length=128),
+    product: Optional[str] = Query(None, min_length=1, max_length=128),
+    version: Optional[str] = Query(None, max_length=256),
+    project_key: Optional[str] = Query(None),
+    unassigned: bool = Query(False),
+    include_retired: bool = Query(False),
+    include_stale: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """#496 / #4117 B2-1：物理设备三级作用域 Facets（只读，不含分页与排序参数）。"""
+    filters = DeviceQueryFilters(
+        q=q,
+        status=status,
+        host_id=host_id,
+        model=model,
+        product=product,
+        version=version,
+        tags=tags,
+        has_tags=has_tags,
+        project_key=project_key,
+        unassigned=unassigned,
+        include_stale=include_stale,
+        include_retired=include_retired,
+    )
+    try:
+        return ok(build_device_facets(db, filters, now=datetime.now(timezone.utc)))
+    except DeviceQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+
+@router.post("/selection-preview", response_model=ApiResponse[DeviceSelectionPreviewOut])
+def preview_device_selection(
+    payload: DeviceSelectionPreviewIn,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """#496 / #4117 B2-1：跨页批量选择预览（只读，冻结匹配 ID 与影响摘要）。"""
+    filters = DeviceQueryFilters(
+        q=payload.q,
+        status=payload.status,
+        host_id=payload.host_id,
+        model=payload.model,
+        product=payload.product,
+        version=payload.version,
+        tags=payload.tags,
+        has_tags=payload.has_tags,
+        project_key=payload.project_key,
+        unassigned=payload.unassigned,
+        include_stale=payload.include_stale,
+        include_retired=payload.include_retired,
+    )
+    try:
+        return ok(
+            build_device_selection_preview(
+                db,
+                filters,
+                action=payload.action,
+                now=datetime.now(timezone.utc),
+            )
+        )
+    except DeviceQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
 
 @router.get("/{device_id}", response_model=DeviceOut)
@@ -738,6 +789,7 @@ def retire_devices_endpoint(
     """
     if not payload.device_ids:
         raise HTTPException(status_code=422, detail="device_ids must not be empty")
+    _enforce_bulk_limit_http(payload.device_ids, action="retire")
     results = retire_devices_batch(
         db,
         device_ids=payload.device_ids,

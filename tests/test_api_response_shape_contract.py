@@ -696,6 +696,43 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "DeviceReturnDebtItem",
     ),
+    # #496 / #4117 B2-1：物理设备有界列表、独立 Facets 与跨页选择预览。
+    (
+        "backend/api/schemas/device.py",
+        "DeviceListItemOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceListItem",
+    ),
+    (
+        "backend/api/schemas/device.py",
+        "DeviceFacetStatusCountsOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceFacetStatusCounts",
+    ),
+    (
+        "backend/api/schemas/device.py",
+        "DeviceHostFacetOptionOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceHostFacetOption",
+    ),
+    (
+        "backend/api/schemas/device.py",
+        "DeviceFacetOptionsOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceFacetOptions",
+    ),
+    (
+        "backend/api/schemas/device.py",
+        "DeviceFacetsOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceFacets",
+    ),
+    (
+        "backend/api/schemas/device.py",
+        "DeviceSelectionPreviewOut",
+        "frontend/src/utils/api/types.ts",
+        "DeviceSelectionPreview",
+    ),
     # #2187 opt-in scripts.py：目录行与使用统计双双 MATCH（TS 命名不同源
     # ——ScriptEntry/ScriptUsage 是消费侧原名，键集与后端模型逐名一致）。
     (

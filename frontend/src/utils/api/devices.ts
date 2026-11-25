@@ -4,14 +4,39 @@ import type {
   ApiResponseEnvelope,
   BulkSwipeTrailResult,
   Device,
+  DeviceFacets,
+  DeviceFilterQueryParams,
   DeviceLeaseReleaseResult,
+  DeviceListItem,
+  DeviceListPageQueryParams,
   DeviceReturnDebtItem,
   DeviceReturnOverrideRequest,
   DeviceReturnOverrideResult,
   DeviceRetireBatchResponse,
   DeviceRebindRequest,
+  DeviceSelectionPreview,
+  DeviceSelectionPreviewRequest,
   PaginatedResponse,
 } from './types';
+
+function compactDeviceFilterParams(
+  params: DeviceFilterQueryParams,
+): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  if (params.q && params.q.trim()) out.q = params.q.trim();
+  if (params.status && params.status !== 'all') out.status = params.status;
+  if (params.host_id && params.host_id !== 'all') out.host_id = params.host_id;
+  if (params.model && params.model !== 'all') out.model = params.model;
+  if (params.product && params.product !== 'all') out.product = params.product;
+  if (params.version && params.version !== 'all') out.version = params.version;
+  if (params.tags && params.tags.trim()) out.tags = params.tags.trim();
+  if (params.has_tags !== undefined) out.has_tags = params.has_tags;
+  if (params.project_key) out.project_key = params.project_key;
+  if (params.unassigned) out.unassigned = true;
+  if (params.include_stale) out.include_stale = true;
+  if (params.include_retired) out.include_retired = true;
+  return out;
+}
 
 export const devices = {
   list: (
@@ -91,6 +116,35 @@ export const devices = {
         device_ids: deviceIds,
         enabled,
       }),
+    ),
+  /** #496 / #4117 B2-1：服务端分页有界设备列表（`projection=list`）。 */
+  listPage: (params: DeviceListPageQueryParams = {}) => {
+    const queryParams: Record<string, string | number | boolean> = {
+      ...compactDeviceFilterParams(params),
+      skip: params.skip ?? 0,
+      limit: params.limit ?? 50,
+      projection: params.projection ?? 'list',
+    };
+    if (params.sort_by) queryParams.sort_by = params.sort_by;
+    if (params.sort_dir) queryParams.sort_dir = params.sort_dir;
+    return apiClient
+      .get<PaginatedResponse<DeviceListItem>>('/devices', { params: queryParams })
+      .then(r => r.data);
+  },
+  /** #496 / #4117 B2-1：独立只读三级 Facets（状态计数与主机/型号/Product/版本候选）。 */
+  facets: (params: DeviceFilterQueryParams = {}) =>
+    unwrapApiResponse(
+      apiClient.get<ApiResponseEnvelope<DeviceFacets>>('/devices/facets', {
+        params: compactDeviceFilterParams(params),
+      }),
+    ),
+  /** #496 / #4117 B2-1：跨页批量选择预览（冻结匹配 ID + 写操作影响摘要）。 */
+  selectionPreview: (body: DeviceSelectionPreviewRequest) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<DeviceSelectionPreview>>(
+        '/devices/selection-preview',
+        body,
+      ),
     ),
 };
 

@@ -1,11 +1,12 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import model_validator, BaseModel, Field, field_validator
 
 from backend.agent.contracts.device_return import DISARM_RESULTS, FAMILY_STEPS
 from backend.api.schemas.base import ORMBaseModel
 from backend.core.device_lifecycle import is_retire_suggested, is_stale
+from backend.core.device_serial import is_placeholder_serial
 
 
 class DeviceCreate(BaseModel):
@@ -273,3 +274,138 @@ class DeviceLiteOut(ORMBaseModel):
     product: Optional[str] = None
     host_id: Optional[str] = None
     status: str
+
+
+class DeviceListItemOut(ORMBaseModel):
+    """#496 / #4117 B2-1：物理设备有界列表 DTO（``projection=list``）。
+
+    刻意省略无界 ``extra`` 字典以将单页（50 条）原始 UTF-8 JSON 稳定压在 100 KiB 以内，
+    同时随行透传 ``host_name`` 以消除前端表格对全量主机列表的依赖。
+    """
+
+    id: int
+    serial: str
+    serial_suspect: bool = False
+    model: Optional[str] = None
+    product: Optional[str] = None
+    platform: Optional[str] = None
+    host_id: Optional[str] = None
+    host_name: Optional[str] = None
+    project_key: Optional[str] = None
+    attribution_source: Optional[str] = None
+    status: str
+    last_seen: Optional[datetime] = None
+    tags: List[str] = Field(default_factory=list)
+    adb_state: Optional[str] = None
+    adb_connected: Optional[bool] = None
+    battery_level: Optional[int] = None
+    battery_temp: Optional[int] = None
+    temperature: Optional[int] = None
+    wifi_rssi: Optional[int] = None
+    wifi_ssid: Optional[str] = None
+    network_latency: Optional[float] = None
+    build_display_id: Optional[str] = None
+    disk_total: Optional[int] = None
+    disk_used: Optional[int] = None
+    retired_at: Optional[datetime] = None
+    retired_by: Optional[str] = None
+    retire_reason: Optional[str] = None
+    is_stale: bool = False
+    retire_suggested: bool = False
+    return_state: Optional[Dict[str, Any]] = None
+    usb_presence: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def _mark_serial_suspect(self):
+        self.serial_suspect = is_placeholder_serial(self.serial)
+        return self
+
+    @model_validator(mode="after")
+    def _mark_lifecycle_flags(self):
+        self.is_stale = is_stale(self.status, self.last_seen)
+        self.retire_suggested = is_retire_suggested(self.status, self.last_seen)
+        return self
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _coerce_tags(cls, v):
+        if v is None or isinstance(v, dict):
+            return []
+        return v
+
+
+class DeviceFacetStatusCountsOut(BaseModel):
+    """#496 / #4117 B2-1：作用域 B 下的设备状态计数卡。"""
+
+    all: int = 0
+    ONLINE: int = 0
+    BUSY: int = 0
+    OFFLINE: int = 0
+    ERROR: int = 0
+    need_attention: int = 0
+    tagged: int = 0
+
+
+class DeviceHostFacetOptionOut(BaseModel):
+    """主机下拉候选项（无主机桶使用 ``value='unassigned'``）。"""
+
+    value: str
+    label: str
+
+
+class DeviceFacetOptionsOut(BaseModel):
+    """#496 / #4117 B2-1：作用域 H/D 下的下拉候选项（首版不含未消费的 ``tags``）。"""
+
+    hosts: List[DeviceHostFacetOptionOut] = Field(default_factory=list)
+    models: List[str] = Field(default_factory=list)
+    products: List[str] = Field(default_factory=list)
+    versions: List[str] = Field(default_factory=list)
+
+
+class DeviceFacetsOut(BaseModel):
+    """``GET /api/v1/devices/facets`` 响应模型。"""
+
+    status_counts: DeviceFacetStatusCountsOut
+    options: DeviceFacetOptionsOut
+
+
+class DeviceSelectionPreviewIn(BaseModel):
+    """``POST /api/v1/devices/selection-preview`` 请求体：按筛选条件冻结跨页批量操作集合。"""
+
+    action: Literal[
+        "tags",
+        "assign_project",
+        "swipe_trail",
+        "retire",
+        "unretire",
+        "copy",
+        "export",
+    ]
+    q: Optional[str] = Field(default=None, max_length=256)
+    status: Optional[str] = Field(default=None, max_length=64)
+    host_id: Optional[str] = Field(default=None, max_length=64)
+    model: Optional[str] = Field(default=None, max_length=128)
+    product: Optional[str] = Field(default=None, max_length=128)
+    version: Optional[str] = Field(default=None, max_length=256)
+    tags: Optional[str] = Field(default=None, max_length=512)
+    has_tags: Optional[bool] = None
+    project_key: Optional[str] = Field(default=None, max_length=128)
+    unassigned: bool = False
+    include_stale: bool = False
+    include_retired: bool = False
+
+
+class DeviceSelectionPreviewOut(BaseModel):
+    """``POST /api/v1/devices/selection-preview`` 响应模型。"""
+
+    action: str
+    total_matched: int
+    max_allowed: Optional[int] = None
+    exceeds_limit: bool = False
+    device_ids: List[int] = Field(default_factory=list)
+    status_counts: DeviceFacetStatusCountsOut
+    affected_models: List[str] = Field(default_factory=list)
+    devices_without_model_serials: List[str] = Field(default_factory=list)
+    retired_count: int = 0
+    active_count: int = 0
+    stale_count: int = 0

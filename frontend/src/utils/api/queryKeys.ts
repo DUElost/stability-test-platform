@@ -71,6 +71,12 @@ export const deviceKeys = {
    *  改标签/归入项目）永远打不到全量缓存，计划执行设备矩阵与排程选择器长期陈旧。
    *  放在前缀下之后，`allLists()` 的失效天然覆盖它。 */
   all: () => ['devices', 'all'] as const,
+  /** #496 / #4117 B2-1：服务端分页列表键（含全部筛选、页码与排序）。 */
+  page: (params: Record<string, unknown>) => ['devices', 'page', params] as const,
+  /** #496 / #4117 B2-1：独立 Facets 键（不含页码与排序，避免翻页/排序重复拉取）。 */
+  facets: (params: Record<string, unknown>) => ['devices', 'facets', params] as const,
+  /** #496 / #4117 B2-1：单台物理设备详情键（?drawer= 深链独立加载）。 */
+  detail: (deviceId: number) => ['devices', 'detail', deviceId] as const,
 } as const;
 
 export const planRunKeys = {
