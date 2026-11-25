@@ -9,7 +9,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from backend.api.routes import hosts as hosts_route
-from backend.models.host import Host
+from backend.models.host import Device, Host
 
 DESIRED_DIGEST = "sha256:" + "a" * 64
 DRIFT_DIGEST = "sha256:" + "b" * 64
@@ -457,3 +457,121 @@ class TestHostVersionLookupHoisting:
         assert resp_preview.status_code == 200
         assert resp_preview.json()["data"]["total_matched"] == 5
         assert calls["count"] == 0
+
+
+class TestUsbControllerHealthAndEmptyCabinetDistinction:
+    """区分纯空置主机（零台账且无硬件证据）与真实主控/端口故障或账实失明主机。"""
+
+    def test_zero_ledger_empty_tree_excluded_while_ledger_and_hardware_faults_kept(
+        self, client, db_session, auth_headers, monkeypatch
+    ):
+        monkeypatch.setattr(hosts_route, "_list_desired_artifact_digest", lambda: DESIRED_DIGEST)
+        prefix = f"usbd-{uuid4().hex[:6]}"
+        now = datetime.now(timezone.utc)
+        base = client.get("/api/v1/hosts/facets", headers=auth_headers).json()["data"]
+
+        # 1) 纯空置主机：usb_tree_empty + 台账 0 设备 + 无硬件异常 -> 不进 usb_anomaly（P0）
+        h_zero_ledger = _make_host(
+            db_session,
+            host_id=f"{prefix}-empty0",
+            name=f"ZeroLedger-{prefix}",
+            ip=f"10.74.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "DEGRADED", "reasons": ["usb_tree_empty"]},
+                "capacity": {
+                    "usb_device_count": 0,
+                    "usb_controller_health": {
+                        "unbound_xhci_controllers": 0,
+                        "disabled_root_ports": 0,
+                        "disabled_hub_ports": 0,
+                        "over_current_ports": 0,
+                        "stuck_default_ports": 0,
+                    },
+                },
+            },
+        )
+        # 2) 台账有在册设备 + usb_tree_empty + 未置位 emptied_at -> 进 usb_anomaly（P2）
+        h_ledger_blind = _make_host(
+            db_session,
+            host_id=f"{prefix}-blind",
+            name=f"LedgerBlind-{prefix}",
+            ip=f"10.74.2.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "DEGRADED", "reasons": ["usb_tree_empty"]},
+                "capacity": {"usb_device_count": 0},
+            },
+        )
+        db_session.add(
+            Device(
+                serial=f"{prefix}-SER-01",
+                host_id=h_ledger_blind.id,
+                model="TEST",
+                platform="mtk",
+                status="OFFLINE",
+            )
+        )
+        # 3) 即使台账 0 且已置位 emptied_at，但存在硬件硬证据（root hub disable=1）-> P3 绝不豁免
+        h_hw_disabled = _make_host(
+            db_session,
+            host_id=f"{prefix}-hw73",
+            name=f"HwDisabled-{prefix}",
+            ip=f"10.74.3.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            emptied_at=now - timedelta(hours=1),
+            extra={
+                "health": {"status": "DEGRADED", "reasons": ["usb_tree_empty"]},
+                "capacity": {
+                    "usb_device_count": 0,
+                    "usb_controller_health": {
+                        "unbound_xhci_controllers": 0,
+                        "disabled_root_ports": 16,
+                        "disabled_hub_ports": 0,
+                        "over_current_ports": 0,
+                        "stuck_default_ports": 0,
+                    },
+                },
+            },
+        )
+        # 4) 台账 0 + 无 reason，但单口卡死 state=default（.57 形态）-> P1
+        h_stuck_port = _make_host(
+            db_session,
+            host_id=f"{prefix}-stuck57",
+            name=f"StuckPort-{prefix}",
+            ip=f"10.74.4.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "DEGRADED", "reasons": ["usb_tree_empty"]},
+                "capacity": {
+                    "usb_device_count": 0,
+                    "usb_controller_health": {
+                        "unbound_xhci_controllers": 0,
+                        "disabled_root_ports": 0,
+                        "disabled_hub_ports": 0,
+                        "over_current_ports": 0,
+                        "stuck_default_ports": 1,
+                    },
+                },
+            },
+        )
+        db_session.commit()
+
+        cur = client.get("/api/v1/hosts/facets", headers=auth_headers).json()["data"]
+        # 4 台新增里：仅 h_ledger_blind(P2) + h_hw_disabled(P3) + h_stuck_port(P1) = 3 台计入 usb_anomaly
+        assert cur["usb_anomaly"] - base["usb_anomaly"] == 3
+
+        r_usb = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "usb_anomaly": "true", "sort_by": "priority", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert r_usb.status_code == 200
+        items = r_usb.json()["items"]
+        # 全局优先级置顶顺序：P3(hw73) > P2(blind) > P1(stuck57)；零台账纯空柜(empty0)被排除
+        assert [h["id"] for h in items] == [h_hw_disabled.id, h_ledger_blind.id, h_stuck_port.id]
+        by_id = {h["id"]: h for h in items}
+        assert by_id[h_ledger_blind.id]["ledger_device_count"] == 1
+        assert by_id[h_hw_disabled.id]["ledger_device_count"] == 0
+
+        # 单机详情接口同样返回 ledger_device_count
+        r_detail = client.get(f"/api/v1/hosts/{h_zero_ledger.id}", headers=auth_headers)
+        assert r_detail.status_code == 200
+        assert r_detail.json()["ledger_device_count"] == 0
+

@@ -63,6 +63,14 @@ export interface Host {
       enum_errors: number;
       hub_port_errors: number;
     } | null;
+    /** 零权限 sysfs USB 主控与端口硬件异常体检（区分真实主控/端口故障与正常空柜） */
+    usb_controller_health?: {
+      unbound_xhci_controllers: number;
+      disabled_root_ports: number;
+      disabled_hub_ports: number;
+      over_current_ports: number;
+      stuck_default_ports: number;
+    } | null;
   };
   health?: {
     status: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
@@ -140,6 +148,8 @@ export interface Host {
   emptied_at?: string | null;
   emptied_by?: string | null;
   emptied_reason?: string | null;
+  /** 台账在册（未退役）设备数（用于区分纯空主机与台账有设备但 USB 空树的疑似失明主机） */
+  ledger_device_count?: number | null;
 }
 
 /** #496 / #4117 B2-2：`GET /hosts/facets` 10 项全局计数模型。 */

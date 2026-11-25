@@ -774,6 +774,93 @@ describe('S2：USB / Hub 故障工作台（快捷视图、主行外显、异常�
     expect(within(statusLine).getByText('降级')).toBeInTheDocument();
     expect(within(statusLine).getByText('USB 空树')).toBeInTheDocument();
   });
+
+  it('零台账纯空柜不计入 USB / Hub 异常并显示「未接设备」，而硬件端口禁用与卡死端口会置顶外显', () => {
+    const pureEmptyCabinet: HostTableData = {
+      ...host,
+      id: 'host-empty-zero',
+      name: 'Host-Zero-Ledger',
+      ip: '10.0.15.1',
+      health_status: 'DEGRADED',
+      health_reasons: ['usb_tree_empty'],
+      device_count: 0,
+      usb_device_count: 0,
+      ledger_device_count: 0,
+      usb_controller_health: {
+        unbound_xhci_controllers: 0,
+        disabled_root_ports: 0,
+        disabled_hub_ports: 0,
+        over_current_ports: 0,
+        stuck_default_ports: 0,
+      },
+    };
+    const rootDisabledHost: HostTableData = {
+      ...host,
+      id: 'host-root-disabled',
+      name: 'Host-Root-Disabled-73',
+      ip: '10.0.15.73',
+      health_status: 'DEGRADED',
+      health_reasons: ['usb_tree_empty'],
+      device_count: 0,
+      usb_device_count: 0,
+      ledger_device_count: 0,
+      usb_controller_health: {
+        unbound_xhci_controllers: 0,
+        disabled_root_ports: 16,
+        disabled_hub_ports: 0,
+        over_current_ports: 0,
+        stuck_default_ports: 0,
+      },
+    };
+    const stuckPortHost: HostTableData = {
+      ...host,
+      id: 'host-stuck-57',
+      name: 'Host-Stuck-57',
+      ip: '10.0.15.57',
+      health_status: 'DEGRADED',
+      health_reasons: ['usb_tree_empty'],
+      device_count: 0,
+      usb_device_count: 0,
+      ledger_device_count: 0,
+      usb_controller_health: {
+        unbound_xhci_controllers: 0,
+        disabled_root_ports: 0,
+        disabled_hub_ports: 0,
+        over_current_ports: 0,
+        stuck_default_ports: 1,
+      },
+    };
+
+    render(
+      <ExpandableHostTable
+        hosts={[pureEmptyCabinet, stuckPortHost, rootDisabledHost]}
+      />,
+    );
+
+    const rows = screen.getAllByRole('button', { name: /^查看主机 / });
+    expect(rows[0]).toHaveTextContent('Host-Root-Disabled-73');
+    expect(rows[1]).toHaveTextContent('Host-Stuck-57');
+    expect(rows[2]).toHaveTextContent('Host-Zero-Ledger');
+
+    expect(screen.getByTestId('host-inline-faults-host-empty-zero')).toHaveTextContent('未接设备');
+    expect(screen.getByTestId('host-inline-faults-host-root-disabled')).toHaveTextContent(
+      '主控端口禁用(16)',
+    );
+    expect(screen.getByTestId('host-inline-faults-host-stuck-57')).toHaveTextContent('端口卡死(1)');
+
+    // 切到「USB / Hub 异常」：排除纯空柜 Host-Zero-Ledger，保留真硬件异常主机
+    fireEvent.click(screen.getByText(/USB \/ Hub 异常/));
+    expect(screen.getByText('Host-Root-Disabled-73')).toBeInTheDocument();
+    expect(screen.getByText('Host-Stuck-57')).toBeInTheDocument();
+    expect(screen.queryByText('Host-Zero-Ledger')).not.toBeInTheDocument();
+
+    // 打开详情抽屉展示「台账在册设备」与「主控与端口体检（sysfs）」
+    fireEvent.click(screen.getByText('Host-Root-Disabled-73'));
+    const card = screen.getByTestId('host-usb-diagnostics-host-root-disabled');
+    expect(within(card).getByText('台账在册设备')).toBeInTheDocument();
+    expect(within(card).getByText('主控与端口体检（sysfs）')).toBeInTheDocument();
+    expect(within(card).getByText('根口禁用: 16')).toBeInTheDocument();
+  });
 });
 
 describe('B3-2 服务端分页模式（serverMode + 10 项 Facets + upgrade_pending）', () => {

@@ -108,6 +108,18 @@ def test_reconcile_empty_cabinet_not_blind():
     assert "empty_cabinet_not_blind" in result.signals
 
 
+def test_reconcile_hc_died_on_root_hub_only_is_agent_mute_not_empty_cabinet():
+    """xHCI HC died 后级联 Hub 全部消失，lsusb 只剩 root hub，不得按空柜早退成 ALIGNED。"""
+    round_ = ProbeRound(
+        journal=parse_journal_probe(_HC_DIED_JOURNAL),
+        topology=classify_lsusb_topology(_LSUSB_EMPTY_CABINET),
+    )
+    result = reconcile_agent_health([], round_)
+    assert result.verdict == ProbeVerdict.AGENT_MUTE
+    assert "probe_hc_dead" in result.signals
+    assert "empty_cabinet_not_blind" not in result.signals
+
+
 def test_consecutive_strike_requires_n_rounds():
     assert consecutive_strike_open([ProbeVerdict.AGENT_MUTE], need=2) is False
     assert (
@@ -170,7 +182,12 @@ class _FakeSSH:
 
     def exec_command(self, cmd: str, timeout: int = 10):
         self.commands.append(cmd)
-        key = "lsusb" if "lsusb" in cmd else "journal_kernel_2h"
+        if "lsusb" in cmd:
+            key = "lsusb"
+        elif "--lines=1" in cmd and "journal_kernel_readable" in self.outputs:
+            key = "journal_kernel_readable"
+        else:
+            key = "journal_kernel_2h"
         rc, out, err = self.outputs[key]
         ch = _FakeChannel(rc)
         return (
@@ -411,3 +428,33 @@ def test_collect_failure_beats_probe_quiet():
     round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
     result = reconcile_agent_health(["usb_host_controller_dead"], round_)
     assert result.verdict == ProbeVerdict.PROBE_ERROR
+
+
+def test_quiet_2h_journal_verified_readable_is_not_probe_error():
+    """安静主机 2h 无内核日志，但 --boot --lines=1 可读 ⇒ 正常安静，不误报 PROBE_ERROR。"""
+    client = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_EMPTY_CABINET) + "\n", ""),
+            "journal_kernel_2h": (0, "", ""),
+            "journal_kernel_readable": (0, "Linux version 6.12.73\n", ""),
+        }
+    )
+    round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
+    assert round_.collect_failed == ()
+    result = reconcile_agent_health(["usb_tree_empty"], round_)
+    assert result.verdict == ProbeVerdict.ALIGNED
+    assert "empty_cabinet_not_blind" in result.signals
+
+
+def test_quiet_2h_journal_with_unreadable_boot_probe_stays_probe_error():
+    """2h 输出为空且 --boot --lines=1 也读不到一行 ⇒ 保持 PROBE_ERROR。"""
+    client = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_EMPTY_CABINET) + "\n", ""),
+            "journal_kernel_2h": (0, "", ""),
+            "journal_kernel_readable": (0, "", ""),
+        }
+    )
+    round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
+    assert round_.collect_failed == ("journal_kernel_2h:empty_stdout",)
+    assert reconcile_agent_health(["usb_tree_empty"], round_).verdict == ProbeVerdict.PROBE_ERROR

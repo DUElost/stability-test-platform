@@ -186,3 +186,102 @@ class TestCapacityReporterPureObservation:
         assert with_fine["health"]["status"] == "HEALTHY"
         assert with_fine["capacity"]["usb_hub_topology"]["unbound_hubs"] == 1
         assert with_fine["capacity"]["usb_kernel_errors_1h"]["hub_port_errors"] == 3
+
+
+def _mk_port(parent, name: str, *, disable: str = "0", oc: str = "0", state: str = "not attached", has_dev: bool = False):
+    p = parent / name
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "disable").write_text(disable + "\n", encoding="utf-8")
+    (p / "over_current_count").write_text(oc + "\n", encoding="utf-8")
+    (p / "state").write_text(state + "\n", encoding="utf-8")
+    if has_dev:
+        (p / "device").mkdir(exist_ok=True)
+
+
+def _mk_pci(pci_root, bdf: str, pci_class: str, *, bound_driver: bool, enable: str = "1"):
+    d = pci_root / bdf
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "class").write_text(pci_class + "\n", encoding="utf-8")
+    (d / "enable").write_text(enable + "\n", encoding="utf-8")
+    if bound_driver:
+        (d / "driver").mkdir(exist_ok=True)
+
+
+class TestInspectUsbControllerHealth:
+    def test_returns_none_when_usb_sysfs_missing(self, tmp_path):
+        assert dd.inspect_usb_controller_health(str(tmp_path / "missing"), str(tmp_path / "pci")) is None
+
+    def test_healthy_controller_and_ports_all_zero(self, tmp_path):
+        usb_root = tmp_path / "usb"
+        pci_root = tmp_path / "pci"
+        _mk_pci(pci_root, "0000:00:14.0", "0x0c0330", bound_driver=True, enable="0")
+        rh1 = usb_root / "usb1" / "1-0:1.0"
+        _mk_port(rh1, "usb1-port1", disable="0", state="not attached")
+        hub_iface = usb_root / "1-5:1.0"
+        _mk_port(hub_iface, "1-5-port1", disable="0", state="configured", has_dev=True)
+
+        # .63 形态：enable=0 但 driver 已绑定，不得误报 unbound_xhci_controllers
+        assert dd.inspect_usb_controller_health(str(usb_root), str(pci_root)) == {
+            "unbound_xhci_controllers": 0,
+            "disabled_root_ports": 0,
+            "disabled_hub_ports": 0,
+            "over_current_ports": 0,
+            "stuck_default_ports": 0,
+        }
+
+    def test_detects_unbound_xhci_disabled_ports_over_current_and_stuck_default(self, tmp_path):
+        usb_root = tmp_path / "usb"
+        pci_root = tmp_path / "pci"
+        # .88 probe -110 形态：PCI 0x0c0330 缺少 driver 链接
+        _mk_pci(pci_root, "0000:00:14.0", "0x0c0330", bound_driver=False, enable="0")
+        # 非 xHCI PCI 设备忽略
+        _mk_pci(pci_root, "0000:00:1f.0", "0x060100", bound_driver=False)
+
+        # .73 HC died 形态：root hub 端口 disable=1
+        rh1 = usb_root / "usb1" / "1-0:1.0"
+        _mk_port(rh1, "usb1-port1", disable="1", state="not attached")
+        _mk_port(rh1, "usb1-port2", disable="1", oc="2", state="not attached")
+
+        # Hub 下游端口：VBUS 0000 off (disable=1) + .57 卡死 (state=default 且无 device)
+        hub_iface = usb_root / "1-5.1:1.0"
+        _mk_port(hub_iface, "1-5.1-port1", disable="1", state="not attached")
+        _mk_port(hub_iface, "1-5.1-port2", disable="0", state="default", has_dev=False)
+        _mk_port(hub_iface, "1-5.1-port3", disable="0", state="default", has_dev=True)
+
+        assert dd.inspect_usb_controller_health(str(usb_root), str(pci_root)) == {
+            "unbound_xhci_controllers": 1,
+            "disabled_root_ports": 2,
+            "disabled_hub_ports": 1,
+            "over_current_ports": 1,
+            "stuck_default_ports": 1,
+        }
+
+    def test_capacity_reporter_omits_controller_health_when_none_and_keeps_slots(self):
+        base = compute_capacity(
+            active_job_count=0,
+            active_device_count=0,
+            online_healthy_devices=4,
+            total_devices=4,
+            system_stats={"cpu_load": 10, "ram_usage": 20, "disk_usage": {"writable_percent": 30}},
+            mount_status={"/mnt/nfs": {"ok": True}},
+        )
+        assert "usb_controller_health" not in base["capacity"]
+
+        ctrl = {
+            "unbound_xhci_controllers": 0,
+            "disabled_root_ports": 2,
+            "disabled_hub_ports": 0,
+            "over_current_ports": 0,
+            "stuck_default_ports": 1,
+        }
+        with_ctrl = compute_capacity(
+            active_job_count=0,
+            active_device_count=0,
+            online_healthy_devices=4,
+            total_devices=4,
+            system_stats={"cpu_load": 10, "ram_usage": 20, "disk_usage": {"writable_percent": 30}},
+            mount_status={"/mnt/nfs": {"ok": True}},
+            usb_controller_health=ctrl,
+        )
+        assert with_ctrl["capacity"]["usb_controller_health"] == ctrl
+        assert with_ctrl["capacity"]["effective_slots"] == base["capacity"]["effective_slots"]

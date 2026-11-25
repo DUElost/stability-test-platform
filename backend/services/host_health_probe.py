@@ -197,8 +197,9 @@ def reconcile_agent_health(
         }
     )
 
-    if topo.classification == TOPOLOGY_EMPTY_CABINET:
-        # 空柜不是失明——即使 agent 报了 usb_tree_empty 也不升 AGENT_MUTE
+    if topo.classification == TOPOLOGY_EMPTY_CABINET and not probe_hc and not probe_link:
+        # 仅当无内核主控死亡/链路劣化证据时，root_hub_only 才按空柜处理；
+        # 否则 xHCI HC died 导致级联 Hub 全部消失后会被误判为「空柜 / 一致」。
         if "usb_tree_empty" in reasons:
             signals.append("empty_cabinet_not_blind")
         return ReconcileResult(ProbeVerdict.ALIGNED, tuple(signals))
@@ -256,7 +257,23 @@ PROBE_ARGV_WHITELIST: dict[str, tuple[str, ...]] = {
         "--since",
         "-2h",
     ),
+    # 2h 窗口无输出时的正向可读性探针（对齐 Agent 侧 kernel_log_is_readable）：
+    # 区分「安静主机 2h 确实零内核事件」与「非特权/故障导致 rc=0 + 空输出」（#2957）。
+    "journal_kernel_readable": (
+        "journalctl",
+        "-k",
+        "--no-pager",
+        "-o",
+        "cat",
+        "--boot",
+        "--lines=1",
+    ),
 }
+
+_JOURNAL_BLIND_HINT_MARKERS = (
+    "not seeing messages from other users and the system",
+    "can see all messages",
+)
 
 
 def resolve_probe_argv(name: str) -> tuple[str, ...]:
@@ -337,6 +354,11 @@ def collect_failure_reason(output: RemoteProbeOutput) -> Optional[str]:
     return None
 
 
+def _journal_output_is_blind_hint(output: RemoteProbeOutput) -> bool:
+    stderr = (output.stderr or "").lower()
+    return any(marker in stderr for marker in _JOURNAL_BLIND_HINT_MARKERS)
+
+
 def collect_probe_round_via_ssh(
     client: Any,
     *,
@@ -348,21 +370,45 @@ def collect_probe_round_via_ssh(
     ``rc`` / ``stderr`` 此前被算出来却从不检查 ⇒ ``sudo`` 失败（密码错、sudoers
     缺规则、未装 sudo ⇒ rc 127）与「真的干净」不可区分，被判 ALIGNED（#2983 复核）。
     现在两条探针都过 ``collect_failure_reason``，失败写进 ``collect_failed``。
+
+    2h 内核日志在安静主机上可能合法返回空 stdout；仅当 ``rc == 0``、stderr 无权限
+    盲区提示且正向可读性探针 ``journal_kernel_readable``（``--boot --lines=1``）
+    返回至少一行时，才认定为「可读且安静」，否则维持 ``journal_kernel_2h:empty_stdout``。
     """
-    outputs = (
-        run_whitelisted_sudo(client, "lsusb", sudo_password=sudo_password, timeout=timeout),
-        run_whitelisted_sudo(
-            client, "journal_kernel_2h", sudo_password=sudo_password, timeout=timeout
-        ),
+    lsusb = run_whitelisted_sudo(
+        client, "lsusb", sudo_password=sudo_password, timeout=timeout
     )
-    failures = tuple(
-        reason for reason in (collect_failure_reason(o) for o in outputs) if reason
+    journal = run_whitelisted_sudo(
+        client, "journal_kernel_2h", sudo_password=sudo_password, timeout=timeout
     )
-    lsusb, journal = outputs
+    failures_list: list[str] = []
+    lsusb_fail = collect_failure_reason(lsusb)
+    if lsusb_fail:
+        failures_list.append(lsusb_fail)
+
+    journal_fail = collect_failure_reason(journal)
+    if journal_fail == "journal_kernel_2h:empty_stdout" and not _journal_output_is_blind_hint(
+        journal
+    ):
+        probe_readable = run_whitelisted_sudo(
+            client,
+            "journal_kernel_readable",
+            sudo_password=sudo_password,
+            timeout=timeout,
+        )
+        if (
+            probe_readable.rc == 0
+            and bool((probe_readable.stdout or "").strip())
+            and not _journal_output_is_blind_hint(probe_readable)
+        ):
+            journal_fail = None
+    if journal_fail:
+        failures_list.append(journal_fail)
+
     return ProbeRound(
         journal=parse_journal_probe(journal.stdout.splitlines()),
         topology=classify_lsusb_topology(lsusb.stdout.splitlines()),
-        collect_failed=failures,
+        collect_failed=tuple(failures_list),
     )
 
 
