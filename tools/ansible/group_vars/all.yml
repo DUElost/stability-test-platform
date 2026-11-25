@@ -12,8 +12,17 @@ ansible_become_method: sudo
 # Agent 安装的摘要任务现场实证）。免密/NOPASSWD 主机取值空口令即可。
 ansible_become_password: "{{ ansible_password | default('') }}"
 
-# agent 安装目录：两面共享的路径锚（配置类 task 需要）。
+# agent 安装目录、运行身份与源码根：部署面（linux_hosts）、配置面（agent_config）
+# 及窄 playbook（update_priv_wrapper.yml 等）跨面共享的单一定义。
 agent_install_dir: "/opt/stability-test-agent"
+agent_service_name: "stability-test-agent"
+agent_user: "android"
+agent_group: "android"
+# 锚定 playbook_dir 而不是 inventory_dir：真实 inventory 常放在仓库外
+# （如 /home/debian13/hosts.ini），那时 inventory_dir 相对路径会指到仓库外，
+# 兜底静默失效。playbook_dir 恒为 <repo>/tools/ansible/playbooks。
+# 需要时用 -e stp_repo_root=/path/to/repo 覆盖。
+stp_repo_root: "{{ (playbook_dir ~ '/../../..') | realpath }}"
 
 # ── 进程日志轮转（#2205 / #2218）──────────────────────────────────────────
 # agent_error.log 无轮转曾累积全队 94.5GB（systemd append: 无大小控制）；

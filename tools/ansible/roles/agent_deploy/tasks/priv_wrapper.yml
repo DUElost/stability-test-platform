@@ -1,0 +1,40 @@
+---
+# ADR-0037（#1250）：提权边界 wrapper（/usr/local/sbin/stp-agent-priv）共享 task。
+#
+# 经两条通道 include（单一维护点，与 logrotate.yml / journald.yml 同形）：
+#   - update_agent.yml（linux_hosts 更新面；include 带 tags: [priv_wrapper]）
+#   - update_priv_wrapper.yml（窄 playbook：只下发/自检 wrapper，不碰 rsync / upgrade-gate / 服务重启）
+#
+# 存量主机迁移与增量能力升级（如 sync-env/retired-keys、xhci-rebind）：
+# wrapper 放 /usr/local/sbin（Agent 不可写），conf/sudoers 由 bootstrap 生成并
+# visudo 校验；先装 wrapper 再重写 sudoers 并执行 selftest，任何一步失败即中止。
+#
+# **tag 必须写在各 task 上**：ansible-core 2.19 中 include_tasks 的 tags 不传播到
+# 被包含任务（#2218 实测教训）；显式标注后 `--tags priv_wrapper` 才能真正执行。
+- name: Install agent privilege wrapper
+  become: true
+  tags: ["priv_wrapper"]
+  ansible.builtin.copy:
+    src: "{{ stp_repo_root }}/backend/agent/stp_agent_priv.py"
+    dest: /usr/local/sbin/stp-agent-priv
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Bootstrap privilege wrapper (conf + sudoers)
+  become: true
+  tags: ["priv_wrapper"]
+  ansible.builtin.command: >-
+    /usr/local/sbin/stp-agent-priv bootstrap
+    --install-dir {{ agent_install_dir }}
+    --user {{ agent_user }}
+    --group {{ agent_group }}
+    --service {{ agent_service_name }}
+  register: agent_priv_bootstrap
+  changed_when: false
+
+- name: Verify privilege wrapper self-test
+  become: true
+  tags: ["priv_wrapper"]
+  ansible.builtin.command: /usr/local/sbin/stp-agent-priv selftest
+  changed_when: false

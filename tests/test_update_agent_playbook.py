@@ -174,7 +174,12 @@ def test_touched_agent_playbooks_pass_ansible_syntax_check():
     if shutil.which("ansible-playbook") is None:
         pytest.skip("ansible 不可用")
     repo_root = Path(__file__).resolve().parents[1]
-    for name in ("update_agent.yml", "install_agent.yml", "ensure_flash_prereqs.yml"):
+    for name in (
+        "update_agent.yml",
+        "install_agent.yml",
+        "ensure_flash_prereqs.yml",
+        "update_priv_wrapper.yml",
+    ):
         proc = subprocess.run(
             ["ansible-playbook", "--syntax-check", str(repo_root / "tools/ansible/playbooks" / name)],
             capture_output=True, text=True, cwd=str(repo_root / "tools/ansible"),

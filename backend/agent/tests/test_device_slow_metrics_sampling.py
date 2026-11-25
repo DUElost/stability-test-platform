@@ -124,23 +124,57 @@ def test_slow_metrics_due_matrix():
 
 
 def test_absorb_keeps_old_values_on_partial_failure():
-    """探测失败的 None 键不覆盖上一轮好值（disk #2757 同形的保守合并）。"""
+    """#4166：电量/温度/版本探测失败的 None 仍保留旧值，但 network_latency=None
+    表示本轮实测 ping 不通（断网），须覆盖旧缓存并标记 network_latency_probed=True。"""
+    thread = _bare_thread(_slow_sample_interval=1800.0)
+    good = {"battery_level": 80, "temperature": 30, "network_latency": 5.0,
+            "build_display_id": "B1"}
+    good_info = {**good, "adb_connected": True}
+    thread._absorb_slow_metrics("S1", good_info, collected=True)
+    assert thread._slow_metrics_by_serial["S1"] == good
+    assert good_info["network_latency_probed"] is True
+
+    # 第二轮电量采集偶发失败（None）+ ping 失败（断网，None）→ 电量保留旧值，
+    # network_latency 按本轮实测结果清为 None 并显式标记 probed。
+    fresh = {"battery_level": None, "temperature": 31, "network_latency": None,
+             "build_display_id": "B1", "adb_connected": True}
+    thread._absorb_slow_metrics("S1", fresh, collected=True)
+    assert thread._slow_metrics_by_serial["S1"] == {
+        "battery_level": 80, "temperature": 31, "network_latency": None,
+        "build_display_id": "B1",
+    }
+    assert fresh["battery_level"] == 80
+    assert fresh["network_latency"] is None
+    assert fresh["network_latency_probed"] is True
+
+    # 非采样（降频）拍：继续携带清空后的 network_latency=None 与 probed=True，
+    # 避免控制面硬件快照降采样窗口跳过首次清空。
+    throttled = {"battery_level": None, "temperature": None, "network_latency": None,
+                 "build_display_id": None, "adb_connected": True}
+    thread._absorb_slow_metrics("S1", throttled, collected=False)
+    assert throttled["battery_level"] == 80
+    assert throttled["network_latency"] is None
+    assert throttled["network_latency_probed"] is True
+
+    # 离线拍：不回填缓存，也不置 probed 标记（避免误清）。
+    offline = {"battery_level": None, "temperature": None, "network_latency": None,
+               "build_display_id": None, "adb_connected": False}
+    thread._absorb_slow_metrics("S1", offline, collected=True)
+    assert offline.get("network_latency_probed") is not True
+
+
+def test_absorb_all_none_does_not_overwrite_existing_cache():
+    """已有缓存的设备若重启后首拍全部慢探测均失败（全 None），不误清旧缓存也不标 probed。"""
     thread = _bare_thread(_slow_sample_interval=1800.0)
     good = {"battery_level": 80, "temperature": 30, "network_latency": 5.0,
             "build_display_id": "B1"}
     thread._absorb_slow_metrics("S1", {**good, "adb_connected": True}, collected=True)
-    assert thread._slow_metrics_by_serial["S1"] == good
 
-    # 第二轮 ping 挂了（latency None），电量温度有新值 → None 键保留旧值
-    fresh = {"battery_level": 79, "temperature": 31, "network_latency": None,
-             "build_display_id": "B1", "adb_connected": True}
-    thread._absorb_slow_metrics("S1", fresh, collected=True)
-    assert thread._slow_metrics_by_serial["S1"] == {
-        "battery_level": 79, "temperature": 31, "network_latency": 5.0,
-        "build_display_id": "B1",
-    }
-    # info 被回填为合并结果（payload=缓存 单一口径）
-    assert fresh["network_latency"] == 5.0
+    transient = {"adb_connected": True, "battery_level": None, "temperature": None,
+                 "network_latency": None, "build_display_id": None}
+    thread._absorb_slow_metrics("S1", transient, collected=True)
+    assert thread._slow_metrics_by_serial["S1"] == good
+    assert transient.get("network_latency_probed") is not True
 
 
 def test_absorb_all_none_does_not_create_cache():

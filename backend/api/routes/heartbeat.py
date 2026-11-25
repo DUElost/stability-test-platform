@@ -612,7 +612,14 @@ def _process_heartbeat_with_db(
                 hardware_updated |= _update_if_not_none(device, "temperature", dev_data.get("temperature"))
                 hardware_updated |= _update_if_not_none(device, "wifi_rssi", dev_data.get("wifi_rssi"))
                 hardware_updated |= _update_if_not_none(device, "wifi_ssid", dev_data.get("wifi_ssid"))
-                hardware_updated |= _update_if_not_none(device, "network_latency", dev_data.get("network_latency"))
+                raw_latency = dev_data.get("network_latency")
+                if raw_latency is not None:
+                    hardware_updated |= _update_if_not_none(device, "network_latency", raw_latency)
+                elif dev_data.get("network_latency_probed") is True and device.network_latency is not None:
+                    # #4166：Agent 已实际执行网络 ping 且失败（无网），显式清空历史残留延时；
+                    # 旧版 Agent 不携带该标记，保持 _update_if_not_none 语义不误清。
+                    device.network_latency = None
+                    hardware_updated = True
                 _update_if_not_none(device, "build_display_id", dev_data.get("build_display_id"))
                 if hardware_updated:
                     device.hardware_updated_at = now
