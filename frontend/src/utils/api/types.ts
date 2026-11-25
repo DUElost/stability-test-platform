@@ -142,6 +142,73 @@ export interface Host {
   emptied_reason?: string | null;
 }
 
+/** #496 / #4117 B2-2：`GET /hosts/facets` 10 项全局计数模型。 */
+export interface HostFacets {
+  all: number;
+  online: number;
+  degraded: number;
+  offline: number;
+  usb_anomaly: number;
+  upgrade_pending: number;
+  health_anomaly: number;
+  mount_anomaly: number;
+  aligned_agent_count: number;
+  trackable_agent_count: number;
+}
+
+export type HostListSortBy =
+  | 'default'
+  | 'priority'
+  | 'id'
+  | 'name'
+  | 'devices'
+  | 'cpu'
+  | 'ram'
+  | 'disk'
+  | 'heartbeat';
+
+export type HostListSortDir = 'asc' | 'desc';
+
+export type HostSyncQueryFilter =
+  | 'upgrade_pending'
+  | 'drift'
+  | 'matched'
+  | 'pending'
+  | 'unknown';
+
+export interface HostFilterQueryParams {
+  include_retired?: boolean;
+  status?: 'ONLINE' | 'DEGRADED' | 'OFFLINE' | string;
+  health_status?: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE' | 'unhealthy' | string;
+  sync_status?: HostSyncQueryFilter | string;
+  usb_anomaly?: boolean;
+  mount_anomaly?: boolean;
+  q?: string;
+}
+
+export interface HostListPageQueryParams extends HostFilterQueryParams {
+  skip?: number;
+  limit?: number;
+  sort_by?: HostListSortBy;
+  sort_dir?: HostListSortDir;
+}
+
+export type HostSelectionPreviewRequest = HostFilterQueryParams;
+
+/** #496 / #4117 B2-2：`POST /hosts/selection-preview` 跨页选择预览响应模型。 */
+export interface HostSelectionPreview {
+  total_matched: number;
+  host_ids: string[];
+  online_count: number;
+  offline_count: number;
+  degraded_count: number;
+  retired_count: number;
+  first_install_count: number;
+  reinstall_count: number;
+  hot_update_count: number;
+  flash_prereqs_count: number;
+}
+
 // ─── 脚本在位矩阵（#2958 第五道闸） ────────────────────────────────────────────
 
 /**
