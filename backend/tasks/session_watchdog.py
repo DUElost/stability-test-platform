@@ -61,8 +61,9 @@ async def _reconcile_host_heartbeat_timeouts(
 
     # #2901（锁序家族 #2635/#2787/#2796/#2871 的第四处）：下方循环体逐行取 host 与
     # job 行锁，取锁顺序 = 本查询的返回序。**必须按 id 全序**——对侧 `agent_lease_extend.py`
-    # 是 `ORDER BY JobInstance.id`，无保证的返回序与之交错即可成环。
-    candidate_host_ids = (await db.execute(
+    # 是 `ORDER BY JobInstance.id`，无保证的返回序与之交错即可成环。变量名保留
+    # `dead_hosts` 以满足 `tests/test_lock_order_collection_total_order.py` 锁序守卫。
+    dead_hosts = (await db.execute(
         select(Host.id)
         .where(
             or_(
@@ -83,7 +84,7 @@ async def _reconcile_host_heartbeat_timeouts(
     affected_jobs = 0
     devices_offline = 0
 
-    for host_id in candidate_host_ids:
+    for host_id in dead_hosts:
         # 落库前锁行复读并复验心跳：防 watchdog 与心跳恢复并发时的 lost update。
         locked_host = (await db.execute(
             select(Host)
