@@ -828,12 +828,17 @@ class HeartbeatThread:
             logger.debug("usb_power_presence_failed: %s", exc)
             usb_power_slots = None
 
-        # S1：零权限 sysfs 级联 Hub 拓扑与 1h 内核 USB 错误数值计数（纯观测）
+        # S1：零权限 sysfs 级联 Hub 拓扑、主控/端口硬件体检与 1h 内核 USB 错误数值计数（纯观测）
         try:
             usb_hub_topology = device_discovery.inspect_usb_hub_topology()
         except Exception as exc:
             logger.debug("usb_hub_topology_failed: %s", exc)
             usb_hub_topology = None
+        try:
+            usb_controller_health = device_discovery.inspect_usb_controller_health()
+        except Exception as exc:
+            logger.debug("usb_controller_health_failed: %s", exc)
+            usb_controller_health = None
         try:
             usb_kernel_errors_1h = self._kernel_usb_watch.window_summary()
         except Exception as exc:
@@ -909,6 +914,7 @@ class HeartbeatThread:
                 usb_power_slots=usb_power_slots,
                 usb_hub_topology=usb_hub_topology,
                 usb_kernel_errors_1h=usb_kernel_errors_1h,
+                usb_controller_health=usb_controller_health,
             )
             with self._mount_points_lock:
                 if mount_gen != self._mount_points_generation:
