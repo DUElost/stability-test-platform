@@ -115,4 +115,41 @@ describe('HostBulkActionBar', () => {
     fireEvent.click(screen.getByTestId('host-bulk-clear'));
     expect(onClear).toHaveBeenCalled();
   });
+
+  it('offers explicit cross-page freeze button when page selection is smaller than filteredTotal', () => {
+    const onSelectAllFiltered = vi.fn();
+    render(
+      <HostBulkActionBar
+        counts={{ selected: 50, firstInstall: 10, reinstall: 5, hotUpdate: 35, flashPrereqs: 40 }}
+        isAdmin
+        selectionScope="page"
+        filteredTotal={120}
+        onSelectAllFiltered={onSelectAllFiltered}
+        onInstall={vi.fn()}
+        onClear={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('host-bulk-scope-badge')).toHaveTextContent('仅当前页');
+    const btn = screen.getByTestId('host-bulk-select-all-filtered');
+    expect(btn).toHaveTextContent('选中全部筛选结果 (120)');
+    fireEvent.click(btn);
+    expect(onSelectAllFiltered).toHaveBeenCalledOnce();
+  });
+
+  it('shows frozen cross-page badge in all_filtered mode', () => {
+    render(
+      <HostBulkActionBar
+        counts={{ selected: 120, firstInstall: 20, reinstall: 10, hotUpdate: 90, flashPrereqs: 100 }}
+        isAdmin
+        selectionScope="all_filtered"
+        filteredTotal={120}
+        onInstall={vi.fn()}
+        onClear={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('host-bulk-scope-badge')).toHaveTextContent('跨页已冻结');
+    expect(screen.queryByTestId('host-bulk-select-all-filtered')).not.toBeInTheDocument();
+  });
 });

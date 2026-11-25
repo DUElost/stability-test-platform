@@ -12,22 +12,46 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-const mockHostsList = vi.fn().mockResolvedValue({ items: [], total: 0 });
-const mockFetchHostList = vi.fn((..._args: unknown[]) =>
-  mockHostsList().then((res: { items: unknown[] }) => res.items),
-);
+const mockHostsListPage = vi.fn().mockResolvedValue({ items: [], total: 0, skip: 0, limit: 50 });
+const mockHostsFacets = vi.fn().mockResolvedValue({
+  all: 0,
+  online: 0,
+  degraded: 0,
+  offline: 0,
+  usb_anomaly: 0,
+  upgrade_pending: 0,
+  health_anomaly: 0,
+  mount_anomaly: 0,
+  aligned_agent_count: 0,
+  trackable_agent_count: 0,
+});
+const mockHostsSelectionPreview = vi.fn().mockResolvedValue({
+  total_matched: 0,
+  host_ids: [],
+  online_count: 0,
+  offline_count: 0,
+  degraded_count: 0,
+  retired_count: 0,
+  first_install_count: 0,
+  reinstall_count: 0,
+  hot_update_count: 0,
+  flash_prereqs_count: 0,
+});
+const mockFetchAllHosts = vi.fn();
 
 // Mock api
 vi.mock('../../utils/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/api')>();
   return {
     ...actual,
-    fetchHostList: (...args: unknown[]) => mockFetchHostList(...args),
-    // #3152：主列表 queryFn 改 fetchAllHosts——委托回同一 mock，参数按原「一页=200」记账
-    fetchAllHosts: (includeRetired = false) => mockFetchHostList(0, 200, includeRetired),
+    fetchAllHosts: (...args: unknown[]) => mockFetchAllHosts(...args),
     api: {
     hosts: {
-      list: (...args: unknown[]) => mockHostsList(...args),
+      list: vi.fn().mockResolvedValue({ items: [], total: 0, skip: 0, limit: 50 }),
+      listPage: (...args: unknown[]) => mockHostsListPage(...args),
+      facets: (...args: unknown[]) => mockHostsFacets(...args),
+      selectionPreview: (...args: unknown[]) => mockHostsSelectionPreview(...args),
+      get: vi.fn(),
       getDetail: vi.fn(),
       create: vi.fn().mockResolvedValue({}),
       update: vi.fn().mockResolvedValue({}),
@@ -151,6 +175,10 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     scriptPresenceSummaryError,
     showRetired,
     onShowRetiredChange,
+    onSyncFilterChange,
+    onPageChange,
+    onSortChange,
+    drawerHostOverride,
   }: {
     hosts: any[];
     selectedIds?: Set<string | number>;
@@ -161,8 +189,34 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     scriptPresenceSummaryError?: boolean;
     showRetired?: boolean;
     onShowRetiredChange?: (val: boolean) => void;
+    onSyncFilterChange?: (val: string) => void;
+    onPageChange?: (page: number) => void;
+    onSortChange?: (key: string, dir: string) => void;
+    drawerHostOverride?: any;
   }) => (
     <div data-testid="host-table">
+      {drawerHostOverride && (
+        <div data-testid="drawer-host-override">{drawerHostOverride.name || drawerHostOverride.id}</div>
+      )}
+      {onSyncFilterChange && (
+        <button
+          type="button"
+          data-testid="filter-upgrade-pending"
+          onClick={() => onSyncFilterChange('upgrade_pending')}
+        >
+          待热更新
+        </button>
+      )}
+      {onPageChange && (
+        <button type="button" data-testid="go-page-2" onClick={() => onPageChange(2)}>
+          page-2
+        </button>
+      )}
+      {onSortChange && (
+        <button type="button" data-testid="sort-by-name" onClick={() => onSortChange('name', 'asc')}>
+          sort-name
+        </button>
+      )}
       {onShowRetiredChange && (
         <input
           type="checkbox"
@@ -223,12 +277,12 @@ vi.mock('./components/AddHostModal', () => ({
     isOpen ? <div data-testid="add-host-modal">Add Host Modal</div> : null,
 }));
 
-function createWrapper() {
+function createWrapper(initialEntries: string[] = ['/hosts']) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return ({ children }: { children: React.ReactNode }) => (
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <QueryClientProvider client={queryClient}>
         {children}
       </QueryClientProvider>
@@ -236,31 +290,67 @@ function createWrapper() {
   );
 }
 
+function defaultFacets(all = 0) {
+  return {
+    all,
+    online: all,
+    degraded: 0,
+    offline: 0,
+    usb_anomaly: 0,
+    upgrade_pending: 0,
+    health_anomaly: 0,
+    mount_anomaly: 0,
+    aligned_agent_count: all,
+    trackable_agent_count: all,
+  };
+}
+
 describe('HostsPage', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockHostsList.mockResolvedValue({ items: [], total: 0 });
+    mocks.confirm.mockReset().mockResolvedValue(true);
+    mockHostsListPage.mockReset().mockResolvedValue({ items: [], total: 0, skip: 0, limit: 50 });
+    mockHostsFacets.mockReset().mockResolvedValue(defaultFacets(0));
+    mockHostsSelectionPreview.mockReset().mockResolvedValue({
+      total_matched: 0,
+      host_ids: [],
+      online_count: 0,
+      offline_count: 0,
+      degraded_count: 0,
+      retired_count: 0,
+      first_install_count: 0,
+      reinstall_count: 0,
+      hot_update_count: 0,
+      flash_prereqs_count: 0,
+    });
     const { api } = await import('../../utils/api');
     (api.planRuns.list as any).mockResolvedValue([]);
+    (api.hosts.get as any).mockReset();
     (api.hosts.getDetail as any).mockReset();
     (api.hotUpdate.trigger as any).mockReset().mockResolvedValue({ ok: true, message: 'ok' });
   });
 
-  it('renders host rows when react-query cache already holds Host[]', async () => {
+  it('fetches single page via api.hosts.listPage + independent facets without fetchAllHosts or polluting hostKeys.list()', async () => {
     const { hostKeys } = await import('../../utils/api/queryKeys');
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData(hostKeys.list(), [
-      {
-        id: 'h1',
-        name: 'node-1',
-        ip: '10.0.0.1',
-        status: 'ONLINE',
-        extra: {},
-        agent_installed: true,
-      },
-    ]);
+    mockHostsListPage.mockResolvedValue({
+      items: [
+        {
+          id: 'h1',
+          name: 'node-1',
+          ip: '10.0.0.1',
+          status: 'ONLINE',
+          extra: {},
+          agent_installed: true,
+        },
+      ],
+      total: 1,
+      skip: 0,
+      limit: 50,
+    });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(
@@ -274,46 +364,159 @@ describe('HostsPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('host-row-h1')).toBeInTheDocument();
     });
+    expect(mockFetchAllHosts).not.toHaveBeenCalled();
+    expect(mockHostsListPage).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 0, limit: 50, sort_by: 'priority', sort_dir: 'desc' }),
+    );
+    expect(mockHostsFacets).toHaveBeenCalledWith(false);
+    // 契约 §6.1：不得把 PaginatedResponse 写入共享 ['hosts'] 缓存键
+    expect(queryClient.getQueryData(hostKeys.list())).toBeUndefined();
   });
 
-  it('renders host rows when react-query cache holds paginated envelope', async () => {
-    const { hostKeys } = await import('../../utils/api/queryKeys');
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    queryClient.setQueryData(hostKeys.list(), {
+  it('sends sync_status=upgrade_pending and does not refetch facets on pagination or sorting', async () => {
+    mockHostsListPage.mockResolvedValue({
       items: [
-        {
-          id: 'h2',
-          name: 'node-2',
-          ip: '10.0.0.2',
-          status: 'ONLINE',
-          extra: {},
-          agent_installed: true,
-        },
+        { id: 'h1', name: 'node-1', ip: '10.0.0.1', status: 'ONLINE', extra: {}, agent_installed: true },
       ],
-      total: 1,
+      total: 120,
       skip: 0,
-      limit: 200,
+      limit: 50,
+    });
+    mockHostsFacets.mockResolvedValue({ ...defaultFacets(120), upgrade_pending: 5 });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByTestId('host-row-h1');
+    expect(mockHostsFacets).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('filter-upgrade-pending'));
+    await waitFor(() => {
+      expect(mockHostsListPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sync_status: 'upgrade_pending', skip: 0, limit: 50 }),
+      );
+    });
+
+    fireEvent.click(screen.getByTestId('go-page-2'));
+    await waitFor(() => {
+      expect(mockHostsListPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ skip: 50, limit: 50 }),
+      );
+    });
+
+    fireEvent.click(screen.getByTestId('sort-by-name'));
+    await waitFor(() => {
+      expect(mockHostsListPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sort_by: 'name', sort_dir: 'asc', skip: 0 }),
+      );
+    });
+
+    // 筛选/翻页/排序均不得重复触发 hosts/facets 请求
+    expect(mockHostsFacets).toHaveBeenCalledTimes(1);
+  });
+
+  it('freezes cross-page selection via selectionPreview and resolves off-page hosts for bulk install', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsListPage.mockResolvedValue({
+      items: [
+        { id: 'h1', name: 'node-1', ip: '10.0.0.1', status: 'OFFLINE', extra: {}, agent_installed: false },
+      ],
+      total: 2,
+      skip: 0,
+      limit: 50,
+    });
+    mockHostsFacets.mockResolvedValue({ ...defaultFacets(2), online: 0, offline: 2 });
+    mockHostsSelectionPreview.mockResolvedValue({
+      total_matched: 2,
+      host_ids: ['h1', 'h2'],
+      online_count: 0,
+      offline_count: 2,
+      degraded_count: 0,
+      retired_count: 0,
+      first_install_count: 2,
+      reinstall_count: 0,
+      hot_update_count: 0,
+      flash_prereqs_count: 0,
+    });
+    (api.hosts.getDetail as any).mockResolvedValue({
+      id: 'h2',
+      name: 'node-2',
+      ip: '10.0.0.2',
+      status: 'OFFLINE',
+      extra: {},
+      agent_installed: false,
+    });
+    mocks.confirm.mockResolvedValue(false);
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByTestId('host-row-h1');
+    fireEvent.click(screen.getByTestId('select-all-hosts'));
+    expect(screen.getByTestId('host-bulk-scope-badge')).toHaveTextContent('仅当前页');
+
+    fireEvent.click(screen.getByTestId('host-bulk-select-all-filtered'));
+    await waitFor(() => {
+      expect(mockHostsSelectionPreview).toHaveBeenCalledWith({});
+      expect(screen.getByTestId('host-bulk-scope-badge')).toHaveTextContent('跨页已冻结');
+    });
+    expect(screen.getByTestId('host-bulk-action-bar')).toHaveTextContent('已选择 2 台主机');
+
+    fireEvent.click(screen.getByTestId('host-bulk-install'));
+    await waitFor(() => {
+      expect(api.hosts.getDetail).toHaveBeenCalledWith('h2');
+      expect(mocks.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: expect.stringContaining('将对 2 台主机安装 Agent（跨页已冻结集合）'),
+        }),
+      );
+    });
+  });
+
+  it('loads off-page ?drawer= deep-link host via api.hosts.get', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsListPage.mockResolvedValue({
+      items: [
+        { id: 'h1', name: 'node-1', ip: '10.0.0.1', status: 'ONLINE', extra: {}, agent_installed: true },
+      ],
+      total: 2,
+      skip: 0,
+      limit: 50,
+    });
+    mockHostsFacets.mockResolvedValue(defaultFacets(2));
+    (api.hosts.get as any).mockResolvedValue({
+      id: 'h99',
+      name: 'OffPage-Host-99',
+      ip: '10.0.0.99',
+      status: 'ONLINE',
+      extra: {},
+      mount_status: {},
+      agent_installed: true,
     });
 
     const HostsPage = (await import('./HostsPage')).default;
-    render(
-      <MemoryRouter>
-        <QueryClientProvider client={queryClient}>
-          <HostsPage />
-        </QueryClientProvider>
-      </MemoryRouter>,
-    );
+    render(<HostsPage />, { wrapper: createWrapper(['/hosts?drawer=h99']) });
 
     await waitFor(() => {
-      expect(screen.getByTestId('host-row-h2')).toBeInTheDocument();
+      expect(api.hosts.get).toHaveBeenCalledWith('h99');
+      expect(screen.getByTestId('drawer-host-override')).toHaveTextContent('OffPage-Host-99');
     });
+  });
+
+  it('keeps filter table mounted when active filter returns 0 hosts', async () => {
+    mockHostsListPage.mockResolvedValue({ items: [], total: 0, skip: 0, limit: 50 });
+    mockHostsFacets.mockResolvedValue(defaultFacets(5));
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper(['/hosts?status=OFFLINE']) });
+
+    await screen.findByTestId('host-table');
+    expect(screen.queryByText('暂无主机')).not.toBeInTheDocument();
   });
 
   it('renders loading state initially', async () => {
     // Make the promise never resolve to show loading
-    mockHostsList.mockReturnValueOnce(new Promise(() => {}));
+    mockHostsListPage.mockReturnValueOnce(new Promise(() => {}));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -356,13 +559,16 @@ describe('HostsPage', () => {
   });
 
   it('renders host table when hosts exist', async () => {
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         { id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} },
         { id: 2, name: 'Worker-02', ip: '192.0.2.11', status: 'OFFLINE', extra: {}, mount_status: {} },
       ],
       total: 2,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(2));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -375,10 +581,13 @@ describe('HostsPage', () => {
 
   it('does not query fleet script presence summary on HostsPage', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -390,7 +599,7 @@ describe('HostsPage', () => {
 
   it('does not query plan runs to compute host active task counts', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         {
           id: 'host-1',
@@ -404,7 +613,10 @@ describe('HostsPage', () => {
         },
       ],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -414,7 +626,7 @@ describe('HostsPage', () => {
   });
 
   it('shows online device count from heartbeat capacity, not historical DB records', async () => {
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         {
           id: '192-0-2-87',
@@ -432,7 +644,10 @@ describe('HostsPage', () => {
         },
       ],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -443,7 +658,7 @@ describe('HostsPage', () => {
 
   it('deactivates watcher admin state after confirmation', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         {
           id: 'host-1',
@@ -456,7 +671,10 @@ describe('HostsPage', () => {
         },
       ],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -478,13 +696,16 @@ describe('HostsPage', () => {
 
   it('opens progress panel when bulk precheck skips every selected host', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         { id: 1, name: 'n1', ip: '10.0.0.1', status: 'ONLINE', extra: {}, agent_installed: true },
         { id: 2, name: 'n2', ip: '10.0.0.2', status: 'ONLINE', extra: {}, agent_installed: true },
       ],
       total: 2,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(2));
     (api.hosts.getDetail as any).mockImplementation(async (id: number) => ({
       id,
       name: `n${id}`,
@@ -515,14 +736,17 @@ describe('HostsPage', () => {
 
   it('keeps numeric failed and 409 hosts selected after mixed bulk hot-update', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         { id: 1, name: 'n1', ip: '10.0.0.1', status: 'ONLINE', extra: {}, agent_installed: true },
         { id: 2, name: 'n2', ip: '10.0.0.2', status: 'ONLINE', extra: {}, agent_installed: true },
         { id: 3, name: 'n3', ip: '10.0.0.3', status: 'ONLINE', extra: {}, agent_installed: true },
       ],
       total: 3,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(3));
     (api.hosts.getDetail as any).mockImplementation(async (id: number) => ({
       id,
       name: `n${id}`,
@@ -570,13 +794,16 @@ describe('HostsPage', () => {
 
   it('toasts bulk hot-update failure and keeps the numeric failed host selected', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         { id: 10, name: 'n10', ip: '10.0.0.10', status: 'ONLINE', extra: {}, agent_installed: true },
         { id: 11, name: 'n11', ip: '10.0.0.11', status: 'ONLINE', extra: {}, agent_installed: true },
       ],
       total: 2,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(2));
     (api.hosts.getDetail as any).mockImplementation(async (id: number) => ({
       id,
       name: `n${id}`,
@@ -607,7 +834,7 @@ describe('HostsPage', () => {
     );
   });
 
-  it('prunes selected host ids when a host disappears from the list', async () => {
+  it('prunes selected host ids when a host disappears from the page', async () => {
     const hosts = [
       {
         id: 'h1',
@@ -626,13 +853,15 @@ describe('HostsPage', () => {
         agent_installed: true,
       },
     ];
-    mockHostsList.mockResolvedValue({ items: hosts, total: 2 });
+    mockHostsListPage.mockResolvedValue({ items: hosts, total: 2, skip: 0, limit: 50 });
+    mockHostsFacets.mockResolvedValue(defaultFacets(2));
 
     const { hostKeys } = await import('../../utils/api/queryKeys');
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData(hostKeys.list(), { items: hosts, total: 2 });
+    const pageKey = hostKeys.page({ skip: 0, limit: 50, sort_by: 'priority', sort_dir: 'desc' });
+    queryClient.setQueryData(pageKey, { items: hosts, total: 2, skip: 0, limit: 50 });
 
     const HostsPage = (await import('./HostsPage')).default;
     render(
@@ -647,7 +876,7 @@ describe('HostsPage', () => {
     fireEvent.click(screen.getByTestId('select-all-hosts'));
     expect(screen.getByTestId('host-bulk-action-bar')).toHaveTextContent('已选择 2 台主机');
 
-    queryClient.setQueryData(hostKeys.list(), [hosts[0]]);
+    queryClient.setQueryData(pageKey, { items: [hosts[0]], total: 1, skip: 0, limit: 50 });
 
     await waitFor(() => {
       expect(screen.queryByTestId('host-row-h2')).not.toBeInTheDocument();
@@ -660,17 +889,11 @@ describe('HostsPage', () => {
 });
 
 describe('ADR-0038 退役前端（#1807）', () => {
-  // 本 describe 不在外层 beforeEach 作用域内：自行清调用并复位实现
-  // （clearAllMocks 不还原 mockRejectedValue 这类实现改动）。
   beforeEach(async () => {
     vi.clearAllMocks();
-    // #2362：`clearAllMocks` 只清调用记录、**不清实现**——本 describe 里有用例按
-    // `include_retired` 分流（参数敏感实现挂在 mockFetchHostList 上），残留会把
-    // 后续用例的主列表打成空集。逐测复位成模块级默认实现。
-    mockFetchHostList.mockReset();
-    mockFetchHostList.mockImplementation((..._args: unknown[]) =>
-      mockHostsList().then((res: { items: unknown[] }) => res.items),
-    );
+    mocks.confirm.mockReset().mockResolvedValue(true);
+    mockHostsListPage.mockReset().mockResolvedValue({ items: [], total: 0, skip: 0, limit: 50 });
+    mockHostsFacets.mockReset().mockResolvedValue(defaultFacets(0));
     const { api } = await import('../../utils/api');
     (api.hosts.delete as ReturnType<typeof vi.fn>).mockResolvedValue({});
     (api.hosts.retire as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'h1' });
@@ -689,53 +912,66 @@ describe('ADR-0038 退役前端（#1807）', () => {
     retire_reason: '样机报废',
   };
 
-  it('「显示已退役」开关把 include_retired 穿透到 fetchHostList', async () => {
-    mockHostsList.mockResolvedValue({
+  it('「显示已退役」开关把 include_retired 穿透到 listPage 与 facets', async () => {
+    mockHostsListPage.mockResolvedValue({
       items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
     await screen.findByText('Worker-01');
-    // #2362 起空态会额外发一条存在性探针（0,1,true），故按「调用集合」断言，
-    // 不再用「最后一次调用」指代主查询。
-    const args = () => mockFetchHostList.mock.calls.map((c) => c.slice(0, 3));
-    await waitFor(() => expect(args()).toContainEqual([0, 200, false]));
+    await waitFor(() => {
+      expect(mockHostsListPage).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, limit: 50 }),
+      );
+      expect(mockHostsFacets).toHaveBeenCalledWith(false);
+    });
 
     fireEvent.click(screen.getByTestId('hosts-show-retired'));
 
-    await waitFor(() => expect(args()).toContainEqual([0, 200, true]));
+    await waitFor(() => {
+      expect(mockHostsListPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ include_retired: true, skip: 0, limit: 50 }),
+      );
+      expect(mockHostsFacets).toHaveBeenCalledWith(true);
+    });
   });
 
   it('全部主机退役（列表为空）时开关仍可见可点——否则无法解除退役（#2051）', async () => {
-    // 后端默认过滤退役主机：只剩退役机时列表为空 → 页面落空态。开关若只在
-    // 「有数据」分支渲染，用户就再也没有 UI 路径勾选它（ADR-0038 回收路径断头）。
-    // #2362：mock 必须按 include_retired 分流——旧写法对两种查询都回空集，
-    // 那是「全新环境」而不是「全退役」，会把空态口径掩盖掉。
-    mockFetchHostList.mockImplementation((_skip: unknown, _limit: unknown, includeRetired: unknown) =>
-      Promise.resolve(includeRetired ? [retiredHost] : []),
+    mockHostsListPage.mockImplementation((params: { include_retired?: boolean }) =>
+      Promise.resolve(
+        params?.include_retired
+          ? { items: [retiredHost], total: 1, skip: 0, limit: 50 }
+          : { items: [], total: 0, skip: 0, limit: 50 },
+      ),
+    );
+    mockHostsFacets.mockImplementation((includeRetired?: boolean) =>
+      Promise.resolve(defaultFacets(includeRetired ? 1 : 0)),
     );
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
     const toggle = await screen.findByTestId('hosts-show-retired');
     expect(toggle).toBeInTheDocument();
-    // 空态文案点明「勾选可查看并解除退役」
     expect(await screen.findByText(/勾选「显示已退役」/)).toBeInTheDocument();
 
     fireEvent.click(toggle);
 
     await waitFor(() => {
-      const latest = mockFetchHostList.mock.calls[mockFetchHostList.mock.calls.length - 1];
-      expect(latest?.slice(0, 3)).toEqual([0, 200, true]);
+      expect(mockHostsListPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ include_retired: true, skip: 0, limit: 50 }),
+      );
     });
     expect(await screen.findByText('Retired-09')).toBeInTheDocument();
   });
 
   it('全新环境（从未接入）不把空集归因退役（#2362）', async () => {
-    // 两种查询都为空 = 一台主机都没有 → 文案不得指向「退役记录」
-    mockFetchHostList.mockImplementation(() => Promise.resolve([]));
+    mockHostsListPage.mockResolvedValue({ items: [], total: 0, skip: 0, limit: 50 });
+    mockHostsFacets.mockResolvedValue(defaultFacets(0));
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
@@ -746,10 +982,13 @@ describe('ADR-0038 退役前端（#1807）', () => {
 
   it('退役入口通过 RetireHostDialog 收集必填原因并调用 API（写审计）', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
@@ -765,7 +1004,8 @@ describe('ADR-0038 退役前端（#1807）', () => {
 
   it('解除退役入口通过 RetireHostDialog 收集原因并调用 API', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({ items: [retiredHost], total: 1 });
+    mockHostsListPage.mockResolvedValue({ items: [retiredHost], total: 1, skip: 0, limit: 50 });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
@@ -781,10 +1021,13 @@ describe('ADR-0038 退役前端（#1807）', () => {
 
   it('空原因拦截提交且取消对话框不发起请求', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
@@ -803,10 +1046,13 @@ describe('ADR-0038 退役前端（#1807）', () => {
 
   it('批量删除失败时透出 409 文案（不吞原因）', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'OFFLINE', extra: {}, mount_status: {} }],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
     (api.hosts.delete as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('主机有 2 条历史 Job 记录，删除会清空执行历史；请先归档/清理后再删除'),
     );
@@ -823,11 +1069,9 @@ describe('ADR-0038 退役前端（#1807）', () => {
     );
   });
 
-  // #2062：本用例原先写在 describe **之外**——describe 的 beforeEach
-  // （clearAllMocks + mock 复位）不生效，断言可能落在共享 mock 的历史调用上。
   it('批量安装跳过退役主机并显式提示（#1807 / D5 批量 skip）', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         { id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'OFFLINE', extra: {}, mount_status: {}, agent_installed: true },
         {
@@ -836,9 +1080,10 @@ describe('ADR-0038 退役前端（#1807）', () => {
         },
       ],
       total: 2,
+      skip: 0,
+      limit: 50,
     });
-    // 确认框返回 false：本用例只验「退役主机被排除出目标集」，不真正启动批量安装
-    // （批量安装会拉起操作面板渲染，与本用例无关）。
+    mockHostsFacets.mockResolvedValue(defaultFacets(2));
     mocks.confirm.mockResolvedValue(false);
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -851,7 +1096,6 @@ describe('ADR-0038 退役前端（#1807）', () => {
         expect.stringContaining('已退役主机'),
       ),
     );
-    // 退役主机不得进入安装目标集：确认文案只应包含 1 台
     await waitFor(() =>
       expect(mocks.confirm).toHaveBeenCalledWith(
         expect.objectContaining({ description: expect.stringContaining('将对 1 台主机安装') }),
@@ -860,10 +1104,9 @@ describe('ADR-0038 退役前端（#1807）', () => {
     expect(api.agentInstall.trigger).not.toHaveBeenCalledWith(9);
   });
 
-  // #2255：取消 ≠ 失败——现场验证抓到 UI 曾把显式取消报成红色「安装失败: CANCELED」
   it('取消的安装走 info 提示，不报失败', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         {
           id: 'h-cancel',
@@ -876,7 +1119,10 @@ describe('ADR-0038 退役前端（#1807）', () => {
         },
       ],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
     mocks.confirm.mockResolvedValue(true);
     vi.mocked(api.agentInstall.status).mockResolvedValueOnce({
       host_id: 'h-cancel',
@@ -903,10 +1149,9 @@ describe('ADR-0038 退役前端（#1807）', () => {
     );
   });
 
-  // #3193：刷机前置批次取消走 info 不报失败，且进行中时页头重开按钮显示「进行中」
   it('#3193 取消的刷机前置走 info 提示，不报失败', async () => {
     const { api } = await import('../../utils/api');
-    mockHostsList.mockResolvedValue({
+    mockHostsListPage.mockResolvedValue({
       items: [
         {
           id: 'h-fp',
@@ -919,7 +1164,10 @@ describe('ADR-0038 退役前端（#1807）', () => {
         },
       ],
       total: 1,
+      skip: 0,
+      limit: 50,
     });
+    mockHostsFacets.mockResolvedValue(defaultFacets(1));
     mocks.confirm.mockResolvedValue(true);
     vi.mocked(api.flashPrereqs.status).mockResolvedValueOnce({
       host_id: 'h-fp',

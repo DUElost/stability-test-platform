@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Server } from 'lucide-react';
 import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 import { useToast } from '@/hooks/useToast';
@@ -10,6 +10,8 @@ import { useHostOperations } from '@/hooks/useHostOperations';
 import {
   ExpandableHostTable,
   type HostHealthFilter,
+  type HostSortDirection,
+  type HostSortKey,
   type HostSyncFilter,
   type HostTableData,
 } from '@/components/network/ExpandableHostTable';
@@ -18,8 +20,13 @@ import { RetireHostDialog, type HostRetireMode } from './components/RetireHostDi
 import HostHotUpdateConfirmDialog from '@/components/host/HostHotUpdateConfirmDialog';
 import HostBulkActionBar from '@/components/host/HostBulkActionBar';
 import HostOperationPanel from '@/components/host/HostOperationPanel';
-import { api, coerceHostList, fetchAllHosts, fetchHostList, toApiError } from '@/utils/api';
-import type { Host } from '@/utils/api/types';
+import { api, toApiError } from '@/utils/api';
+import type {
+  Host,
+  HostFilterQueryParams,
+  HostListSortBy,
+  HostSelectionPreview,
+} from '@/utils/api/types';
 import { hostKeys, scriptPresenceKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -27,6 +34,8 @@ import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { BULK_HOT_UPDATE_SKIP_LABEL, precheckBulkHotUpdate } from './bulkHotUpdate';
+
+const PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 
 function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -46,9 +55,224 @@ function resolveSelectedHostId(
   return found ? found.id : key;
 }
 
+function mapHostToTableData(host: Host): HostTableData {
+  const extra = host.extra && typeof host.extra === 'object'
+    ? host.extra as Record<string, unknown> : {};
+  const diskInfo = extra.disk_usage && typeof extra.disk_usage === 'object'
+    ? extra.disk_usage as Record<string, unknown> : {};
+  const onlineDevices =
+    host.status === 'ONLINE'
+      ? (host.capacity?.online_healthy_devices ?? 0)
+      : 0;
+  let claimHint: string | null = null;
+  if (onlineDevices > 0 && host.status === 'ONLINE') {
+    const busy = host.capacity?.active_devices ?? 0;
+    const claimable =
+      host.capacity?.available_slots
+      ?? Math.max(0, onlineDevices - busy);
+    const parts = [`${claimable} 可认领`];
+    if (busy > 0) {
+      parts.push(`${busy} 租约占用`);
+    }
+    claimHint = parts.join(' · ');
+  }
+
+  const capRaw =
+    host.capacity && typeof host.capacity === 'object'
+      ? (host.capacity as Record<string, unknown>)
+      : {};
+  const topoRaw =
+    capRaw.usb_hub_topology && typeof capRaw.usb_hub_topology === 'object'
+      ? (capRaw.usb_hub_topology as Record<string, unknown>)
+      : null;
+  const usbHubTopology =
+    topoRaw &&
+    typeof topoRaw.cascade_hubs === 'number' &&
+    typeof topoRaw.unbound_hubs === 'number' &&
+    typeof topoRaw.unbound_idle_bus_hubs === 'number'
+      ? {
+          cascade_hubs: topoRaw.cascade_hubs,
+          unbound_hubs: topoRaw.unbound_hubs,
+          unbound_idle_bus_hubs: topoRaw.unbound_idle_bus_hubs,
+        }
+      : null;
+  const kerrRaw =
+    capRaw.usb_kernel_errors_1h && typeof capRaw.usb_kernel_errors_1h === 'object'
+      ? (capRaw.usb_kernel_errors_1h as Record<string, unknown>)
+      : null;
+  const usbKernelErrors1h =
+    kerrRaw &&
+    typeof kerrRaw.link_errors === 'number' &&
+    typeof kerrRaw.cable_suspect === 'number' &&
+    typeof kerrRaw.disconnects === 'number' &&
+    typeof kerrRaw.resets === 'number' &&
+    typeof kerrRaw.enum_errors === 'number' &&
+    typeof kerrRaw.hub_port_errors === 'number'
+      ? {
+          link_errors: kerrRaw.link_errors,
+          cable_suspect: kerrRaw.cable_suspect,
+          disconnects: kerrRaw.disconnects,
+          resets: kerrRaw.resets,
+          enum_errors: kerrRaw.enum_errors,
+          hub_port_errors: kerrRaw.hub_port_errors,
+        }
+      : null;
+  const adbStatesRaw =
+    capRaw.adb_state_counts && typeof capRaw.adb_state_counts === 'object'
+      ? (capRaw.adb_state_counts as Record<string, unknown>)
+      : null;
+  const adbStateCounts = adbStatesRaw
+    ? {
+        device: optionalNumber(adbStatesRaw.device),
+        offline: optionalNumber(adbStatesRaw.offline),
+        unauthorized: optionalNumber(adbStatesRaw.unauthorized),
+        other: optionalNumber(adbStatesRaw.other),
+      }
+    : null;
+  const rawKernelLog = capRaw.usb_kernel_log;
+  const usbKernelLog =
+    rawKernelLog === 'ok' || rawKernelLog === 'unavailable' || rawKernelLog === 'unknown'
+      ? rawKernelLog
+      : null;
+  const probeCandidate =
+    (host as { health_probe?: unknown }).health_probe ?? extra.health_probe;
+  const probeRaw =
+    probeCandidate && typeof probeCandidate === 'object'
+      ? (probeCandidate as Record<string, unknown>)
+      : null;
+  const healthProbe = probeRaw
+    ? {
+        checked_at: typeof probeRaw.checked_at === 'string' ? probeRaw.checked_at : undefined,
+        verdict: typeof probeRaw.verdict === 'string' ? probeRaw.verdict : undefined,
+        signals: Array.isArray(probeRaw.signals)
+          ? probeRaw.signals.filter((s): s is string => typeof s === 'string')
+          : undefined,
+        topology: typeof probeRaw.topology === 'string' ? probeRaw.topology : undefined,
+        recent_verdicts: Array.isArray(probeRaw.recent_verdicts)
+          ? probeRaw.recent_verdicts.filter((s): s is string => typeof s === 'string')
+          : undefined,
+        strike_open: typeof probeRaw.strike_open === 'boolean' ? probeRaw.strike_open : undefined,
+        strike_need: typeof probeRaw.strike_need === 'number' ? probeRaw.strike_need : undefined,
+      }
+    : null;
+  const selfHealCandidate =
+    (host as { self_heal?: unknown }).self_heal ?? extra.self_heal;
+  const selfHealRaw =
+    selfHealCandidate && typeof selfHealCandidate === 'object'
+      ? (selfHealCandidate as Record<string, unknown>)
+      : null;
+  const selfHeal = selfHealRaw
+    ? {
+        state: typeof selfHealRaw.state === 'string' ? selfHealRaw.state : undefined,
+        fuse_open: typeof selfHealRaw.fuse_open === 'boolean' ? selfHealRaw.fuse_open : undefined,
+        fuse_reason: typeof selfHealRaw.fuse_reason === 'string' ? selfHealRaw.fuse_reason : null,
+        xhci:
+          selfHealRaw.xhci && typeof selfHealRaw.xhci === 'object'
+            ? (selfHealRaw.xhci as Host['self_heal'] extends infer T ? T extends { xhci?: infer X } ? X : never : never)
+            : undefined,
+        adb_reconnect:
+          selfHealRaw.adb_reconnect && typeof selfHealRaw.adb_reconnect === 'object'
+            ? (selfHealRaw.adb_reconnect as Host['self_heal'] extends infer T ? T extends { adb_reconnect?: infer A } ? A : never : never)
+            : undefined,
+      }
+    : null;
+
+  return {
+    id: host.id,
+    name: host.name ?? '',
+    retired_at: host.retired_at ?? null,
+    retired_by: host.retired_by ?? null,
+    retire_reason: host.retire_reason ?? null,
+    emptied_at: host.emptied_at ?? null,
+    emptied_by: host.emptied_by ?? null,
+    emptied_reason: host.emptied_reason ?? null,
+    ip: host.ip ?? '',
+    status: host.status,
+    watcher_admin_active: host.watcher_admin_active !== false,
+    last_heartbeat: host.last_heartbeat ?? undefined,
+    agent_installed: Boolean(host.agent_installed),
+    agent_protocol_version:
+      host.agent_protocol_version ??
+      (typeof host.extra?.agent_version === 'string' ? host.extra.agent_version : null),
+    agent_code_revision: host.agent_code_revision ?? null,
+    agent_artifact_digest: host.agent_artifact_digest ?? null,
+    expected_code_revision: host.expected_code_revision ?? null,
+    agent_code_deployed: host.agent_code_deployed ?? null,
+    agent_code_deployed_at: host.agent_code_deployed_at ?? null,
+    agent_code_sync_status: host.agent_code_sync_status ?? 'unknown',
+    resources: host.status === 'ONLINE' ? {
+      cpu_load: asNumber(extra.cpu_load),
+      cpu_cores: optionalNumber(extra.cpu_cores),
+      ram_usage: asNumber(extra.ram_usage),
+      ram_total_gb: optionalNumber(extra.ram_total_gb),
+      disk_usage: optionalNumber(diskInfo.usage_percent) ?? null,
+      disk_total_gb: optionalNumber(diskInfo.total_gb),
+      temperature: optionalNumber(extra.temperature),
+      uptime_seconds: optionalNumber(extra.uptime_seconds),
+    } : undefined,
+    mount_status: host.mount_status
+      ? Object.entries(host.mount_status).map(([path, info]: [string, unknown]) => {
+          const mount = typeof info === 'object' && info !== null
+            ? info as Record<string, unknown> : {};
+          return {
+            path,
+            mounted: mount.ok === true || info === true,
+            available_gb: typeof mount.available_gb === 'number' ? mount.available_gb : undefined,
+            total_gb: typeof mount.total_gb === 'number' ? mount.total_gb : undefined,
+          };
+        })
+      : [],
+    device_count: onlineDevices,
+    usb_device_count: optionalNumber(host.capacity?.usb_device_count) ?? null,
+    adb_interface_count: optionalNumber(capRaw.adb_interface_count) ?? null,
+    adb_state_counts: adbStateCounts,
+    usb_kernel_log: usbKernelLog,
+    usb_hub_topology: usbHubTopology,
+    usb_kernel_errors_1h: usbKernelErrors1h,
+    health_probe: healthProbe,
+    self_heal: selfHeal,
+    claim_hint: claimHint,
+    active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
+    health_status: host.health?.status,
+    health_reasons: host.health?.reasons,
+  };
+}
+
+/** 跨页冻结批量动作时解析不在当前页的主机详情，保证资格复验与标签准确且不重跑筛选。 */
+async function resolveHostRecordsForIds(
+  ids: Array<string | number>,
+  pageHosts: Host[],
+): Promise<Host[]> {
+  const byKey = new Map<string, Host>();
+  for (const h of pageHosts) {
+    byKey.set(String(h.id), h);
+  }
+  const missing = ids.filter((id) => !byKey.has(String(id)));
+  if (missing.length > 0) {
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(5, missing.length) }, async () => {
+      while (cursor < missing.length) {
+        const id = missing[cursor++];
+        try {
+          const detail = await api.hosts.getDetail(id);
+          if (detail) byKey.set(String(detail.id), detail);
+        } catch {
+          // 离线/单机拉取失败时跳过，交由下游汇总反馈
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+  return ids
+    .map((id) => byKey.get(String(id)))
+    .filter((h): h is Host => Boolean(h));
+}
+
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedHostIds, setSelectedHostIds] = useState<Set<string | number>>(new Set());
+  const [crossPagePreview, setCrossPagePreview] = useState<HostSelectionPreview | null>(null);
+  const [crossPagePreviewLoading, setCrossPagePreviewLoading] = useState(false);
   const queryClient = useQueryClient();
   const toast = useToast();
   const confirmDialog = useConfirm();
@@ -62,9 +286,22 @@ export default function HostsPage() {
   const navigate = useNavigate();
   const { getString, getBool, updateParams, clearParams } = useUrlFilterParams();
 
+  const clearSelection = useCallback(() => {
+    setSelectedHostIds(new Set());
+    setCrossPagePreview(null);
+  }, []);
+
+  const updateFilterParams = useCallback(
+    (patch: Record<string, string | boolean | undefined>) => {
+      clearSelection();
+      updateParams({ ...patch, page: undefined });
+    },
+    [clearSelection, updateParams],
+  );
+
   // ADR-0038 D5：「显示已退役」开关——同步到 URL 参数 retired=1
   const showRetired = getBool('retired');
-  const setShowRetired = (next: boolean) => updateParams({ retired: next });
+  const setShowRetired = (next: boolean) => updateFilterParams({ retired: next });
   const rawStatus = getString('status', 'all');
   const statusFilter: 'all' | HostTableData['status'] =
     rawStatus === 'ONLINE' || rawStatus === 'OFFLINE' || rawStatus === 'DEGRADED'
@@ -81,6 +318,7 @@ export default function HostsPage() {
       : 'all';
   const rawSync = getString('sync', 'all');
   const syncFilter: HostSyncFilter =
+    rawSync === 'upgrade_pending' ||
     rawSync === 'drift' ||
     rawSync === 'matched' ||
     rawSync === 'mount_error' ||
@@ -88,28 +326,126 @@ export default function HostsPage() {
       ? rawSync
       : 'all';
   const drawerHostId = getString('drawer', '') || null;
-  const { data: hostsData, isLoading, error } = useQuery({
-    queryKey: showRetired ? hostKeys.retiredList() : hostKeys.list(),
-    // #3152：全量列表按服务端 total 翻页——单次 `list(0,200)` 在第 201 台起会让主机
-    // 从管理页消失（含退役视图随换机世代单调累积，最先撞线）。
-    queryFn: () => fetchAllHosts(showRetired),
+
+  const rawPage = Number.parseInt(getString('page', '1'), 10);
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 1;
+  const rawLimit = Number.parseInt(getString('limit', '50'), 10);
+  const pageSize: number = (PAGE_SIZE_OPTIONS as readonly number[]).includes(rawLimit)
+    ? rawLimit
+    : 50;
+  const rawSortBy = getString('sort_by', 'default');
+  const sortKey: HostSortKey =
+    rawSortBy === 'name' ||
+    rawSortBy === 'devices' ||
+    rawSortBy === 'cpu' ||
+    rawSortBy === 'ram' ||
+    rawSortBy === 'disk' ||
+    rawSortBy === 'heartbeat'
+      ? rawSortBy
+      : 'default';
+  const rawSortDir = getString('sort_dir', 'desc');
+  const sortDirection: HostSortDirection = rawSortDir === 'asc' ? 'asc' : 'desc';
+
+  const hasActiveFilters =
+    statusFilter !== 'all' ||
+    healthFilter !== 'all' ||
+    syncFilter !== 'all' ||
+    Boolean(searchQuery.trim());
+
+  // 契约 §4：将前端筛选状态映射为后端增量子集参数（upgrade_pending 复用精确谓词）
+  const hostFilterParams = useMemo<HostFilterQueryParams>(() => {
+    const params: HostFilterQueryParams = {};
+    if (showRetired) params.include_retired = true;
+    if (statusFilter !== 'all') params.status = statusFilter;
+    if (healthFilter !== 'all') params.health_status = healthFilter;
+    if (syncFilter === 'upgrade_pending' || syncFilter === 'drift' || syncFilter === 'matched') {
+      params.sync_status = syncFilter;
+    } else if (syncFilter === 'usb_fault') {
+      params.usb_anomaly = true;
+    } else if (syncFilter === 'mount_error') {
+      params.mount_anomaly = true;
+    }
+    if (searchQuery.trim()) params.q = searchQuery.trim();
+    return params;
+  }, [showRetired, statusFilter, healthFilter, syncFilter, searchQuery]);
+
+  const apiSortBy: HostListSortBy = sortKey === 'default' ? 'priority' : sortKey;
+  const apiSortDir: HostSortDirection = sortKey === 'default' ? 'desc' : sortDirection;
+  const pageQueryParams = useMemo(
+    () => ({
+      ...hostFilterParams,
+      skip: (page - 1) * pageSize,
+      limit: pageSize,
+      sort_by: apiSortBy,
+      sort_dir: apiSortDir,
+    }),
+    [hostFilterParams, page, pageSize, apiSortBy, apiSortDir],
+  );
+
+  // B3-2：主列表走服务端单页分页（独立缓存键 hostKeys.page，不污染 ['hosts']）
+  const {
+    data: hostsPageData,
+    isLoading,
+    isFetching: isFetchingPage,
+    error,
+  } = useQuery({
+    queryKey: hostKeys.page(pageQueryParams),
+    queryFn: () => api.hosts.listPage(pageQueryParams),
+    placeholderData: keepPreviousData,
     refetchInterval: 10000,
   });
-  const hosts = useMemo(() => coerceHostList(hostsData), [hostsData]);
-  // #2362：空态要区分「从未接入」与「全部退役」——主查询在 include_retired=false 时
-  // 只回**过滤后**的集合（`total` 也是过滤后的计数），空集无法自证属于哪一种。
-  // 故用一条「含退役、只取 1 条」的探针查**存在性**：仅在空态启用（不增加常态请求），
-  // 独立缓存键（不复用 retiredList，见 queryKeys 的说明）。未回来时保持既有文案。
+
+  // B3-2：独立 10 项主机 Facets（仅依赖 showRetired，不受搜索/排序/翻页影响）
+  const facetsQ = useQuery({
+    queryKey: hostKeys.facets(showRetired),
+    queryFn: () => api.hosts.facets(showRetired),
+    refetchInterval: 10000,
+  });
+
+  const hosts = useMemo(() => hostsPageData?.items ?? [], [hostsPageData]);
+  const filteredTotal = hostsPageData?.total ?? hosts.length;
+
+  // 页码越界保护（例如末页主机被删后自动回落到末页）
+  useEffect(() => {
+    if (!hostsPageData) return;
+    const maxPage = Math.max(1, Math.ceil(hostsPageData.total / pageSize));
+    if (page > maxPage) {
+      updateParams({ page: maxPage > 1 ? String(maxPage) : undefined });
+    }
+  }, [hostsPageData, page, pageSize, updateParams]);
+
+  // 契约 §6.1：跨页 `?drawer=<id>` 深链不在当前页时独立拉单机详情
+  const drawerHostInPage = useMemo(
+    () => Boolean(drawerHostId && hosts.some((h) => String(h.id) === drawerHostId)),
+    [drawerHostId, hosts],
+  );
+  const drawerHostQ = useQuery({
+    queryKey: hostKeys.detail(drawerHostId ?? ''),
+    queryFn: () => api.hosts.get(drawerHostId!),
+    enabled: Boolean(drawerHostId) && !drawerHostInPage,
+  });
+  const drawerHostOverride = useMemo<HostTableData | null>(() => {
+    if (!drawerHostId || drawerHostInPage || !drawerHostQ.data) return null;
+    return mapHostToTableData(drawerHostQ.data);
+  }, [drawerHostId, drawerHostInPage, drawerHostQ.data]);
+
+  // #2362：空态区分「从未接入」与「全部退役」——仅在无筛选且在用全集为 0 时探针一次含退役 Facets
+  const isTrulyEmptyScope =
+    !showRetired &&
+    !hasActiveFilters &&
+    !isLoading &&
+    filteredTotal === 0 &&
+    (facetsQ.data ? facetsQ.data.all === 0 : true);
   const retiredPeekQ = useQuery({
     queryKey: hostKeys.retiredPeek(),
-    queryFn: () => fetchHostList(0, 1, true),
-    enabled: !showRetired && !isLoading && hosts.length === 0,
+    queryFn: () => api.hosts.facets(true),
+    enabled: isTrulyEmptyScope,
     refetchInterval: 10000,
   });
   const hasAnyHost =
     retiredPeekQ.data === undefined
       ? null
-      : coerceHostList(retiredPeekQ.data).length > 0;
+      : retiredPeekQ.data.all > 0;
 
   const loadHostScriptPresence = (hostId: string | number) =>
     api.scriptPresence.host(hostId);
@@ -119,29 +455,44 @@ export default function HostsPage() {
     return result;
   };
 
-  const [filteredHostIds, setFilteredHostIds] = useState<Set<string> | null>(null);
-  const handleFilteredHostsChange = useCallback((nextHosts: HostTableData[]) => {
-    const nextIds = new Set(nextHosts.map((host) => String(host.id)));
-    setFilteredHostIds(nextIds);
-    setSelectedHostIds((previous) => {
-      if (previous.size === 0) return previous;
-      const next = new Set(Array.from(previous).filter((id) => nextIds.has(String(id))));
-      return next.size === previous.size ? previous : next;
-    });
-  }, []);
-
   const liveHostIds = useMemo(
     () => new Set(hosts.map((host) => String(host.id))),
     [hosts],
   );
+  const selectionScope: 'page' | 'all_filtered' = crossPagePreview ? 'all_filtered' : 'page';
   const visibleSelectedHostIds = useMemo(() => {
+    if (crossPagePreview) {
+      return new Set<string | number>(
+        crossPagePreview.host_ids.map((id) => resolveSelectedHostId(id, hosts)),
+      );
+    }
     if (selectedHostIds.size === 0) return selectedHostIds;
-    const activeScopeIds = filteredHostIds ?? liveHostIds;
     const next = new Set(
-      Array.from(selectedHostIds).filter((id) => activeScopeIds.has(String(id))),
+      Array.from(selectedHostIds).filter((id) => liveHostIds.has(String(id))),
     );
     return next.size === selectedHostIds.size ? selectedHostIds : next;
-  }, [selectedHostIds, filteredHostIds, liveHostIds]);
+  }, [crossPagePreview, selectedHostIds, liveHostIds, hosts]);
+
+  const handlePageSelectionChange = useCallback((nextIds: Set<string | number>) => {
+    setCrossPagePreview(null);
+    setSelectedHostIds(nextIds);
+  }, []);
+
+  const handleSelectAllFiltered = useCallback(async () => {
+    setCrossPagePreviewLoading(true);
+    try {
+      const preview = await api.hosts.selectionPreview(hostFilterParams);
+      setCrossPagePreview(preview);
+      setSelectedHostIds(
+        new Set(preview.host_ids.map((id) => resolveSelectedHostId(id, hosts))),
+      );
+      toast.info(`已冻结全部筛选结果（共 ${preview.total_matched} 台主机）`);
+    } catch (err: unknown) {
+      toast.error(`冻结筛选结果失败: ${toApiError(err).message}`);
+    } finally {
+      setCrossPagePreviewLoading(false);
+    }
+  }, [hostFilterParams, hosts, toast]);
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof api.hosts.create>[0]) => api.hosts.create(data),
@@ -451,11 +802,9 @@ export default function HostsPage() {
     }
   };
 
-  const resolveInstallTargets = (hostIds: Array<string | number>) => {
-    return hostIds
-      .map((id) => {
-        const full = hosts?.find((h: Host) => h.id === id);
-        if (!full) return null;
+  const resolveInstallTargetsFromRecords = (records: Host[]) => {
+    return records
+      .map((full) => {
         // ADR-0038 D5：退役主机不接受控制面动作（仅 unretire 除外）
         if (full.retired_at) return null;
         if (full.status === 'ONLINE') return null;
@@ -469,7 +818,8 @@ export default function HostsPage() {
   };
 
   const handleInstall = async (hostId: number | string) => {
-    const targets = resolveInstallTargets([hostId]);
+    const records = await resolveHostRecordsForIds([hostId], hosts);
+    const targets = resolveInstallTargetsFromRecords(records);
     if (!targets.length) {
       toast.info('该主机在线，请使用热更新');
       return;
@@ -487,32 +837,36 @@ export default function HostsPage() {
 
   const handleBulkInstall = async () => {
     const selectedIds = Array.from(visibleSelectedHostIds);
-    const retiredCount = selectedIds.filter((id) =>
-      hosts?.some((h: Host) => h.id === id && h.retired_at),
-    ).length;
+    const records = await resolveHostRecordsForIds(selectedIds, hosts);
+    const retiredCount = records.filter((h) => Boolean(h.retired_at)).length;
     if (retiredCount > 0) {
       toast.error(`已跳过 ${retiredCount} 台已退役主机（不接受安装/热更新）`);
     }
-    const targets = resolveInstallTargets(selectedIds);
+    const targets = resolveInstallTargetsFromRecords(records);
     if (!targets.length) {
       toast.info('选中主机中没有可安装目标（ONLINE 请用热更新）');
       return;
     }
     const first = targets.filter((t) => !t.agentInstalled).length;
     const re = targets.filter((t) => t.agentInstalled).length;
+    const scopePrefix = selectionScope === 'all_filtered' ? '（跨页已冻结集合）' : '';
     const ok = await confirmDialog({
-      description: `将对 ${targets.length} 台主机安装 Agent（首次 ${first} / 重装 ${re}，并发 2）。是否继续？`,
+      description: `将对 ${targets.length} 台主机安装 Agent${scopePrefix}（首次 ${first} / 重装 ${re}，并发 2）。是否继续？`,
       variant: 'destructive',
     });
     if (!ok) return;
     await startInstallBatch(targets);
-    setSelectedHostIds(new Set());
+    clearSelection();
   };
 
   const handleBulkDelete = async () => {
     if (visibleSelectedHostIds.size === 0) return;
+    const scopeText =
+      selectionScope === 'all_filtered'
+        ? `跨页已冻结的 ${visibleSelectedHostIds.size} 台主机`
+        : `选中的 ${visibleSelectedHostIds.size} 台主机`;
     const ok = await confirmDialog({
-      description: `确定删除选中的 ${visibleSelectedHostIds.size} 台主机？此操作不可恢复。`,
+      description: `确定删除${scopeText}？此操作不可恢复。`,
       variant: 'destructive',
     });
     if (!ok) return;
@@ -542,7 +896,7 @@ export default function HostsPage() {
     } else {
       toast.success(`已删除 ${succeeded} 台主机`);
     }
-    setSelectedHostIds(new Set());
+    clearSelection();
     queryClient.invalidateQueries({ queryKey: hostKeys.list() });
   };
 
@@ -593,195 +947,23 @@ export default function HostsPage() {
   };
 
   // Transform data for expandable table
-  const tableData: HostTableData[] = useMemo(() => {
-    if (!hosts) return [];
-    return hosts.map((host) => {
-      const extra = host.extra && typeof host.extra === 'object'
-        ? host.extra as Record<string, unknown> : {};
-      const diskInfo = extra.disk_usage && typeof extra.disk_usage === 'object'
-        ? extra.disk_usage as Record<string, unknown> : {};
-      const onlineDevices =
-        host.status === 'ONLINE'
-          ? (host.capacity?.online_healthy_devices ?? 0)
-          : 0;
-      let claimHint: string | null = null;
-      if (onlineDevices > 0 && host.status === 'ONLINE') {
-        const busy = host.capacity?.active_devices ?? 0;
-        const claimable =
-          host.capacity?.available_slots
-          ?? Math.max(0, onlineDevices - busy);
-        const parts = [`${claimable} 可认领`];
-        if (busy > 0) {
-          parts.push(`${busy} 租约占用`);
-        }
-        claimHint = parts.join(' · ');
-      }
-
-      const capRaw =
-        host.capacity && typeof host.capacity === 'object'
-          ? (host.capacity as Record<string, unknown>)
-          : {};
-      const topoRaw =
-        capRaw.usb_hub_topology && typeof capRaw.usb_hub_topology === 'object'
-          ? (capRaw.usb_hub_topology as Record<string, unknown>)
-          : null;
-      const usbHubTopology =
-        topoRaw &&
-        typeof topoRaw.cascade_hubs === 'number' &&
-        typeof topoRaw.unbound_hubs === 'number' &&
-        typeof topoRaw.unbound_idle_bus_hubs === 'number'
-          ? {
-              cascade_hubs: topoRaw.cascade_hubs,
-              unbound_hubs: topoRaw.unbound_hubs,
-              unbound_idle_bus_hubs: topoRaw.unbound_idle_bus_hubs,
-            }
-          : null;
-      const kerrRaw =
-        capRaw.usb_kernel_errors_1h && typeof capRaw.usb_kernel_errors_1h === 'object'
-          ? (capRaw.usb_kernel_errors_1h as Record<string, unknown>)
-          : null;
-      const usbKernelErrors1h =
-        kerrRaw &&
-        typeof kerrRaw.link_errors === 'number' &&
-        typeof kerrRaw.cable_suspect === 'number' &&
-        typeof kerrRaw.disconnects === 'number' &&
-        typeof kerrRaw.resets === 'number' &&
-        typeof kerrRaw.enum_errors === 'number' &&
-        typeof kerrRaw.hub_port_errors === 'number'
-          ? {
-              link_errors: kerrRaw.link_errors,
-              cable_suspect: kerrRaw.cable_suspect,
-              disconnects: kerrRaw.disconnects,
-              resets: kerrRaw.resets,
-              enum_errors: kerrRaw.enum_errors,
-              hub_port_errors: kerrRaw.hub_port_errors,
-            }
-          : null;
-      const adbStatesRaw =
-        capRaw.adb_state_counts && typeof capRaw.adb_state_counts === 'object'
-          ? (capRaw.adb_state_counts as Record<string, unknown>)
-          : null;
-      const adbStateCounts = adbStatesRaw
-        ? {
-            device: optionalNumber(adbStatesRaw.device),
-            offline: optionalNumber(adbStatesRaw.offline),
-            unauthorized: optionalNumber(adbStatesRaw.unauthorized),
-            other: optionalNumber(adbStatesRaw.other),
-          }
-        : null;
-      const rawKernelLog = capRaw.usb_kernel_log;
-      const usbKernelLog =
-        rawKernelLog === 'ok' || rawKernelLog === 'unavailable' || rawKernelLog === 'unknown'
-          ? rawKernelLog
-          : null;
-      const probeCandidate =
-        (host as { health_probe?: unknown }).health_probe ?? extra.health_probe;
-      const probeRaw =
-        probeCandidate && typeof probeCandidate === 'object'
-          ? (probeCandidate as Record<string, unknown>)
-          : null;
-      const healthProbe = probeRaw
-        ? {
-            checked_at: typeof probeRaw.checked_at === 'string' ? probeRaw.checked_at : undefined,
-            verdict: typeof probeRaw.verdict === 'string' ? probeRaw.verdict : undefined,
-            signals: Array.isArray(probeRaw.signals)
-              ? probeRaw.signals.filter((s): s is string => typeof s === 'string')
-              : undefined,
-            topology: typeof probeRaw.topology === 'string' ? probeRaw.topology : undefined,
-            recent_verdicts: Array.isArray(probeRaw.recent_verdicts)
-              ? probeRaw.recent_verdicts.filter((s): s is string => typeof s === 'string')
-              : undefined,
-            strike_open: typeof probeRaw.strike_open === 'boolean' ? probeRaw.strike_open : undefined,
-            strike_need: typeof probeRaw.strike_need === 'number' ? probeRaw.strike_need : undefined,
-          }
-        : null;
-      const selfHealCandidate =
-        (host as { self_heal?: unknown }).self_heal ?? extra.self_heal;
-      const selfHealRaw =
-        selfHealCandidate && typeof selfHealCandidate === 'object'
-          ? (selfHealCandidate as Record<string, unknown>)
-          : null;
-      const selfHeal = selfHealRaw
-        ? {
-            state: typeof selfHealRaw.state === 'string' ? selfHealRaw.state : undefined,
-            fuse_open: typeof selfHealRaw.fuse_open === 'boolean' ? selfHealRaw.fuse_open : undefined,
-            fuse_reason: typeof selfHealRaw.fuse_reason === 'string' ? selfHealRaw.fuse_reason : null,
-            xhci:
-              selfHealRaw.xhci && typeof selfHealRaw.xhci === 'object'
-                ? (selfHealRaw.xhci as Host['self_heal'] extends infer T ? T extends { xhci?: infer X } ? X : never : never)
-                : undefined,
-            adb_reconnect:
-              selfHealRaw.adb_reconnect && typeof selfHealRaw.adb_reconnect === 'object'
-                ? (selfHealRaw.adb_reconnect as Host['self_heal'] extends infer T ? T extends { adb_reconnect?: infer A } ? A : never : never)
-                : undefined,
-          }
-        : null;
-
-      return {
-        id: host.id,
-        name: host.name ?? '',
-        retired_at: host.retired_at ?? null,
-        retired_by: host.retired_by ?? null,
-        retire_reason: host.retire_reason ?? null,
-        emptied_at: host.emptied_at ?? null,
-        emptied_by: host.emptied_by ?? null,
-        emptied_reason: host.emptied_reason ?? null,
-        ip: host.ip ?? '',
-        status: host.status,
-        watcher_admin_active: host.watcher_admin_active !== false,
-        last_heartbeat: host.last_heartbeat ?? undefined,
-        agent_installed: Boolean(host.agent_installed),
-        agent_protocol_version:
-          host.agent_protocol_version ??
-          (typeof host.extra?.agent_version === 'string' ? host.extra.agent_version : null),
-        agent_code_revision: host.agent_code_revision ?? null,
-        agent_artifact_digest: host.agent_artifact_digest ?? null,
-        expected_code_revision: host.expected_code_revision ?? null,
-        agent_code_deployed: host.agent_code_deployed ?? null,
-        agent_code_deployed_at: host.agent_code_deployed_at ?? null,
-        agent_code_sync_status: host.agent_code_sync_status ?? 'unknown',
-        resources: host.status === 'ONLINE' ? {
-          cpu_load: asNumber(extra.cpu_load),
-          cpu_cores: optionalNumber(extra.cpu_cores),
-          ram_usage: asNumber(extra.ram_usage),
-          ram_total_gb: optionalNumber(extra.ram_total_gb),
-          disk_usage: optionalNumber(diskInfo.usage_percent) ?? null,
-          disk_total_gb: optionalNumber(diskInfo.total_gb),
-          temperature: optionalNumber(extra.temperature),
-          uptime_seconds: optionalNumber(extra.uptime_seconds),
-        } : undefined,
-        mount_status: host.mount_status
-          ? Object.entries(host.mount_status).map(([path, info]: [string, unknown]) => {
-              const mount = typeof info === 'object' && info !== null
-                ? info as Record<string, unknown> : {};
-              return {
-                path,
-                mounted: mount.ok === true || info === true,
-                available_gb: typeof mount.available_gb === 'number' ? mount.available_gb : undefined,
-                total_gb: typeof mount.total_gb === 'number' ? mount.total_gb : undefined,
-              };
-            })
-          : [],
-        device_count: onlineDevices,
-        usb_device_count: optionalNumber(host.capacity?.usb_device_count) ?? null,
-        adb_interface_count: optionalNumber(capRaw.adb_interface_count) ?? null,
-        adb_state_counts: adbStateCounts,
-        usb_kernel_log: usbKernelLog,
-        usb_hub_topology: usbHubTopology,
-        usb_kernel_errors_1h: usbKernelErrors1h,
-        health_probe: healthProbe,
-        self_heal: selfHeal,
-        claim_hint: claimHint,
-        active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
-        health_status: host.health?.status,
-        health_reasons: host.health?.reasons,
-      };
-    });
-  }, [hosts]);
+  const tableData: HostTableData[] = useMemo(
+    () => hosts.map(mapHostToTableData),
+    [hosts],
+  );
 
   const bulkCounts = useMemo(() => {
+    if (crossPagePreview) {
+      return {
+        selected: crossPagePreview.total_matched,
+        firstInstall: crossPagePreview.first_install_count,
+        reinstall: crossPagePreview.reinstall_count,
+        hotUpdate: crossPagePreview.hot_update_count,
+        flashPrereqs: crossPagePreview.flash_prereqs_count,
+      };
+    }
     const selected = Array.from(visibleSelectedHostIds)
-      .map((id) => hosts?.find((h: Host) => h.id === id))
+      .map((id) => hosts.find((h: Host) => String(h.id) === String(id)))
       .filter((h): h is Host => Boolean(h));
     let firstInstall = 0;
     let reinstall = 0;
@@ -806,7 +988,7 @@ export default function HostsPage() {
       hotUpdate,
       flashPrereqs,
     };
-  }, [visibleSelectedHostIds, hosts]);
+  }, [crossPagePreview, visibleSelectedHostIds, hosts]);
 
   const installPending = hostOps.some(
     (op) =>
@@ -823,11 +1005,10 @@ export default function HostsPage() {
   );
   const hotUpdatePanelOps = hostOps.some((op) => op.kind === 'hot_update');
 
-  const resolveFlashPrereqsTargets = (hostIds: Array<string | number>) => {
-    return hostIds
-      .map((id) => {
-        const full = hosts?.find((h: Host) => h.id === id);
-        if (!full || full.retired_at || !full.agent_installed) return null;
+  const resolveFlashPrereqsTargetsFromRecords = (records: Host[]) => {
+    return records
+      .map((full) => {
+        if (full.retired_at || !full.agent_installed) return null;
         return {
           hostId: full.id,
           label: full.name ?? full.ip ?? String(full.id),
@@ -838,7 +1019,8 @@ export default function HostsPage() {
   };
 
   const handleFlashPrereqs = async (hostId: number | string) => {
-    const targets = resolveFlashPrereqsTargets([hostId]);
+    const records = await resolveHostRecordsForIds([hostId], hosts);
+    const targets = resolveFlashPrereqsTargetsFromRecords(records);
     if (!targets.length) {
       toast.info('仅已安装 Agent 的主机可补齐刷机前置');
       return;
@@ -851,23 +1033,26 @@ export default function HostsPage() {
   };
 
   const handleBulkFlashPrereqs = async () => {
-    const targets = resolveFlashPrereqsTargets(Array.from(visibleSelectedHostIds));
+    const records = await resolveHostRecordsForIds(Array.from(visibleSelectedHostIds), hosts);
+    const targets = resolveFlashPrereqsTargetsFromRecords(records);
     if (!targets.length) {
       toast.info('选中主机中没有可补齐刷机前置的目标（需已安装 Agent）');
       return;
     }
+    const scopePrefix = selectionScope === 'all_filtered' ? '（跨页已冻结集合）' : '';
     const ok = await confirmDialog({
-      description: `确定对 ${targets.length} 台主机补齐刷机前置（dialout / udev / Qt 库）？不会热更新代码。`,
+      description: `确定对 ${targets.length} 台主机补齐刷机前置${scopePrefix}（dialout / udev / Qt 库）？不会热更新代码。`,
     });
     if (!ok) return;
     await startFlashPrereqsBatch(targets);
+    clearSelection();
   };
 
   const handleSelectedHotUpdate = async () => {
     if (visibleSelectedHostIds.size === 0 || bulkHotUpdateProgress) return;
-    if (visibleSelectedHostIds.size === 1) {
+    if (selectionScope === 'page' && visibleSelectedHostIds.size === 1) {
       const [hostId] = Array.from(visibleSelectedHostIds);
-      const host = hosts?.find((item: Host) => item.id === hostId);
+      const host = hosts.find((item: Host) => String(item.id) === String(hostId));
       if (!host || host.status !== 'ONLINE') {
         toast.info('请选择一台在线主机进行热更新');
         return;
@@ -876,13 +1061,13 @@ export default function HostsPage() {
       return;
     }
 
-    const targets = Array.from(visibleSelectedHostIds)
-      .map((id) => hosts?.find((host: Host) => host.id === id))
-      .filter((host): host is Host => Boolean(host))
-      .map((host) => ({
-        id: host.id,
-        label: host.name ?? host.ip ?? String(host.id),
-      }));
+    const targets = Array.from(visibleSelectedHostIds).map((id) => {
+      const host = hosts.find((item: Host) => String(item.id) === String(id));
+      return {
+        id: host ? host.id : id,
+        label: host?.name ?? host?.ip ?? String(id),
+      };
+    });
     if (targets.length === 0) return;
 
     setBulkHotUpdateProgress({ phase: 'checking', completed: 0, total: targets.length });
@@ -910,19 +1095,21 @@ export default function HostsPage() {
         );
         const skippedOnly = await startHotUpdateBatch([], { skipped: skippedSeeds });
         if (skippedOnly) {
+          setCrossPagePreview(null);
           setSelectedHostIds(
             new Set(
-              skippedOnly.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts ?? [])),
+              skippedOnly.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts)),
             ),
           );
         }
         return;
       }
 
+      const scopePrefix = selectionScope === 'all_filtered' ? '（跨页已冻结集合）' : '';
       const ok = await confirmDialog({
         title: '确认安全批量热更新',
         description:
-          `预检完成：可热更新 ${precheck.eligible.length} 台；` +
+          `预检完成${scopePrefix}：可热更新 ${precheck.eligible.length} 台；` +
           `将跳过活跃 Job ${activeJobs} 台、离线/未安装 ${unavailable} 台、预检失败 ${checkFailed} 台。` +
           '系统将以并发 2 逐台重启 Agent，执行期间不会中止任何 Job。是否继续？',
         confirmText: `热更新 ${precheck.eligible.length} 台`,
@@ -943,9 +1130,10 @@ export default function HostsPage() {
         return;
       }
       const remainingIds = new Set<string | number>([
-        ...result.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts ?? [])),
-        ...result.failed.map((item) => resolveSelectedHostId(item.hostId, hosts ?? [])),
+        ...result.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts)),
+        ...result.failed.map((item) => resolveSelectedHostId(item.hostId, hosts)),
       ]);
+      setCrossPagePreview(null);
       setSelectedHostIds(remainingIds);
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       queryClient.invalidateQueries({ queryKey: ['host-detail'] });
@@ -1081,7 +1269,14 @@ export default function HostsPage() {
       ? '尚未接入任何主机。等待 Agent 接入后，主机会出现在这里。'
       : '所有主机都已退役。勾选「显示已退役」可查看并解除退役。';
 
-  if (tableData.length === 0) {
+  // 契约 §6.1：仅当全集确实为 0 且无活动筛选时切全页空态；有筛选无结果时必须保留筛选栏
+  const showFullPageEmpty =
+    !hasActiveFilters &&
+    tableData.length === 0 &&
+    filteredTotal === 0 &&
+    (facetsQ.data ? facetsQ.data.all === 0 : true);
+
+  if (showFullPageEmpty) {
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
         <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
@@ -1116,20 +1311,54 @@ export default function HostsPage() {
       {/* Host Table */}
       <ExpandableHostTable
         hosts={tableData}
+        serverMode
+        serverFacets={facetsQ.data}
+        serverFilteredTotal={filteredTotal}
+        page={page}
+        pageSize={pageSize}
+        pageSizeOptions={PAGE_SIZE_OPTIONS}
+        onPageChange={(nextPage) => {
+          if (selectionScope === 'page') setSelectedHostIds(new Set());
+          updateParams({ page: nextPage > 1 ? String(nextPage) : undefined });
+        }}
+        onPageSizeChange={(nextSize) => {
+          if (selectionScope === 'page') setSelectedHostIds(new Set());
+          updateParams({
+            limit: nextSize === 50 ? undefined : String(nextSize),
+            page: undefined,
+          });
+        }}
+        sortKey={sortKey}
+        sortDirection={sortDirection}
+        onSortChange={(nextKey, nextDir) => {
+          if (selectionScope === 'page') setSelectedHostIds(new Set());
+          updateParams({
+            sort_by: nextKey === 'default' ? undefined : nextKey,
+            sort_dir: nextKey === 'default' ? undefined : nextDir,
+            page: undefined,
+          });
+        }}
+        drawerHostOverride={drawerHostOverride}
+        isFetchingPage={isFetchingPage}
         statusFilter={statusFilter}
-        onStatusFilterChange={(val) => updateParams({ status: val === 'all' ? undefined : val })}
+        onStatusFilterChange={(val) => updateFilterParams({ status: val === 'all' ? undefined : val })}
         searchQuery={searchQuery}
-        onSearchQueryChange={(val) => updateParams({ q: val || undefined })}
+        onSearchQueryChange={(val) => updateFilterParams({ q: val || undefined })}
         healthFilter={healthFilter}
-        onHealthFilterChange={(val) => updateParams({ health: val === 'all' ? undefined : val })}
+        onHealthFilterChange={(val) => updateFilterParams({ health: val === 'all' ? undefined : val })}
         syncFilter={syncFilter}
-        onSyncFilterChange={(val) => updateParams({ sync: val === 'all' ? undefined : val })}
+        onSyncFilterChange={(val) => updateFilterParams({ sync: val === 'all' ? undefined : val })}
         activeDrawerHostId={drawerHostId}
         onActiveDrawerHostIdChange={(val) => updateParams({ drawer: val || undefined })}
         showRetired={showRetired}
         onShowRetiredChange={setShowRetired}
-        onClearQuickView={() => updateParams({ status: undefined, health: undefined, sync: undefined })}
-        onResetAllFilters={() => clearParams(['status', 'q', 'health', 'sync', 'retired'])}
+        onClearQuickView={() =>
+          updateFilterParams({ status: undefined, health: undefined, sync: undefined })
+        }
+        onResetAllFilters={() => {
+          clearSelection();
+          clearParams(['status', 'q', 'health', 'sync', 'retired', 'page', 'sort_by', 'sort_dir']);
+        }}
         onNavigateToDevices={(hostId) => navigate(`/devices?host=${hostId}`)}
         onHotUpdate={isAdmin ? handleHotUpdate : undefined}
         isHotUpdating={(hostId: string | number) =>
@@ -1162,8 +1391,7 @@ export default function HostsPage() {
         canManageWatcherAdminState={canManageWatcherAdminState}
         isAdmin={isAdmin}
         selectedIds={visibleSelectedHostIds}
-        onSelectionChange={setSelectedHostIds}
-        onFilteredHostsChange={handleFilteredHostsChange}
+        onSelectionChange={handlePageSelectionChange}
         onLoadHostScriptPresence={loadHostScriptPresence}
         onRefreshHostScriptPresence={refreshHostScriptPresence}
       />
@@ -1172,6 +1400,10 @@ export default function HostsPage() {
         <HostBulkActionBar
           counts={bulkCounts}
           isAdmin={isAdmin}
+          selectionScope={selectionScope}
+          filteredTotal={filteredTotal}
+          crossPagePreviewLoading={crossPagePreviewLoading}
+          onSelectAllFiltered={handleSelectAllFiltered}
           installPending={installPending || hotUpdateOpPending || flashPrereqsPending}
           hotUpdatePending={
             bulkHotUpdateProgress != null ||
@@ -1189,7 +1421,7 @@ export default function HostsPage() {
           onHotUpdate={handleSelectedHotUpdate}
           onFlashPrereqs={handleBulkFlashPrereqs}
           onDelete={handleBulkDelete}
-          onClear={() => setSelectedHostIds(new Set())}
+          onClear={clearSelection}
         />
       )}
 
