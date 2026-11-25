@@ -45,6 +45,27 @@ class BulkSwipeTrailOut(BaseModel):
     results: List[BulkSwipeTrailDeviceResult] = Field(default_factory=list)
 
 
+class BulkSkipOobeIn(BaseModel):
+    """设备页批量快捷跳过 OOBE（复用脚本库 oobe_skip）。"""
+
+    device_ids: List[int]
+
+
+class BulkSkipOobeDeviceResult(BaseModel):
+    device_id: int
+    serial: str
+    status: str  # ok | failed | skipped
+    error: Optional[str] = None
+
+
+class BulkSkipOobeOut(BaseModel):
+    script_version: str
+    ok: int = 0
+    failed: int = 0
+    skipped: int = 0
+    results: List[BulkSkipOobeDeviceResult] = Field(default_factory=list)
+
+
 class DeviceLeaseReleaseIn(BaseModel):
     """#3646：管理员紧急释放一条终态 job 租约。原因写入审计，不得为空。"""
 
@@ -376,6 +397,7 @@ class DeviceSelectionPreviewIn(BaseModel):
         "tags",
         "assign_project",
         "swipe_trail",
+        "skip_oobe",
         "retire",
         "unretire",
         "copy",

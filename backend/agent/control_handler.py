@@ -8,12 +8,16 @@ be unit-tested without importing the process entrypoint.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
+import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
 from .config import BASE_DIR
@@ -21,6 +25,7 @@ from .event_uploader import EventUploader
 from .evidence_uploader import EvidenceUploader
 from .log_archiver import LogArchiver
 from .scan_runner import ScanRunner
+from .script_packages import PackageUnavailable, inject_required_tools, resolve_script_path
 from .settings import reset_agent_settings_caches
 from .unisoc_scan_runner import UnisocScanRunner
 from .upload_manager import UploadManager
@@ -35,6 +40,11 @@ logger = logging.getLogger(__name__)
 # 所以这里必须与框架读点一致，不能凭 Settings.Secure 的直觉分表（#3578 回归 #3179）。
 _SWIPE_TRAIL_SETTINGS = (("system", "show_touches"), ("system", "pointer_location"))
 _SWIPE_TRAIL_ADB_TIMEOUT_S = 10
+
+# 设备页批量「快捷跳过 OOBE」：严格白名单仅允许执行脚本库中的 oobe_skip 包。
+_SKIP_OOBE_SCRIPT_NAME = "oobe_skip"
+_SKIP_OOBE_SCRIPT_TIMEOUT_S = 90
+_SKIP_OOBE_MAX_WORKERS = 8
 
 
 @dataclass
@@ -148,6 +158,142 @@ def _set_device_swipe_trail(
         sum(1 for r in results if r.get("ok")),
     )
     return {"ok": True, "results": results}
+
+
+def _parse_oobe_skip_output(stdout: str, stderr: str) -> tuple[bool, Optional[str]]:
+    """解析 oobe_skip.py stdout 尾行 JSON；协议约定退出码为 0 时仍以 success 字段判成败。"""
+    for line in reversed((stdout or "").splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and "success" in parsed:
+            if parsed.get("success") is True:
+                return True, None
+            err = parsed.get("error_message") or "oobe_skip failed"
+            return False, str(err)[:200]
+    err = (stderr or stdout or "invalid oobe_skip output").strip()
+    return False, err[:200]
+
+
+def _skip_device_oobe(
+    *,
+    adb_path: str,
+    serials: Any,
+    script: Any,
+    params: Any,
+) -> Dict[str, Any]:
+    """Run packaged script-library ``oobe_skip`` on listed serials (strict whitelist)."""
+    if not isinstance(serials, list) or not serials:
+        return {"ok": False, "error": "serials must be a non-empty list"}
+    if not isinstance(script, dict):
+        return {"ok": False, "error": "invalid oobe_skip script descriptor"}
+
+    name = script.get("name")
+    version = script.get("version")
+    nfs_path = script.get("nfs_path")
+    package_sha256 = script.get("package_sha256")
+    script_type = script.get("script_type") or "python"
+    if (
+        name != _SKIP_OOBE_SCRIPT_NAME
+        or not isinstance(version, str)
+        or not version.strip()
+        or not isinstance(nfs_path, str)
+        or not nfs_path.strip()
+        or not isinstance(package_sha256, str)
+        or not package_sha256.strip()
+        or script_type != "python"
+    ):
+        return {"ok": False, "error": "invalid oobe_skip script descriptor"}
+
+    if params is None:
+        step_params: Dict[str, Any] = {}
+    elif isinstance(params, dict):
+        step_params = params
+    else:
+        return {"ok": False, "error": "params must be a dict"}
+
+    entry = SimpleNamespace(
+        name=_SKIP_OOBE_SCRIPT_NAME,
+        version=version.strip(),
+        nfs_path=nfs_path.strip(),
+        package_sha256=package_sha256.strip(),
+    )
+    try:
+        resolved = resolve_script_path(entry)
+    except PackageUnavailable as exc:
+        return {"ok": False, "error": f"script package unavailable: {exc}"}
+
+    base_env = os.environ.copy()
+    base_env.update(
+        {
+            "STP_ADB_PATH": adb_path,
+            "STP_STEP_PARAMS": json.dumps(step_params, ensure_ascii=False),
+            "STP_SCRIPT_SOURCE": resolved.source,
+        }
+    )
+    tool_error = inject_required_tools(Path(resolved.cwd), base_env)
+    if tool_error:
+        return {"ok": False, "error": tool_error}
+
+    def _run_one(serial: str) -> Dict[str, Any]:
+        env = dict(base_env)
+        env["STP_DEVICE_SERIAL"] = serial
+        try:
+            completed = subprocess.run(
+                [sys.executable, resolved.path],
+                env=env,
+                cwd=resolved.cwd or None,
+                capture_output=True,
+                text=True,
+                timeout=_SKIP_OOBE_SCRIPT_TIMEOUT_S,
+                check=False,
+            )
+            ok, err = _parse_oobe_skip_output(
+                completed.stdout or "",
+                completed.stderr or "",
+            )
+            if completed.returncode != 0:
+                if ok:
+                    err = (completed.stderr or completed.stdout or f"exit {completed.returncode}").strip()[:200]
+                return {"serial": serial, "ok": False, "error": err or f"exit {completed.returncode}"}
+            if ok:
+                return {"serial": serial, "ok": True}
+            return {"serial": serial, "ok": False, "error": err or "oobe_skip failed"}
+        except subprocess.TimeoutExpired:
+            return {"serial": serial, "ok": False, "error": "timeout"}
+        except Exception as exc:  # noqa: BLE001 — per-serial failure must not abort batch
+            return {"serial": serial, "ok": False, "error": str(exc)[:200]}
+
+    results: List[Optional[Dict[str, Any]]] = [None] * len(serials)
+    valid_items: List[tuple[int, str]] = []
+    for idx, raw in enumerate(serials):
+        if not isinstance(raw, str) or not raw.strip():
+            results[idx] = {"serial": raw, "ok": False, "error": "invalid serial"}
+        else:
+            valid_items.append((idx, raw.strip()))
+
+    if len(valid_items) == 1:
+        idx, serial = valid_items[0]
+        results[idx] = _run_one(serial)
+    elif valid_items:
+        workers = min(_SKIP_OOBE_MAX_WORKERS, len(valid_items))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="oobe-skip") as pool:
+            futures = [(idx, pool.submit(_run_one, serial)) for idx, serial in valid_items]
+            for idx, future in futures:
+                results[idx] = future.result()
+
+    final_results: List[Dict[str, Any]] = [r for r in results if r is not None]
+    logger.info(
+        "control_skip_device_oobe version=%s total=%d ok=%d",
+        entry.version,
+        len(final_results),
+        sum(1 for r in final_results if r.get("ok")),
+    )
+    return {"ok": True, "script_version": entry.version, "results": final_results}
 
 
 def build_control_handler(
@@ -335,6 +481,13 @@ def build_control_handler(
                 adb_path=adb_path,
                 serials=payload.get("serials"),
                 enabled=payload.get("enabled"),
+            )
+        elif command == "skip_device_oobe":
+            return _skip_device_oobe(
+                adb_path=adb_path,
+                serials=payload.get("serials"),
+                script=payload.get("script"),
+                params=payload.get("params"),
             )
         else:
             logger.warning("unknown_control_command: %s", command)

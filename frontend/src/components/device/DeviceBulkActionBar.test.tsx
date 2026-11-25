@@ -117,6 +117,52 @@ describe('DeviceBulkActionBar', () => {
     await user.click(screen.getByTestId('device-bulk-more'));
     expect(screen.queryByTestId('device-bulk-swipe-trail-on')).not.toBeInTheDocument();
     expect(screen.queryByTestId('device-bulk-swipe-trail-off')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-bulk-skip-oobe')).not.toBeInTheDocument();
+  });
+
+  it('renders quick skip OOBE directly below swipe-trail-off and invokes callback', async () => {
+    const user = userEvent.setup();
+    const onSkipOobe = vi.fn();
+    render(
+      <DeviceBulkActionBar
+        selectedCount={2}
+        filteredCount={2}
+        selectedFilteredCount={2}
+        canSwipeTrail
+        canSkipOobe
+        {...handlers}
+        onSkipOobe={onSkipOobe}
+      />,
+    );
+    await user.click(screen.getByTestId('device-bulk-more'));
+    const swipeOff = screen.getByTestId('device-bulk-swipe-trail-off');
+    const skipOobe = screen.getByTestId('device-bulk-skip-oobe');
+    expect(skipOobe).toHaveTextContent('快捷跳过OOBE');
+    // 顺序约束：「快捷跳过OOBE」紧跟在「关闭滑动留痕」下方
+    expect(
+      swipeOff.compareDocumentPosition(skipOobe) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(skipOobe);
+    expect(onSkipOobe).toHaveBeenCalledOnce();
+  });
+
+  it('shows pending label and disables skip OOBE item while running', async () => {
+    const user = userEvent.setup();
+    render(
+      <DeviceBulkActionBar
+        selectedCount={1}
+        filteredCount={1}
+        selectedFilteredCount={1}
+        canSkipOobe
+        skipOobePending
+        {...handlers}
+      />,
+    );
+    await user.click(screen.getByTestId('device-bulk-more'));
+    const skipOobe = screen.getByTestId('device-bulk-skip-oobe');
+    expect(skipOobe).toHaveTextContent('跳过中…');
+    expect(skipOobe).toHaveAttribute('aria-disabled', 'true');
   });
 
 });

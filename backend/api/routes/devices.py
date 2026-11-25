@@ -17,6 +17,8 @@ from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
 from backend.api.response import ApiResponse, ok
 from backend.api.schemas.device import (
     BulkProjectAssignIn,
+    BulkSkipOobeIn,
+    BulkSkipOobeOut,
     BulkSwipeTrailIn,
     BulkSwipeTrailOut,
     DeviceFacetsOut,
@@ -58,6 +60,7 @@ from backend.services.device_retirement import (
     unretire_device,
 )
 from backend.services.device_rebind import rebind_device
+from backend.services.device_skip_oobe import bulk_skip_device_oobe
 from backend.services.device_swipe_trail import bulk_set_swipe_trail
 
 # `GET /devices` 的**单次响应** limit 护栏。它是体积护栏，**不是 fleet 总量**：
@@ -292,6 +295,47 @@ async def bulk_swipe_trail(
         resource_id=None,
         details={
             "enabled": payload.enabled,
+            "device_ids": list(payload.device_ids),
+            "ok": out.ok,
+            "failed": out.failed,
+            "skipped": out.skipped,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    return ok(out)
+
+
+@router.post("/bulk-skip-oobe", response_model=ApiResponse[BulkSkipOobeOut])
+async def bulk_skip_oobe(
+    payload: BulkSkipOobeIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
+    """对选中设备批量快捷跳过 OOBE（复用脚本库 oobe_skip）。
+
+    控制面选取最新已启用的 oobe_skip 脚本包，按 host_id 并发下发白名单
+    Agent control ``skip_device_oobe``；无 host / host 离线 / 设备忙碌计入
+    skipped；Agent 未连 / RPC 或脚本执行失败计入 failed。
+    """
+    if not payload.device_ids:
+        raise HTTPException(status_code=422, detail="device_ids must not be empty")
+    _enforce_bulk_limit_http(payload.device_ids, action="skip_oobe")
+
+    out = await bulk_skip_device_oobe(
+        db,
+        device_ids=payload.device_ids,
+    )
+    record_audit(
+        db,
+        action="bulk_skip_oobe",
+        resource_type="device",
+        resource_id=None,
+        details={
+            "script_version": out.script_version,
             "device_ids": list(payload.device_ids),
             "ok": out.ok,
             "failed": out.failed,

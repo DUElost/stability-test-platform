@@ -84,6 +84,7 @@ BULK_ACTION_MAX_LIMITS: Dict[str, Optional[int]] = {
     "tags": DEVICE_BULK_WRITE_MAX_IDS,
     "assign_project": DEVICE_BULK_WRITE_MAX_IDS,
     "swipe_trail": DEVICE_BULK_WRITE_MAX_IDS,
+    "skip_oobe": DEVICE_BULK_WRITE_MAX_IDS,
     "retire": DEVICE_BULK_WRITE_MAX_IDS,
     "unretire": DEVICE_BULK_WRITE_MAX_IDS,
     "copy": None,

@@ -91,6 +91,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "archive_project",
     "audit_retention_pruned",  # SUMMARY_ACTION；字面量/常量两条路径都覆盖
     "bulk_assign_project_models",
+    "bulk_skip_oobe",
     "bulk_swipe_trail",
     "clear_device_intent",  # #3159 host 设备面意图位清除；与 retire/unretire_host 同族
     "compat_rerun_purge",  # B8 U5 #4045 人工确认回收动作；与 trigger 同族，business 90d

@@ -11,6 +11,7 @@ const mockProjectsList = vi.fn();
 const mockAssignDevicesToProject = vi.fn();
 const mockCreateDevice = vi.fn();
 const mockBulkSwipeTrail = vi.fn();
+const mockBulkSkipOobe = vi.fn();
 const mockRetireBatch = vi.fn();
 const mockUnretireDevice = vi.fn();
 const mockReturnDebts = vi.fn();
@@ -41,6 +42,7 @@ vi.mock('@/utils/api', async (importOriginal) => {
         ...actual.api.devices,
         create: (...args: unknown[]) => mockCreateDevice(...args),
         bulkSwipeTrail: (...args: unknown[]) => mockBulkSwipeTrail(...args),
+        bulkSkipOobe: (...args: unknown[]) => mockBulkSkipOobe(...args),
         retireBatch: (...args: unknown[]) => mockRetireBatch(...args),
         unretire: (...args: unknown[]) => mockUnretireDevice(...args),
         returnDebts: (...args: unknown[]) => mockReturnDebts(...args),
@@ -142,6 +144,13 @@ describe('DevicesPage', () => {
     mockAssignDevicesToProject.mockResolvedValue([]);
     mockBulkSwipeTrail.mockResolvedValue({
       enabled: true,
+      ok: 1,
+      failed: 0,
+      skipped: 0,
+      results: [],
+    });
+    mockBulkSkipOobe.mockResolvedValue({
+      script_version: '1.1.3',
       ok: 1,
       failed: 0,
       skipped: 0,
@@ -290,6 +299,7 @@ describe('DevicesPage', () => {
     await user.click(screen.getByTestId('device-bulk-more'));
     expect(screen.queryByTestId('device-bulk-swipe-trail-on')).not.toBeInTheDocument();
     expect(screen.queryByTestId('device-bulk-swipe-trail-off')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-bulk-skip-oobe')).not.toBeInTheDocument();
   });
 
   it('admin can bulk-enable swipe trail on selected devices', async () => {
@@ -307,6 +317,24 @@ describe('DevicesPage', () => {
 
     await waitFor(() => {
       expect(mockBulkSwipeTrail).toHaveBeenCalledWith([1], true);
+    });
+  });
+
+  it('admin can quick-skip OOBE on selected devices via more menu', async () => {
+    const user = userEvent.setup();
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
+    await user.click(await screen.findByTestId('device-bulk-more'));
+    await user.click(await screen.findByTestId('device-bulk-skip-oobe'));
+
+    await waitFor(() => {
+      expect(mockBulkSkipOobe).toHaveBeenCalledWith([1]);
     });
   });
 

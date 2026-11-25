@@ -375,6 +375,22 @@ export default function DevicesPage() {
     },
   });
 
+  const skipOobeMutation = useMutation({
+    mutationFn: () =>
+      api.devices.bulkSkipOobe(Array.from(selectedDeviceIds)),
+    onSuccess: (result) => {
+      const summary = `快捷跳过OOBE（v${result.script_version}）：成功 ${result.ok} · 失败 ${result.failed} · 跳过 ${result.skipped}`;
+      if (result.failed > 0 || result.ok === 0) {
+        toast.error(summary);
+      } else {
+        toast.success(summary);
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`快捷跳过OOBE下发失败: ${toApiError(error).message}`);
+    },
+  });
+
   type RetireOutcome =
     | { kind: 'retire'; batch: Awaited<ReturnType<typeof api.devices.retireBatch>> }
     | { kind: 'unretire'; ok: number; failed: string[] };
@@ -629,6 +645,8 @@ export default function DevicesPage() {
         canAssignProject={isAdmin}
         canSwipeTrail={isAdmin}
         swipeTrailPending={swipeTrailMutation.isPending}
+        canSkipOobe={isAdmin}
+        skipOobePending={skipOobeMutation.isPending}
         canRetire={isAdmin}
         retirePending={retireMutation.isPending}
         onSelectAllFiltered={handleSelectAllFiltered}
@@ -636,6 +654,7 @@ export default function DevicesPage() {
         onAssignProject={() => setIsAssignDialogOpen(true)}
         onSwipeTrailOn={() => swipeTrailMutation.mutate(true)}
         onSwipeTrailOff={() => swipeTrailMutation.mutate(false)}
+        onSkipOobe={() => skipOobeMutation.mutate()}
         onRetire={() => setRetireDialog({ open: true, mode: 'retire' })}
         onUnretire={() => setRetireDialog({ open: true, mode: 'unretire' })}
         onCopySerials={handleCopySerials}

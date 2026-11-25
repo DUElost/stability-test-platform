@@ -1,7 +1,9 @@
 import apiClient, { unwrapApiResponse } from './client';
 import { fetchAllPages, type PagedResult } from './paginate';
+import { NO_TIMEOUT } from './timeouts';
 import type {
   ApiResponseEnvelope,
+  BulkSkipOobeResult,
   BulkSwipeTrailResult,
   Device,
   DeviceFacets,
@@ -116,6 +118,14 @@ export const devices = {
         device_ids: deviceIds,
         enabled,
       }),
+    ),
+  bulkSkipOobe: (deviceIds: number[]) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<BulkSkipOobeResult>>(
+        '/devices/bulk-skip-oobe',
+        { device_ids: deviceIds },
+        { timeout: NO_TIMEOUT },
+      ),
     ),
   /** #496 / #4117 B2-1：服务端分页有界设备列表（`projection=list`）。 */
   listPage: (params: DeviceListPageQueryParams = {}) => {

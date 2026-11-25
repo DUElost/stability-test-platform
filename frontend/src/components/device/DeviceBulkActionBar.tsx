@@ -8,6 +8,7 @@ import {
   FolderKanban,
   MoreHorizontal,
   Pointer,
+  SkipForward,
   Tags,
   X,
 } from 'lucide-react';
@@ -33,6 +34,9 @@ interface DeviceBulkActionBarProps {
   /** admin：批量开关滑动留痕（show_touches + pointer_location） */
   canSwipeTrail?: boolean;
   swipeTrailPending?: boolean;
+  /** admin：批量快捷跳过 OOBE（复用脚本库 oobe_skip） */
+  canSkipOobe?: boolean;
+  skipOobePending?: boolean;
   /** ADR-0057 D2（#2962 B）：批量退役 / 解除退役（admin 动作） */
   canRetire?: boolean;
   retirePending?: boolean;
@@ -41,6 +45,7 @@ interface DeviceBulkActionBarProps {
   onAssignProject?: () => void;
   onSwipeTrailOn?: () => void;
   onSwipeTrailOff?: () => void;
+  onSkipOobe?: () => void;
   onRetire?: () => void;
   onUnretire?: () => void;
   onCopySerials: () => void;
@@ -51,8 +56,8 @@ interface DeviceBulkActionBarProps {
 /**
  * 设备批量操作条（#4117 U2-1a 收敛）：
  * 主区保留 3 个高频动作（批量标签 / 归入项目 / 导出 CSV），
- * 复制序列号、滑动留痕与退役/解除退役收拢至「更多操作」DropdownMenu，
- * 避免 9 个平铺按钮在 1280×800 折行撑高底栏。
+ * 复制序列号、滑动留痕、快捷跳过OOBE 与退役/解除退役收拢至「更多操作」DropdownMenu，
+ * 避免平铺按钮在 1280×800 折行撑高底栏。
  */
 export default function DeviceBulkActionBar({
   selectedCount,
@@ -64,6 +69,8 @@ export default function DeviceBulkActionBar({
   canAssignProject = false,
   canSwipeTrail = false,
   swipeTrailPending = false,
+  canSkipOobe = false,
+  skipOobePending = false,
   canRetire = false,
   retirePending = false,
   onSelectAllFiltered,
@@ -71,6 +78,7 @@ export default function DeviceBulkActionBar({
   onAssignProject = () => {},
   onSwipeTrailOn = () => {},
   onSwipeTrailOff = () => {},
+  onSkipOobe = () => {},
   onRetire = () => {},
   onUnretire = () => {},
   onCopySerials,
@@ -200,6 +208,21 @@ export default function DeviceBulkActionBar({
                   >
                     <Pointer className="h-3.5 w-3.5 text-muted-foreground" />
                     {swipeTrailPending ? '下发中…' : '关闭滑动留痕'}
+                  </DropdownMenuItem>
+                </>
+              )}
+
+              {canSkipOobe && (
+                <>
+                  {!canSwipeTrail && <DropdownMenuSeparator />}
+                  <DropdownMenuItem
+                    data-testid="device-bulk-skip-oobe"
+                    disabled={skipOobePending}
+                    onSelect={onSkipOobe}
+                    className="gap-2 text-xs"
+                  >
+                    <SkipForward className="h-3.5 w-3.5 text-muted-foreground" />
+                    {skipOobePending ? '跳过中…' : '快捷跳过OOBE'}
                   </DropdownMenuItem>
                 </>
               )}
