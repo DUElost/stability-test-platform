@@ -229,3 +229,152 @@ def test_set_device_swipe_trail_disable_and_per_serial_failure(monkeypatch):
     assert by_serial["OK"]["ok"] is True
     assert by_serial["BAD"]["ok"] is False
     assert "offline" in by_serial["BAD"]["error"]
+
+
+def test_skip_device_oobe_rejects_bad_payload_and_non_whitelist_script():
+    handle, _ = _handler()
+    assert handle({"command": "skip_device_oobe", "payload": {}}) == {
+        "ok": False,
+        "error": "serials must be a non-empty list",
+    }
+    valid_script = {
+        "name": "oobe_skip",
+        "version": "1.1.3",
+        "script_type": "python",
+        "nfs_path": "oobe_skip/v1.1.3/oobe_skip.py",
+        "package_sha256": "a" * 64,
+    }
+    assert handle(
+        {
+            "command": "skip_device_oobe",
+            "payload": {
+                "serials": ["SER1"],
+                "script": {**valid_script, "name": "flash_firmware"},
+            },
+        }
+    ) == {"ok": False, "error": "invalid oobe_skip script descriptor"}
+    assert handle(
+        {
+            "command": "skip_device_oobe",
+            "payload": {
+                "serials": ["SER1"],
+                "script": {**valid_script, "package_sha256": ""},
+            },
+        }
+    ) == {"ok": False, "error": "invalid oobe_skip script descriptor"}
+    assert handle(
+        {
+            "command": "skip_device_oobe",
+            "payload": {
+                "serials": ["SER1"],
+                "script": valid_script,
+                "params": ["not-a-dict"],
+            },
+        }
+    ) == {"ok": False, "error": "params must be a dict"}
+
+
+def test_skip_device_oobe_fails_closed_when_package_unavailable(monkeypatch):
+    from backend.agent.script_packages import PackageUnavailable
+
+    handle, _ = _handler()
+
+    def fake_resolve(_entry):
+        raise PackageUnavailable("oobe_skip@1.1.3: package_unavailable")
+
+    monkeypatch.setattr(
+        "backend.agent.control_handler.resolve_script_path",
+        fake_resolve,
+    )
+    ack = handle(
+        {
+            "command": "skip_device_oobe",
+            "payload": {
+                "serials": ["SER1"],
+                "script": {
+                    "name": "oobe_skip",
+                    "version": "1.1.3",
+                    "script_type": "python",
+                    "nfs_path": "oobe_skip/v1.1.3/oobe_skip.py",
+                    "package_sha256": "a" * 64,
+                },
+                "params": {"wait_for_device_seconds": 5},
+            },
+        }
+    )
+    assert ack["ok"] is False
+    assert "script package unavailable" in ack["error"]
+
+
+def test_skip_device_oobe_runs_packaged_script_and_parses_json_result(
+    monkeypatch, tmp_path,
+):
+    from backend.agent.script_packages import ResolvedScript
+
+    handle, _ = _handler()
+    script_file = tmp_path / "oobe_skip.py"
+    script_file.write_text("# stub\n", encoding="utf-8")
+
+    seen_calls: list[dict] = []
+
+    def fake_resolve(entry):
+        assert entry.name == "oobe_skip"
+        assert entry.version == "1.1.3"
+        assert entry.package_sha256 == "b" * 64
+        return ResolvedScript(path=str(script_file), cwd=str(tmp_path))
+
+    def fake_run(argv, **kwargs):
+        env = kwargs["env"]
+        serial = env["STP_DEVICE_SERIAL"]
+        seen_calls.append({"argv": list(argv), "env": dict(env), "cwd": kwargs["cwd"]})
+        if serial == "SER_OK":
+            return MagicMock(
+                returncode=0,
+                stdout='{"success": true, "skipped": false, "metrics": {}}\n',
+                stderr='PROGRESS {"seq": 1, "step": "oobe_skip"}\n',
+            )
+        if serial == "SER_FAIL_JSON":
+            # oobe_skip.py 失败时退出码仍为 0，靠 stdout JSON success=false 表达失败。
+            return MagicMock(
+                returncode=0,
+                stdout='{"success": false, "skipped": false, "error_message": "device SER_FAIL_JSON not adb-ready"}\n',
+                stderr="",
+            )
+        return MagicMock(returncode=1, stdout="", stderr="python crashed")
+
+    monkeypatch.setattr("backend.agent.control_handler.resolve_script_path", fake_resolve)
+    monkeypatch.setattr("backend.agent.control_handler.inject_required_tools", lambda _p, _e: None)
+    monkeypatch.setattr("backend.agent.control_handler.subprocess.run", fake_run)
+
+    ack = handle(
+        {
+            "command": "skip_device_oobe",
+            "payload": {
+                "serials": ["SER_OK", "SER_FAIL_JSON", "SER_RC1"],
+                "script": {
+                    "name": "oobe_skip",
+                    "version": "1.1.3",
+                    "script_type": "python",
+                    "nfs_path": "oobe_skip/v1.1.3/oobe_skip.py",
+                    "package_sha256": "b" * 64,
+                },
+                "params": {"wait_for_device_seconds": 5, "verify_retries": 1},
+            },
+        }
+    )
+
+    assert ack["ok"] is True
+    assert ack["script_version"] == "1.1.3"
+    assert [r["serial"] for r in ack["results"]] == ["SER_OK", "SER_FAIL_JSON", "SER_RC1"]
+    by_serial = {r["serial"]: r for r in ack["results"]}
+    assert by_serial["SER_OK"] == {"serial": "SER_OK", "ok": True}
+    assert by_serial["SER_FAIL_JSON"]["ok"] is False
+    assert "not adb-ready" in by_serial["SER_FAIL_JSON"]["error"]
+    assert by_serial["SER_RC1"]["ok"] is False
+    assert "crashed" in by_serial["SER_RC1"]["error"]
+    assert len(seen_calls) == 3
+    for call in seen_calls:
+        assert call["argv"][1] == str(script_file)
+        assert call["cwd"] == str(tmp_path)
+        assert call["env"]["STP_ADB_PATH"] == "adb"
+        assert '"wait_for_device_seconds": 5' in call["env"]["STP_STEP_PARAMS"]

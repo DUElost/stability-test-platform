@@ -70,4 +70,16 @@ describe('长请求超时豁免（#1199）', () => {
     expect(mocks.post.mock.calls[0][1]).toBeInstanceOf(FormData);
     expect(mocks.post.mock.calls[0][2]).toEqual({ timeout: NO_TIMEOUT });
   });
+
+  it('设备批量快捷跳过 OOBE 豁免应用层超时', async () => {
+    const { devices } = await import('./devices');
+
+    await devices.bulkSkipOobe([1, 2]);
+
+    expect(mocks.post).toHaveBeenCalledWith(
+      '/devices/bulk-skip-oobe',
+      { device_ids: [1, 2] },
+      { timeout: NO_TIMEOUT },
+    );
+  });
 });

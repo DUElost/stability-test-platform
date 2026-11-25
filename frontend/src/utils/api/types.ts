@@ -448,6 +448,22 @@ export interface BulkSwipeTrailResult {
   results: BulkSwipeTrailResultItem[];
 }
 
+/** `POST /devices/bulk-skip-oobe` — 批量快捷跳过 OOBE（复用脚本库 oobe_skip）。 */
+export interface BulkSkipOobeResultItem {
+  device_id: number;
+  serial: string;
+  status: 'ok' | 'failed' | 'skipped';
+  error?: string | null;
+}
+
+export interface BulkSkipOobeResult {
+  script_version: string;
+  ok: number;
+  failed: number;
+  skipped: number;
+  results: BulkSkipOobeResultItem[];
+}
+
 /** #496 / #4117 B2-1：物理设备有界列表 DTO（`GET /devices?projection=list`）。 */
 export interface DeviceListItem {
   id: number;
@@ -547,6 +563,7 @@ export type DeviceBulkPreviewAction =
   | 'tags'
   | 'assign_project'
   | 'swipe_trail'
+  | 'skip_oobe'
   | 'retire'
   | 'unretire'
   | 'copy'

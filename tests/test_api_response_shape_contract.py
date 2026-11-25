@@ -723,6 +723,19 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "BulkSwipeTrailResultItem",
     ),
+    # 设备页批量快捷跳过 OOBE 响应（复用脚本库 oobe_skip；键集与后端 Out 逐名一致）。
+    (
+        "backend/api/schemas/device.py",
+        "BulkSkipOobeOut",
+        "frontend/src/utils/api/types.ts",
+        "BulkSkipOobeResult",
+    ),
+    (
+        "backend/api/schemas/device.py",
+        "BulkSkipOobeDeviceResult",
+        "frontend/src/utils/api/types.ts",
+        "BulkSkipOobeResultItem",
+    ),
     # #2962 B（ADR-0057 D2）：设备退役（单台 DeviceOut 已由上登记覆盖；批量
     # 端点有独立 Out/结果行，前端 devices.ts 消费，逐名对拍）。
     (
