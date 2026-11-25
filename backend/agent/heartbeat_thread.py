@@ -117,6 +117,7 @@ class HeartbeatThread:
         self._slow_sample_interval: float = _hb.stp_device_info_sample_interval_seconds
         self._slow_metrics_by_serial: Dict[str, Dict[str, Any]] = {}
         self._slow_metrics_next_due: Dict[str, float] = {}
+        self._network_latency_probed_by_serial: Dict[str, bool] = {}
         self._pending_reconnected_serials: List[str] = []
         self._adb_repair_cooldown: float = _hb.stp_adb_repair_cooldown_seconds
         # 初始化为 -cooldown：fresh 进程的 time.monotonic() 可能小于冷却值
@@ -319,6 +320,9 @@ class HeartbeatThread:
     # 慢指标键：短期变化小、每拍全采是 tick 拖慢在线状态上报的主因
     # （ping 单台最坏 15s×2）。与 payload/DB 键名一致。
     _SLOW_METRIC_KEYS = ("battery_level", "temperature", "network_latency", "build_display_id")
+    # #4166：network_latency=None 代表设备当前实测 ping 不通（未联网），
+    # 区别于电量/温度/版本的瞬态读取失败；实测轮次不得用旧缓存回填。
+    _AUTHORITATIVE_NONE_SLOW_KEYS = frozenset({"network_latency"})
 
     def _slow_metrics_due(self, serial: str, raw_adb_state: str) -> bool:
         """本拍是否对该 serial 采慢指标（读**上一拍**的连接态，须在写回之前调用）。
@@ -343,38 +347,46 @@ class HeartbeatThread:
     def _absorb_slow_metrics(self, serial: str, info: Dict[str, Any], collected: bool) -> None:
         """慢指标缓存与回填。
 
-        - ``collected=True``：新值合并进缓存（探测失败的 None 键**不覆盖**上一轮
-          好值，与 #2757 disk 的保守语义同形），重设窗口到期点，并把合并结果写回
-          info（保持「payload=缓存」单一口径）；
-        - ``collected=False``：把缓存回填进 info——未连通设备的 info 保持
-          None 缺省（控制面 ``_update_if_not_none`` 跳过、不误清库中旧值），
-          连通设备则每拍带上最近一次值（幂等写）。
+        - ``collected=True``：电量/温度/版本探测失败的 None 键**不覆盖**上一轮
+          好值（与 #2757 disk 保守语义同形），但 ``network_latency`` 为权威 None
+          键（#4166：ping 不通代表当前确实无网，覆盖旧缓存并置
+          ``network_latency_probed=True``），重设窗口到期点并写回 info；
+        - ``collected=False``：把缓存回填进 info 并透传 ``network_latency_probed``
+          ——未连通设备的 info 保持 None 缺省且不置 probed（控制面不误清旧值）。
         """
+        if info.get("adb_connected") is not True:
+            return
         if not collected:
-            if info.get("adb_connected") is not True:
-                return
             cached = self._slow_metrics_by_serial.get(serial)
             if not cached:
                 return
             for key in self._SLOW_METRIC_KEYS:
                 if info.get(key) is None and cached.get(key) is not None:
                     info[key] = cached[key]
+            if self._network_latency_probed_by_serial.get(serial):
+                info["network_latency_probed"] = True
+            return
+        if all(info.get(key) is None for key in self._SLOW_METRIC_KEYS):
+            # 全失败（echo 通过但 dumpsys/getprop/ping 都没落值，如重启后服务
+            # 未稳）：不写缓存、不设窗口、不置 probed——保持「首见强采」语义下一拍重试
             return
         cached = self._slow_metrics_by_serial.get(serial, {})
         merged = {
-            key: (info.get(key) if info.get(key) is not None else cached.get(key))
+            key: (
+                info.get(key)
+                if (key in self._AUTHORITATIVE_NONE_SLOW_KEYS or info.get(key) is not None)
+                else cached.get(key)
+            )
             for key in self._SLOW_METRIC_KEYS
         }
-        if all(value is None for value in merged.values()):
-            # 全失败（echo 通过但 dumpsys/getprop/ping 都没落值，如重启后服务
-            # 未稳）：不写缓存、不设窗口——保持「首见强采」语义，下一拍重试
-            return
         self._slow_metrics_by_serial[serial] = merged
+        self._network_latency_probed_by_serial[serial] = True
         self._slow_metrics_next_due[serial] = (
             time.monotonic() + self._slow_sample_interval
         )
         for key, value in merged.items():
             info[key] = value
+        info["network_latency_probed"] = True
 
     def _collect_device_infos(
         self, discovered: List[Dict[str, Any]],
@@ -624,6 +636,7 @@ class HeartbeatThread:
                     "battery_level": info.get("battery_level"),
                     "temperature": info.get("temperature"),
                     "network_latency": info.get("network_latency"),
+                    "network_latency_probed": bool(info.get("network_latency_probed", False)),
                     "build_display_id": info.get("build_display_id"),
                     "platform": info.get("platform"),
                     # #2757：最近一次采样的 /data 容量（低频采样 + 缓存，每拍带上）

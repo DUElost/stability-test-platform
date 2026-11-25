@@ -509,6 +509,84 @@ class TestHeartbeat:
         assert device.disk_total == 128000000000
         assert device.disk_used == 64000000000
 
+    def test_heartbeat_clears_stale_network_latency_when_probed(
+        self, client, db_session, sample_host
+    ):
+        """#4166：明确探测过网络且 ping 失败（network_latency=None + probed=True）须清空旧延时；
+        未携带 probed 标记的旧版 Agent 或未采样拍仍保留旧值。"""
+        # 1) 首次上报有网延时
+        resp1 = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": sample_host.id,
+                "status": "ONLINE",
+                "devices": [
+                    {
+                        "serial": "NET_CLEAR_DEV",
+                        "adb_state": "device",
+                        "adb_connected": True,
+                        "battery_level": 90,
+                        "network_latency": 28.4,
+                        "network_latency_probed": True,
+                    }
+                ],
+            },
+        )
+        assert resp1.status_code == 200
+        device = db_session.query(Device).filter(Device.serial == "NET_CLEAR_DEV").first()
+        assert device is not None
+        assert device.network_latency == 28.4
+
+        # 复位硬件快照时间窗，使下一次心跳进入 write_hw
+        device.hardware_updated_at = None
+        db_session.commit()
+
+        # 2) 旧版 Agent / 未探测拍上报 network_latency=None（无 probed 标记）→ 保留旧值
+        resp2 = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": sample_host.id,
+                "status": "ONLINE",
+                "devices": [
+                    {
+                        "serial": "NET_CLEAR_DEV",
+                        "adb_state": "device",
+                        "adb_connected": True,
+                        "battery_level": 89,
+                        "network_latency": None,
+                    }
+                ],
+            },
+        )
+        assert resp2.status_code == 200
+        db_session.refresh(device)
+        assert device.network_latency == 28.4
+
+        device.hardware_updated_at = None
+        db_session.commit()
+
+        # 3) 新版 Agent 实测断网（network_latency=None + network_latency_probed=True）→ 清空为 None
+        resp3 = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": sample_host.id,
+                "status": "ONLINE",
+                "devices": [
+                    {
+                        "serial": "NET_CLEAR_DEV",
+                        "adb_state": "device",
+                        "adb_connected": True,
+                        "battery_level": 88,
+                        "network_latency": None,
+                        "network_latency_probed": True,
+                    }
+                ],
+            },
+        )
+        assert resp3.status_code == 200
+        db_session.refresh(device)
+        assert device.network_latency is None
+
     def test_heartbeat_preserves_existing_device(self, client, sample_device):
         """Test heartbeat preserves existing device data"""
 
