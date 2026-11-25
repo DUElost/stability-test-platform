@@ -26,6 +26,25 @@ sdt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sdt)
 
 
+def _patch_advancing_clock(monkeypatch, mod, *, start: float = 1_000_000.0):
+    """Replace mod.time.sleep/time so sleep advances a fake clock (no wall wait).
+
+    同构自 `test_powercycle_scripts.py`（#3202 守卫：sleep 换 no-op 却不推进时钟
+    = 等待环靠真墙钟判 deadline 的忙等形态）。
+    """
+    state = {"now": start}
+
+    def fake_time() -> float:
+        return state["now"]
+
+    def fake_sleep(seconds: float) -> None:
+        state["now"] += float(seconds)
+
+    monkeypatch.setattr(mod.time, "time", fake_time)
+    monkeypatch.setattr(mod.time, "sleep", fake_sleep)
+    return state
+
+
 def _proc(rc: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=["adb"], returncode=rc, stdout=stdout, stderr=stderr)
 
@@ -241,6 +260,8 @@ class TestSyncDeviceTime:
         assert "max_drift_seconds" in payload["error_message"]
 
     def test_wait_adbd_ready_respects_poll_bound(self, monkeypatch):
+        # monotonic 每调 +0.1，保证 15 轮内墙钟截止不会先触发——本用例钉的是
+        # 迭代上界（_ROOT_WAIT_MAX_POLLS），不是 deadline。
         ticks = [0.0]
 
         def advancing_mono():
@@ -253,8 +274,8 @@ class TestSyncDeviceTime:
             polls[0] += 1
             return _proc(1, "", "offline")
 
+        _patch_advancing_clock(monkeypatch, sdt)
         monkeypatch.setattr(sdt.time, "monotonic", advancing_mono)
-        monkeypatch.setattr(sdt.time, "sleep", lambda _s: None)
         monkeypatch.setattr(sdt, "subprocess_run", fake_run)
 
         assert sdt._wait_adbd_ready("SER-OFF", "adb", timeout=5) is False
