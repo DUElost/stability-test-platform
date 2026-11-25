@@ -41,7 +41,12 @@ def host_usb_power_slots(host: Any) -> Optional[Dict[str, Any]]:
     return slots if isinstance(slots, dict) else None
 
 
-def usb_presence_for(host: Any, serial: str) -> Optional[Dict[str, Any]]:
+def usb_presence_for(
+    host: Any,
+    serial: str,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
     """设备在其主机槽位表里的在位状态；主机未上报或设备不在映射里时为 None。"""
     slots = host_usb_power_slots(host) if host is not None else None
     entry = slots.get(serial) if slots else None
@@ -57,16 +62,20 @@ def usb_presence_for(host: Any, serial: str) -> Optional[Dict[str, Any]]:
         "vid_pid": vid_pid,
         "state": classify_usb_presence(vid_pid),
         "reported_at": reported_at,
-        "host_online": host_is_live(host),
+        "host_online": host_is_live(host, now),
     }
 
 
-def powered_off_slot_keys(hosts: Iterable[Any]) -> Set[Tuple[str, str]]:
+def powered_off_slot_keys(
+    hosts: Iterable[Any],
+    *,
+    now: Optional[datetime] = None,
+) -> Set[Tuple[str, str]]:
     """在线主机上报为关机态的 ``(host_id, serial)`` 集合（设备列表的陈旧豁免用）。"""
     keys: Set[Tuple[str, str]] = set()
-    now = datetime.now(timezone.utc)
+    ref_now = now or datetime.now(timezone.utc)
     for host in hosts:
-        if not host_is_live(host, now):
+        if not host_is_live(host, ref_now):
             continue
         for serial, entry in (host_usb_power_slots(host) or {}).items():
             if (isinstance(serial, str) and isinstance(entry, (list, tuple)) and len(entry) == 2
