@@ -8,11 +8,15 @@ import { StateTabs } from '@/components/ui/state-tabs';
 import { useToast } from '@/hooks/useToast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import PlanRunHero from '@/components/plan-run/PlanRunHero';
-import PlanRunKpiGrid from '@/components/plan-run/PlanRunKpiGrid';
+import PlanRunKpiGrid, {
+  type PlanRunDeviceLinkFilter,
+  type PlanRunDeviceStatusFilter,
+} from '@/components/plan-run/PlanRunKpiGrid';
 import AnomalyDashboard from '@/components/plan-run/AnomalyDashboard';
 import PlanChainSidebar from '@/components/plan-run/PlanChainSidebar';
 import BusinessFlowStepper from '@/components/plan-run/BusinessFlowStepper';
 import DeviceOverview from '@/components/plan-run/DeviceOverview';
+import { filterMinimapDevices } from '@/components/plan-run/deviceUiStatus';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import PlanSnapshotDrawer from '@/components/plan-run/PlanSnapshotDrawer';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
@@ -39,9 +43,10 @@ import { normalizeWatcherTimeScope, shouldShowDispatchGate, normalizeDispatchSta
 import { usePlanRunDetailData } from '@/hooks/plan-run/usePlanRunDetailData';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 import { api, loadErrorCopy } from '@/utils/api';
-import type { DeviceLinkStatus, DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
+import type { WatcherTimeScope } from '@/utils/api/types';
 
 type DetailSectionTab = 'monitoring' | 'delivery' | 'diagnostics';
+const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 
 export default function PlanRunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -55,9 +60,17 @@ export default function PlanRunDetailPage() {
   })();
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const deviceStatusFilter = (searchParams.get('status') ?? 'all') as DeviceUiStatus | 'all';
-  const deviceLinkFilter = (searchParams.get('link') ?? 'all') as DeviceLinkStatus | 'all';
+  const deviceStatusFilter = (searchParams.get('status') ?? 'all') as PlanRunDeviceStatusFilter;
+  const deviceLinkFilter = (searchParams.get('link') ?? 'all') as PlanRunDeviceLinkFilter;
   const deviceHostFilter = searchParams.get('host') ?? 'all';
+  const deviceSearchQuery = searchParams.get('q') ?? '';
+  const deviceViewMode: 'grid' | 'table' = searchParams.get('view') === 'table' ? 'table' : 'grid';
+  const rawDevicePage = Number.parseInt(searchParams.get('page') ?? '1', 10);
+  const devicePage = Number.isFinite(rawDevicePage) && rawDevicePage >= 1 ? rawDevicePage : 1;
+  const rawDeviceLimit = Number.parseInt(searchParams.get('limit') ?? '50', 10);
+  const devicePageSize: number = (TABLE_PAGE_SIZE_OPTIONS as readonly number[]).includes(rawDeviceLimit)
+    ? rawDeviceLimit
+    : 50;
   const watcherTimeScope = normalizeWatcherTimeScope(
     searchParams.get('scope') ?? searchParams.get('window'),
   );
@@ -68,12 +81,13 @@ export default function PlanRunDetailPage() {
   const selectedJobId = drawerParam && /^\d+$/.test(drawerParam) ? Number(drawerParam) : null;
 
   const updateParam = useCallback(
-    (key: string, value: string, isDefault: boolean) =>
+    (key: string, value: string, isDefault: boolean, resetPage = false) =>
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
           if (isDefault) next.delete(key);
           else next.set(key, value);
+          if (resetPage) next.delete('page');
           return next;
         },
         { replace: true },
@@ -81,15 +95,31 @@ export default function PlanRunDetailPage() {
     [setSearchParams],
   );
   const setDeviceStatusFilter = useCallback(
-    (s: DeviceUiStatus | 'all') => updateParam('status', s, s === 'all'),
+    (s: PlanRunDeviceStatusFilter) => updateParam('status', s, s === 'all', true),
     [updateParam],
   );
   const setDeviceLinkFilter = useCallback(
-    (s: DeviceLinkStatus | 'all') => updateParam('link', s, s === 'all'),
+    (s: PlanRunDeviceLinkFilter) => updateParam('link', s, s === 'all', true),
     [updateParam],
   );
   const setDeviceHostFilter = useCallback(
-    (h: string | 'all') => updateParam('host', h, h === 'all'),
+    (h: string | 'all') => updateParam('host', h, h === 'all', true),
+    [updateParam],
+  );
+  const setDeviceSearchQuery = useCallback(
+    (q: string) => updateParam('q', q, !q.trim(), true),
+    [updateParam],
+  );
+  const setDeviceViewMode = useCallback(
+    (mode: 'grid' | 'table') => updateParam('view', mode, mode === 'grid', true),
+    [updateParam],
+  );
+  const setDevicePage = useCallback(
+    (nextPage: number) => updateParam('page', String(nextPage), nextPage <= 1),
+    [updateParam],
+  );
+  const setDevicePageSize = useCallback(
+    (nextSize: number) => updateParam('limit', String(nextSize), nextSize === 50, true),
     [updateParam],
   );
   const setWatcherTimeScope = useCallback(
@@ -113,6 +143,8 @@ export default function PlanRunDetailPage() {
           next.delete('status');
           next.delete('link');
           next.delete('host');
+          next.delete('q');
+          next.delete('page');
           return next;
         },
         { replace: true },
@@ -130,13 +162,16 @@ export default function PlanRunDetailPage() {
   const {
     runQ,
     timelineQ,
-    devicesQ,
+    minimapQ,
+    devicesPageQ,
+    selectedJobQ,
     watcherQ,
     chainQ,
     jobProjectionQ,
     isTerminal,
     isAnyFetching,
     refreshAll,
+    prefetchAdjacentJobs,
     abortMut,
     finalArchiveMut,
     retryMut,
@@ -149,27 +184,57 @@ export default function PlanRunDetailPage() {
     deviceStatusFilter,
     deviceLinkFilter,
     deviceHostFilter,
+    deviceSearchQuery,
+    viewMode: deviceViewMode,
+    devicePage,
+    devicePageSize,
+    selectedJobId,
     watcherTimeScope,
     projectionJobId: snapshotJobId,
   });
 
-  const deviceList = useMemo(() => devicesQ.data?.devices ?? [], [devicesQ.data?.devices]);
-  const selectedDeviceIdx = useMemo(
+  // B3-3（契约 §5.1 / §5.3）：Minimap 视图按当前筛选全集顺序导航，表格分页视图按本页顺序导航；
+  // 通过 `?drawer=` 打开不在当前浏览集合中的设备时不得猜测邻居。
+  const filteredMinimapDevices = useMemo(
     () =>
-      selectedJobId == null
-        ? -1
-        : deviceList.findIndex((device) => device.job_id === selectedJobId),
-    [deviceList, selectedJobId],
+      filterMinimapDevices(minimapQ.data?.devices ?? [], {
+        statusFilter: deviceStatusFilter,
+        linkFilter: deviceLinkFilter,
+        hostFilter: deviceHostFilter,
+        searchQuery: deviceSearchQuery,
+      }),
+    [minimapQ.data?.devices, deviceStatusFilter, deviceLinkFilter, deviceHostFilter, deviceSearchQuery],
   );
-  const selectedDevice = selectedDeviceIdx >= 0 ? deviceList[selectedDeviceIdx] : null;
+  const navJobIds = useMemo(
+    () =>
+      deviceViewMode === 'table'
+        ? (devicesPageQ.data?.devices ?? []).map((d) => d.job_id)
+        : filteredMinimapDevices.map((d) => d.job_id),
+    [deviceViewMode, devicesPageQ.data?.devices, filteredMinimapDevices],
+  );
+  const selectedDeviceIdx = useMemo(
+    () => (selectedJobId == null ? -1 : navJobIds.indexOf(selectedJobId)),
+    [navJobIds, selectedJobId],
+  );
   const handlePrevDevice =
     selectedDeviceIdx > 0
-      ? () => setSelectedJobId(deviceList[selectedDeviceIdx - 1].job_id)
+      ? () => setSelectedJobId(navJobIds[selectedDeviceIdx - 1])
       : undefined;
   const handleNextDevice =
-    selectedDeviceIdx >= 0 && selectedDeviceIdx < deviceList.length - 1
-      ? () => setSelectedJobId(deviceList[selectedDeviceIdx + 1].job_id)
+    selectedDeviceIdx >= 0 && selectedDeviceIdx < navJobIds.length - 1
+      ? () => setSelectedJobId(navJobIds[selectedDeviceIdx + 1])
       : undefined;
+
+  // B3-3（契约 §5.3 规则 4）：选中单机详情加载成功后，最多预取相邻 2 条单机详情
+  useEffect(() => {
+    if (!selectedJobQ.isSuccess || selectedDeviceIdx < 0) return;
+    const neighbors: number[] = [];
+    if (selectedDeviceIdx > 0) neighbors.push(navJobIds[selectedDeviceIdx - 1]);
+    if (selectedDeviceIdx < navJobIds.length - 1) neighbors.push(navJobIds[selectedDeviceIdx + 1]);
+    if (neighbors.length > 0) {
+      prefetchAdjacentJobs(neighbors);
+    }
+  }, [selectedJobQ.isSuccess, selectedDeviceIdx, navJobIds, prefetchAdjacentJobs]);
 
   const finalArchivePromptedKey = `plan-run-${id}-final-archive-prompted`;
   // #780：原先读 `archive.readiness` / `archive.ready_for_extract`——后端
@@ -341,7 +406,7 @@ export default function PlanRunDetailPage() {
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
             <div className="shrink-0">
               <PlanRunKpiGrid
-                devices={devicesQ.data}
+                facets={minimapQ.data?.facets}
                 currentStage={timelineQ.data?.current_stage ?? null}
                 patrolCycle={
                   timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
@@ -391,16 +456,29 @@ export default function PlanRunDetailPage() {
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             {/* Minimap 与设备态势常驻置顶（Owner 硬保留约束） */}
             <DeviceOverview
-              data={devicesQ.data}
-              isLoading={devicesQ.isLoading}
-              isError={devicesQ.isError}
+              minimapData={minimapQ.data}
+              tableData={devicesPageQ.data}
+              isLoading={minimapQ.isLoading}
+              isError={minimapQ.isError}
+              tableLoading={devicesPageQ.isLoading}
+              tableError={devicesPageQ.isError}
+              isFetchingTable={devicesPageQ.isFetching}
+              viewMode={deviceViewMode}
+              onViewModeChange={setDeviceViewMode}
               statusFilter={deviceStatusFilter}
               linkFilter={deviceLinkFilter}
               hostFilter={deviceHostFilter}
+              searchQuery={deviceSearchQuery}
               onStatusFilterChange={setDeviceStatusFilter}
               onLinkFilterChange={setDeviceLinkFilter}
               onHostFilterChange={setDeviceHostFilter}
-              onSelectDevice={(device) => setSelectedJobId(device.job_id)}
+              onSearchQueryChange={setDeviceSearchQuery}
+              page={devicePage}
+              pageSize={devicePageSize}
+              pageSizeOptions={TABLE_PAGE_SIZE_OPTIONS}
+              onPageChange={setDevicePage}
+              onPageSizeChange={setDevicePageSize}
+              onSelectJobId={setSelectedJobId}
               selectedJobId={selectedJobId}
             />
 
@@ -446,7 +524,8 @@ export default function PlanRunDetailPage() {
                   timeScope={watcherTimeScope}
                   onTimeScopeChange={setWatcherTimeScope}
                   onSelectDeviceSerial={(serial) => {
-                    const matched = devicesQ.data?.devices.find(
+                    // B3-3（契约 §5.1 规则 5）：Watcher 串号反查复用 Minimap 全集轻量索引，不依赖单页表格
+                    const matched = minimapQ.data?.devices.find(
                       (d) => d.device_serial === serial,
                     );
                     if (matched) {
@@ -556,7 +635,12 @@ export default function PlanRunDetailPage() {
       </div>
 
       <DeviceDetailDrawer
-        device={selectedDevice}
+        open={selectedJobId != null}
+        jobId={selectedJobId}
+        device={selectedJobQ.data ?? null}
+        isLoading={selectedJobQ.isLoading}
+        isError={selectedJobQ.isError}
+        onRetryLoad={() => void selectedJobQ.refetch()}
         runId={id}
         onClose={() => setSelectedJobId(null)}
         onManualRetry={(jobId) => retryMut.mutate(jobId)}
@@ -571,15 +655,16 @@ export default function PlanRunDetailPage() {
               : `/jobs/${jobId}/report`,
           )
         }
-        isRetryPending={retryMut.isPending}
-        isExitPending={exitMut.isPending}
+        isRetryPending={retryMut.isPending && retryMut.variables === selectedJobId}
+        isExitPending={exitMut.isPending && exitMut.variables === selectedJobId}
         devicePosition={selectedDeviceIdx >= 0 ? selectedDeviceIdx + 1 : undefined}
-        totalDevices={deviceList.length}
+        totalDevices={selectedDeviceIdx >= 0 ? navJobIds.length : undefined}
+        navScopeLabel={deviceViewMode === 'table' ? '本页' : undefined}
         onPrevDevice={handlePrevDevice}
         onNextDevice={handleNextDevice}
       />
 
-      {/* #3350 + #3653 U4：快照身份仍来自 detail.plan_snapshot；参数只消费 L2/L3 投影 */}
+      {/* #3350 + #3653 U4 + B3-3：快照设备选择器复用 Minimap 全集轻量索引，不随表格翻页截断 */}
       <PlanSnapshotDrawer
         open={snapshotOpen}
         onClose={() => {
@@ -589,7 +674,7 @@ export default function PlanRunDetailPage() {
         snapshot={runQ.data?.plan_snapshot ?? null}
         l2Projection={runQ.data?.parameter_projection ?? null}
         l2Unavailable={Boolean(runQ.isSuccess && runQ.data?.parameter_projection == null)}
-        devices={devicesQ.data?.devices ?? []}
+        devices={minimapQ.data?.devices ?? []}
         selectedJobId={snapshotJobId}
         onSelectJobId={setSnapshotJobId}
         l3Projection={jobProjectionQ.data ?? null}

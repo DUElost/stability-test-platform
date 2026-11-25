@@ -18,12 +18,20 @@ import DeviceFilterBar from './DeviceFilterBar';
 import SectionHeader from './SectionHeader';
 import { formatScriptIdentity } from './scriptIdentity';
 import type {
-  DeviceLinkStatus,
   DeviceMatrixItem,
-  DeviceUiStatus,
+  PlanRunDevicesMinimapPayload,
   PlanRunDevicesPayload,
+  PlanRunMinimapDevice,
 } from '@/utils/api/types';
-import { DEVICE_UI_STATUS } from './deviceUiStatus';
+import type {
+  PlanRunDeviceLinkFilter,
+  PlanRunDeviceStatusFilter,
+} from './PlanRunKpiGrid';
+import {
+  DEVICE_UI_STATUS,
+  filterMinimapDevices,
+  UNASSIGNED_HOST_BUCKET,
+} from './deviceUiStatus';
 import { DEVICE_LINK_STATUS } from './deviceLinkStatus';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAllHosts } from '@/utils/api';
@@ -37,22 +45,47 @@ import {
   shouldVirtualizeDeviceTable,
 } from './deviceTableVirtual';
 
+const DEFAULT_PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
+
+type MinimapCellItem = Pick<
+  PlanRunMinimapDevice,
+  'job_id' | 'device_id' | 'device_serial' | 'host_id' | 'job_exec_status' | 'device_link_status' | 'log_signal_count'
+> & { ui_status?: DeviceMatrixItem['ui_status'] };
+
 interface Props {
-  data: PlanRunDevicesPayload | undefined;
+  /** 兼容旧单载荷调用方（单测/回滚）；双视图模式请传 minimapData + tableData */
+  data?: PlanRunDevicesPayload | undefined;
+  /** B3-3（契约 §5.1）：独立轻量全集 Minimap 载荷 */
+  minimapData?: PlanRunDevicesMinimapPayload | undefined;
+  /** B3-3（契约 §5.2）：表格真分页载荷（仅表格视图按需加载） */
+  tableData?: PlanRunDevicesPayload | undefined;
   isLoading?: boolean;
   isError?: boolean;
-  statusFilter?: DeviceUiStatus | 'all';
-  linkFilter?: DeviceLinkStatus | 'all';
+  tableLoading?: boolean;
+  tableError?: boolean;
+  isFetchingTable?: boolean;
+  statusFilter?: PlanRunDeviceStatusFilter;
+  linkFilter?: PlanRunDeviceLinkFilter;
   hostFilter?: string | 'all';
-  onStatusFilterChange?: (s: DeviceUiStatus | 'all') => void;
-  onLinkFilterChange?: (s: DeviceLinkStatus | 'all') => void;
+  searchQuery?: string;
+  onStatusFilterChange?: (s: PlanRunDeviceStatusFilter) => void;
+  onLinkFilterChange?: (s: PlanRunDeviceLinkFilter) => void;
   onHostFilterChange?: (h: string | 'all') => void;
+  onSearchQueryChange?: (q: string) => void;
   onSelectDevice?: (device: DeviceMatrixItem) => void;
+  /** B3-3：轻量 jobId 选中回调（Minimap 与表格行共用） */
+  onSelectJobId?: (jobId: number) => void;
   /** 当前在右侧 DeviceDetailDrawer 打开的 Job ID，用于在 Minimap 中保留选中高亮框 */
   selectedJobId?: number | null;
   /** Controlled view mode; falls back to internal state when omitted. */
   viewMode?: 'grid' | 'table';
   onViewModeChange?: (mode: 'grid' | 'table') => void;
+  /** B3-3 表格真分页控制 */
+  page?: number;
+  pageSize?: number;
+  pageSizeOptions?: readonly number[];
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (size: number) => void;
 }
 
 // ── Grid cell color map ──────────────────────────────────────────────────
@@ -163,11 +196,11 @@ function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
 
 function DeviceGrid({
   devices,
-  onSelect,
+  onSelectJobId,
   selectedJobId,
 }: {
-  devices: DeviceMatrixItem[];
-  onSelect?: (d: DeviceMatrixItem) => void;
+  devices: readonly MinimapCellItem[];
+  onSelectJobId?: (jobId: number) => void;
   selectedJobId?: number | null;
 }) {
   return (
@@ -185,7 +218,7 @@ function DeviceGrid({
         {devices.map((d) => {
           // 方块着色跟随「执行」维度,与筛选 chip / 表格执行列同源;
           // 连接维度另行拼进 label,避免两处口径打架。
-          const exec = d.job_exec_status ?? d.ui_status;
+          const exec = d.job_exec_status ?? d.ui_status ?? 'unknown';
           const link = d.device_link_status;
           const linkSuffix =
             link && link !== 'online' ? ` · ${DEVICE_LINK_STATUS[link].label}` : '';
@@ -201,7 +234,7 @@ function DeviceGrid({
               type="button"
               data-testid={`minimap-cell-${d.job_id}`}
               data-selected={isSelected ? 'true' : undefined}
-              onClick={() => onSelect?.(d)}
+              onClick={() => onSelectJobId?.(d.job_id)}
               aria-label={label}
               aria-pressed={isSelected}
               title={label}
@@ -224,13 +257,12 @@ function DeviceTable({
   devices,
   onSelect,
   highlightJobId,
-  hostMap,
+  hostLabelFor,
 }: {
   devices: DeviceMatrixItem[];
   onSelect?: (d: DeviceMatrixItem) => void;
   highlightJobId?: number | null;
-  /** #2601：host_id → Host，仅用于显示名解析（查不到回落 host_id，与旧行为一致） */
-  hostMap: Map<string, { ip?: string | null; name?: string | null }>;
+  hostLabelFor: (hostId: string | null | undefined) => string;
 }) {
   // 渲染期时间戳仅用于卡死高亮派生，无副作用（#260 待统一 tick 状态）。
   // 注：原先这里挂着 `eslint-disable react-hooks/purity`；虚拟化接线落地后该规则
@@ -353,7 +385,7 @@ function DeviceTable({
                   {d.device_serial || `Device #${d.device_id}`}
                 </TableCell>
                 <TableCell className={cn('px-2 py-2 font-mono text-xs', TEXT.subtitle)}>
-                  {hostLabel(hostMap.get(String(d.host_id ?? '')), d.host_id, '—')}
+                  {hostLabelFor(d.host_id)}
                 </TableCell>
                 <TableCell className="px-2 py-2">
                   <span title={statusTooltip(d, now)}>
@@ -447,18 +479,31 @@ function DeviceTable({
 
 export default function DeviceOverview({
   data,
+  minimapData,
+  tableData,
   isLoading = false,
   isError = false,
+  tableLoading = false,
+  tableError = false,
+  isFetchingTable = false,
   statusFilter = 'all',
   linkFilter = 'all',
   hostFilter = 'all',
+  searchQuery = '',
   onStatusFilterChange,
   onLinkFilterChange,
   onHostFilterChange,
+  onSearchQueryChange,
   onSelectDevice,
+  onSelectJobId,
   selectedJobId,
   viewMode: controlledViewMode,
   onViewModeChange,
+  page = 1,
+  pageSize = 50,
+  pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
+  onPageChange,
+  onPageSizeChange,
 }: Props) {
   const [internalViewMode, setInternalViewMode] = useState<'grid' | 'table'>('grid');
   const viewMode = controlledViewMode ?? internalViewMode;
@@ -470,34 +515,108 @@ export default function DeviceOverview({
     [onViewModeChange],
   );
 
-  const total = data?.total ?? 0;
-  const devices = data?.devices ?? [];
-  const byStatus = data?.by_status ?? { all: 0 };
-  const byLinkStatus = data?.by_link_status;
-  const byHost = useMemo(() => data?.by_host ?? {}, [data?.by_host]);
-  // #2601：`by_host` 的键是内部 host_id，本组件此前直接把它当展示值（同一条 host
-  // 事实在报告页显示 IP、在这里显示 slug）。复用与选机工作台同键的 host 查询，
-  // 显示名一律走 hostLabel()；查不到（权限不足/缓存未到）时回落 host_id，与旧行为一致。
+  const dualViewMode = minimapData !== undefined || tableData !== undefined || onPageChange !== undefined;
+  const total = minimapData?.facets.total ?? tableData?.total ?? data?.total ?? 0;
+  const byStatus = minimapData?.facets.by_status ?? tableData?.by_status ?? data?.by_status ?? { all: 0 };
+  const byLinkStatus = minimapData?.facets.by_link_status ?? tableData?.by_link_status ?? data?.by_link_status;
+  const byHost = useMemo(
+    () => minimapData?.facets.by_host ?? tableData?.by_host ?? data?.by_host ?? {},
+    [minimapData?.facets.by_host, tableData?.by_host, data?.by_host],
+  );
+
+  // B3-3（契约 §5.1 规则 3）：minimap 响应已自带去重 host 显示名映射（含退役与无主机桶）；
+  // 仅在兼容旧单载荷调用方（非 dualViewMode）时回落 fetchAllHosts(true)，避免首帧多发 /hosts。
   const { data: hostList } = useQuery({
     queryKey: hostKeys.retiredList(),
-    queryFn: () => fetchAllHosts(true),  // #3152：翻页拉全（含退役，历史设备要能归属）
+    queryFn: () => fetchAllHosts(true),
+    enabled: !dualViewMode,
   });
   const hostMap = useMemo(
-    () => new Map((hostList ?? []).map(host => [String(host.id), host])),
+    () => new Map((hostList ?? []).map((host) => [String(host.id), host])),
     [hostList],
   );
+  const minimapHosts = minimapData?.hosts;
+  const hostLabelFor = useCallback(
+    (hostId: string | null | undefined): string => {
+      if (!hostId || hostId === UNASSIGNED_HOST_BUCKET) {
+        return minimapHosts?.[UNASSIGNED_HOST_BUCKET] ?? '未分配主机';
+      }
+      if (minimapHosts && minimapHosts[hostId]) {
+        return minimapHosts[hostId];
+      }
+      return hostLabel(hostMap.get(String(hostId)), hostId, '—');
+    },
+    [minimapHosts, hostMap],
+  );
+
+  // Minimap 视图：对服务端轻量全集在本地做即时筛选（不截断为单页）
+  const gridDevices = useMemo<readonly MinimapCellItem[]>(() => {
+    if (minimapData) {
+      return filterMinimapDevices(minimapData.devices, {
+        statusFilter,
+        linkFilter,
+        hostFilter,
+        searchQuery,
+      });
+    }
+    return (data?.devices ?? []).map((d) => ({
+      job_id: d.job_id,
+      device_id: d.device_id,
+      device_serial: d.device_serial ?? null,
+      host_id: d.host_id ?? null,
+      job_exec_status: d.job_exec_status ?? d.ui_status,
+      device_link_status: d.device_link_status ?? 'online',
+      log_signal_count: d.log_signal_count,
+      ui_status: d.ui_status,
+    }));
+  }, [minimapData, data?.devices, statusFilter, linkFilter, hostFilter, searchQuery]);
+
+  // 表格视图：消费真分页当页（或旧单载荷）
+  const tableDevices = useMemo(
+    () => tableData?.devices ?? data?.devices ?? [],
+    [tableData?.devices, data?.devices],
+  );
+  const tableFilteredTotal =
+    tableData?.filtered_total ?? tableData?.total ?? data?.filtered_total ?? data?.total ?? tableDevices.length;
+  const totalPages = Math.max(1, Math.ceil(tableFilteredTotal / Math.max(1, pageSize)));
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  const rangeStart = tableFilteredTotal === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const rangeEnd =
+    tableFilteredTotal === 0
+      ? 0
+      : Math.min(tableFilteredTotal, (currentPage - 1) * pageSize + tableDevices.length);
 
   const hosts = useMemo(
     () => Object.keys(byHost).sort((a, b) => a.localeCompare(b)),
     [byHost],
   );
 
-  const handleGridSelect = useCallback(
+  const handleGridSelectJobId = useCallback(
+    (jobId: number) => {
+      if (onSelectJobId) {
+        onSelectJobId(jobId);
+        return;
+      }
+      const legacyMatch = (data?.devices ?? []).find((d) => d.job_id === jobId);
+      if (legacyMatch) onSelectDevice?.(legacyMatch);
+    },
+    [onSelectJobId, onSelectDevice, data?.devices],
+  );
+
+  const handleTableSelectDevice = useCallback(
     (d: DeviceMatrixItem) => {
+      if (onSelectJobId) {
+        onSelectJobId(d.job_id);
+        return;
+      }
       onSelectDevice?.(d);
     },
-    [onSelectDevice],
+    [onSelectJobId, onSelectDevice],
   );
+
+  const activeError = viewMode === 'table' && dualViewMode ? tableError : isError;
+  const activeLoading = viewMode === 'table' && dualViewMode ? tableLoading : isLoading;
+  const activeCount = viewMode === 'grid' ? gridDevices.length : tableDevices.length;
 
   const meta = `${total} 设备 · ${hosts.length} Host`;
 
@@ -544,39 +663,109 @@ export default function DeviceOverview({
           statusFilter={statusFilter}
           linkFilter={linkFilter}
           hostFilter={hostFilter}
+          searchQuery={searchQuery}
           onStatusFilterChange={onStatusFilterChange ?? (() => {})}
           onLinkFilterChange={onLinkFilterChange}
           onHostFilterChange={onHostFilterChange ?? (() => {})}
-          hostLabelFor={(hostId) => hostLabel(hostMap.get(hostId), hostId)}
+          onSearchQueryChange={onSearchQueryChange}
+          hostLabelFor={(hostId) => hostLabelFor(hostId)}
         />
 
         {/* Body */}
-        {isError ? (
+        {activeError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <AlertCircle className="mb-2 h-6 w-6 text-destructive/60" />
             <span className="text-xs font-semibold text-destructive">加载失败</span>
             <span className="mt-1 text-[11px] text-destructive/70">请检查网络连接或稍后重试</span>
           </div>
-        ) : isLoading && devices.length === 0 ? (
+        ) : activeLoading && activeCount === 0 ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />
             <Skeleton className="h-8 w-full" />
           </div>
-        ) : devices.length === 0 ? (
+        ) : activeCount === 0 ? (
           <div className={cn('py-10 text-center text-xs', TEXT.subtitle)}>
             <Activity className="mx-auto mb-2 h-5 w-5 opacity-30" />
             该过滤条件下暂无设备
           </div>
         ) : viewMode === 'grid' ? (
-          <DeviceGrid devices={devices} onSelect={handleGridSelect} selectedJobId={selectedJobId} />
-        ) : (
-          <DeviceTable
-            devices={devices}
-            onSelect={onSelectDevice}
-            highlightJobId={selectedJobId}
-            hostMap={hostMap}
+          <DeviceGrid
+            devices={gridDevices}
+            onSelectJobId={handleGridSelectJobId}
+            selectedJobId={selectedJobId}
           />
+        ) : (
+          <>
+            <DeviceTable
+              devices={tableDevices}
+              onSelect={handleTableSelectDevice}
+              highlightJobId={selectedJobId}
+              hostLabelFor={hostLabelFor}
+            />
+            {onPageChange && (
+              <div
+                data-testid="plan-run-devices-pagination"
+                className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-mono tabular-nums">
+                    {tableFilteredTotal === 0
+                      ? '共 0 台设备'
+                      : `第 ${rangeStart}–${rangeEnd} / 匹配 ${tableFilteredTotal} 台${tableFilteredTotal !== total ? `（总计 ${total} 台）` : ''}`}
+                  </span>
+                  {isFetchingTable ? <span className="text-muted-foreground/70">刷新中…</span> : null}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onPageSizeChange ? (
+                    <div className="inline-flex items-center gap-1" role="group" aria-label="每页显示条数">
+                      <span>每页</span>
+                      {pageSizeOptions.map((size) => (
+                        <button
+                          key={size}
+                          type="button"
+                          data-testid={`plan-run-page-size-${size}`}
+                          aria-pressed={pageSize === size}
+                          onClick={() => onPageSizeChange(size)}
+                          className={cn(
+                            'rounded border px-2 py-0.5 font-mono text-xs transition-colors',
+                            pageSize === size
+                              ? 'border-primary bg-primary/10 font-medium text-primary'
+                              : 'border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                          )}
+                        >
+                          {size}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="inline-flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      data-testid="plan-run-prev-page"
+                      disabled={currentPage <= 1}
+                      onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+                      className="rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      上一页
+                    </button>
+                    <span className="font-mono tabular-nums text-foreground" data-testid="plan-run-page-indicator">
+                      {currentPage} / {totalPages}
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="plan-run-next-page"
+                      disabled={currentPage >= totalPages}
+                      onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+                      className="rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </section>

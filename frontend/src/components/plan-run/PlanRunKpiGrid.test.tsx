@@ -95,16 +95,18 @@ describe('PlanRunKpiGrid', () => {
     expect(screen.getByTestId('kpi-link-abnormal').textContent).toContain('2');
   });
 
-  it('U5-2：点击 KPI 卡片联动筛选并支持再次点击复位', () => {
+  it('U5-2 / B3-3：点击聚合 KPI 卡片触发真实并集筛选（lost_or_backoff / abnormal）并支持复位', () => {
     const onSelectStatus = vi.fn();
     const onSelectLink = vi.fn();
     const onResetFilters = vi.fn();
     render(
       <PlanRunKpiGrid
-        devices={makeDevices(
-          { total: 5, running: 2, completed: 1, failed: 2, unknown: 0, backoff: 0 },
-          { all: 5, online: 3, offline: 2 },
-        )}
+        facets={{
+          total: 5,
+          by_status: { all: 5, running: 1, completed: 1, failed: 1, unknown: 1, backoff: 1 },
+          by_link_status: { all: 5, online: 3, offline: 1, adb_error: 1 },
+          by_host: {},
+        }}
         statusFilter="all"
         linkFilter="all"
         onSelectStatus={onSelectStatus}
@@ -116,8 +118,11 @@ describe('PlanRunKpiGrid', () => {
     fireEvent.click(screen.getByTestId('kpi-failed'));
     expect(onSelectStatus).toHaveBeenCalledWith('failed');
 
+    fireEvent.click(screen.getByTestId('kpi-disconnected-backoff'));
+    expect(onSelectStatus).toHaveBeenCalledWith('lost_or_backoff');
+
     fireEvent.click(screen.getByTestId('kpi-link-abnormal'));
-    expect(onSelectLink).toHaveBeenCalledWith('offline');
+    expect(onSelectLink).toHaveBeenCalledWith('abnormal');
 
     fireEvent.click(screen.getByTestId('kpi-total'));
     expect(onResetFilters).toHaveBeenCalledTimes(1);

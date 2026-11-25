@@ -1,8 +1,13 @@
 import { Filter, Server } from 'lucide-react';
+import { FilterSearchInput } from '@/components/ui/filter-bar';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { FILTER_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type { DeviceLinkStatus, DeviceUiStatus } from '@/utils/api/types';
+import type {
+  PlanRunDeviceLinkFilter,
+  PlanRunDeviceStatusFilter,
+} from './PlanRunKpiGrid';
 
 interface Props {
   /** Facet over `job_exec_status` (执行维度)。 */
@@ -10,12 +15,14 @@ interface Props {
   /** Facet over `device_link_status` (连接维度)。缺省则不渲染连接 chip 组。 */
   byLinkStatus?: Record<string, number>;
   byHost?: Record<string, number>;
-  statusFilter: DeviceUiStatus | 'all';
-  linkFilter?: DeviceLinkStatus | 'all';
+  statusFilter: PlanRunDeviceStatusFilter;
+  linkFilter?: PlanRunDeviceLinkFilter;
   hostFilter: string | 'all';
-  onStatusFilterChange: (s: DeviceUiStatus | 'all') => void;
-  onLinkFilterChange?: (s: DeviceLinkStatus | 'all') => void;
+  searchQuery?: string;
+  onStatusFilterChange: (s: PlanRunDeviceStatusFilter) => void;
+  onLinkFilterChange?: (s: PlanRunDeviceLinkFilter) => void;
   onHostFilterChange: (h: string | 'all') => void;
+  onSearchQueryChange?: (q: string) => void;
   statusTestIdPrefix?: string;
   linkTestIdPrefix?: string;
   hostTestIdPrefix?: string;
@@ -55,9 +62,11 @@ export default function DeviceFilterBar({
   statusFilter,
   linkFilter = 'all',
   hostFilter,
+  searchQuery = '',
   onStatusFilterChange,
   onLinkFilterChange,
   onHostFilterChange,
+  onSearchQueryChange,
   statusTestIdPrefix = 'device-status-filter',
   linkTestIdPrefix = 'device-link-filter',
   hostTestIdPrefix = 'device-host-filter',
@@ -68,6 +77,10 @@ export default function DeviceFilterBar({
   // Why: byStatus 自带 'all' 键,直接 sum 会把总数算成两倍。
   const total = byStatus.all ?? 0;
   const showLinkChips = !!byLinkStatus && !!onLinkFilterChange;
+  const lostOrBackoffCount = (byStatus.unknown ?? 0) + (byStatus.backoff ?? 0);
+  const linkAbnormalCount = byLinkStatus
+    ? Math.max(0, (byLinkStatus.all ?? total) - (byLinkStatus.online ?? 0))
+    : 0;
 
   return (
     <div className="flex flex-wrap items-center gap-1 border-b bg-card px-3 py-2">
@@ -94,6 +107,18 @@ export default function DeviceFilterBar({
           </span>
         </button>
       ))}
+      {statusFilter === 'lost_or_backoff' && (
+        <button
+          type="button"
+          data-testid={`${statusTestIdPrefix}-lost_or_backoff`}
+          onClick={() => onStatusFilterChange('all')}
+          className={cn('rounded-md px-2 py-0.5 text-xs transition', FILTER_CHIP.active)}
+          title="点击清除失联/退避并集筛选"
+        >
+          失联/退避
+          <span className={cn('ml-1', FILTER_CHIP.count)}>{lostOrBackoffCount}</span>
+        </button>
+      )}
       {showLinkChips && (
         <>
           <span className={FILTER_CHIP.divider} />
@@ -117,6 +142,18 @@ export default function DeviceFilterBar({
               </span>
             </button>
           ))}
+          {linkFilter === 'abnormal' && (
+            <button
+              type="button"
+              data-testid={`${linkTestIdPrefix}-abnormal`}
+              onClick={() => onLinkFilterChange?.('all')}
+              className={cn('rounded-md px-2 py-0.5 text-xs transition', FILTER_CHIP.active)}
+              title="点击清除连接异常并集筛选"
+            >
+              连接异常
+              <span className={cn('ml-1', FILTER_CHIP.count)}>{linkAbnormalCount}</span>
+            </button>
+          )}
         </>
       )}
       {hosts.length > 0 && (
@@ -135,6 +172,20 @@ export default function DeviceFilterBar({
             ariaLabel="按主机筛选"
             testId={hostTestIdPrefix}
             className="w-44"
+          />
+        </>
+      )}
+      {onSearchQueryChange && (
+        <>
+          <span className={FILTER_CHIP.divider} />
+          <FilterSearchInput
+            id="plan-run-device-search"
+            value={searchQuery}
+            onChange={onSearchQueryChange}
+            placeholder="搜索设备串号..."
+            ariaLabel="按设备串号筛选"
+            testId="plan-run-device-search"
+            className="w-48"
           />
         </>
       )}

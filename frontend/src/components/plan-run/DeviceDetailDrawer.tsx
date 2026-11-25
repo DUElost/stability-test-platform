@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
+  AlertCircle,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Copy,
   ExternalLink,
   FileText,
@@ -11,10 +14,12 @@ import {
   Loader2,
   LogOut,
   RotateCw,
+  ShieldAlert,
   Sparkles,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Sheet,
   SheetContent,
@@ -35,10 +40,12 @@ import {
 import { ALERT_BOX, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
+import { planRunKeys } from '@/utils/api/queryKeys';
 import type {
   DeviceMatrixItem,
   DeviceUiStatus,
   DisarmResultEntry,
+  PlanRunJobDetail,
 } from '@/utils/api/types';
 import { formatScriptIdentity } from './scriptIdentity';
 import { formatDateTimeShort } from '@/utils/format';
@@ -49,17 +56,24 @@ import {
 import { disarmResultLabel, familyLabel } from '@/components/device/deviceReturn';
 
 interface Props {
-  device: DeviceMatrixItem | null;
+  device: DeviceMatrixItem | PlanRunJobDetail | null;
   runId: number;
+  /** B3-3：显式打开态与 jobId，支持 `?drawer=` 深链加载态与错误态展示 */
+  open?: boolean;
+  jobId?: number | null;
+  isLoading?: boolean;
+  isError?: boolean;
+  onRetryLoad?: () => void;
   onClose: () => void;
   onManualRetry: (jobId: number) => void;
   onManualExit: (jobId: number) => void;
   onOpenReport: (jobId: number) => void;
   isRetryPending?: boolean;
   isExitPending?: boolean;
-  /** U5-3：筛选列表内切机导航（对齐 DevicesPage / HostsPage 标杆抽屉） */
+  /** U5-3 / B3-3：筛选列表内切机导航；表格分页模式下传 `本页` 明确标注页边界 */
   devicePosition?: number;
   totalDevices?: number;
+  navScopeLabel?: string;
   onPrevDevice?: () => void;
   onNextDevice?: () => void;
 }
@@ -83,9 +97,26 @@ const TERMINAL_DEVICE: ReadonlyArray<DeviceUiStatus> = [
   'unknown',
 ];
 
-export default function DeviceDetailDrawer({
+export default function DeviceDetailDrawer(props: Props) {
+  const effectiveJobId = props.device?.job_id ?? props.jobId ?? 0;
+  // B3-3（契约 §5.3 规则 4）：按 `(runId, jobId)` 严格隔离抽屉内操作态与折叠态，
+  // 切换设备时绝不残留前一台的确认弹窗、复制提示或展开子查询。
+  return (
+    <DeviceDetailDrawerInner
+      key={`${props.runId}:${effectiveJobId}`}
+      {...props}
+    />
+  );
+}
+
+function DeviceDetailDrawerInner({
   device,
   runId,
+  open,
+  jobId,
+  isLoading = false,
+  isError = false,
+  onRetryLoad,
   onClose,
   onManualRetry,
   onManualExit,
@@ -94,13 +125,15 @@ export default function DeviceDetailDrawer({
   isExitPending = false,
   devicePosition,
   totalDevices,
+  navScopeLabel,
   onPrevDevice,
   onNextDevice,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState<null | 'retry' | 'exit'>(null);
   const [copiedSerial, setCopiedSerial] = useState(false);
 
-  const isOpen = Boolean(device);
+  const isOpen = open ?? Boolean(device);
+  const effectiveJobId = device?.job_id ?? jobId ?? null;
   const isTerminal = device ? TERMINAL_DEVICE.includes(device.ui_status) : false;
   const exitRequested = device?.manual_action === 'EXIT_REQUESTED';
   const retryRequested = device?.manual_action === 'RETRY_NOW';
@@ -126,6 +159,8 @@ export default function DeviceDetailDrawer({
   const canOpenReport = device?.capabilities?.open_report ?? true;
 
   const deviceSerialLabel = device?.device_serial || (device ? `Device #${device.device_id}` : '');
+  const hostDisplayLabel =
+    (device && 'host_name' in device && device.host_name) || device?.host_id || '—';
   const logsHref = device?.device_serial
     ? `/execution/plan-runs/${runId}/logs?q=${encodeURIComponent(device.device_serial)}`
     : `/execution/plan-runs/${runId}/logs`;
@@ -134,6 +169,15 @@ export default function DeviceDetailDrawer({
         `请协助诊断 PlanRun #${runId} 中的设备 ${deviceSerialLabel}（Job #${device.job_id}，执行态=${execStatus}，连接态=${linkStatus ?? 'unknown'}${device.status_reason ? `，原因=${device.status_reason}` : ''}）`,
       )}`
     : '/assistant';
+
+  const prevLabel = navScopeLabel ? `上一台设备（${navScopeLabel}）` : '上一台设备';
+  const nextLabel = navScopeLabel ? `下一台设备（${navScopeLabel}）` : '下一台设备';
+  const positionText =
+    devicePosition != null && totalDevices != null
+      ? navScopeLabel
+        ? `${navScopeLabel} ${devicePosition}/${totalDevices}`
+        : `${devicePosition}/${totalDevices}`
+      : null;
 
   const handleCopySerial = () => {
     if (!device?.device_serial || !navigator.clipboard?.writeText) return;
@@ -170,7 +214,7 @@ export default function DeviceDetailDrawer({
             <header className="flex items-center justify-between gap-3 border-b px-5 py-3.5">
               <div className="min-w-0">
                 <SheetDescription className={cn('truncate text-xs', TEXT.subtitle)}>
-                  Job #{device.job_id} · {device.host_id || '—'}
+                  Job #{device.job_id} · {hostDisplayLabel}
                   {device.device_model ? ` · ${device.device_model}` : ''}
                 </SheetDescription>
                 <div className="mt-0.5 flex items-center gap-1.5">
@@ -196,7 +240,7 @@ export default function DeviceDetailDrawer({
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                {totalDevices != null && totalDevices > 1 && devicePosition != null && (
+                {totalDevices != null && totalDevices > 1 && positionText != null && (
                   <div
                     className="inline-flex items-center rounded-md border border-border bg-background"
                     aria-label="切换设备"
@@ -206,22 +250,25 @@ export default function DeviceDetailDrawer({
                       data-testid="device-drawer-prev"
                       onClick={onPrevDevice}
                       disabled={!onPrevDevice}
-                      aria-label="上一台设备"
-                      title="上一台设备"
+                      aria-label={prevLabel}
+                      title={prevLabel}
                       className="px-1.5 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-35"
                     >
                       <ChevronLeft className="h-3.5 w-3.5" />
                     </button>
-                    <span className="border-x border-border px-2 font-mono text-xs tabular-nums text-muted-foreground">
-                      {devicePosition}/{totalDevices}
+                    <span
+                      data-testid="device-drawer-position"
+                      className="border-x border-border px-2 font-mono text-xs tabular-nums text-muted-foreground"
+                    >
+                      {positionText}
                     </span>
                     <button
                       type="button"
                       data-testid="device-drawer-next"
                       onClick={onNextDevice}
                       disabled={!onNextDevice}
-                      aria-label="下一台设备"
-                      title="下一台设备"
+                      aria-label={nextLabel}
+                      title={nextLabel}
                       className="px-1.5 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-35"
                     >
                       <ChevronRight className="h-3.5 w-3.5" />
@@ -346,6 +393,23 @@ export default function DeviceDetailDrawer({
             </div>
           )}
 
+          {/* B3-3（契约 §5.3 规则 3）：按需延迟加载的阶段时间线与 Watcher 异常明细（默认折叠，绝不预取） */}
+          {device.job_id && (
+            <JobTimelineBlock
+              runId={runId}
+              jobId={device.job_id}
+              traceCount={'step_trace_count' in device ? device.step_trace_count : undefined}
+            />
+          )}
+
+          {device.job_id && device.log_signal_count > 0 && (
+            <JobWatcherSignalsBlock
+              runId={runId}
+              jobId={device.job_id}
+              signalCount={device.log_signal_count}
+            />
+          )}
+
           {/* ADR-0025 Sprint 3: Crash 产物（AEE/bugreport 等 JobArtifact） */}
           {device.job_id && (
             <CrashArtifactsBlock runId={runId} jobId={device.job_id} />
@@ -430,6 +494,59 @@ export default function DeviceDetailDrawer({
             )}
           </div>
         </footer>
+          </SheetContent>
+        ) : isOpen ? (
+          <SheetContent
+            side="right"
+            size="lg"
+            hideCloseButton
+            overlayTestId="device-drawer-overlay"
+            data-testid="device-drawer"
+            aria-label={effectiveJobId ? `Job #${effectiveJobId} 详情` : '设备详情'}
+          >
+            <header className="flex items-center justify-between gap-3 border-b px-5 py-3.5">
+              <div className="min-w-0">
+                <SheetDescription className={cn('text-xs', TEXT.subtitle)}>
+                  PlanRun #{runId}
+                </SheetDescription>
+                <SheetTitle className={cn('font-mono text-base font-semibold', TEXT.heading)}>
+                  {effectiveJobId ? `Job #${effectiveJobId}` : '设备详情'}
+                </SheetTitle>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
+                data-testid="device-drawer-close"
+                aria-label="关闭设备详情"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </header>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {isError ? (
+                <div
+                  data-testid="device-drawer-error"
+                  className="flex flex-col items-center justify-center gap-2 py-12 text-center text-xs"
+                >
+                  <AlertCircle className="h-6 w-6 text-destructive/70" />
+                  <div className="font-semibold text-destructive">加载单机详情失败</div>
+                  <p className={TEXT.subtitle}>Job 可能不存在或不属于当前 PlanRun。</p>
+                  {onRetryLoad && (
+                    <Button variant="outline" size="sm" onClick={onRetryLoad}>
+                      重试
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <div data-testid="device-drawer-loading" className="space-y-3">
+                  <Skeleton className="h-6 w-48" />
+                  <Skeleton className="h-28 w-full" />
+                  <Skeleton className="h-28 w-full" />
+                  {isLoading ? null : null}
+                </div>
+              )}
+            </div>
           </SheetContent>
         ) : null}
       </Sheet>
@@ -588,6 +705,165 @@ const ARTIFACT_LABELS: Record<string, string> = {
   vendor_aee_crash: 'Vendor AEE',
   bugreport: 'Bugreport',
 };
+
+function JobTimelineBlock({
+  runId,
+  jobId,
+  traceCount,
+}: {
+  runId: number;
+  jobId: number;
+  traceCount?: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const timelineQ = useQuery({
+    queryKey: planRunKeys.jobTimeline(runId, jobId, { skip: 0, limit: 50 }),
+    queryFn: () => api.planRuns.getJobTimeline(runId, jobId, { skip: 0, limit: 50 }),
+    enabled: expanded && !!runId && !!jobId,
+    staleTime: 15_000,
+  });
+
+  return (
+    <div className="mt-4 rounded-lg border border-border/80" data-testid="device-drawer-timeline-block">
+      <button
+        type="button"
+        data-testid="device-drawer-timeline-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-muted/40"
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+          阶段时间线
+          {typeof traceCount === 'number' ? (
+            <span className={cn('font-mono font-normal', TEXT.subtitle)}>({traceCount})</span>
+          ) : null}
+        </span>
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+        )}
+      </button>
+      {expanded && (
+        <div className="border-t border-border/70 px-3 py-2 text-xs">
+          {timelineQ.isLoading ? (
+            <div className={cn('flex items-center gap-1.5', TEXT.subtitle)}>
+              <Loader2 className="h-3 w-3 animate-spin" /> 加载时间线...
+            </div>
+          ) : timelineQ.isError ? (
+            <div className="text-destructive-text">时间线加载失败</div>
+          ) : !timelineQ.data?.items?.length ? (
+            <div className={TEXT.subtitle}>暂无步骤事件记录</div>
+          ) : (
+            <div className="space-y-1.5">
+              <div className={cn('text-[11px]', TEXT.subtitle)}>
+                展示 {timelineQ.data.items.length} / 共 {timelineQ.data.total} 条
+              </div>
+              <ul className="max-h-56 space-y-1 overflow-y-auto">
+                {timelineQ.data.items.map((item) => (
+                  <li key={item.id} className="rounded border border-border/60 px-2 py-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate font-mono text-[11px] font-medium">
+                        {item.stage} · {item.step_id}
+                      </span>
+                      <span className={cn('shrink-0 font-mono text-[10px]', TEXT.subtitle)}>
+                        {item.status} · {formatKvTime(item.original_ts)}
+                      </span>
+                    </div>
+                    {item.error_message ? (
+                      <p className="mt-0.5 break-words text-[11px] text-destructive-text">
+                        {item.error_message}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JobWatcherSignalsBlock({
+  runId,
+  jobId,
+  signalCount,
+}: {
+  runId: number;
+  jobId: number;
+  signalCount: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const signalsQ = useQuery({
+    queryKey: planRunKeys.jobWatcherSignals(runId, jobId, { skip: 0, limit: 50 }),
+    queryFn: () => api.planRuns.getJobWatcherSignals(runId, jobId, { skip: 0, limit: 50 }),
+    enabled: expanded && !!runId && !!jobId,
+    staleTime: 15_000,
+  });
+
+  return (
+    <div className="mt-3 rounded-lg border border-border/80" data-testid="device-drawer-signals-block">
+      <button
+        type="button"
+        data-testid="device-drawer-signals-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-muted/40"
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <ShieldAlert className="h-3.5 w-3.5 text-warning" />
+          Watcher 异常明细
+          <span className={cn('font-mono font-normal', TEXT.subtitle)}>({signalCount})</span>
+        </span>
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+        )}
+      </button>
+      {expanded && (
+        <div className="border-t border-border/70 px-3 py-2 text-xs">
+          {signalsQ.isLoading ? (
+            <div className={cn('flex items-center gap-1.5', TEXT.subtitle)}>
+              <Loader2 className="h-3 w-3 animate-spin" /> 加载异常明细...
+            </div>
+          ) : signalsQ.isError ? (
+            <div className="text-destructive-text">异常明细加载失败</div>
+          ) : !signalsQ.data?.items?.length ? (
+            <div className={TEXT.subtitle}>暂无明细记录</div>
+          ) : (
+            <div className="space-y-1.5">
+              <div className={cn('text-[11px]', TEXT.subtitle)}>
+                展示 {signalsQ.data.items.length} / 共 {signalsQ.data.total} 条
+              </div>
+              <ul className="max-h-56 space-y-1 overflow-y-auto">
+                {signalsQ.data.items.map((sig) => (
+                  <li key={sig.id} className="rounded border border-border/60 px-2 py-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] font-medium text-warning">
+                        {sig.category}
+                        <span className={cn('ml-1.5 font-normal', TEXT.subtitle)}>({sig.source})</span>
+                      </span>
+                      <span className={cn('shrink-0 font-mono text-[10px]', TEXT.subtitle)}>
+                        {formatKvTime(sig.detected_at)}
+                      </span>
+                    </div>
+                    <div className={cn('mt-0.5 truncate font-mono text-[10px]', TEXT.subtitle)} title={sig.path_on_device}>
+                      {sig.path_on_device}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CrashArtifactsBlock({ runId, jobId }: { runId: number; jobId: number }) {
   const { data, isLoading, isError } = useQuery({

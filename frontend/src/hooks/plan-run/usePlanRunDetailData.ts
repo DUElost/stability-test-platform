@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/useToast';
 import { useSocketIO, type SocketIOMessage } from '@/hooks/useSocketIO';
 import { planRunSubscription } from '@/config';
 import {
-  isJobStuck,
   isPlanRunTerminal,
   PLAN_RUN_SOCKET_COALESCE_MS,
   planRunJobStatusInvalidateKeys,
@@ -18,15 +17,23 @@ import { dedupKeys, planRunKeys } from '@/utils/api/queryKeys';
 import { SOCKET_MESSAGE_TYPES } from '@/utils/socketEvents';
 import type {
   ChainDispatchFailed,
-  DeviceLinkStatus,
-  DeviceUiStatus,
+  PlanRunMinimapDevice,
   WatcherTimeScope,
 } from '@/utils/api/types';
+import type {
+  PlanRunDeviceLinkFilter,
+  PlanRunDeviceStatusFilter,
+} from '@/components/plan-run/PlanRunKpiGrid';
 
 interface Filters {
-  deviceStatusFilter: DeviceUiStatus | 'all';
-  deviceLinkFilter: DeviceLinkStatus | 'all';
+  deviceStatusFilter: PlanRunDeviceStatusFilter;
+  deviceLinkFilter: PlanRunDeviceLinkFilter;
   deviceHostFilter: string;
+  deviceSearchQuery?: string;
+  viewMode?: 'grid' | 'table';
+  devicePage?: number;
+  devicePageSize?: number;
+  selectedJobId?: number | null;
   watcherTimeScope: WatcherTimeScope;
   /** #3653 U4：快照抽屉选中的 Job，用于读取 L3 投影；null = 只看 L2 */
   projectionJobId?: number | null;
@@ -37,6 +44,11 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     deviceStatusFilter,
     deviceLinkFilter,
     deviceHostFilter,
+    deviceSearchQuery = '',
+    viewMode = 'grid',
+    devicePage = 1,
+    devicePageSize = 50,
+    selectedJobId = null,
     watcherTimeScope,
     projectionJobId = null,
   } = filters;
@@ -45,6 +57,10 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
   const watcherSignalTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const jobStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const precheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedJobIdRef = useRef<number | null>(selectedJobId);
+  useEffect(() => {
+    selectedJobIdRef.current = selectedJobId;
+  }, [selectedJobId]);
 
   useEffect(() => {
     return () => {
@@ -76,18 +92,42 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     refetchInterval,
   });
 
-  const devicesQ = useQuery({
-    queryKey: planRunKeys.devices(
-      id, deviceStatusFilter, deviceHostFilter, deviceLinkFilter,
-    ),
-    queryFn: () =>
-      api.planRuns.getDevices(id, {
-        status: deviceStatusFilter,
-        link_status: deviceLinkFilter,
-        host_id: deviceHostFilter,
-      }),
+  // B3-3（契约 §5.1）：独立轻量全集 Minimap（7 字段设备格子 + 全局 facets/hosts/stuck_job_ids）
+  // 任何情况下不截断为单页，且驱动超时横幅、Watcher 串号反查与快照设备选择器。
+  const minimapQ = useQuery({
+    queryKey: planRunKeys.devicesMinimap(id),
+    queryFn: () => api.planRuns.getDevicesMinimap(id),
     enabled: !!id,
     refetchInterval,
+  });
+
+  // B3-3（契约 §5.2）：仅在表格视图按需拉取当前页（默认 limit=50，支持真实并集筛选与串号搜索）
+  const tablePageParams = useMemo(
+    () => ({
+      status: deviceStatusFilter,
+      link_status: deviceLinkFilter,
+      host_id: deviceHostFilter,
+      ...(deviceSearchQuery.trim() ? { q: deviceSearchQuery.trim() } : {}),
+      skip: (Math.max(1, devicePage) - 1) * devicePageSize,
+      limit: devicePageSize,
+    }),
+    [deviceStatusFilter, deviceLinkFilter, deviceHostFilter, deviceSearchQuery, devicePage, devicePageSize],
+  );
+
+  const devicesPageQ = useQuery({
+    queryKey: planRunKeys.devicesPage(id, tablePageParams),
+    queryFn: () => api.planRuns.getDevices(id, tablePageParams),
+    enabled: !!id && viewMode === 'table',
+    placeholderData: keepPreviousData,
+    refetchInterval: viewMode === 'table' ? refetchInterval : false,
+  });
+
+  // B3-3（契约 §5.3）：单 Job 完整详情按 (runId, jobId) 严格隔离加载
+  const selectedJobQ = useQuery({
+    queryKey: planRunKeys.jobDetail(id, selectedJobId ?? 0),
+    queryFn: () => api.planRuns.getJobDetail(id, selectedJobId as number),
+    enabled: !!id && selectedJobId != null,
+    refetchInterval: selectedJobId != null ? refetchInterval : false,
   });
 
   const watcherQ = useQuery({
@@ -115,17 +155,27 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
   const isAnyFetching =
     runQ.isFetching ||
     timelineQ.isFetching ||
-    devicesQ.isFetching ||
+    minimapQ.isFetching ||
+    devicesPageQ.isFetching ||
+    selectedJobQ.isFetching ||
     watcherQ.isFetching ||
     chainQ.isFetching ||
     jobProjectionQ.isFetching;
+
+  const invalidateSelectedJob = useCallback(() => {
+    const activeJobId = selectedJobIdRef.current;
+    if (activeJobId != null) {
+      qc.invalidateQueries({ queryKey: planRunKeys.jobDetail(id, activeJobId) });
+    }
+  }, [qc, id]);
 
   const refreshAll = useCallback(() => {
     // #1193：手动刷新覆盖去重状态与逐条用例结果等后处理产物（键表见 utils）。
     for (const key of planRunRefreshKeys(id)) {
       qc.invalidateQueries({ queryKey: key });
     }
-  }, [qc, id]);
+    invalidateSelectedJob();
+  }, [qc, id, invalidateSelectedJob]);
 
   const onSocketMessage = useCallback(
     (msg: SocketIOMessage<unknown>) => {
@@ -137,6 +187,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
           for (const key of planRunJobStatusInvalidateKeys(id)) {
             qc.invalidateQueries({ queryKey: key });
           }
+          invalidateSelectedJob();
           jobStatusTimer.current = null;
         }, PLAN_RUN_SOCKET_COALESCE_MS);
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS) {
@@ -146,6 +197,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
         qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
+        invalidateSelectedJob();
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PRECHECK_UPDATE) {
         if (precheckTimer.current) clearTimeout(precheckTimer.current);
         precheckTimer.current = setTimeout(() => {
@@ -162,7 +214,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
         }, PLAN_RUN_SOCKET_COALESCE_MS);
       }
     },
-    [id, qc],
+    [id, qc, invalidateSelectedJob],
   );
 
   useSocketIO(id ? planRunSubscription(id) : '', {
@@ -178,6 +230,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
       qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
       qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
       qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
+      invalidateSelectedJob();
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -202,6 +255,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     onSuccess: (data) => {
       toast.success(`已请求 Job #${data.job_id} 立即重试`);
       qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
+      qc.invalidateQueries({ queryKey: planRunKeys.jobDetail(id, data.job_id) });
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -214,6 +268,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     onSuccess: (data) => {
       toast.success(`已请求 Job #${data.job_id} 退出`);
       qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
+      qc.invalidateQueries({ queryKey: planRunKeys.jobDetail(id, data.job_id) });
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -244,12 +299,29 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     return null;
   }, [runQ.data?.result_summary]);
 
-  const stuckJobs = useMemo(() => {
-    if (isTerminal || !devicesQ.data?.devices?.length) return [];
-    // eslint-disable-next-line react-hooks/purity -- 渲染期时间戳仅用于卡死判定派生（#260 待统一 tick 状态）
-    const now = Date.now();
-    return devicesQ.data.devices.filter((d) => isJobStuck(d, now));
-  }, [devicesQ.data, isTerminal]);
+  // B3-3（契约 §5.1 规则 5）：全局心跳超时横幅由 Minimap `stuck_job_ids` 驱动，不依赖表格单页
+  const stuckJobs = useMemo<PlanRunMinimapDevice[]>(() => {
+    if (isTerminal || !minimapQ.data?.stuck_job_ids?.length) return [];
+    const byJobId = new Map(minimapQ.data.devices.map((d) => [d.job_id, d]));
+    return minimapQ.data.stuck_job_ids
+      .map((jobId) => byJobId.get(jobId))
+      .filter((d): d is PlanRunMinimapDevice => Boolean(d));
+  }, [minimapQ.data, isTerminal]);
+
+  // B3-3（契约 §5.3 规则 4）：选中详情加载成功后最多预取相邻 2 条单机详情（严禁预取时间线/异常/产物）
+  const prefetchAdjacentJobs = useCallback(
+    (neighborJobIds: number[]) => {
+      if (!id) return;
+      for (const neighborId of neighborJobIds.slice(0, 2)) {
+        void qc.prefetchQuery({
+          queryKey: planRunKeys.jobDetail(id, neighborId),
+          queryFn: () => api.planRuns.getJobDetail(id, neighborId),
+          staleTime: 10_000,
+        });
+      }
+    },
+    [id, qc],
+  );
 
   const planName = useMemo(
     () => timelineQ.data?.plan_name ?? null,
@@ -259,13 +331,16 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
   return {
     runQ,
     timelineQ,
-    devicesQ,
+    minimapQ,
+    devicesPageQ,
+    selectedJobQ,
     watcherQ,
     chainQ,
     jobProjectionQ,
     isTerminal,
     isAnyFetching,
     refreshAll,
+    prefetchAdjacentJobs,
     abortMut,
     finalArchiveMut,
     retryMut,

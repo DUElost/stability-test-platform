@@ -646,3 +646,104 @@ describe('DeviceOverview 表格虚拟化（#83）', () => {
     expect(wrapper!.className).not.toMatch(/overflow-visible/);
   });
 });
+
+describe('B3-3 双视图分离：1,000 格全量 Minimap 与表格真分页', () => {
+  it('Minimap 完整渲染 1,000 格、保留悬停精确异常条数、支持并集即时筛选且恢复全集', () => {
+    const devices = Array.from({ length: 1000 }, (_, i) => ({
+      job_id: 10000 + i,
+      device_id: i + 1,
+      device_serial: `SER-${String(i).padStart(4, '0')}`,
+      host_id: i % 2 === 0 ? 'host-a' : 'host-b',
+      job_exec_status: (i === 0 ? 'unknown' : i === 1 ? 'backoff' : 'running') as 'unknown' | 'backoff' | 'running',
+      device_link_status: (i === 2 ? 'offline' : i === 3 ? 'adb_error' : 'online') as 'offline' | 'adb_error' | 'online',
+      log_signal_count: i === 0 ? 7 : 0,
+    }));
+    const minimapData = {
+      plan_run_id: 88,
+      facets: {
+        total: 1000,
+        by_status: { all: 1000, running: 998, unknown: 1, backoff: 1 },
+        by_link_status: { all: 1000, online: 998, offline: 1, adb_error: 1 },
+        by_host: { 'host-a': 500, 'host-b': 500 },
+      },
+      hosts: { 'host-a': '机柜 A', 'host-b': '机柜 B' },
+      stuck_job_ids: [],
+      devices,
+    };
+
+    const { container, rerender } = renderWithClient(
+      <DeviceOverview minimapData={minimapData} statusFilter="all" linkFilter="all" />,
+    );
+    expect(container.querySelectorAll('[data-testid^="minimap-cell-"]').length).toBe(1000);
+    expect(screen.getByTestId('minimap-cell-10000')).toHaveAttribute(
+      'aria-label',
+      expect.stringContaining('异常 7'),
+    );
+
+    // 执行并集 lost_or_backoff → 命中 unknown(10000) + backoff(10001)
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <DeviceOverview minimapData={minimapData} statusFilter="lost_or_backoff" linkFilter="all" />
+      </QueryClientProvider>,
+    );
+    expect(container.querySelectorAll('[data-testid^="minimap-cell-"]').length).toBe(2);
+
+    // 连接异常并集 abnormal → 命中 offline(10002) + adb_error(10003)
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <DeviceOverview minimapData={minimapData} statusFilter="all" linkFilter="abnormal" />
+      </QueryClientProvider>,
+    );
+    expect(container.querySelectorAll('[data-testid^="minimap-cell-"]').length).toBe(2);
+
+    // 清空筛选恢复 1,000 格全集
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <DeviceOverview minimapData={minimapData} statusFilter="all" linkFilter="all" />
+      </QueryClientProvider>,
+    );
+    expect(container.querySelectorAll('[data-testid^="minimap-cell-"]').length).toBe(1000);
+  });
+
+  it('表格视图渲染真分页栏（filtered_total / total 与 50/100/200 页容量）', () => {
+    const onPageChange = vi.fn();
+    const onPageSizeChange = vi.fn();
+    renderWithClient(
+      <DeviceOverview
+        minimapData={{
+          plan_run_id: 88,
+          facets: {
+            total: 200,
+            by_status: { all: 200, running: 200 },
+            by_link_status: { all: 200, online: 200 },
+            by_host: { 'host-a': 200 },
+          },
+          hosts: { 'host-a': '机柜 A' },
+          stuck_job_ids: [],
+          devices: [],
+        }}
+        tableData={{
+          ...fixture,
+          total: 200,
+          filtered_total: 75,
+        }}
+        viewMode="table"
+        page={1}
+        pageSize={50}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+      />,
+    );
+
+    expect(screen.getByTestId('plan-run-devices-pagination')).toHaveTextContent(
+      '第 1–4 / 匹配 75 台（总计 200 台）',
+    );
+    expect(screen.getByTestId('plan-run-page-indicator')).toHaveTextContent('1 / 2');
+
+    fireEvent.click(screen.getByTestId('plan-run-next-page'));
+    expect(onPageChange).toHaveBeenCalledWith(2);
+
+    fireEvent.click(screen.getByTestId('plan-run-page-size-100'));
+    expect(onPageSizeChange).toHaveBeenCalledWith(100);
+  });
+});
