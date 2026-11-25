@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-11-24
+> **最后更新**：2026-11-25
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
@@ -123,7 +123,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **设计** | [`design/2026-device-log-chain-contract.md`](./design/2026-device-log-chain-contract.md) | 设备日志链路 Living Contract（全链地图 + 逻辑坐标 + Central namespace 映射；**非 ADR**；路由入口而非第五 owner；细节展开见 `2026-log-chain-global-semantics.md`；**Draft**，#2546） |
 | **设计** | [`design/2026-log-chain-global-semantics.md`](./design/2026-log-chain-global-semantics.md) | 终端设备日志链全局语义汇总（阶段 / 易混概念 / X2 四层挂接 / Phase 2 A/B/C 语义前提；填 X2「缺可引用汇总」；**不新增决策**） |
 | **前端契约** | [`design/2026-11-23-frontend-ui-governance-contract.md`](./design/2026-11-23-frontend-ui-governance-contract.md) | 前端 UI 治理前置契约（v1.0 Accepted，跟踪台账 [#4117](https://github.com/DUElost/stability-test-platform/issues/4117)：D1 下拉两档分层 / D2 标准 Sheet 抽屉与弹窗分工 / D4 URL 深链与页面级项目筛选 / D5 规模两阶段 / D6 AI 协同入口 / 视觉密度与状态层级 / 9 页防返工冻结边界 / 静态守卫与 B 轨验收门槛；废止 `tokens.ts` 旧 B4 全原生下拉注释） |
-| **规模契约** | [`design/2026-11-24-list-pagination-and-facets-contract.md`](./design/2026-11-24-list-pagination-and-facets-contract.md) | 列表服务端分页、只读投影与 Facet 聚合契约（Draft v0.1，承接 [#4117](https://github.com/DUElost/stability-test-platform/issues/4117) D5 Phase 2、[#496](https://github.com/DUElost/stability-test-platform/issues/496)、[#3325](https://github.com/DUElost/stability-test-platform/issues/3325)、[#83](https://github.com/DUElost/stability-test-platform/issues/83)：读端点纯只读去写库 / `GET /devices` 真分页与独立 Facets / `GET /hosts` 分页计数 / `GET /plan-runs/{id}/devices` 保护 Minimap 全集的轻量投影与表格真分页双视图分离） |
+| **规模契约** | [`design/2026-11-24-list-pagination-and-facets-contract.md`](./design/2026-11-24-list-pagination-and-facets-contract.md) | 列表服务端分页、只读投影与 Facet 聚合契约（Accepted v1.0，承接 [#4117](https://github.com/DUElost/stability-test-platform/issues/4117) D5 Phase 2、[#496](https://github.com/DUElost/stability-test-platform/issues/496)、[#3325](https://github.com/DUElost/stability-test-platform/issues/3325)、[#83](https://github.com/DUElost/stability-test-platform/issues/83)：后台对账接管与四 GET 纯只读 / `GET /devices` 有界分页、三级作用域 Facets 与跨页 `filter_query` 预览 / `GET /hosts` 双形态冻结与独立 Facets / `GET /plan-runs/{id}/devices/minimap` 轻投影与单 Job 详情双轨分离） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 
