@@ -13,7 +13,18 @@ from backend.api.schemas.host import (
     HostActiveJob,
     HeartbeatIn,
 )
-from backend.api.schemas.device import DeviceCreate, DeviceOut, DeviceLiteOut
+from backend.api.schemas.device import (
+    DeviceCreate,
+    DeviceFacetOptionsOut,
+    DeviceFacetStatusCountsOut,
+    DeviceFacetsOut,
+    DeviceHostFacetOptionOut,
+    DeviceListItemOut,
+    DeviceLiteOut,
+    DeviceOut,
+    DeviceSelectionPreviewIn,
+    DeviceSelectionPreviewOut,
+)
 from backend.api.schemas.run import (
     LogArtifactIn, LogArtifactOut,
     TaskOut, RunOut, RunUpdate, RunCompleteIn, RunAgentOut,
@@ -132,6 +143,13 @@ __all__ = [
     "DeviceCreate",
     "DeviceOut",
     "DeviceLiteOut",
+    "DeviceListItemOut",
+    "DeviceFacetStatusCountsOut",
+    "DeviceHostFacetOptionOut",
+    "DeviceFacetOptionsOut",
+    "DeviceFacetsOut",
+    "DeviceSelectionPreviewIn",
+    "DeviceSelectionPreviewOut",
     "TaskOut",
     "LogArtifactIn",
     "LogArtifactOut",

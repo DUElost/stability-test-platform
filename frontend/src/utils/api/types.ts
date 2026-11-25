@@ -381,6 +381,130 @@ export interface BulkSwipeTrailResult {
   results: BulkSwipeTrailResultItem[];
 }
 
+/** #496 / #4117 B2-1：物理设备有界列表 DTO（`GET /devices?projection=list`）。 */
+export interface DeviceListItem {
+  id: number;
+  serial: string;
+  serial_suspect?: boolean;
+  model: string | null;
+  product?: string | null;
+  platform?: 'MTK' | 'UNISOC' | 'QCOM' | 'UNKNOWN' | null;
+  host_id: string | number | null;
+  host_name?: string | null;
+  project_key?: string | null;
+  attribution_source?: 'mapped' | 'unmapped' | null;
+  status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
+  last_seen: string | null;
+  tags: string[];
+  adb_state?: string | null;
+  adb_connected?: boolean | null;
+  battery_level?: number | null;
+  battery_temp?: number | null;
+  temperature?: number | null;
+  wifi_rssi?: number | null;
+  wifi_ssid?: string | null;
+  network_latency?: number | null;
+  build_display_id?: string | null;
+  disk_total?: number | null;
+  disk_used?: number | null;
+  retired_at?: string | null;
+  retired_by?: string | null;
+  retire_reason?: string | null;
+  is_stale?: boolean;
+  retire_suggested?: boolean;
+  return_state?: Record<string, {
+    state: string;
+    source?: string;
+    updated_at?: string;
+    [key: string]: unknown;
+  }> | null;
+  usb_presence?: DeviceUsbPresence | null;
+}
+
+export type DeviceListSortBy = 'serial' | 'host_id';
+export type DeviceListSortDir = 'asc' | 'desc';
+
+/** #496 / #4117 B2-1：物理设备列表与 Facets 共享筛选参数。 */
+export interface DeviceFilterQueryParams {
+  q?: string;
+  status?: string;
+  host_id?: string;
+  model?: string;
+  product?: string;
+  version?: string;
+  tags?: string;
+  has_tags?: boolean;
+  project_key?: string;
+  unassigned?: boolean;
+  include_stale?: boolean;
+  include_retired?: boolean;
+}
+
+export interface DeviceListPageQueryParams extends DeviceFilterQueryParams {
+  skip?: number;
+  limit?: number;
+  sort_by?: DeviceListSortBy;
+  sort_dir?: DeviceListSortDir;
+  projection?: 'full' | 'list';
+}
+
+export interface DeviceFacetStatusCounts {
+  all: number;
+  ONLINE: number;
+  BUSY: number;
+  OFFLINE: number;
+  ERROR: number;
+  need_attention: number;
+  tagged: number;
+}
+
+export interface DeviceHostFacetOption {
+  value: string;
+  label: string;
+}
+
+export interface DeviceFacetOptions {
+  hosts: DeviceHostFacetOption[];
+  models: string[];
+  products: string[];
+  versions: string[];
+}
+
+/** `GET /devices/facets` 响应模型。 */
+export interface DeviceFacets {
+  status_counts: DeviceFacetStatusCounts;
+  options: DeviceFacetOptions;
+}
+
+export type DeviceBulkPreviewAction =
+  | 'tags'
+  | 'assign_project'
+  | 'swipe_trail'
+  | 'retire'
+  | 'unretire'
+  | 'copy'
+  | 'export';
+
+/** `POST /devices/selection-preview` 请求体。 */
+export interface DeviceSelectionPreviewRequest extends DeviceFilterQueryParams {
+  action: DeviceBulkPreviewAction;
+}
+
+/** `POST /devices/selection-preview` 响应模型。 */
+export interface DeviceSelectionPreview {
+  action: DeviceBulkPreviewAction | string;
+  total_matched: number;
+  max_allowed: number | null;
+  exceeds_limit: boolean;
+  device_ids: number[];
+  status_counts: DeviceFacetStatusCounts;
+  affected_models: string[];
+  devices_without_model_serials: string[];
+  retired_count: number;
+  active_count: number;
+  stale_count: number;
+}
+
 export interface Task {
   id: number;
   name: string;
