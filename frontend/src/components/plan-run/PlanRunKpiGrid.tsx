@@ -2,19 +2,26 @@ import type {
   DeviceLinkStatus,
   DeviceUiStatus,
   PlanRunDevicesPayload,
+  PlanRunMinimapFacets,
 } from '@/utils/api/types';
 import { BORDER, KPI_TONE, STAT, SURFACE, type KpiTone } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import SectionHeader from './SectionHeader';
 
+/** B3-3（契约 §5.2）：支持真实并集筛选 `lost_or_backoff`（unknown OR backoff）与 `abnormal`（!= online）。 */
+export type PlanRunDeviceStatusFilter = DeviceUiStatus | 'all' | 'lost_or_backoff';
+export type PlanRunDeviceLinkFilter = DeviceLinkStatus | 'all' | 'abnormal';
+
 interface Props {
   devices?: PlanRunDevicesPayload;
+  /** B3-3：优先消费 Minimap 全局 Facets，不依赖重列表载荷 */
+  facets?: PlanRunMinimapFacets;
   currentStage?: string | null;
   patrolCycle?: number | null;
-  statusFilter?: DeviceUiStatus | 'all';
-  linkFilter?: DeviceLinkStatus | 'all';
-  onSelectStatus?: (status: DeviceUiStatus | 'all') => void;
-  onSelectLink?: (link: DeviceLinkStatus | 'all') => void;
+  statusFilter?: PlanRunDeviceStatusFilter;
+  linkFilter?: PlanRunDeviceLinkFilter;
+  onSelectStatus?: (status: PlanRunDeviceStatusFilter) => void;
+  onSelectLink?: (link: PlanRunDeviceLinkFilter) => void;
   onResetFilters?: () => void;
 }
 
@@ -69,6 +76,7 @@ function Cell({
 
 export default function PlanRunKpiGrid({
   devices,
+  facets,
   currentStage,
   patrolCycle,
   statusFilter = 'all',
@@ -77,9 +85,9 @@ export default function PlanRunKpiGrid({
   onSelectLink,
   onResetFilters,
 }: Props) {
-  const byStatus = devices?.by_status ?? {};
-  const byLinkStatus = devices?.by_link_status;
-  const total = devices?.total ?? 0;
+  const byStatus = facets?.by_status ?? devices?.by_status ?? {};
+  const byLinkStatus = facets?.by_link_status ?? devices?.by_link_status;
+  const total = facets?.total ?? devices?.total ?? 0;
   const running = byStatus.running ?? 0;
   const completed = byStatus.completed ?? 0;
   const failed = byStatus.failed ?? 0;
@@ -109,19 +117,15 @@ export default function PlanRunKpiGrid({
           ? '清理'
           : '—';
 
-  const disconnectedTarget: DeviceUiStatus = unknown > 0 ? 'unknown' : 'backoff';
-  const linkAbnormalTarget: DeviceLinkStatus = (() => {
-    if (!byLinkStatus) return 'offline';
-    if ((byLinkStatus.offline ?? 0) > 0) return 'offline';
-    if ((byLinkStatus.adb_error ?? 0) > 0) return 'adb_error';
-    if ((byLinkStatus.host_offline ?? 0) > 0) return 'host_offline';
-    return 'unknown';
-  })();
-
   const toggleStatus = onSelectStatus
-    ? (target: DeviceUiStatus) =>
+    ? (target: PlanRunDeviceStatusFilter) =>
         onSelectStatus(statusFilter === target ? 'all' : target)
     : undefined;
+
+  const isDisconnectedActive =
+    statusFilter === 'lost_or_backoff' || statusFilter === 'unknown' || statusFilter === 'backoff';
+  const isLinkAbnormalActive =
+    linkFilter === 'abnormal' || (linkFilter !== 'all' && linkFilter !== 'online');
 
   return (
     <div className="space-y-2">
@@ -172,9 +176,13 @@ export default function PlanRunKpiGrid({
           label="Job 失联/退避"
           tone={disconnectedTone}
           testId="kpi-disconnected-backoff"
-          active={statusFilter === 'unknown' || statusFilter === 'backoff'}
-          onClick={toggleStatus ? () => toggleStatus(disconnectedTarget) : undefined}
-          title={toggleStatus ? '点击筛选失联/退避设备' : undefined}
+          active={isDisconnectedActive}
+          onClick={
+            onSelectStatus
+              ? () => onSelectStatus(isDisconnectedActive ? 'all' : 'lost_or_backoff')
+              : undefined
+          }
+          title={onSelectStatus ? '点击筛选全部失联或退避设备（unknown + backoff 并集）' : undefined}
         />
         {/* 连接维度与上面的执行维度正交,同一台设备可能同时计入两处,
             所以横跨整行单独呈现,避免读成「又一个执行状态」。 */}
@@ -184,18 +192,13 @@ export default function PlanRunKpiGrid({
             label="设备连接异常"
             tone={linkTone}
             testId="kpi-link-abnormal"
-            active={linkFilter !== 'all' && linkFilter !== 'online'}
+            active={isLinkAbnormalActive}
             onClick={
               onSelectLink
-                ? () =>
-                    onSelectLink(
-                      linkFilter !== 'all' && linkFilter !== 'online'
-                        ? 'all'
-                        : linkAbnormalTarget,
-                    )
+                ? () => onSelectLink(isLinkAbnormalActive ? 'all' : 'abnormal')
                 : undefined
             }
-            title={onSelectLink ? '点击筛选连接异常设备' : undefined}
+            title={onSelectLink ? '点击筛选全部连接异常设备（非 online 并集）' : undefined}
           />
         </div>
       </div>

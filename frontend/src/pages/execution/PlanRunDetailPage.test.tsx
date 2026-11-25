@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   getTimeline: vi.fn(),
   getEvents: vi.fn(),
   getDevices: vi.fn(),
+  getDevicesMinimap: vi.fn(),
+  getJobDetail: vi.fn(),
+  getJobTimeline: vi.fn(),
+  getJobWatcherSignals: vi.fn(),
   getWatcherSummary: vi.fn(),
   getLogEvents: vi.fn().mockResolvedValue({
     plan_run_id: 12, data_authority: 'device_log_event', total: 0, items: [],
@@ -64,6 +68,10 @@ vi.mock('@/utils/api', () => ({
       getTimeline: mocks.getTimeline,
       getEvents: mocks.getEvents,
       getDevices: mocks.getDevices,
+      getDevicesMinimap: mocks.getDevicesMinimap,
+      getJobDetail: mocks.getJobDetail,
+      getJobTimeline: mocks.getJobTimeline,
+      getJobWatcherSignals: mocks.getJobWatcherSignals,
       getWatcherSummary: mocks.getWatcherSummary,
       getLogEvents: mocks.getLogEvents,
       getChain: mocks.getChain,
@@ -109,13 +117,13 @@ function HeaderSlotOutlet() {
   return <>{headerSlot}</>;
 }
 
-function renderPage() {
+function renderPage(initialEntries: string[] = ['/execution/plan-runs/12']) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
   return render(
     <HeaderSlotProvider>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <QueryClientProvider client={queryClient}>
           <HeaderSlotOutlet />
           <PlanRunDetailPage />
@@ -366,12 +374,7 @@ beforeEach(() => {
     },
   });
   mocks.abort.mockResolvedValue({ plan_run_id: 12, status: 'FAILED' });
-  mocks.getDevices.mockResolvedValue({
-    plan_run_id: 12,
-    total: 2,
-    by_status: { all: 2, running: 1, backoff: 1 },
-    by_host: { 'host-101': 2 },
-    devices: [
+  const defaultDeviceItems = [
       {
         device_id: 1,
         device_serial: 'DEV-AAAA',
@@ -380,6 +383,8 @@ beforeEach(() => {
         job_id: 3001,
         job_status: 'RUNNING',
         ui_status: 'running',
+        job_exec_status: 'running',
+        device_link_status: 'online',
         current_stage: 'patrol',
         current_step: 'monkey_check',
         patrol_cycle_count: 12,
@@ -392,6 +397,10 @@ beforeEach(() => {
         last_heartbeat_at: null,
         started_at: null,
         ended_at: null,
+        plan_run_id: 12,
+        host_name: 'Host-101',
+        step_trace_count: 2,
+        artifact_count: 0,
       },
       {
         device_id: 2,
@@ -401,6 +410,8 @@ beforeEach(() => {
         job_id: 3002,
         job_status: 'RUNNING',
         ui_status: 'backoff',
+        job_exec_status: 'backoff',
+        device_link_status: 'online',
         current_stage: 'patrol',
         current_step: 'monkey_check',
         patrol_cycle_count: 12,
@@ -413,8 +424,71 @@ beforeEach(() => {
         last_heartbeat_at: null,
         started_at: null,
         ended_at: null,
+        plan_run_id: 12,
+        host_name: 'Host-101',
+        step_trace_count: 4,
+        artifact_count: 0,
+      },
+    ];
+  mocks.getDevices.mockResolvedValue({
+    plan_run_id: 12,
+    total: 2,
+    filtered_total: 2,
+    by_status: { all: 2, running: 1, backoff: 1 },
+    by_link_status: { all: 2, online: 2 },
+    by_host: { 'host-101': 2 },
+    devices: defaultDeviceItems,
+  });
+  mocks.getDevicesMinimap.mockResolvedValue({
+    plan_run_id: 12,
+    facets: {
+      total: 2,
+      by_status: { all: 2, running: 1, backoff: 1 },
+      by_link_status: { all: 2, online: 2 },
+      by_host: { 'host-101': 2 },
+    },
+    hosts: { 'host-101': 'Host-101' },
+    stuck_job_ids: [],
+    devices: [
+      {
+        job_id: 3001,
+        device_id: 1,
+        device_serial: 'DEV-AAAA',
+        host_id: 'host-101',
+        job_exec_status: 'running',
+        device_link_status: 'online',
+        log_signal_count: 0,
+      },
+      {
+        job_id: 3002,
+        device_id: 2,
+        device_serial: 'DEV-BBBB',
+        host_id: 'host-101',
+        job_exec_status: 'backoff',
+        device_link_status: 'online',
+        log_signal_count: 2,
       },
     ],
+  });
+  mocks.getJobDetail.mockImplementation(async (_runId: number, jobId: number) => {
+    const found = defaultDeviceItems.find((item) => item.job_id === jobId);
+    return found ?? { ...defaultDeviceItems[0], job_id: jobId, device_id: jobId, device_serial: `DEV-${jobId}` };
+  });
+  mocks.getJobTimeline.mockResolvedValue({
+    plan_run_id: 12,
+    job_id: 3001,
+    total: 0,
+    skip: 0,
+    limit: 50,
+    items: [],
+  });
+  mocks.getJobWatcherSignals.mockResolvedValue({
+    plan_run_id: 12,
+    job_id: 3002,
+    total: 0,
+    skip: 0,
+    limit: 50,
+    items: [],
   });
   mocks.getChain.mockResolvedValue({
     plan_run_id: 12,
@@ -589,7 +663,7 @@ describe('PlanRunDetailPage', () => {
     // Click grid cell to open drawer (default grid view in DeviceOverview)
     fireEvent.click(await screen.findByTestId('minimap-cell-3002'));
     expect(await screen.findByTestId('device-drawer')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('device-drawer-retry-btn'));
+    fireEvent.click(await screen.findByTestId('device-drawer-retry-btn'));
     fireEvent.click(await screen.findByTestId('device-drawer-confirm'));
     await waitFor(() => expect(mocks.manualRetryJob).toHaveBeenCalledWith(12, 3002));
   });
@@ -623,7 +697,7 @@ describe('PlanRunDetailPage', () => {
     await waitFor(() => screen.getByTestId('device-overview'));
     expect(typeof mocks.socketCallback.current).toBe('function');
 
-    mocks.getDevices.mockClear();
+    mocks.getDevicesMinimap.mockClear();
     mocks.getTimeline.mockClear();
     mocks.getWatcherSummary.mockClear();
 
@@ -638,8 +712,8 @@ describe('PlanRunDetailPage', () => {
       payload: { job_id: 3002, status: 'RUNNING' },
     });
 
-    await waitFor(() => expect(mocks.getDevices).toHaveBeenCalled(), COALESCE_WAIT);
-    expect(mocks.getDevices).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.getDevicesMinimap).toHaveBeenCalled(), COALESCE_WAIT);
+    expect(mocks.getDevicesMinimap).toHaveBeenCalledTimes(1);
     expect(mocks.getTimeline).toHaveBeenCalled();
     // watcher 只由 WATCHER_SIGNAL 失效
     expect(mocks.getWatcherSummary).not.toHaveBeenCalled();
@@ -649,7 +723,7 @@ describe('PlanRunDetailPage', () => {
     renderPage();
     await waitFor(() => screen.getByTestId('device-overview'));
 
-    mocks.getDevices.mockClear();
+    mocks.getDevicesMinimap.mockClear();
     mocks.getWatcherSummary.mockClear();
 
     // Push a WATCHER_SIGNAL — watcher should refetch (coalesced), devices should not.
@@ -659,7 +733,7 @@ describe('PlanRunDetailPage', () => {
     });
 
     await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled(), COALESCE_WAIT);
-    expect(mocks.getDevices).not.toHaveBeenCalled();
+    expect(mocks.getDevicesMinimap).not.toHaveBeenCalled();
   });
 
   it('invalidates run+timeline+devices on PLAN_RUN_STATUS', async () => {
@@ -668,7 +742,7 @@ describe('PlanRunDetailPage', () => {
 
     mocks.getRun.mockClear();
     mocks.getTimeline.mockClear();
-    mocks.getDevices.mockClear();
+    mocks.getDevicesMinimap.mockClear();
 
     mocks.socketCallback.current!({
       type: 'PLAN_RUN_STATUS',
@@ -676,7 +750,7 @@ describe('PlanRunDetailPage', () => {
     });
     await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
     expect(mocks.getTimeline).toHaveBeenCalled();
-    expect(mocks.getDevices).toHaveBeenCalled();
+    expect(mocks.getDevicesMinimap).toHaveBeenCalled();
   });
 
   it('invalidates run+timeline+devices on PRECHECK_UPDATE (coalesced)', async () => {
@@ -685,7 +759,7 @@ describe('PlanRunDetailPage', () => {
 
     mocks.getRun.mockClear();
     mocks.getTimeline.mockClear();
-    mocks.getDevices.mockClear();
+    mocks.getDevicesMinimap.mockClear();
 
     mocks.socketCallback.current!({
       type: 'PRECHECK_UPDATE',
@@ -694,7 +768,7 @@ describe('PlanRunDetailPage', () => {
 
     await waitFor(() => expect(mocks.getRun).toHaveBeenCalled(), COALESCE_WAIT);
     expect(mocks.getTimeline).toHaveBeenCalled();
-    expect(mocks.getDevices).toHaveBeenCalled();
+    expect(mocks.getDevicesMinimap).toHaveBeenCalled();
   });
 
   it('hides the dispatch gate card when precheck is absent', async () => {
@@ -864,35 +938,25 @@ describe('PlanRunDetailPage', () => {
   });
 
   it('shows stuck-jobs banner when backend marks RUNNING job as stuck', async () => {
-    mocks.getDevices.mockResolvedValueOnce({
+    mocks.getDevicesMinimap.mockResolvedValueOnce({
       plan_run_id: 12,
-      total: 1,
-      by_status: { all: 1, running: 1 },
-      by_host: { 'host-101': 1 },
+      facets: {
+        total: 1,
+        by_status: { all: 1, running: 1 },
+        by_link_status: { all: 1, online: 1 },
+        by_host: { 'host-101': 1 },
+      },
+      hosts: { 'host-101': 'Host-101' },
+      stuck_job_ids: [3001],
       devices: [
         {
+          job_id: 3001,
           device_id: 1,
           device_serial: 'DEV-STALE',
-          device_model: 'Pixel 8',
           host_id: 'host-101',
-          job_id: 3001,
-          job_status: 'RUNNING',
-          ui_status: 'running',
-          current_stage: 'patrol',
-          current_step: 'monkey_check',
-          patrol_cycle_count: 12,
-          patrol_success_cycle_count: 12,
-          patrol_failed_cycle_count: 0,
-          current_failure_streak: 0,
-          next_retry_at: null,
-          manual_action: null,
+          job_exec_status: 'running',
+          device_link_status: 'online',
           log_signal_count: 0,
-          // #514: frontend no longer infers staleness from last_heartbeat_at alone.
-          is_stuck: true,
-          heartbeat_deadline_at: new Date(Date.now() - 60_000).toISOString(),
-          last_heartbeat_at: new Date(Date.now() - 300_000).toISOString(),
-          started_at: new Date(Date.now() - 600_000).toISOString(),
-          ended_at: null,
         },
       ],
     });
@@ -1012,56 +1076,67 @@ describe('PlanRunDetailPage', () => {
     expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
   });
 
-  it('keeps an open drawer synchronized with the latest device query object', async () => {
-    mocks.getDevices
-      .mockResolvedValueOnce({
-        plan_run_id: 12,
-        total: 1,
-        by_status: { all: 1, running: 1 },
-        by_host: { 'host-101': 1 },
-        devices: [{
+  it('keeps an open drawer synchronized with the latest single-job detail query', async () => {
+    let job3002Calls = 0;
+    mocks.getJobDetail.mockImplementation(async (_runId: number, jobId: number) => {
+      if (jobId === 3002) {
+        job3002Calls += 1;
+        return {
+          plan_run_id: 12,
           device_id: 2,
           device_serial: 'DEV-LIVE',
           host_id: 'host-101',
+          host_name: 'Host-101',
           job_id: 3002,
           job_status: 'RUNNING',
-          ui_status: 'running',
+          ui_status: job3002Calls === 1 ? 'running' : 'backoff',
+          job_exec_status: job3002Calls === 1 ? 'running' : 'backoff',
+          device_link_status: 'online',
           current_stage: 'patrol',
-          current_step: 'before-refetch',
-          patrol_cycle_count: 1,
+          current_step: job3002Calls === 1 ? 'before-refetch' : 'after-refetch',
+          patrol_cycle_count: job3002Calls,
           patrol_success_cycle_count: 1,
-          patrol_failed_cycle_count: 0,
-          current_failure_streak: 0,
+          patrol_failed_cycle_count: job3002Calls === 1 ? 0 : 1,
+          current_failure_streak: job3002Calls === 1 ? 0 : 1,
           manual_action: null,
           log_signal_count: 0,
-        }],
-      })
-      .mockResolvedValueOnce({
+          step_trace_count: 0,
+          artifact_count: 0,
+        };
+      }
+      return {
         plan_run_id: 12,
-        total: 1,
-        by_status: { all: 1, backoff: 1 },
-        by_host: { 'host-101': 1 },
-        devices: [{
-          device_id: 2,
-          device_serial: 'DEV-LIVE',
-          host_id: 'host-101',
-          job_id: 3002,
-          job_status: 'RUNNING',
-          ui_status: 'backoff',
-          current_stage: 'patrol',
-          current_step: 'after-refetch',
-          patrol_cycle_count: 2,
-          patrol_success_cycle_count: 1,
-          patrol_failed_cycle_count: 1,
-          current_failure_streak: 1,
-          manual_action: null,
-          log_signal_count: 0,
-        }],
-      });
+        device_id: 1,
+        device_serial: 'DEV-AAAA',
+        host_id: 'host-101',
+        host_name: 'Host-101',
+        job_id: jobId,
+        job_status: 'RUNNING',
+        ui_status: 'running',
+        job_exec_status: 'running',
+        device_link_status: 'online',
+        current_stage: 'patrol',
+        current_step: 'monkey_check',
+        patrol_cycle_count: 1,
+        patrol_success_cycle_count: 1,
+        patrol_failed_cycle_count: 0,
+        current_failure_streak: 0,
+        manual_action: null,
+        log_signal_count: 0,
+        step_trace_count: 0,
+        artifact_count: 0,
+      };
+    });
 
     renderPage();
     fireEvent.click(await screen.findByTestId('minimap-cell-3002'));
-    expect(await screen.findByTestId('device-drawer')).toHaveTextContent('before-refetch');
+    await waitFor(() =>
+      expect(screen.getByTestId('device-drawer')).toHaveTextContent('before-refetch'),
+    );
+    // 详情加载成功后预取相邻 3001 单机详情，绝不预取时间线或异常明细
+    await waitFor(() => expect(mocks.getJobDetail).toHaveBeenCalledWith(12, 3001));
+    expect(mocks.getJobTimeline).not.toHaveBeenCalled();
+    expect(mocks.getJobWatcherSignals).not.toHaveBeenCalled();
 
     mocks.socketCallback.current!({
       type: 'JOB_STATUS',
@@ -1352,5 +1427,75 @@ describe('PlanRunDetailPage', () => {
     expect(await screen.findByTestId('parameter-projection-unavailable')).toBeInTheDocument();
     expect(screen.queryByText('LEGACY_SECRET')).not.toBeInTheDocument();
     expect(screen.queryByText('default_params')).not.toBeInTheDocument();
+  });
+
+  it('B3-3: 默认 Minimap 视图不拉重表接口，切表格视图按 limit=50 真分页且支持 KPI 并集筛选', async () => {
+    renderPage();
+    await screen.findByTestId('minimap-cell-3001');
+    expect(mocks.getDevicesMinimap).toHaveBeenCalledWith(12);
+    expect(mocks.getDevices).not.toHaveBeenCalled();
+
+    // 切到表格视图 → 按 limit=50 真分页拉取
+    fireEvent.click(screen.getByTestId('device-overview-table-btn'));
+    await waitFor(() => {
+      expect(mocks.getDevices).toHaveBeenCalledWith(
+        12,
+        expect.objectContaining({ skip: 0, limit: 50 }),
+      );
+    });
+
+    // 点击「Job 失联/退避」与「设备连接异常」发送真实并集参数
+    fireEvent.click(screen.getByTestId('kpi-disconnected-backoff'));
+    await waitFor(() => {
+      expect(mocks.getDevices).toHaveBeenLastCalledWith(
+        12,
+        expect.objectContaining({ status: 'lost_or_backoff', skip: 0, limit: 50 }),
+      );
+    });
+
+    fireEvent.click(screen.getByTestId('kpi-link-abnormal'));
+    await waitFor(() => {
+      expect(mocks.getDevices).toHaveBeenLastCalledWith(
+        12,
+        expect.objectContaining({ link_status: 'abnormal', skip: 0, limit: 50 }),
+      );
+    });
+  });
+
+  it('B3-3: ?drawer= 深链不在浏览集合中时独立加载单机详情且不猜测邻居', async () => {
+    mocks.getJobDetail.mockResolvedValueOnce({
+      plan_run_id: 12,
+      job_id: 9999,
+      device_id: 99,
+      device_serial: 'DEV-OFFPAGE-9999',
+      host_id: 'host-999',
+      host_name: 'Host-999',
+      job_status: 'RUNNING',
+      ui_status: 'running',
+      job_exec_status: 'running',
+      device_link_status: 'online',
+      current_stage: 'patrol',
+      current_step: 'monkey_check',
+      patrol_cycle_count: 5,
+      patrol_success_cycle_count: 5,
+      patrol_failed_cycle_count: 0,
+      current_failure_streak: 0,
+      manual_action: null,
+      log_signal_count: 0,
+      step_trace_count: 0,
+      artifact_count: 0,
+    });
+
+    renderPage(['/execution/plan-runs/12?drawer=9999']);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('device-drawer')).toHaveTextContent('DEV-OFFPAGE-9999');
+    });
+    expect(mocks.getJobDetail).toHaveBeenCalledWith(12, 9999);
+    // 不在当前浏览集合中 → 不渲染猜测的上一台/下一台按钮，也不触发邻居预取
+    expect(screen.queryByTestId('device-drawer-prev')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-drawer-next')).not.toBeInTheDocument();
+    expect(mocks.getJobTimeline).not.toHaveBeenCalled();
+    expect(mocks.getJobWatcherSignals).not.toHaveBeenCalled();
   });
 });

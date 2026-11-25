@@ -12,12 +12,18 @@ import {
 import { PANEL, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type {
-  DeviceMatrixItem,
   ParameterProjection,
   PlanSnapshot,
   PlanSnapshotStep,
 } from '@/utils/api/types';
 import { formatScriptIdentity } from './scriptIdentity';
+
+export interface SnapshotDeviceOption {
+  job_id: number;
+  device_id: number;
+  device_serial?: string | null;
+  host_id?: string | null;
+}
 
 /**
  * #3350（ADR-0023 D4）+ #3653 U4（ADR-0060）：PlanRun「查看快照」抽屉。
@@ -35,7 +41,7 @@ interface Props {
   /** detail 内嵌 L2；缺省或失败时不得回退原始参数 */
   l2Projection?: ParameterProjection | null;
   l2Unavailable?: boolean;
-  devices?: DeviceMatrixItem[];
+  devices?: SnapshotDeviceOption[];
   selectedJobId?: number | null;
   onSelectJobId?: (jobId: number | null) => void;
   l3Projection?: ParameterProjection | null;
@@ -71,7 +77,7 @@ function jsonBlock(value: unknown): string {
   }
 }
 
-function deviceLabel(device: DeviceMatrixItem): string {
+function deviceLabel(device: SnapshotDeviceOption): string {
   const serial = device.device_serial || `device#${device.device_id}`;
   return `${serial} · job#${device.job_id}`;
 }

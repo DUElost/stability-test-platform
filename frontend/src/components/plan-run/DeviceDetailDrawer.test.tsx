@@ -3,11 +3,27 @@ import { describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { DeviceMatrixItem } from '@/utils/api/types';
 
-// Mock api.planRuns.listJobArtifacts（CrashArtifactsBlock 调用）
+// Mock api.planRuns sub-queries（CrashArtifactsBlock / JobTimelineBlock / JobWatcherSignalsBlock）
 vi.mock('@/utils/api', () => ({
   api: {
     planRuns: {
       listJobArtifacts: vi.fn().mockResolvedValue([]),
+      getJobTimeline: vi.fn().mockResolvedValue({
+        plan_run_id: 1,
+        job_id: 3001,
+        total: 0,
+        skip: 0,
+        limit: 50,
+        items: [],
+      }),
+      getJobWatcherSignals: vi.fn().mockResolvedValue({
+        plan_run_id: 1,
+        job_id: 3001,
+        total: 0,
+        skip: 0,
+        limit: 50,
+        items: [],
+      }),
     },
   },
 }));
@@ -484,5 +500,77 @@ describe('DeviceDetailDrawer — 解除结果（ADR-0061 D1.2 / U6）', () => {
     expect(block).not.toHaveTextContent('db_history');
     expect(block).not.toHaveTextContent('file_tree.txt');
     expect(block).not.toHaveTextContent('SWT_JBT_TRACES');
+  });
+
+  it('B3-3: 阶段时间线与 Watcher 异常明细默认折叠不请求，展开时按 (runId, jobId) 延迟加载有上限子查询', async () => {
+    vi.mocked(api.planRuns.getJobTimeline).mockClear();
+    vi.mocked(api.planRuns.getJobWatcherSignals).mockClear();
+    vi.mocked(api.planRuns.getJobTimeline).mockResolvedValueOnce({
+      plan_run_id: 1,
+      job_id: 3011,
+      total: 1,
+      skip: 0,
+      limit: 50,
+      items: [
+        {
+          id: 901,
+          stage: 'patrol',
+          step_id: 'monkey_check',
+          event_type: 'STEP_END',
+          status: 'FAILED',
+          error_message: 'exit code 1',
+          original_ts: '2026-11-25T08:00:00Z',
+          created_at: '2026-11-25T08:00:01Z',
+        },
+      ],
+    });
+    vi.mocked(api.planRuns.getJobWatcherSignals).mockResolvedValueOnce({
+      plan_run_id: 1,
+      job_id: 3011,
+      total: 2,
+      skip: 0,
+      limit: 50,
+      items: [
+        {
+          id: 701,
+          seq_no: 1,
+          category: 'AEE',
+          source: 'watcher',
+          detected_at: '2026-11-25T08:01:00Z',
+          received_at: '2026-11-25T08:01:01Z',
+          path_on_device: '/data/aee_exp/db.01.NE',
+        },
+      ],
+    });
+
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({ job_id: 3011, log_signal_count: 2 })}
+        navScopeLabel="本页"
+        devicePosition={1}
+        totalDevices={50}
+        onNextDevice={vi.fn()}
+        {...handlers}
+      />,
+    );
+
+    // 默认折叠：绝不预先请求时间线或异常明细
+    expect(api.planRuns.getJobTimeline).not.toHaveBeenCalled();
+    expect(api.planRuns.getJobWatcherSignals).not.toHaveBeenCalled();
+
+    // 页边界标注「本页」
+    expect(screen.getByTestId('device-drawer-position')).toHaveTextContent('本页 1/50');
+    expect(screen.getByTestId('device-drawer-prev')).toBeDisabled();
+    expect(screen.getByTestId('device-drawer-prev')).toHaveAttribute('aria-label', '上一台设备（本页）');
+
+    // 展开时间线
+    fireEvent.click(screen.getByTestId('device-drawer-timeline-toggle'));
+    expect(await screen.findByText(/exit code 1/)).toBeInTheDocument();
+    expect(api.planRuns.getJobTimeline).toHaveBeenCalledWith(1, 3011, { skip: 0, limit: 50 });
+
+    // 展开异常明细
+    fireEvent.click(screen.getByTestId('device-drawer-signals-toggle'));
+    expect(await screen.findByText('/data/aee_exp/db.01.NE')).toBeInTheDocument();
+    expect(api.planRuns.getJobWatcherSignals).toHaveBeenCalledWith(1, 3011, { skip: 0, limit: 50 });
   });
 });

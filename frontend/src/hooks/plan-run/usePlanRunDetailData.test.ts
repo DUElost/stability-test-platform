@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   getTimeline: vi.fn(),
   getDevices: vi.fn(),
+  getDevicesMinimap: vi.fn(),
+  getJobDetail: vi.fn(),
   getWatcherSummary: vi.fn(),
   getChain: vi.fn(),
   jobParameterProjection: vi.fn(),
@@ -36,6 +38,8 @@ vi.mock('@/utils/api', () => ({
       get: mocks.get,
       getTimeline: mocks.getTimeline,
       getDevices: mocks.getDevices,
+      getDevicesMinimap: mocks.getDevicesMinimap,
+      getJobDetail: mocks.getJobDetail,
       getWatcherSummary: mocks.getWatcherSummary,
       getChain: mocks.getChain,
       jobParameterProjection: mocks.jobParameterProjection,
@@ -73,7 +77,15 @@ describe('usePlanRunDetailData (#3653 U4)', () => {
       plan_snapshot: { schema_version: 1, plan: {}, steps: [] },
     });
     mocks.getTimeline.mockResolvedValue({ plan_run_id: 12, plan_name: 'demo', stages: [] });
-    mocks.getDevices.mockResolvedValue({ plan_run_id: 12, total: 0, by_status: {}, by_host: {}, devices: [] });
+    mocks.getDevices.mockResolvedValue({ plan_run_id: 12, total: 0, filtered_total: 0, by_status: {}, by_host: {}, devices: [] });
+    mocks.getDevicesMinimap.mockResolvedValue({
+      plan_run_id: 12,
+      facets: { total: 0, by_status: { all: 0 }, by_link_status: { all: 0 }, by_host: {} },
+      hosts: {},
+      stuck_job_ids: [],
+      devices: [],
+    });
+    mocks.getJobDetail.mockResolvedValue({ plan_run_id: 12, job_id: 101, device_id: 11, step_trace_count: 0, artifact_count: 0 });
     mocks.getWatcherSummary.mockResolvedValue({ plan_run_id: 12 });
     mocks.getChain.mockResolvedValue({ plan_run_id: 12, items: [] });
     mocks.jobParameterProjection.mockResolvedValue({
@@ -140,5 +152,23 @@ describe('usePlanRunDetailData (#3653 U4)', () => {
     );
     await waitFor(() => expect(result.current.jobProjectionQ.isError).toBe(true));
     expect(result.current.jobProjectionQ.data).toBeUndefined();
+  });
+
+  it('B3-3: fetches minimap in grid mode without calling getDevices, and fetches paginated getDevices in table mode', async () => {
+    const { result, rerender } = renderHook(
+      ({ viewMode }: { viewMode: 'grid' | 'table' }) =>
+        usePlanRunDetailData(12, { ...filters, viewMode, devicePage: 1, devicePageSize: 50 }),
+      { wrapper, initialProps: { viewMode: 'grid' as 'grid' | 'table' } },
+    );
+    await waitFor(() => expect(result.current.minimapQ.isSuccess).toBe(true));
+    expect(mocks.getDevicesMinimap).toHaveBeenCalledWith(12);
+    expect(mocks.getDevices).not.toHaveBeenCalled();
+
+    rerender({ viewMode: 'table' });
+    await waitFor(() => expect(result.current.devicesPageQ.isSuccess).toBe(true));
+    expect(mocks.getDevices).toHaveBeenCalledWith(
+      12,
+      expect.objectContaining({ skip: 0, limit: 50 }),
+    );
   });
 });
