@@ -59,7 +59,7 @@ Agent 主机权威时钟，从源头消除因离线设备时钟漂移引发的�
 
 - 现网全机群基线只读摸底（16 个在位 `平台 × 机型` 族全覆盖，16/16 支持 `cmd alarm` 且
   `com.android.shell` 已授 `SET_TIME` / `SET_TIME_ZONE`）；
-- 真机同步实测（本机 `ABBQNX6B03000073` 在 `adb unroot` `uid=2000` 下验证 `UTC` ↔ `Asia/Shanghai`
+- 真机同步实测（本机 `ABBQNX6B****0073` 在 `adb unroot` `uid=2000` 下验证 `UTC` ↔ `Asia/Shanghai`
   + 校时 + `/dev/rtc0` 同步；另选 8 台跨 MTK/UNISOC、HONOR/Infinix、SDK 34–36、`user/0`/`user/1`/`userdebug/1`、
   `uid=0`/`uid=2000` 空闲真机逐台验证，8/8 耗时 107–370ms 且钟差与可读 RTC 全部归 0）；
 - 单元测试：`venv/bin/python scripts/run_pytest.py backend/agent/tests/test_sync_device_time_v100.py -q`；
