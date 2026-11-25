@@ -402,6 +402,63 @@ class TestHostSortingPaginationAndSelectionPreview:
             cleanup()
 
 
+class TestHostVersionLookupHoisting:
+    """回归：多台主机查询不得按 N 台重复调用 get_agent_code_version()（#496）。"""
+
+    def test_list_calls_version_once_and_facets_preview_call_zero_times(
+        self, client, auth_headers, db_session, monkeypatch
+    ):
+        import backend.services.agent_version_info as avi_mod
+        import backend.services.host_inventory_query as hiq_mod
+
+        monkeypatch.setattr(hosts_route, "_list_desired_artifact_digest", lambda: DESIRED_DIGEST)
+        prefix = f"b22v-{uuid4().hex[:6]}"
+        for idx in range(5):
+            _make_host(
+                db_session,
+                host_id=f"{prefix}-{idx}",
+                name=f"Hoist-{prefix}-{idx}",
+                ip=f"10.74.{idx}.{int(uuid4().hex[:2], 16) % 200 + 10}",
+                status="ONLINE",
+                agent_artifact_digest=DESIRED_DIGEST,
+                extra={"agent_installed": True},
+            )
+        db_session.commit()
+
+        calls = {"count": 0}
+
+        def _counting_version() -> str:
+            calls["count"] += 1
+            return "4afb332bc"
+
+        monkeypatch.setattr(hiq_mod, "get_agent_code_version", _counting_version)
+        monkeypatch.setattr(avi_mod, "get_agent_code_version", _counting_version)
+
+        resp_list = client.get(
+            f"/api/v1/hosts?skip=0&limit=50&q={prefix}",
+            headers=auth_headers,
+        )
+        assert resp_list.status_code == 200
+        items = resp_list.json()["items"]
+        assert len(items) == 5
+        assert all(item["expected_code_revision"] == "4afb332bc" for item in items)
+        assert calls["count"] == 1
+
+        calls["count"] = 0
+        resp_facets = client.get("/api/v1/hosts/facets", headers=auth_headers)
+        assert resp_facets.status_code == 200
+        assert calls["count"] == 0
+
+        resp_preview = client.post(
+            "/api/v1/hosts/selection-preview",
+            json={"q": prefix},
+            headers=auth_headers,
+        )
+        assert resp_preview.status_code == 200
+        assert resp_preview.json()["data"]["total_matched"] == 5
+        assert calls["count"] == 0
+
+
 class TestUsbControllerHealthAndEmptyCabinetDistinction:
     """区分纯空置主机（零台账且无硬件证据）与真实主控/端口故障或账实失明主机。"""
 
@@ -517,3 +574,4 @@ class TestUsbControllerHealthAndEmptyCabinetDistinction:
         r_detail = client.get(f"/api/v1/hosts/{h_zero_ledger.id}", headers=auth_headers)
         assert r_detail.status_code == 200
         assert r_detail.json()["ledger_device_count"] == 0
+

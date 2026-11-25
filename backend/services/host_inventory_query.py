@@ -30,6 +30,7 @@ from backend.api.schemas.host import (
 )
 from backend.models.host import Device, Host
 from backend.services.agent_version_info import build_host_version_view
+from backend.services.host_updater import get_agent_code_version
 from backend.services.inventory_status import effective_host_status
 
 # 与前端 ExpandableHostTable.tsx REASON_LABELS 保持同源，确保 q 搜索可按中文原因命中
@@ -129,6 +130,7 @@ def build_host_out_readonly(
     host: Host,
     *,
     desired_artifact_digest: Optional[str] = None,
+    expected_code_revision: Optional[str] = None,
     now: Optional[datetime] = None,
     host_key_trust: Optional[str] = None,
     ledger_device_count: Optional[int] = None,
@@ -152,6 +154,7 @@ def build_host_out_readonly(
         extra,
         agent_artifact_digest=getattr(host, "agent_artifact_digest", None),
         desired_artifact_digest=desired_artifact_digest,
+        expected_code_revision=expected_code_revision,
     )
     out.agent_protocol_version = version_view["agent_protocol_version"]
     out.agent_code_revision = version_view["agent_code_revision"]
@@ -496,11 +499,15 @@ def _load_base_host_outs(
     include_retired: bool,
     desired_artifact_digest: Optional[str],
     now: datetime,
+    include_expected_revision: bool = True,
 ) -> List[HostOut]:
     query = db.query(Host)
     if not include_retired:
         query = query.filter(Host.retired_at.is_(None))
     hosts = query.order_by(Host.id).all()
+    # 单请求外层只求一次 expected_code_revision（facets/preview 不消费此溯源字段则跳过），
+    # 避免按 N 台主机循环重复调用 get_agent_code_version()。
+    expected_rev = get_agent_code_version() if include_expected_revision else ""
     ledger_counts = load_host_ledger_device_counts(
         db,
         [str(h.id) for h in hosts],
@@ -509,6 +516,7 @@ def _load_base_host_outs(
         build_host_out_readonly(
             h,
             desired_artifact_digest=desired_artifact_digest,
+            expected_code_revision=expected_rev,
             now=now,
             ledger_device_count=ledger_counts.get(str(h.id), 0),
         )
@@ -555,6 +563,7 @@ def build_host_facets(
         include_retired=include_retired,
         desired_artifact_digest=desired_artifact_digest,
         now=ref_now,
+        include_expected_revision=False,
     )
     return _aggregate_host_facets(hosts)
 
@@ -622,6 +631,7 @@ def build_host_selection_preview(
         include_retired=filters.include_retired,
         desired_artifact_digest=desired_artifact_digest,
         now=ref_now,
+        include_expected_revision=False,
     )
     matched = [h for h in all_outs if _matches_host_filters(h, filters)]
     ordered = sort_host_outs(matched, sort_by="id", sort_dir="asc")

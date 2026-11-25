@@ -244,17 +244,19 @@ def test_get_agent_code_version_returns_short_hash():
 
 
 def test_get_agent_code_version_falls_back_to_bundle_version_file(tmp_path, monkeypatch):
-    """#3401 A4：bundle / release 布局不是 git 仓库 → 回退读 <agent 源树>/VERSION。
-
-    没有这条回退时，控制面在 bundle 布局下 `code_version` 为空、远端 write-version
-    被跳过 → 主机 VERSION/`agent_code_revision` 停在上一代（2026-09-26 实测）。
-    """
+    """#3401 A4：bundle / release 布局不是 git 仓库 → 回退读 <agent 源树>/VERSION，且不得 fork git。"""
+    import subprocess
     import backend.services.host_updater as hu_mod
 
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()
     (agent_dir / "VERSION").write_text("0fa1d741\n", encoding="utf-8")
     monkeypatch.setattr(hu_mod, "_AGENT_SOURCE_DIR", agent_dir)
+
+    def _forbid_git(*args, **kwargs):
+        raise AssertionError("bundle layout without .git must not spawn git subprocess")
+
+    monkeypatch.setattr(subprocess, "run", _forbid_git)
 
     assert hu_mod.get_agent_code_version() == "0fa1d741"
 
