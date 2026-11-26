@@ -1,5 +1,8 @@
 # Agent Note: #4182 Phase 2 — UI 从模板创建 Plan、复制为草稿与脚本轻标签筛选
 
+Status: implemented
+Class: feature
+
 - **关联 Issue**：[#4182](https://github.com/DUElost/stability-test-platform/issues/4182)
 - **日期**：2026-11-26
 
