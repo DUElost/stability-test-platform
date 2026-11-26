@@ -1,15 +1,19 @@
-"""sync_device_time v1.0.0：测试前置设备时区与系统时钟强制同步。
+"""sync_device_time v1.0.0 / v1.0.1：测试前置设备时区与系统时钟强制同步。
 
 验证：
 - 主路径（cmd alarm set-timezone + set-time，无需 root）成功 + 回读核验 + metrics 留痕；
+- v1.0.1 控制面权威时钟优先：即使 Agent 主机时钟偏斜数小时，仍按控制面 ``/health`` HTTP
+  ``Date`` 头同步设备并记录 ``host_drift_vs_control_plane_seconds`` + 告警标记；
+- 控制面不可达时平滑回退主机时钟；``require_control_plane_time=true`` 时 fail-closed；
 - 主路径失败（如 Android ≤ 11 或裁剪权限）→ 自动走 root 兜底（adb root + setprop + date + hwclock）并回读通过；
 - 主路径与兜底均失败（非 root 无法提权 / 回读仍偏斜）→ 显式失败并带完整设备诊断信息；
-- 参数校验：缺 serial、非法 timezone（含命令注入形态）、非法 max_drift_seconds 一律 fail-closed；
+- 参数校验：缺 serial、非法 timezone（含命令注入形态）、非法 api_url scheme、非法 max_drift_seconds 一律 fail-closed；
 - 进度戳（PROGRESS）与 `_wait_adbd_ready` 双上界（不触发推进时钟死循环）。
 """
 
 from __future__ import annotations
 
+import email.utils
 import importlib.util
 import json
 import subprocess
@@ -20,7 +24,7 @@ _SCRIPT_PATH = (
     / "agent" / "scripts" / "sync_device_time" / "sync_device_time.py"
 )
 
-_spec = importlib.util.spec_from_file_location("sync_device_time_v100", _SCRIPT_PATH)
+_spec = importlib.util.spec_from_file_location("sync_device_time_v101", _SCRIPT_PATH)
 assert _spec is not None and _spec.loader is not None
 sdt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sdt)
@@ -69,16 +73,31 @@ def _wire_device(
     root_date_rc: int = 0,
     hwclock_rc: int = 0,
     force_verify_drift: int | None = None,
+    cp_epoch: int | None = None,
+    cp_error: Exception | None = None,
 ):
-    """构造可观测的模拟设备状态机（通过 subprocess_run 注入）。"""
+    """构造可观测的模拟设备状态机（通过 subprocess_run / http_get_date_header 注入）。"""
     state = {
         "uid": uid,
         "tz": tz_before,
         "epoch": dev_epoch_before,
         "calls": [],
+        "http_urls": [],
     }
+    ref_epoch = cp_epoch if cp_epoch is not None else host_epoch
+    monkeypatch.delenv("API_URL", raising=False)
     monkeypatch.setattr(sdt.time, "time", lambda: float(host_epoch))
     monkeypatch.setattr(sdt.time, "sleep", lambda _s: None)
+
+    def fake_http_date(url: str, timeout: float):
+        state["http_urls"].append((url, timeout))
+        if cp_error is not None:
+            raise cp_error
+        if cp_epoch is not None:
+            return email.utils.formatdate(cp_epoch, usegmt=True)
+        return None
+
+    monkeypatch.setattr(sdt, "http_get_date_header", fake_http_date)
 
     def fake_run(argv, **_kwargs):
         state["calls"].append(argv)
@@ -99,7 +118,7 @@ def _wire_device(
                 )
             if len(sargs) == 1 and "TZ=" in sargs[0] and "EPOCH=" in sargs[0]:
                 reported_epoch = (
-                    host_epoch + force_verify_drift
+                    ref_epoch + force_verify_drift
                     if force_verify_drift is not None
                     else state["epoch"]
                 )
@@ -144,6 +163,7 @@ class TestSyncDeviceTime:
         assert payload["skipped"] is False
         m = payload["metrics"]
         assert m["method"] == "cmd_alarm"
+        assert m["time_source"] == "host_fallback"
         assert m["timezone_before"] == "UTC"
         assert m["timezone_after"] == "Asia/Shanghai"
         assert m["drift_before_seconds"] == -575200
@@ -156,6 +176,85 @@ class TestSyncDeviceTime:
         stamps = [ln for ln in captured.err.splitlines() if ln.startswith("PROGRESS ")]
         assert any('"stage": "sync-alarm"' in s for s in stamps)
         assert any('"stage": "done"' in s for s in stamps)
+
+    def test_control_plane_clock_overrides_skewed_agent_host(self, monkeypatch, capsys):
+        """Agent 主机慢 5 小时时，仍以控制面 Date 权威钟对齐设备并暴露主机钟偏告警。"""
+        cp_now = 1795661555
+        skewed_host = cp_now - 18000  # 主机慢 5 小时
+        state = _wire_device(
+            monkeypatch,
+            host_epoch=skewed_host,
+            dev_epoch_before=cp_now - 90000,
+            cp_epoch=cp_now,
+            uid=2000,
+            tz_before="UTC",
+        )
+        monkeypatch.setenv("STP_DEVICE_SERIAL", "SER-CP-TIME")
+        monkeypatch.setenv("API_URL", "http://127.0.0.1:8000/")
+        monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({"timezone": "Asia/Shanghai"}))
+
+        sdt.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+
+        assert payload["success"] is True
+        m = payload["metrics"]
+        assert m["time_source"] == "control_plane"
+        assert m["host_drift_vs_control_plane_seconds"] == -18000
+        assert m["host_clock_skew_warning"] is True
+        assert m["control_plane_time_error"] is None
+        assert m["drift_before_seconds"] == -90000
+        assert m["drift_after_seconds"] == 0
+        # 写入设备的是控制面时钟，而不是偏斜的宿主机时钟
+        assert state["epoch"] == cp_now
+        assert state["http_urls"][0][0] == "http://127.0.0.1:8000/health"
+
+    def test_control_plane_unreachable_falls_back_to_host_clock(self, monkeypatch, capsys):
+        state = _wire_device(
+            monkeypatch,
+            host_epoch=1795575200,
+            cp_error=OSError("connection refused"),
+        )
+        monkeypatch.setenv("STP_DEVICE_SERIAL", "SER-FB-HOST")
+        monkeypatch.setenv("API_URL", "http://127.0.0.1:8000")
+        monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({"timezone": "Asia/Shanghai"}))
+
+        sdt.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+
+        assert payload["success"] is True
+        m = payload["metrics"]
+        assert m["time_source"] == "host_fallback"
+        assert "connection refused" in m["control_plane_time_error"]
+        assert state["epoch"] == 1795575200
+
+    def test_require_control_plane_time_fails_closed_when_unreachable(self, monkeypatch, capsys):
+        state = _wire_device(monkeypatch, cp_error=OSError("timed out"))
+        monkeypatch.setenv("STP_DEVICE_SERIAL", "SER-REQ-CP")
+        monkeypatch.setenv("API_URL", "http://127.0.0.1:8000")
+        monkeypatch.setenv(
+            "STP_STEP_PARAMS",
+            json.dumps({"timezone": "Asia/Shanghai", "require_control_plane_time": True}),
+        )
+
+        sdt.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+
+        assert payload["success"] is False
+        assert "Control-plane clock required" in payload["error_message"]
+        assert state["calls"] == []
+
+    def test_rejects_invalid_api_url_scheme(self, monkeypatch, capsys):
+        called = []
+        monkeypatch.setattr(sdt, "subprocess_run", lambda *a, **kw: called.append(a))
+        monkeypatch.setenv("STP_DEVICE_SERIAL", "SER-BADURL")
+        monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({"api_url": "file:///etc/passwd"}))
+
+        sdt.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+
+        assert payload["success"] is False
+        assert "invalid api_url" in payload["error_message"]
+        assert called == []
 
     def test_fallback_to_root_when_cmd_alarm_unsupported(self, monkeypatch, capsys):
         state = _wire_device(

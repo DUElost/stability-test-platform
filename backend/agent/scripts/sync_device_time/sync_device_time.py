@@ -1,4 +1,14 @@
-"""Synchronize Android device timezone and system wall clock to Agent host clock.
+"""Synchronize Android device timezone and system wall clock to STP authoritative clock.
+
+v1.0.1：时钟源升级为**控制面优先**（切断「单台 Agent 主机钟漂移 → 污染整机 Android 设备」
+的间接传导风险）：
+  - 启动时向 ``{API_URL}/health``（无需鉴权、毫秒级响应）发起一次轻量 GET，解析 HTTP
+    ``Date`` 响应头（RFC 7231）并按半程 RTT 修正，再以单调钟 ``time.monotonic()`` 推进，
+    作为全流程权威 UTC 时钟源；
+  - 同步计算并记录 ``host_drift_vs_control_plane_seconds`` 与 ``host_clock_skew_warning``
+    到 ``metrics``，主机自身钟偏时立即留痕暴露；
+  - 控制面未配置或不可达时，默认平滑回退 Agent 主机 ``time.time()``（``time_source=
+    "host_fallback"``）；若计划显式设置 ``require_control_plane_time=true``，则 fail-closed。
 
 v1.0.0：稳定性测试前置强制校时（位于 check_device 之后、clean_env / aee_prepare 之前）。
 实证背景（2026-11-25 全机群 16 机型抽样）：离线/无 NTP 设备普遍存在 3 小时至 747 天
@@ -7,7 +17,7 @@ v1.0.0：稳定性测试前置强制校时（位于 check_device 之后、clean_
 执行策略（极简两分支 + 回读闭环核验）：
   1. 主路径（Android 12–16+ 通用，无需 root、无需网络）：
      - ``cmd alarm set-timezone <IANA_TZ>``
-     - ``cmd alarm set-time <host_epoch_ms>``
+     - ``cmd alarm set-time <authoritative_epoch_ms>``
      实测覆盖 MTK/UNISOC × HONOR/Infinix × SDK 34–36 × uid=0/uid=2000，耗时 100–370ms，
      同时更新系统时钟、``persist.sys.timezone`` 与底层硬件 ``/dev/rtc0``，且不破坏
      ``auto_time`` / ``auto_time_zone`` 设置。
@@ -15,22 +25,26 @@ v1.0.0：稳定性测试前置强制校时（位于 check_device 之后、clean_
      用于 Android ≤ 11 老版本或个别裁剪 ``Shell`` 权限的固件）：
      - 确认/尝试 ``adb root``（``id -u == 0``）
      - ``setprop persist.sys.timezone <IANA_TZ>``
-     - ``date -u @<host_epoch_s>``
+     - ``date -u @<authoritative_epoch_s>``
      - ``hwclock -w``（best-effort 写回硬件 RTC）
   3. 回读闭环核验（权威判据）：
      - 回读 ``getprop persist.sys.timezone`` 与 ``date +%s``
-     - 必须满足 ``tz == target_tz`` 且 ``abs(dev_epoch - host_epoch) <= max_drift_seconds``；
+     - 必须满足 ``tz == target_tz`` 且 ``abs(dev_epoch - ref_epoch) <= max_drift_seconds``；
        不达标即显式失败，不静默放行。
 
 Environment:
     STP_DEVICE_SERIAL     (required) 目标设备串号；缺省直接失败
     STP_ADB_PATH          (optional, default: adb)
+    API_URL               (optional) 控制面 origin（如 http://host:8000），存在时优先从
+                          ``/health`` HTTP ``Date`` 响应头取控制面权威时钟
     STP_STEP_PARAMS       (optional, JSON):
         {
-          "timezone": "Asia/Shanghai",    // 可选；缺省取 Agent 主机时区，回落 Asia/Shanghai
-          "max_drift_seconds": 5,         // 可选；回读允许偏差上限（秒，默认 5，最小 1）
-          "allow_root_fallback": true,    // 可选；cmd alarm 失败时是否尝试 root 兜底（默认 true）
-          "command_timeout_seconds": 15   // 可选；单条 adb 命令超时（秒，默认 15，最小 3）
+          "timezone": "Asia/Shanghai",          // 可选；缺省取 Agent 主机时区，回落 Asia/Shanghai
+          "max_drift_seconds": 5,               // 可选；回读允许偏差上限（秒，默认 5，最小 1）
+          "allow_root_fallback": true,          // 可选；cmd alarm 失败时是否尝试 root 兜底（默认 true）
+          "command_timeout_seconds": 15,        // 可选；单条 adb 命令超时（秒，默认 15，最小 3）
+          "api_url": "",                        // 可选；显式覆盖控制面地址（仅允许 http/https）
+          "require_control_plane_time": false   // 可选；为 true 时控制面时钟不可得直接失败（默认 false）
         }
 
 Output (stdout JSON):
@@ -39,19 +53,24 @@ Output (stdout JSON):
 
 from __future__ import annotations
 
+import email.utils
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
+from datetime import timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _PROGRESS_PREFIX = "PROGRESS "
 _DEFAULT_TIMEZONE = "Asia/Shanghai"
 _DEFAULT_MAX_DRIFT_SECONDS = 5
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 15
+_CONTROL_PLANE_HTTP_TIMEOUT_SECONDS = 3.0
 _ROOT_WAIT_DEADLINE_SECONDS = 15.0
 _ROOT_WAIT_MAX_POLLS = 15
 
@@ -59,10 +78,20 @@ _ROOT_WAIT_MAX_POLLS = 15
 _TZ_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}$")
 _CMD_ERROR_MARKERS = ("securityexception", "unknown command", "permission denial", "exception")
 
+ClockFn = Callable[[], float]
+
 
 def subprocess_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
     """间接层：单测可注入，避免全局替换 subprocess。"""
     return subprocess.run(argv, **kwargs)
+
+
+def http_get_date_header(url: str, timeout: float) -> str | None:
+    """间接层：向控制面 ``/health`` 发轻量 GET 并取 HTTP ``Date`` 响应头（单测可注入）。"""
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — scheme 已校验为 http/https
+        headers = resp.headers
+        return headers.get("Date") if headers is not None else None
 
 
 def _emit_progress(seq: list[int], stage: str, **fields: Any) -> None:
@@ -106,6 +135,77 @@ def _parse_positive_int(value: Any, *, name: str, default: int, minimum: int) ->
     if parsed < minimum:
         raise ValueError(f"{name} must be >= {minimum} (got {parsed})")
     return parsed
+
+
+def validated_api_url(raw: Any, *, strict: bool) -> str | None:
+    """校验控制面 URL（仅允许 http/https 且带 netloc，拒绝 file:// 等非法 scheme）。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if any(ch in text for ch in ("\r", "\n", " ", "\t")):
+        if strict:
+            raise ValueError(f"invalid api_url {text!r}: whitespace not allowed")
+        return None
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        if strict:
+            raise ValueError(f"invalid api_url {text!r}: must be http(s)://host[:port]")
+        return None
+    return text.rstrip("/")
+
+
+def _parse_http_date_epoch(date_header: str) -> float:
+    dt = email.utils.parsedate_to_datetime(date_header.strip())
+    if dt is None:
+        raise ValueError(f"unparseable Date header: {date_header!r}")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _resolve_clock_reference(
+    api_url: str | None,
+    *,
+    max_drift_seconds: int,
+    timeout: float = _CONTROL_PLANE_HTTP_TIMEOUT_SECONDS,
+) -> tuple[ClockFn, dict[str, Any]]:
+    """优先从控制面 ``/health`` HTTP ``Date`` 头建立权威时钟，失败时回落主机时钟。"""
+    meta: dict[str, Any] = {
+        "time_source": "host_fallback",
+        "host_drift_vs_control_plane_seconds": None,
+        "host_clock_skew_warning": False,
+        "control_plane_rtt_ms": None,
+        "control_plane_time_error": None,
+    }
+    if not api_url:
+        meta["control_plane_time_error"] = "API_URL not configured"
+        return time.time, meta
+
+    health_url = f"{api_url}/health"
+    t0 = time.monotonic()
+    try:
+        raw_date = http_get_date_header(health_url, timeout=timeout)
+        t1 = time.monotonic()
+        host_now = time.time()
+        if not raw_date:
+            raise ValueError("missing HTTP Date header")
+        cp_epoch_raw = _parse_http_date_epoch(raw_date)
+    except Exception as exc:  # noqa: BLE001 — 网络/解析失败显式落盘，由调用方决定回退或阻断
+        meta["control_plane_time_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        return time.time, meta
+
+    rtt = max(0.0, t1 - t0)
+    cp_anchor = cp_epoch_raw + rtt / 2.0
+    host_drift = round(host_now - cp_anchor)
+    meta["time_source"] = "control_plane"
+    meta["host_drift_vs_control_plane_seconds"] = host_drift
+    meta["host_clock_skew_warning"] = abs(host_drift) > max_drift_seconds
+    meta["control_plane_rtt_ms"] = round(rtt * 1000)
+
+    def _cp_now() -> float:
+        return cp_anchor + max(0.0, time.monotonic() - t1)
+
+    return _cp_now, meta
 
 
 def _detect_host_timezone() -> str:
@@ -206,6 +306,7 @@ def _read_device_state(
     serial: str,
     adb_path: str,
     timeout: int,
+    now_epoch: ClockFn = time.time,
 ) -> dict[str, Any]:
     """一次读取设备基线诊断信息（uid/sdk/build/tz/epoch）。"""
     probe_script = (
@@ -216,7 +317,7 @@ def _read_device_state(
         'echo "TZ=$(getprop persist.sys.timezone)"; '
         'echo "EPOCH=$(date +%s)"'
     )
-    host_epoch = round(time.time())
+    ref_epoch = round(now_epoch())
     rc, stdout, stderr = _adb_shell(serial, adb_path, [probe_script], timeout=timeout)
     kv: dict[str, str] = {}
     for ln in stdout.splitlines():
@@ -225,7 +326,7 @@ def _read_device_state(
             kv[k.strip()] = v.strip()
     dev_epoch = _parse_int_or_none(kv.get("EPOCH", ""))
     uid = _parse_int_or_none(kv.get("UID", ""))
-    drift = (dev_epoch - host_epoch) if dev_epoch is not None else None
+    drift = (dev_epoch - ref_epoch) if dev_epoch is not None else None
     return {
         "rc": rc,
         "error": _snippet(stdout, stderr) if rc != 0 else "",
@@ -235,7 +336,7 @@ def _read_device_state(
         "debuggable": kv.get("DBG") or None,
         "timezone": kv.get("TZ") or None,
         "dev_epoch": dev_epoch,
-        "host_epoch": host_epoch,
+        "ref_epoch": ref_epoch,
         "drift_seconds": drift,
     }
 
@@ -246,10 +347,11 @@ def _verify_clock(
     target_tz: str,
     max_drift_seconds: int,
     timeout: int,
+    now_epoch: ClockFn = time.time,
 ) -> dict[str, Any]:
-    """回读设备时区与秒级时间戳并与主机比对。"""
+    """回读设备时区与秒级时间戳并与权威时钟比对。"""
     probe_script = 'echo "TZ=$(getprop persist.sys.timezone)"; echo "EPOCH=$(date +%s)"'
-    host_epoch = round(time.time())
+    ref_epoch = round(now_epoch())
     rc, stdout, stderr = _adb_shell(serial, adb_path, [probe_script], timeout=timeout)
     kv: dict[str, str] = {}
     for ln in stdout.splitlines():
@@ -258,7 +360,7 @@ def _verify_clock(
             kv[k.strip()] = v.strip()
     tz_after = kv.get("TZ") or ""
     dev_epoch = _parse_int_or_none(kv.get("EPOCH", ""))
-    drift = (dev_epoch - host_epoch) if dev_epoch is not None else None
+    drift = (dev_epoch - ref_epoch) if dev_epoch is not None else None
     tz_ok = rc == 0 and tz_after == target_tz
     time_ok = rc == 0 and drift is not None and abs(drift) <= max_drift_seconds
     return {
@@ -266,7 +368,7 @@ def _verify_clock(
         "error": _snippet(stdout, stderr) if rc != 0 else "",
         "timezone_after": tz_after or None,
         "dev_epoch_after": dev_epoch,
-        "host_epoch_after": host_epoch,
+        "ref_epoch_after": ref_epoch,
         "drift_after_seconds": drift,
         "timezone_ok": tz_ok,
         "time_ok": time_ok,
@@ -293,6 +395,7 @@ def _sync_via_cmd_alarm(
     target_tz: str,
     timeout: int,
     commands: list[dict[str, Any]],
+    now_epoch: ClockFn = time.time,
 ) -> tuple[bool, str]:
     """主路径：通过 AlarmManagerService shell 命令同步时区与毫秒时间戳。"""
     rc_tz, out_tz, err_tz = _adb_shell(
@@ -306,9 +409,9 @@ def _sync_via_cmd_alarm(
         "tail": _snippet(out_tz, err_tz),
     })
 
-    host_ms = int(time.time() * 1000)
+    ref_ms = int(now_epoch() * 1000)
     rc_t, out_t, err_t = _adb_shell(
-        serial, adb_path, ["cmd", "alarm", "set-time", str(host_ms)], timeout=timeout
+        serial, adb_path, ["cmd", "alarm", "set-time", str(ref_ms)], timeout=timeout
     )
     time_failed = _cmd_looks_failed(rc_t, out_t, err_t)
     commands.append({
@@ -335,6 +438,7 @@ def _sync_via_root_fallback(
     current_uid: int | None,
     timeout: int,
     commands: list[dict[str, Any]],
+    now_epoch: ClockFn = time.time,
 ) -> tuple[bool, str]:
     """兜底路径（Android ≤ 11 或裁剪权限固件）：root 下 setprop + date + hwclock。"""
     is_root = current_uid == 0
@@ -370,9 +474,9 @@ def _sync_via_root_fallback(
         "tail": _snippet(out_tz, err_tz),
     })
 
-    host_s = int(time.time())
+    ref_s = int(now_epoch())
     rc_t, out_t, err_t = _adb_shell(
-        serial, adb_path, ["date", "-u", f"@{host_s}"], timeout=timeout
+        serial, adb_path, ["date", "-u", f"@{ref_s}"], timeout=timeout
     )
     commands.append({
         "name": "root-date-set",
@@ -429,16 +533,45 @@ def main() -> None:
             default=_DEFAULT_COMMAND_TIMEOUT_SECONDS,
             minimum=3,
         )
+        explicit_api_url = args.get("api_url")
+        if explicit_api_url is not None and str(explicit_api_url).strip() != "":
+            api_url = validated_api_url(explicit_api_url, strict=True)
+        else:
+            api_url = validated_api_url(os.environ.get("API_URL"), strict=False)
     except ValueError as exc:
         _output(False, error_message=f"Invalid step params: {exc}", metrics={"serial": serial})
         return
 
     allow_root_fallback = _as_bool(args.get("allow_root_fallback"), default=True)
+    require_cp_time = _as_bool(args.get("require_control_plane_time"), default=False)
     commands: list[dict[str, Any]] = []
 
+    # 0. 解析权威时钟源（优先控制面 HTTP Date，避免单台 Agent 主机钟歪传导给全部设备）
+    _emit_progress(seq, "resolve-clock", has_api_url=bool(api_url))
+    now_epoch, clock_meta = _resolve_clock_reference(
+        api_url,
+        max_drift_seconds=max_drift,
+        timeout=min(_CONTROL_PLANE_HTTP_TIMEOUT_SECONDS, float(cmd_timeout)),
+    )
+    if require_cp_time and clock_meta["time_source"] != "control_plane":
+        _output(
+            False,
+            error_message=(
+                "Control-plane clock required but unavailable: "
+                f"{clock_meta['control_plane_time_error']}"
+            ),
+            metrics={
+                "serial": serial,
+                "target_timezone": target_tz,
+                **clock_meta,
+                "duration_seconds": round(time.monotonic() - started, 3),
+            },
+        )
+        return
+
     # 1. 基线探测
-    _emit_progress(seq, "probe-before", target_timezone=target_tz)
-    before = _read_device_state(serial, adb_path, cmd_timeout)
+    _emit_progress(seq, "probe-before", target_timezone=target_tz, time_source=clock_meta["time_source"])
+    before = _read_device_state(serial, adb_path, cmd_timeout, now_epoch=now_epoch)
     if before["rc"] != 0:
         _output(
             False,
@@ -446,6 +579,7 @@ def main() -> None:
             metrics={
                 "serial": serial,
                 "target_timezone": target_tz,
+                **clock_meta,
                 "duration_seconds": round(time.monotonic() - started, 3),
             },
         )
@@ -454,11 +588,15 @@ def main() -> None:
     # 2. 主路径：cmd alarm
     _emit_progress(seq, "sync-alarm", target_timezone=target_tz)
     method = "cmd_alarm"
-    alarm_ok, alarm_err = _sync_via_cmd_alarm(serial, adb_path, target_tz, cmd_timeout, commands)
+    alarm_ok, alarm_err = _sync_via_cmd_alarm(
+        serial, adb_path, target_tz, cmd_timeout, commands, now_epoch=now_epoch
+    )
 
     # 3. 回读核验
     _emit_progress(seq, "verify", method=method)
-    verify = _verify_clock(serial, adb_path, target_tz, max_drift, cmd_timeout)
+    verify = _verify_clock(
+        serial, adb_path, target_tz, max_drift, cmd_timeout, now_epoch=now_epoch
+    )
 
     # 4. 兜底路径（仅主路径未达标且允许兜底）
     fallback_err = ""
@@ -466,11 +604,13 @@ def main() -> None:
         _emit_progress(seq, "sync-root-fallback", reason=alarm_err or "verify_mismatch")
         method = "root_fallback"
         fb_ok, fallback_err = _sync_via_root_fallback(
-            serial, adb_path, target_tz, before["uid"], cmd_timeout, commands
+            serial, adb_path, target_tz, before["uid"], cmd_timeout, commands, now_epoch=now_epoch
         )
         if fb_ok:
             _emit_progress(seq, "verify-fallback", method=method)
-            verify = _verify_clock(serial, adb_path, target_tz, max_drift, cmd_timeout)
+            verify = _verify_clock(
+                serial, adb_path, target_tz, max_drift, cmd_timeout, now_epoch=now_epoch
+            )
 
     duration = round(time.monotonic() - started, 3)
     metrics: dict[str, Any] = {
@@ -487,6 +627,7 @@ def main() -> None:
         "device_build_type": before["build_type"],
         "device_debuggable": before["debuggable"],
         "alarm_cmd_ok": alarm_ok,
+        **clock_meta,
         "duration_seconds": duration,
         "commands": commands,
     }
@@ -496,6 +637,7 @@ def main() -> None:
         detail_parts = [
             f"tz={verify['timezone_after']!r} (want {target_tz!r})",
             f"drift={verify['drift_after_seconds']}s (max ±{max_drift}s)",
+            f"source={clock_meta['time_source']}",
             f"sdk={before['sdk']} build={before['build_type']}/{before['debuggable']} uid={before['uid']}",
         ]
         if alarm_err:

@@ -2632,6 +2632,14 @@
           "retired": false,
           "script": "sync_device_time.py",
           "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/sync_device_time/1.0.1.tar.gz",
+          "package_sha256": "bb573e9f626b048e8cc907fd912d2404fd06d92c43c31c34e44b86e4fe78bcc2",
+          "python": null,
+          "retired": false,
+          "script": "sync_device_time.py",
+          "version": "1.0.1"
         }
       ]
     },
