@@ -1021,4 +1021,28 @@ describe('B3-2 服务端分页模式（serverMode + 10 项 Facets + upgrade_pend
     const drawer = screen.getByTestId('fleet-host-drawer');
     expect(within(drawer).getByText('跨页深链主机-999')).toBeInTheDocument();
   });
+
+  it('表格滚动区采用弹性锁高且分页底栏固定在卡片底部（无 calc(100vh-...)）', () => {
+    const { container } = render(
+      <ExpandableHostTable
+        hosts={[host]}
+        serverMode
+        serverFilteredTotal={78}
+        page={1}
+        pageSize={50}
+        onPageChange={vi.fn()}
+        onPageSizeChange={vi.fn()}
+      />,
+    );
+
+    const scrollBox = container.querySelector('[data-slot="table-scroll-container"]');
+    expect(scrollBox).not.toBeNull();
+    expect(scrollBox?.className).toContain('flex-1');
+    expect(scrollBox?.className).toContain('min-h-0');
+    expect(scrollBox?.className).not.toContain('calc(100vh');
+
+    const paginationBar = screen.getByTestId('hosts-pagination-bar');
+    expect(paginationBar.className).toContain('shrink-0');
+    expect(paginationBar.parentElement).toBe(scrollBox?.parentElement);
+  });
 });

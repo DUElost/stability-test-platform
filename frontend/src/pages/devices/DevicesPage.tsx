@@ -789,15 +789,15 @@ export default function DevicesPage() {
   const pageDeviceMap = new Map(formattedDevices.map((d) => [d.id, d]));
 
   return (
-    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
+    <PageContainer width="wide" scrollable={false} className="py-2.5 lg:py-2.5">
       <PageHeader
         title="物理设备"
         subtitle="管理和监控测试设备 · 点击设备行查看详情，勾选后可批量处理"
         action={addDeviceAction}
       />
 
-      {/* Device Table（服务端分页 + 独立三级 Facets） */}
-      <div>
+      {/* Device Table（视口锁高 + 服务端分页 + 独立三级 Facets + 固定分页底栏） */}
+      <div className="flex flex-1 min-h-0 flex-col">
         <ExpandableDeviceTable
           serverMode
           serverFacets={facetsQ.data}
