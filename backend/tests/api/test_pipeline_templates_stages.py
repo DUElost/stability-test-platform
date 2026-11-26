@@ -126,3 +126,28 @@ def test_stability_templates_pin_sync_device_time_after_check_device():
         assert "script:sync_device_time" not in actions, (
             f"flash template {path.name} should not force sync_device_time before flashing"
         )
+
+
+def test_stability_templates_pin_unisoc_sysdump_config_after_sync_device_time():
+    template_files = sorted(TEMPLATES_DIR.glob("*.json"))
+    stability_templates = [p for p in template_files if not p.name.startswith("flash_")]
+    flash_templates = [p for p in template_files if p.name.startswith("flash_")]
+    assert stability_templates
+
+    for path in stability_templates:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        init = data["lifecycle"]["init"]
+        assert len(init) >= 3, (
+            f"{path.name} should include check_device, sync_device_time, and unisoc_sysdump_config"
+        )
+        assert init[2]["step_id"] == "unisoc_sysdump_config"
+        assert init[2]["action"] == "script:unisoc_sysdump_config"
+        assert init[2]["version"] == "1.0.0"
+        assert init[2]["params"].get("enabled") is True
+
+    for path in flash_templates:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        actions = [s.get("action") for s in data["lifecycle"]["init"]]
+        assert "script:unisoc_sysdump_config" not in actions, (
+            f"flash template {path.name} should not enable sysdump before flashing"
+        )

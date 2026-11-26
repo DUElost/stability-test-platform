@@ -2692,6 +2692,19 @@
           "version": "1.0.2"
         }
       ]
+    },
+    "unisoc_sysdump_config": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/unisoc_sysdump_config/1.0.0.tar.gz",
+          "package_sha256": "51f32b3de43f43b245a62a541a964d38d1fe827747deb4f4f2ecaf5d401f25b0",
+          "python": null,
+          "retired": false,
+          "script": "unisoc_sysdump_config.py",
+          "version": "1.0.0"
+        }
+      ]
     }
   }
 }

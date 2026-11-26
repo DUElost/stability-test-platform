@@ -157,6 +157,12 @@ curl -s -X POST '<base>/api/v1/plans' ... -d '{
 易踩点（schema 都是 `extra=forbid`，字段名打错直接 422）：
 
 - `steps[].stage` 只接受 `init|patrol|teardown`；`retry` 上限 5。
+- **稳定性测试专项强制设备校时前置**：所有产出设备日志的稳定性测试 Plan（Monkey、MTBF、PowerCycle、
+  Sleep、GPU、Aging DDR、DDR、Standby 等），操作者必须在 `init` 阶段 `check_device` 之后、
+  任何日志与负载初始化步骤（`clean_env`、`aee_prepare`、专项 `*_setup`）之前加入
+  `script:sync_device_time`（当前头版本 `1.0.1`，`timeout_seconds: 60`，`retry: 1`，显式传
+  `params: {"timezone": "Asia/Shanghai"}`），以控制面 `/health` HTTP `Date` 为权威时钟源对齐设备
+  时间与时区；刷机类前置 Plan 除外。详细开跑检查见 `.claude/skills/stability-plan-launch/SKILL.md`。
 - `stall_seconds=None/0` 表示关闭停滞钟；配了但脚本无能力会在预览/派发期报错。
 - **「文件停滞判死」的脚本要先看写入节奏（#761）**：`powercycle_check` 这类以「结果文件
   mtime 停滞」判死的脚本，`patrol_interval_seconds` **必须小于**该脚本写结果文件的间隔。
@@ -208,6 +214,7 @@ watcher 信号正常上送（`/plan-runs/{id}/events` 有增量）；终态报�
 ## 7. Step 6 —— 专项上线检查单
 
 - [ ] `POST /scripts/scan` 返回 `conflicts: []`
+- [ ] （稳定性测试专项）`init` 阶段已在 `check_device` 之后、`clean_env` / `aee_prepare` / 专项 `*_setup` 之前加入 `script:sync_device_time@1.0.1`（显式配置 `params.timezone`）
 - [ ] 所有引用脚本的能力声明齐备（配了 stall 的都有 progress_stamps）
 - [ ] Plan 归属正确：`project_key` 已填、`specialty_key` 属于既有字典
 - [ ] （要提单的项目）`jira_project_key` 已补
