@@ -22,6 +22,17 @@ Implements Scheme 2 flashing inside the STP agent script contract:
 7. Verify positive reboot evidence and read back manifest.version_prop == manifest.version
    after cold boot, plus optional build_type / incremental / root checks.
 
+v1.0.10（2026-11-26 / #3995）：基于 2026-11-25 P525AAN 批量刷机复盘（PlanRun 1679）两项加固——
+1. 锁内覆盖刷后冷启动稳定窗：新增 `hold_lock_until_boot`（默认 `True`）与
+   `boot_stabilize_seconds`（默认 `5.0`，0 关闭），在释放 `/tmp/stp-flash-firmware.lock`
+   前等待 `sys.boot_completed=1` 并静置稳定，避免前一台冷启动二次 USB 重枚举撞上后一台
+   `spd_dump` 写分区触发 `timeout reached` 死锁；
+2. 口级绑定模式下收窄锁内 `1782:4d00` 门禁：当 `require_port_binding=True` 且已解析唯一
+   `usb_port`（传 `--usb-port` 且退出后核验 `Opened 1782:4d00 on usb-port <port>`）时，
+   `check_no_unisoc_download_port` 仅拦截目标物理口本身，非目标口残留孤儿 `1782:4d00`
+   记录告警并写入 `metrics.non_target_download_ports_ignored` 而不连坐整机；未绑口模式
+   （`require_port_binding=False`）仍维持全总线 fail-closed。
+
 v1.0.9（2026-11-24 / #3995）：主机锁交接双保险防 `1782:4d00` sysfs 尾影竞态——
 `run_spd_dump` 正常返回后释放 `/tmp/stp-flash-firmware.lock` 前等待自身下载口从
 sysfs 摘除（上限 10s）；锁内 `check_no_unisoc_download_port` 增加短宽限轮询
@@ -72,6 +83,7 @@ _DEFAULT_BATTERY_MIN_LEVEL = 5
 _DEFAULT_SPD_DUMP_TIMEOUT_SECONDS = 3600
 _DEFAULT_DOWNLOAD_PORT_CLEAR_WAIT_SECONDS = 5.0
 _POST_FLASH_PORT_CLEAR_WAIT_SECONDS = 10.0
+_DEFAULT_BOOT_STABILIZE_SECONDS = 5.0
 _DOWNLOAD_PORT_POLL_INTERVAL = 0.25
 
 _ALLOWED_ERASE_PARTITIONS = frozenset({
@@ -673,13 +685,36 @@ def find_unisoc_download_ports(base: Optional[str] = None) -> List[str]:
     return hits
 
 
+def _parse_non_negative_finite_float(
+    raw: object,
+    name: str,
+    default: float,
+    route: Optional[dict] = None,
+) -> float:
+    if raw is None or str(raw).strip() == "":
+        return default
+    if isinstance(raw, bool):
+        raise FlashRejectedError(f"{name} must be a finite non-negative number, got {raw!r}", route=route)
+    try:
+        val = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise FlashRejectedError(
+            f"{name} must be a finite non-negative number, got {raw!r}", route=route
+        ) from exc
+    if not math.isfinite(val) or val < 0:
+        raise FlashRejectedError(f"{name} must be a finite non-negative number, got {raw!r}", route=route)
+    return val
+
+
 def check_no_unisoc_download_port(
     base: Optional[str] = None,
     route: Optional[dict] = None,
     *,
     wait_seconds: float = 0.0,
     poll_interval: Optional[float] = None,
-) -> None:
+    target_usb_port: Optional[str] = None,
+    log: Optional[list] = None,
+) -> List[str]:
     usb_base = _SYSFS_USB_BASE if base is None else base
     interval = _DOWNLOAD_PORT_POLL_INTERVAL if poll_interval is None else poll_interval
     deadline = time.monotonic() + max(0.0, float(wait_seconds))
@@ -692,16 +727,57 @@ def check_no_unisoc_download_port(
                 f"(expected readable sysfs directory with no {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID})",
                 route=route,
             ) from exc
-        if not hits:
-            return
+        if target_usb_port is not None:
+            blocking = [p for p in hits if p == target_usb_port]
+            ignored = [p for p in hits if p != target_usb_port]
+        else:
+            blocking = hits
+            ignored = []
+        if not blocking:
+            if ignored and log is not None:
+                log.append(
+                    f"WARNING: non-target Unisoc download port(s) {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID} "
+                    f"present on USB bus (ports={ignored}, target={target_usb_port!r}); "
+                    "proceeding under --usb-port binding"
+                )
+            return ignored
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if target_usb_port is not None:
+                raise FlashRejectedError(
+                    f"target Unisoc download port {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID} "
+                    f"already present on USB bus (target={target_usb_port!r}, ports={hits})",
+                    route=route,
+                )
             raise FlashRejectedError(
                 f"Unisoc download port {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID} already present on USB bus "
                 f"(ports={hits}, expected none)",
                 route=route,
             )
         time.sleep(min(interval, remaining))
+
+
+def _wait_boot_stabilize(stabilize_seconds: float, progress: Progress) -> float:
+    """Keep host flash lock briefly after sys.boot_completed=1 so post-boot USB re-enumeration settles."""
+    if stabilize_seconds <= 0:
+        return 0.0
+    t0 = time.monotonic()
+    deadline = t0 + stabilize_seconds
+    progress.stamp(stage="boot-stabilize", target_seconds=round(stabilize_seconds, 1), elapsed_s=0.0)
+    last_stamp = t0
+    while True:
+        now = time.monotonic()
+        remaining = deadline - now
+        if remaining <= 0:
+            break
+        if now - last_stamp >= 5.0:
+            progress.stamp(stage="boot-stabilize", elapsed_s=round(now - t0, 1))
+            last_stamp = now
+        time.sleep(min(1.0, remaining))
+        if time.monotonic() <= now:
+            # Sleep mocked as no-op without advancing clock; avoid infinite spin in unit tests.
+            break
+    return round(time.monotonic() - t0, 1)
 
 
 def _wait_download_port_clear(
@@ -1203,16 +1279,39 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
             battery_level = check_battery(adb_bin, serial, battery_min_level, route=route)
 
         is_dry_run = _bool(args.get("dry_run"), False)
-        if is_dry_run:
-            # #4066: dry_run does not acquire the host lock; normal flashing enforces
-            # the 1782:4d00 gate inside /tmp/stp-flash-firmware.lock so queued siblings
-            # do not fail on a peer legitimately flashing on the same host.
-            check_no_unisoc_download_port(route=route)
+        hold_lock_until_boot = _bool(args.get("hold_lock_until_boot"), True)
+        boot_stabilize_seconds = _parse_non_negative_finite_float(
+            args.get("boot_stabilize_seconds"),
+            "boot_stabilize_seconds",
+            float(_DEFAULT_BOOT_STABILIZE_SECONDS),
+            route=route,
+        )
 
         raw_require_port = args.get("require_port_binding")
         if raw_require_port is None or str(raw_require_port).strip() == "":
             raw_require_port = _env("STP_FLASH_REQUIRE_PORT_BINDING", "")
         require_port_binding = _bool(raw_require_port, True)
+
+        dry_ignored_ports: List[str] = []
+        if is_dry_run:
+            # #4066 / #3995: dry_run checks download ports before strict port resolution
+            # so missing target serial still surfaces bus-wide 1782:4d00 first; when
+            # port binding is enabled and target serial resolves uniquely, only reject
+            # the target port itself and report non-target orphans.
+            dry_target_port: Optional[str] = None
+            if require_port_binding:
+                try:
+                    dry_hits = find_usb_ports_for_serial(serial)
+                except OSError:
+                    dry_hits = []
+                if len(dry_hits) == 1 and _USB_PORT_RE.match(dry_hits[0]):
+                    dry_target_port = dry_hits[0]
+            dry_ignored_ports = check_no_unisoc_download_port(
+                route=route,
+                target_usb_port=dry_target_port,
+                log=log,
+            )
+
         usb_port = resolve_device_usb_port(
             serial,
             require_port_binding=require_port_binding,
@@ -1275,6 +1374,9 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                     "pre_build_type": pre_build_type,
                     "pre_incremental": pre_incremental,
                     "spd_dump_cmd_len": len(cmd),
+                    "hold_lock_until_boot": hold_lock_until_boot,
+                    "boot_stabilize_seconds": boot_stabilize_seconds,
+                    "non_target_download_ports_ignored": dry_ignored_ports,
                 }
             }
 
@@ -1322,6 +1424,9 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
 
                 # ④ 持 LOCK_SH 后再取主机刷机排他锁
                 lock_fd = acquire_host_lock(progress, timeout_seconds=lock_timeout)
+                ignored_download_ports: List[str] = []
+                boot_seconds: Optional[float] = None
+                stabilize_actual = 0.0
                 try:
                     live_usb_port = resolve_device_usb_port(
                         serial,
@@ -1343,7 +1448,13 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                         clear_wait = _DEFAULT_DOWNLOAD_PORT_CLEAR_WAIT_SECONDS
                     else:
                         clear_wait = max(0.0, float(raw_clear_wait))
-                    check_no_unisoc_download_port(route=route, wait_seconds=clear_wait)
+                    gate_target_port = usb_port if (require_port_binding and usb_port is not None) else None
+                    ignored_download_ports = check_no_unisoc_download_port(
+                        route=route,
+                        wait_seconds=clear_wait,
+                        target_usb_port=gate_target_port,
+                        log=log,
+                    )
                     reboot_anchor = time.monotonic()
                     _LAST_REBOOT_SENT_AT["value"] = None
                     flash_seconds = (
@@ -1371,6 +1482,11 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                         last_reboot_ts if last_reboot_ts is not None else reboot_anchor
                     )
                     _wait_download_port_clear(usb_port, log)
+                    if hold_lock_until_boot:
+                        boot_seconds = wait_boot_completed(
+                            adb_bin, serial, progress, int(args.get("verify_wait_seconds", 300))
+                        )
+                        stabilize_actual = _wait_boot_stabilize(boot_stabilize_seconds, progress)
                 finally:
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -1378,9 +1494,10 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                     except OSError:
                         pass
 
-                boot_seconds = wait_boot_completed(
-                    adb_bin, serial, progress, int(args.get("verify_wait_seconds", 300))
-                )
+                if boot_seconds is None:
+                    boot_seconds = wait_boot_completed(
+                        adb_bin, serial, progress, int(args.get("verify_wait_seconds", 300))
+                    )
 
                 progress.stamp(stage="verify")
                 reboot_evidence = _verify_post_reboot_evidence(
@@ -1444,6 +1561,9 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                         "root_uid": root_uid,
                         "flash_duration_seconds": flash_seconds,
                         "boot_duration_seconds": boot_seconds,
+                        "lock_held_until_boot": hold_lock_until_boot,
+                        "boot_stabilize_seconds": stabilize_actual,
+                        "non_target_download_ports_ignored": ignored_download_ports,
                         "duration_seconds": round(time.time() - t0, 1),
                         "firmware_cache": fc_metrics,
                     }

@@ -1437,7 +1437,12 @@ def test_u2_26_rejects_download_port_appearing_after_ensure_before_spd_dump(
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
 
     with pytest.raises(RuntimeError, match="1782:4d00"):
-        mod.run({"firmware_dir": str(ver_dir)}, "SN1", mod.Progress(), [])
+        mod.run(
+            {"firmware_dir": str(ver_dir), "require_port_binding": False, "download_port_clear_wait_seconds": 0},
+            "SN1",
+            mod.Progress(),
+            [],
+        )
     assert spd_called["n"] == 0
     assert ["reboot", "autodloader"] not in adb_calls
 
@@ -1672,7 +1677,18 @@ def test_u2_31a_rejects_when_boot_id_unreadable_and_uptime_window_straddles_rebo
     monkeypatch.setattr(mod, "acquire_host_lock", lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666))
 
     with pytest.raises(RuntimeError, match="no positive evidence"):
-        mod.run({"firmware_dir": str(ver_dir), "cache_dir": str(tmp_path / "cache"), "verify_root": False}, "SN1", mod.Progress(), [])
+        # boot_stabilize_seconds=0: fixture uses static post_uptime="30.0" that does not advance with clock.
+        mod.run(
+            {
+                "firmware_dir": str(ver_dir),
+                "cache_dir": str(tmp_path / "cache"),
+                "verify_root": False,
+                "boot_stabilize_seconds": 0,
+            },
+            "SN1",
+            mod.Progress(),
+            [],
+        )
 
 
 def test_u2_31b_passes_when_boot_id_unreadable_and_uptime_window_starts_after_reboot(
@@ -2635,7 +2651,12 @@ def test_v108_orphan_download_port_still_rejected_inside_host_lock(
     monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
 
     with pytest.raises(mod.FlashRejectedError, match="1782:4d00") as exc_info:
-        mod.run({"firmware_dir": str(ver_dir), "verify_root": False}, "SN1", mod.Progress(), [])
+        mod.run(
+            {"firmware_dir": str(ver_dir), "verify_root": False, "require_port_binding": False},
+            "SN1",
+            mod.Progress(),
+            [],
+        )
 
     assert lock_acquired["called"] is True
     assert exc_info.value.route and exc_info.value.route["version"] == "v36"
@@ -2801,7 +2822,12 @@ def test_v109_in_lock_gate_tolerates_transient_peer_reset_tail(
     monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
 
     res = mod.run(
-        {"firmware_dir": str(ver_dir), "verify_root": False, "download_port_clear_wait_seconds": 1.0},
+        {
+            "firmware_dir": str(ver_dir),
+            "verify_root": False,
+            "download_port_clear_wait_seconds": 1.0,
+            "require_port_binding": False,
+        },
         "SN1",
         mod.Progress(),
         [],
@@ -2813,7 +2839,7 @@ def test_v109_in_lock_gate_tolerates_transient_peer_reset_tail(
 def test_v109_in_lock_gate_still_rejects_persistent_orphan_port_after_grace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#3995: a genuine orphan 1782:4d00 persisting beyond the grace window must still fail-closed."""
+    """#3995: in unbound mode, a genuine orphan 1782:4d00 persisting beyond grace must still fail-closed."""
     mod = _load_module()
     ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
     sysfs_base = _make_fake_sysfs(
@@ -2846,7 +2872,12 @@ def test_v109_in_lock_gate_still_rejects_persistent_orphan_port_after_grace(
 
     with pytest.raises(mod.FlashRejectedError, match="1782:4d00") as exc_info:
         mod.run(
-            {"firmware_dir": str(ver_dir), "verify_root": False, "download_port_clear_wait_seconds": 0.05},
+            {
+                "firmware_dir": str(ver_dir),
+                "verify_root": False,
+                "download_port_clear_wait_seconds": 0.05,
+                "require_port_binding": False,
+            },
             "SN1",
             mod.Progress(),
             [],
@@ -2854,3 +2885,358 @@ def test_v109_in_lock_gate_still_rejects_persistent_orphan_port_after_grace(
     assert exc_info.value.route and exc_info.value.route["version"] == "v36"
     assert spd_called["n"] == 0
     assert ["reboot", "autodloader"] not in adb_calls
+
+
+def test_v1010_bound_mode_ignores_non_target_orphan_download_port_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3995 v1.0.10: with --usb-port binding enabled, a non-target orphan 1782:4d00 logs warning and proceeds."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-4.2.4", "1782", "4d00"),
+            ("1-4.1.2", "18d1", "4ee8", "SN1"),
+        ],
+    )
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    seen_ports: List[Optional[str]] = []
+
+    def fake_run_spd_dump(cmd, *_a, expected_usb_port=None, **_kw):
+        seen_ports.append(expected_usb_port)
+        assert "--usb-port" in cmd and "1-4.1.2" in cmd
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+    log: List[str] = []
+    res = mod.run(
+        {"firmware_dir": str(ver_dir), "verify_root": False, "boot_stabilize_seconds": 0},
+        "SN1",
+        mod.Progress(),
+        log,
+    )
+    assert seen_ports == ["1-4.1.2"]
+    assert res["metrics"]["post_version"] == "v36"
+    assert res["metrics"]["non_target_download_ports_ignored"] == ["1-4.2.4"]
+    assert any("non-target" in line and "1-4.2.4" in line for line in log)
+
+
+def test_v1010_bound_mode_still_rejects_target_port_in_download_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3995 v1.0.10: even with port binding, target port itself in 1782:4d00 must fail-closed."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [("1-4.1.2", "18d1", "4ee8", "SN1")])
+    lock_file = tmp_path / "host.lock"
+    adb_calls: List[List[str]] = []
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        adb_calls=adb_calls,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(mod, "_DOWNLOAD_PORT_POLL_INTERVAL", 0.01)
+
+    def flip_target_to_download(progress, timeout_seconds=7200):
+        (sysfs_base / "1-4.1.2" / "idVendor").write_text("1782\n", encoding="utf-8")
+        (sysfs_base / "1-4.1.2" / "idProduct").write_text("4d00\n", encoding="utf-8")
+        return os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+
+    monkeypatch.setattr(mod, "acquire_host_lock", flip_target_to_download)
+    spd_called = {"n": 0}
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
+
+    with pytest.raises(mod.FlashRejectedError, match="target Unisoc download port 1782:4d00"):
+        mod.run(
+            {"firmware_dir": str(ver_dir), "verify_root": False, "download_port_clear_wait_seconds": 0.03},
+            "SN1",
+            mod.Progress(),
+            [],
+        )
+    assert spd_called["n"] == 0
+    assert ["reboot", "autodloader"] not in adb_calls
+
+
+def test_v1010_dry_run_bound_vs_unbound_download_port_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3995 v1.0.10: dry_run mirrors runtime gate — bound ignores sibling orphan, unbound rejects."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-4.2.4", "1782", "4d00"),
+            ("1-4.1.2", "18d1", "4ee8", "SN1"),
+        ],
+    )
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+
+    log: List[str] = []
+    res = mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), log)
+    assert res["metrics"]["dry_run"] is True
+    assert res["metrics"]["non_target_download_ports_ignored"] == ["1-4.2.4"]
+    assert res["metrics"]["hold_lock_until_boot"] is True
+    assert res["metrics"]["boot_stabilize_seconds"] == 5.0
+    assert any("1-4.2.4" in line for line in log)
+
+    with pytest.raises(mod.FlashRejectedError, match="1782:4d00"):
+        mod.run(
+            {"firmware_dir": str(ver_dir), "dry_run": True, "require_port_binding": False},
+            "SN1",
+            mod.Progress(),
+            [],
+        )
+
+
+def test_v1010_holds_host_lock_until_boot_completed_and_stabilize_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.0.10: default hold_lock_until_boot=True keeps host lock until boot_completed=1 + stabilize settle."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [("1-5.4.4", "18d1", "4ee8", "SN1")])
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+
+    events: List[str] = []
+    real_flock = mod.fcntl.flock
+
+    def spy_flock(fd, op):
+        if op == mod.fcntl.LOCK_UN:
+            events.append("unlock")
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(mod.fcntl, "flock", spy_flock)
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: (
+            events.append("lock") or os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+        ),
+    )
+
+    real_wait_boot = mod.wait_boot_completed
+
+    def spy_wait_boot(*a, **kw):
+        res_s = real_wait_boot(*a, **kw)
+        events.append("boot_completed")
+        return res_s
+
+    monkeypatch.setattr(mod, "wait_boot_completed", spy_wait_boot)
+
+    real_stabilize = mod._wait_boot_stabilize
+
+    def spy_stabilize(sec, progress):
+        out = real_stabilize(sec, progress)
+        events.append(f"stabilized:{out}")
+        return out
+
+    monkeypatch.setattr(mod, "_wait_boot_stabilize", spy_stabilize)
+
+    def fake_run_spd_dump(*_a, **_kw):
+        events.append("spd_dump")
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+
+    res = mod.run(
+        {"firmware_dir": str(ver_dir), "verify_root": False, "boot_stabilize_seconds": 3.0},
+        "SN1",
+        mod.Progress(),
+        [],
+    )
+    assert res["metrics"]["lock_held_until_boot"] is True
+    assert res["metrics"]["boot_stabilize_seconds"] == 3.0
+    assert events.index("lock") < events.index("spd_dump") < events.index("boot_completed")
+    assert events.index("boot_completed") < events.index("stabilized:3.0") < events.index("unlock")
+
+
+def test_v1010_releases_host_lock_when_wait_boot_completed_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.0.10: host lock must always be released in finally if wait_boot_completed times out."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [("1-5.4.4", "18d1", "4ee8", "SN1")])
+    lock_file = tmp_path / "host.lock"
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+
+    unlocked = {"count": 0}
+    real_flock = mod.fcntl.flock
+
+    def spy_flock(fd, op):
+        if op == mod.fcntl.LOCK_UN:
+            unlocked["count"] += 1
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(mod.fcntl, "flock", spy_flock)
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: 1.0)
+    monkeypatch.setattr(
+        mod,
+        "wait_boot_completed",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boot timeout")),
+    )
+
+    with pytest.raises(RuntimeError, match="boot timeout"):
+        mod.run({"firmware_dir": str(ver_dir), "verify_root": False}, "SN1", mod.Progress(), [])
+    assert unlocked["count"] == 1
+
+
+def test_v1010_hold_lock_until_boot_false_unlocks_before_boot_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.0.10: hold_lock_until_boot=False opt-out releases host lock prior to wait_boot_completed."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [("1-5.4.4", "18d1", "4ee8", "SN1")])
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+
+    events: List[str] = []
+    real_flock = mod.fcntl.flock
+
+    def spy_flock(fd, op):
+        if op == mod.fcntl.LOCK_UN:
+            events.append("unlock")
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(mod.fcntl, "flock", spy_flock)
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    real_wait_boot = mod.wait_boot_completed
+
+    def spy_wait_boot(*a, **kw):
+        events.append("boot_wait")
+        return real_wait_boot(*a, **kw)
+
+    monkeypatch.setattr(mod, "wait_boot_completed", spy_wait_boot)
+
+    def fake_run_spd_dump(*_a, **_kw):
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+
+    res = mod.run(
+        {"firmware_dir": str(ver_dir), "verify_root": False, "hold_lock_until_boot": False},
+        "SN1",
+        mod.Progress(),
+        [],
+    )
+    assert res["metrics"]["lock_held_until_boot"] is False
+    assert res["metrics"]["boot_stabilize_seconds"] == 0.0
+    assert events.index("unlock") < events.index("boot_wait")
+
+
+@pytest.mark.parametrize("bad_val", [-1, -0.5, "nan", "inf", True, "abc"])
+def test_v1010_rejects_invalid_boot_stabilize_seconds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_val: object
+) -> None:
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [("1-5.4.4", "18d1", "4ee8", "SN1")])
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+
+    with pytest.raises(mod.FlashRejectedError, match="boot_stabilize_seconds"):
+        mod.run(
+            {"firmware_dir": str(ver_dir), "boot_stabilize_seconds": bad_val},
+            "SN1",
+            mod.Progress(),
+            [],
+        )
