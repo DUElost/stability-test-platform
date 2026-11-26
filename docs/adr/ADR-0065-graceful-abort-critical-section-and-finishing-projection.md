@@ -221,24 +221,27 @@
 39. Agent 必须为每个活跃 `job_id` 维护本地单次终态提交锁/CAS 槽位，确保退出中的 worker 与停机路径最多仅有一方提交终态。
 40. 实施者必须通过每尝试专属 Linux cgroup v2 子树或控制面持久化权威进程清单，约束或追踪声明 `critical_section_guard` 的每次 Job 尝试的全部硬件侧进程（包括 MTK `flash_firmware` 以 `start_new_session=True` 独立会话启动的 `flash_tool` 等子工具）。
 41. 在未启用每尝试专属 Linux cgroup v2 子树的宿主上，脚本以独立会话启动硬件侧子工具后，在 Agent 将该内层子进程组的 `(pgid, start_time)` 同步写入控制面权威进程清单并收到持久化确认之前，脚本不得发起任何硬件 I/O。
-42. 控制面在处理上述权威进程清单追加与封口时，必须对同一尝试的持久化清单行获取 `FOR UPDATE` 行锁构成提交屏障：追加事务必须在行锁内校验 `manifest_sealed IS FALSE` 后方可写入并提交（若已封口则必须返回 `409 manifest_sealed` 拒绝），封口事务必须在同一行锁内写入 `manifest_sealed=TRUE` 并提交后返回已提交的权威封口快照（确保追加先提交则必含于封口快照，封口先提交则不再有任何并发追加可提交）。
+42. 控制面在处理上述权威进程清单追加与封口时，必须对同一尝试的持久化清单行获取 `FOR UPDATE` 行锁构成提交屏障：
+    - 清单追加事务必须在行锁内校验 `manifest_sealed IS FALSE` 后方可追加写入并提交，若已封口则控制面必须返回 `409 manifest_sealed` 拒绝追加；
+    - 清单封口事务必须在同一行锁内写入 `manifest_sealed=TRUE` 并提交，提交后控制面必须返回该已提交的权威封口快照（确保追加先提交则必含于封口快照，封口先提交则不再有任何并发追加可提交）。
 43. 若上述控制面权威进程清单写入失败、超时或返回 `409 manifest_sealed`，Agent 必须拒绝向脚本放行硬件 I/O。
 44. 拒绝放行硬件 I/O 后，Agent 必须立即终止该独立会话子进程组。
 45. 当停机结算窗到期且退出中的 worker 尚未占领上述本地 CAS 槽位时，Agent 停机路径必须先封锁该本地 CAS 槽位。
-46. 封锁本地 CAS 槽位后，Agent 停机路径必须在本地封口本尝试的新增硬件进程入口，并在非 cgroup 模式下调用控制面第 42 条权威进程清单封口事务获取已提交的封口快照。
-47. 完成本地占槽与入口封口后，Agent 停机路径必须向本尝试受约束的全部硬件侧进程集合（尝试专属 cgroup v2 整棵子树，或外层脚本与控制面已提交封口快照中的全部内层可信 `pgid`）发送 `SIGTERM → SIGKILL`。
-48. 发送终止信号后，Agent 必须在同时满足共同前提（直接子进程已回收且本尝试新增硬件进程入口与权威清单均已封口，确保核验开始后不再有新硬件进程加入）的前提下，按以下两条证明分支之一核验停止结果：
+46. 封锁本地 CAS 槽位后，Agent 停机路径必须在本地封口本尝试的新增硬件进程入口。
+47. 在非 cgroup 模式下完成本地入口封口后，Agent 停机路径必须调用控制面第 42 条权威进程清单封口事务以获取已提交的封口快照。
+48. 完成本地占槽与入口封口后，Agent 停机路径必须向本尝试受约束的全部硬件侧进程集合（尝试专属 cgroup v2 整棵子树，或外层脚本与控制面已提交封口快照中的全部内层可信 `pgid`）发送 `SIGTERM → SIGKILL`。
+49. 发送终止信号后，Agent 必须在同时满足共同前提（直接子进程已回收且本尝试新增硬件进程入口与权威清单均已封口，确保核验开始后不再有新硬件进程加入）的前提下，按以下两条证明分支之一核验停止结果：
     - **cgroup v2 分支**：仅当对整个尝试专属 cgroup v2 子树核验 `cgroup.events` 确认 `populated=0`（覆盖子树内全部子 cgroup，不得仅凭顶层 `cgroup.procs` 为空判定）时，Agent 才可以判定 `process_group_stopped=true`；
     - **权威进程清单分支**：仅当依据控制面已提交的封口快照核验清单内全部已登记可信 `pgid`（含外层脚本与全部独立会话子工具 `pgid`）执行 `os.killpg(trusted_pgid, 0)` 均返回 `ESRCH` 时，Agent 才可以判定 `process_group_stopped=true`。
-49. 凡不满足第 48 条共同前提，或存在未持久登记的独立会话、子树仍处于 `populated=1`、残留子孙、`EPERM`、探测失败或超时的情形，Agent 必须判定 `process_group_stopped=false`。
-50. 完成上述有界停组核验后，Agent 停机路径必须在关闭 LocalDB 前向本地 outbox 持久化未验证中断记录并如实写入 `process_group_stopped`。
-51. 对所有已登记 `flash_integrity` 义务且经由非正常实证完成路径（包括优雅停机 outbox、worker 先占本地 CAS 槽位提交的终态、`force=true` 强杀与步骤超时中断）结束的 Job，Agent 必须在 `/complete` 或 outbox 载荷中按第 48–49 条判据上报 `process_group_stopped`（缺省按 `false` 处理）。
-52. 当任一未关闭 `flash_integrity` 欠账条目缺失可信全硬件进程停止证明（`process_group_stopped IS NOT TRUE`，覆盖 `false` 与缺失 `NULL`，包括停机 outbox、worker 先占槽、`force=true` 路径未证明收敛及失联超时无回报）时，控制面统一归还、自动清偿与人工放行入口均不得关闭该条目或释放 `MAINTENANCE` 欠账租约。
-53. 控制面必须为每台宿主持久化记录已观测的 `kernel_proc` 启动周期历史（含各周期 `boot_id` 的首次出现与被取代事实），不得仅凭无序晚到的心跳覆写当前宿主 `boot_id`。
-54. 仅当满足以下任一可信停止证据时，控制面才可以解除第 52 条门禁并允许后续清偿或人工放行：
-    - 当宿主呈现的候选新 `boot_id` 与该条目记录的 `worker_boot_id` 均满足 `boot_id_source="kernel_proc"`（严格读自 Linux `/proc/sys/kernel/random/boot_id`，排除随机回退 `pseudo_fallback`）、两者不同、候选新 `boot_id` 不属于该宿主已被取代的历史启动周期，**且**该候选新 `boot_id` 经由本次尝试预登记时刻 `T_arm` 之后建立的新认证会话或控制面下发单次 nonce 的在位宿主探针证实为当前运行内核（排除旧内核晚到心跳）时，控制面可以认定内核已在本次尝试之后真实重启并解除第 52 条门禁；
-    - 当同一宿主内核启动周期内发生进程重启后的新 Agent 或经授权的宿主探针，在控制面已按第 42 条完成该尝试权威进程清单封口提交且外层脚本已终结的前提下，核验尝试专属 cgroup v2 整棵子树 `cgroup.events` 为 `populated=0`、或按该已提交封口快照核验全部受追踪 `(pgid, start_time)` 均返回 `ESRCH` 时，控制面可以解除第 52 条门禁。
-55. 面对伪造或回退 `boot_id`、晚到的旧启动周期心跳、未完成封口提交或未知的权威进程清单、cgroup 子树仍 `populated=1` 或探针探测失败的情形，控制面不得解除第 52 条停止证明门禁。
+50. 凡不满足第 49 条共同前提，或存在未持久登记的独立会话、子树仍处于 `populated=1`、残留子孙、`EPERM`、探测失败或超时的情形，Agent 必须判定 `process_group_stopped=false`。
+51. 完成上述有界停组核验后，Agent 停机路径必须在关闭 LocalDB 前向本地 outbox 持久化未验证中断记录并如实写入 `process_group_stopped`。
+52. 对所有已登记 `flash_integrity` 义务且经由非正常实证完成路径（包括优雅停机 outbox、worker 先占本地 CAS 槽位提交的终态、`force=true` 强杀与步骤超时中断）结束的 Job，Agent 必须在 `/complete` 或 outbox 载荷中按第 49–50 条判据上报 `process_group_stopped`（缺省按 `false` 处理）。
+53. 当任一未关闭 `flash_integrity` 欠账条目缺失可信全硬件进程停止证明（`process_group_stopped IS NOT TRUE`，覆盖 `false` 与缺失 `NULL`，包括停机 outbox、worker 先占槽、`force=true` 路径未证明收敛及失联超时无回报）时，控制面统一归还、自动清偿与人工放行入口均不得关闭该条目或释放 `MAINTENANCE` 欠账租约。
+54. 控制面必须为每台宿主持久化记录已观测的 `kernel_proc` 启动周期历史（含各周期 `boot_id` 的首次出现与被取代事实），不得仅凭无序晚到的心跳覆写当前宿主 `boot_id`。
+55. 仅当满足以下任一可信停止证据时，控制面才可以解除第 53 条门禁并允许后续清偿或人工放行：
+    - 当宿主呈现的候选新 `boot_id` 与该条目记录的 `worker_boot_id` 均满足 `boot_id_source="kernel_proc"`（严格读自 Linux `/proc/sys/kernel/random/boot_id`，排除随机回退 `pseudo_fallback`）、两者不同、候选新 `boot_id` 不属于该宿主已被取代的历史启动周期，**且**该候选新 `boot_id` 经由本次尝试预登记时刻 `T_arm` 之后建立的新认证会话或控制面下发单次 nonce 的在位宿主探针证实为当前运行内核（排除旧内核晚到心跳）时，控制面可以认定内核已在本次尝试之后真实重启并解除第 53 条门禁；
+    - 当同一宿主内核启动周期内发生进程重启后的新 Agent 或经授权的宿主探针，在控制面已按第 42 条完成该尝试权威进程清单封口提交且外层脚本已终结的前提下，核验尝试专属 cgroup v2 整棵子树 `cgroup.events` 为 `populated=0`、或按该已提交封口快照核验全部受追踪 `(pgid, start_time)` 均返回 `ESRCH` 时，控制面可以解除第 53 条门禁。
+56. 面对伪造或回退 `boot_id`、晚到的旧启动周期心跳、未完成封口提交或未知的权威进程清单、cgroup 子树仍 `populated=1` 或探针探测失败的情形，控制面不得解除第 53 条停止证明门禁。
 
 ### D5 按子类型区分终态口径、混合 Plan 边界与在途版本交错兼容
 
