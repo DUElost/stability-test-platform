@@ -1,6 +1,6 @@
 # ADR-0065：统一「收尾中（`finishing`）」过渡态模型与不可中断临界区有界保护
 
-- 状态：Proposed v0.8（2026-11-26 v0.8：按六轮独立复核修订——将 `activate_permit` 锁序扩展为与现行 `session_watchdog`（`Host → Job`）兼容的全库无环顺序 `Host FOR SHARE → JobInstance FOR UPDATE → PlanRun FOR NO KEY UPDATE`，在激活事务内强制同步复核宿主心跳新鲜、设备占用归属、无 `clock_regressed` 与未过期 `ACTIVE JOB` 租约等全部 D4.23 初始保护前提并拆分状态落库与 RPC 回包条款（原 L185），彻底消除宿主心跳已超期却激活成功再被 watchdog 落 `UNKNOWN` 的交错；在 P1-3 非 cgroup 分支要求独立会话子工具在首次硬件 I/O 前取得控制面权威进程清单的持久登记确认（未获确认或清单已封口即拒执行并停杀），在停止核验前强制封口新增入口；在 Linux cgroup v2 分支明确必须通过 `cgroup.events` 确认整个尝试子树 `populated=0`（不单看顶层 `cgroup.procs`）且以直接子进程已回收与入口已封口作为两条停止证明分支的共同前提；精确限定「同一宿主内核启动周期内发生进程重启后的新 Agent」措辞；v0.7：2026-11-26 五轮复核修订；v0.6：2026-11-26 四轮复核修订；v0.5：2026-11-26 三轮复核修订；v0.4：2026-11-26 二轮复核修订；v0.3：2026-11-26 首轮复核修订；v0.2：2026-11-26 吸收 Owner 裁定；v0.1：2026-11-26 初稿）
+- 状态：Proposed v0.9（2026-11-26 v0.9：按七轮独立复核修订——将权威进程清单的条件追加与封口串行化在同一尝试清单行的 `FOR UPDATE` 行锁提交屏障上（封口先提交则迟到追加拒签 `409`，追加先提交则必含于封口快照，恢复端只消费已提交的封口快照），彻底闭合登记与封口交错；强化内核重启替代证明的先后顺序校验（排除已取代旧启动周期的晚到心跳，要求新 `kernel_proc` `boot_id` 既不在已见历史周期中、且经预登记之后的新认证会话或控制面下发 nonce 的在位探针证实确为当前活内核）；将锁序表述精确限定为「在飞 Job 竞争路径的无环锁序」（区分现行 PRECHECK 入场事务）；拆净原 L224、L225 复合句；v0.8：2026-11-26 六轮复核修订；v0.7：2026-11-26 五轮复核修订；v0.6：2026-11-26 四轮复核修订；v0.5：2026-11-26 三轮复核修订；v0.4：2026-11-26 二轮复核修订；v0.3：2026-11-26 首轮复核修订；v0.2：2026-11-26 吸收 Owner 裁定；v0.1：2026-11-26 初稿）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-26
@@ -39,7 +39,7 @@
 统一过渡态集合：finishing（收尾中）   [持久化 status 仍为 RUNNING，不改 DB 终态机与活跃索引]
   │
   ├── 共享底座（统一 FinishingGuard 契约）：
-  │     • 全库无环锁序（Host → JobInstance → PlanRun → 准入门禁行）两段同步握手：
+  │     • 在飞 Job 竞争路径的无环锁序（Host → JobInstance → PlanRun → 准入门禁行）两段同步握手：
   │       activate_permit 在 Host FOR SHARE → JobInstance FOR UPDATE → PlanRun FOR NO KEY UPDATE 事务内与
   │       session_watchdog / recycler 互斥，确立宿主心跳新鲜与未过期 ACTIVE JOB 租约等全部初始保护前提后方允许 grant
   │     • 同量纲绝对截止锚点（服务端时钟冻结、当前步与全组双预算准入、时钟回拨持久失效）
@@ -58,9 +58,9 @@
         • 保护对象：两层冻结——plan_snapshot 静态声明全必需成员 + 预登记校验持久化 VBUS 展开 return_check 至 JobInstance.finishing_guard
         • 终态口径：纯原子交付 Job 全成员实证成功→COMPLETED；任一成员失败、超期或无证据跳过→FAILED；
                    混合 Plan（含未执行 patrol）完成本机原子闭环后跳过 patrol→ABORTED；显式 force 强杀→ABORTED
-        • 完整性义务与全进程树停止门禁：预登记持久化 flash_integrity 待核验义务；独立会话子工具在首次硬件 I/O 前须获权威清单持久确认；
-                   停止核验以直接子进程回收且入口已封口为共同前提，分 cgroup v2 整棵尝试子树 populated=0 或已封口清单全量可信 PGID 返回 ESRCH，
-                   宿主重启替代证明仅认 kernel_proc boot_id
+        • 完整性义务与全进程树停止门禁：预登记持久化 flash_integrity 待核验义务；独立会话子工具在首次硬件 I/O 前须经同行 FOR UPDATE 屏障获权威清单持久确认；
+                   停止核验以直接子进程回收且入口与清单已封口为共同前提，分 cgroup v2 整棵尝试子树 populated=0 或已提交封口快照全量可信 PGID 返回 ESRCH，
+                   宿主重启替代证明须排除已取代旧周期并经预登记后新会话/nonce 探针证实晚于本次尝试的 kernel_proc boot_id
         • 排队隔离：未获批进入临界区的作业（PENDING / return_check / 缓存拉取 / lock-wait）不进入本集合，立即中止为 ABORTED
 ```
 
@@ -144,7 +144,7 @@
 14. 声明了 `critical_section_guard` 的脚本在执行首次不可中断硬件副作用之前（例如 `flash_firmware_unisoc_bsl` 持主机锁并准备发送 `adb reboot autodloader` 启动 `spd_dump` 之前），必须向 Agent 发起有界同步进入许可请求（`critical_section_enter_request`）并阻塞等待显式 `grant` 或 `deny` 回复。
 15. 脚本不得仅凭单向 `stderr` 打点即开始执行不可中断硬件操作。
 16. 若进入许可请求超时、控制通道断开或收到 `deny`，脚本必须立即按失败或中止退出，不得执行任何硬件写入或重启指令。
-17. 控制面必须使临界区预登记事务严格遵循全库无环锁序（`Host → JobInstance → PlanRun → 准入门禁行`）：先以 `FOR UPDATE` 锁定本 `JobInstance` 行，再以 `FOR NO KEY UPDATE` 锁定所属 `PlanRun` 行，最后以 `FOR SHARE` 锁定单一全局降级准入门禁行直至事务提交（与 `plan_run_abort` 的 `PlanRun FOR NO KEY UPDATE` 互斥串行，与 `/complete` 外键 `FOR KEY SHARE` 兼容，并与回滚关门事务在准入门禁行上的 `FOR UPDATE` 严格串行）。
+17. 控制面必须使临界区预登记事务严格遵循在飞 Job 竞争路径的无环锁序（`Host → JobInstance → PlanRun → 准入门禁行`）：先以 `FOR UPDATE` 锁定本 `JobInstance` 行，再以 `FOR NO KEY UPDATE` 锁定所属 `PlanRun` 行，最后以 `FOR SHARE` 锁定单一全局降级准入门禁行直至事务提交（与 `plan_run_abort` 的 `PlanRun FOR NO KEY UPDATE` 互斥串行，与 `/complete` 外键 `FOR KEY SHARE` 兼容，并与回滚关门事务在准入门禁行上的 `FOR UPDATE` 严格串行）。
 18. Agent 必须在发送预登记请求前为本次尝试生成客户端唯一幂等键 `request_id` 并随请求上报。
 19. 控制面在签发每份进入许可时，必须将其绑定至 `(job_id, attempt_id, step_id, worker_boot_id, fencing_token, request_id, permit_id, expires_at)`。
 20. 控制面与 Agent 不得接受跨尝试、跨 worker、跨租约代次、不匹配 `request_id` 或已超过 `expires_at` 的许可。
@@ -155,7 +155,7 @@
     - 收到控制面签发的有效预登记许可后，Agent 必须在向脚本投递 `grant` 之前向控制面发起有界同步激活请求 `activate_permit(permit_id, request_id, fencing_token)`；
     - 在收到控制面 `activate_permit` 成功确认（含未过期 `lease_expires_at` 与 `host_heartbeat_remaining_seconds`）并完成本地租约余量、宿主心跳余量与预算复核之前，Agent 不得向脚本回复 `grant`；
     - 收到控制面拒绝预登记、拒绝激活、任一响应超时、许可已过期、或激活响应扣除本地往返耗时后 `JOB` 租约剩余有效期、宿主心跳剩余有效期或剩余预算（含 60s 存活窗余量）任一项不足安全余量时，Agent 必须向脚本回复 `deny`；
-    - 当预登记或激活请求因响应丢失而超时、Agent 从未向脚本投递 `grant` 且脚本全硬件进程集合已按 D4 第 45 条确认停止时，Agent 可以携带客户端生成的 `request_id`（以及可选 `permit_id`）与 `(job_id, attempt_id, step_id, fencing_token)` 向控制面提交显式 `cancel_pre_registration`；
+    - 当预登记或激活请求因响应丢失而超时、Agent 从未向脚本投递 `grant` 且脚本全硬件进程集合已按 D4 第 49 条确认停止时，Agent 可以携带客户端生成的 `request_id`（以及可选 `permit_id`）与 `(job_id, attempt_id, step_id, fencing_token)` 向控制面提交显式 `cancel_pre_registration`；
     - 控制面收到上述合法 `cancel_pre_registration` 后，必须按 `request_id` 定位并撤销该次未触碰硬件的 `flash_integrity` 待核验义务；
     - 若 Agent 在证明未投递 `grant` 前崩溃或失租，控制面必须保留该未关闭的 `flash_integrity` 义务并按 D4 第 29 条隔离设备；
     - 仅当控制面返回 `activate_permit` 成功确认（`guard_state="granted"` 已落库）、Agent 复算本地未过期 `JOB` 租约余量、宿主心跳余量、存活窗余量与剩余预算均充足且仲裁点仍无中止信号时，Agent 必须将本 Job 原子置为 `critical_section_granted=true` 并向脚本回复 `grant`。
@@ -183,7 +183,7 @@
 11. 控制面在提交预登记时必须将 `JobInstance.finishing_guard` 置为有界预登记态 `guard_state="pre_registered"`（以 `permit_expires_at = T_arm + PRE_REG_GRACE_SECONDS` 封顶，缺省 `30s`），并将 `last_liveness_receipt_at` 与 `last_progress_receipt_at` 初始化为 `T_arm`。
 12. 当 `JobInstance.finishing_guard` 处于 `guard_state="pre_registered"` 且服务端时钟未超过 `min(permit_expires_at, D_atomic)` 时，控制面 `recycler` 与 `abort reaper` 不得因首条心跳尚未到达而将该 Job 置为 `UNKNOWN`。
 13. 若服务端时钟超过 `permit_expires_at` 仍未完成 `activate_permit` 激活，控制面必须在 `JobInstance FOR UPDATE` 行锁事务内停用该次 `pre_registered` 保护并恢复常规回收。
-14. 控制面必须在与现行 `session_watchdog` 兼容的全库无环锁序（先以 `FOR SHARE` 锁定所属 `Host` 行，再以 `FOR UPDATE` 锁定本 `JobInstance` 行，最后以 `FOR NO KEY UPDATE` 锁定所属 `PlanRun` 行）事务内处理 `activate_permit`，并与第 13 条到期回收及 `session_watchdog` 宿主离线写入严格互斥，完成以下全部初始保护前提核验：
+14. 控制面必须在与现行 `session_watchdog` 兼容的在飞 Job 竞争路径无环锁序（先以 `FOR SHARE` 锁定所属 `Host` 行，再以 `FOR UPDATE` 锁定本 `JobInstance` 行，最后以 `FOR NO KEY UPDATE` 锁定所属 `PlanRun` 行）事务内处理 `activate_permit`，并与第 13 条到期回收及 `session_watchdog` 宿主离线写入严格互斥，完成以下全部初始保护前提核验：
     - 控制面必须核验所属宿主当前按权威宿主心跳状态判定仍为 `ONLINE`（心跳未超期且距超时剩余余量满足最低安全阈值），且宿主 `boot_id` 与本次尝试的 `worker_boot_id` 匹配；
     - 控制面必须核验本 Job 仍为 `RUNNING`，`permit_id` / `request_id` / `fencing_token` 匹配，服务端时钟未超过 `min(permit_expires_at, D_atomic)`，且无已提交中止与 `clock_regressed` 失效标记；
     - 控制面必须核验同 Job、同设备与同 worker 当前持有状态为 `ACTIVE` 且 `expires_at > T_act` 的未过期 `JOB` 租约，且设备占用归属匹配。
@@ -221,20 +221,24 @@
 39. Agent 必须为每个活跃 `job_id` 维护本地单次终态提交锁/CAS 槽位，确保退出中的 worker 与停机路径最多仅有一方提交终态。
 40. 实施者必须通过每尝试专属 Linux cgroup v2 子树或控制面持久化权威进程清单，约束或追踪声明 `critical_section_guard` 的每次 Job 尝试的全部硬件侧进程（包括 MTK `flash_firmware` 以 `start_new_session=True` 独立会话启动的 `flash_tool` 等子工具）。
 41. 在未启用每尝试专属 Linux cgroup v2 子树的宿主上，脚本以独立会话启动硬件侧子工具后，在 Agent 将该内层子进程组的 `(pgid, start_time)` 同步写入控制面权威进程清单并收到持久化确认之前，脚本不得发起任何硬件 I/O。
-42. 若上述控制面权威进程清单写入失败、超时或该清单已封口，Agent 必须拒绝放行硬件 I/O 并立即终止该独立会话子进程组。
-43. 当停机结算窗到期且退出中的 worker 尚未占领上述本地 CAS 槽位时，Agent 停机路径必须先封锁该槽位并封口本尝试的新增进程/子进程组注册入口。
-44. 封锁槽位并封口新增入口后，Agent 停机路径必须向本尝试受约束的全部硬件侧进程集合（尝试专属 cgroup v2 整棵子树，或外层脚本与控制面权威进程清单中全部内层可信 `pgid`）发送 `SIGTERM → SIGKILL`。
-45. 发送终止信号后，Agent 必须在同时满足共同前提（直接子进程已回收且本尝试新增硬件进程入口已封口，确保核验开始后不再有新硬件进程加入）的前提下，按以下两条证明分支之一核验停止结果：
+42. 控制面在处理上述权威进程清单追加与封口时，必须对同一尝试的持久化清单行获取 `FOR UPDATE` 行锁构成提交屏障：追加事务必须在行锁内校验 `manifest_sealed IS FALSE` 后方可写入并提交（若已封口则必须返回 `409 manifest_sealed` 拒绝），封口事务必须在同一行锁内写入 `manifest_sealed=TRUE` 并提交后返回已提交的权威封口快照（确保追加先提交则必含于封口快照，封口先提交则不再有任何并发追加可提交）。
+43. 若上述控制面权威进程清单写入失败、超时或返回 `409 manifest_sealed`，Agent 必须拒绝向脚本放行硬件 I/O。
+44. 拒绝放行硬件 I/O 后，Agent 必须立即终止该独立会话子进程组。
+45. 当停机结算窗到期且退出中的 worker 尚未占领上述本地 CAS 槽位时，Agent 停机路径必须先封锁该本地 CAS 槽位。
+46. 封锁本地 CAS 槽位后，Agent 停机路径必须在本地封口本尝试的新增硬件进程入口，并在非 cgroup 模式下调用控制面第 42 条权威进程清单封口事务获取已提交的封口快照。
+47. 完成本地占槽与入口封口后，Agent 停机路径必须向本尝试受约束的全部硬件侧进程集合（尝试专属 cgroup v2 整棵子树，或外层脚本与控制面已提交封口快照中的全部内层可信 `pgid`）发送 `SIGTERM → SIGKILL`。
+48. 发送终止信号后，Agent 必须在同时满足共同前提（直接子进程已回收且本尝试新增硬件进程入口与权威清单均已封口，确保核验开始后不再有新硬件进程加入）的前提下，按以下两条证明分支之一核验停止结果：
     - **cgroup v2 分支**：仅当对整个尝试专属 cgroup v2 子树核验 `cgroup.events` 确认 `populated=0`（覆盖子树内全部子 cgroup，不得仅凭顶层 `cgroup.procs` 为空判定）时，Agent 才可以判定 `process_group_stopped=true`；
-    - **权威进程清单分支**：仅当控制面与本地权威进程清单已封口且清单内全部已登记可信 `pgid`（含外层脚本与全部独立会话子工具 `pgid`）执行 `os.killpg(trusted_pgid, 0)` 均返回 `ESRCH` 时，Agent 才可以判定 `process_group_stopped=true`。
-46. 凡不满足第 45 条共同前提，或存在未持久登记的独立会话、子树仍处于 `populated=1`、残留子孙、`EPERM`、探测失败或超时的情形，Agent 必须判定 `process_group_stopped=false`。
-47. 完成上述有界停组核验后，Agent 停机路径必须在关闭 LocalDB 前向本地 outbox 持久化未验证中断记录并如实写入 `process_group_stopped`。
-48. 对所有已登记 `flash_integrity` 义务且经由非正常实证完成路径（包括优雅停机 outbox、worker 先占本地 CAS 槽位提交的终态、`force=true` 强杀与步骤超时中断）结束的 Job，Agent 必须在 `/complete` 或 outbox 载荷中按第 45–46 条判据上报 `process_group_stopped`（缺省按 `false` 处理）。
-49. 当任一未关闭 `flash_integrity` 欠账条目缺失可信全硬件进程停止证明（`process_group_stopped IS NOT TRUE`，覆盖 `false` 与缺失 `NULL`，包括停机 outbox、worker 先占槽、`force=true` 路径未证明收敛及失联超时无回报）时，控制面统一归还、自动清偿与人工放行入口均不得关闭该条目或释放 `MAINTENANCE` 欠账租约。
-50. 仅当满足以下任一可信停止证据时，控制面才可以解除第 49 条门禁并允许后续清偿或人工放行：
-    - 当宿主新心跳的 `boot_id` 与该条目记录的 `worker_boot_id` 均满足 `boot_id_source="kernel_proc"`（严格读自 Linux `/proc/sys/kernel/random/boot_id`，排除随机回退 `pseudo_fallback`）且两者不同时，控制面可以认定内核已真实重启并解除第 49 条门禁；
-    - 当同一宿主内核启动周期内发生进程重启后的新 Agent 或经授权的宿主探针，在控制面已封口该尝试权威进程清单且外层脚本已终结的前提下，核验尝试专属 cgroup v2 整棵子树 `cgroup.events` 为 `populated=0`、或核验已封口权威清单中全部受追踪 `(pgid, start_time)` 均返回 `ESRCH` 时，控制面可以解除第 49 条门禁。
-51. 面对伪造或回退 `boot_id`、未封口或未知的权威进程清单、cgroup 子树仍 `populated=1` 或探针探测失败的情形，控制面不得解除第 49 条停止证明门禁。
+    - **权威进程清单分支**：仅当依据控制面已提交的封口快照核验清单内全部已登记可信 `pgid`（含外层脚本与全部独立会话子工具 `pgid`）执行 `os.killpg(trusted_pgid, 0)` 均返回 `ESRCH` 时，Agent 才可以判定 `process_group_stopped=true`。
+49. 凡不满足第 48 条共同前提，或存在未持久登记的独立会话、子树仍处于 `populated=1`、残留子孙、`EPERM`、探测失败或超时的情形，Agent 必须判定 `process_group_stopped=false`。
+50. 完成上述有界停组核验后，Agent 停机路径必须在关闭 LocalDB 前向本地 outbox 持久化未验证中断记录并如实写入 `process_group_stopped`。
+51. 对所有已登记 `flash_integrity` 义务且经由非正常实证完成路径（包括优雅停机 outbox、worker 先占本地 CAS 槽位提交的终态、`force=true` 强杀与步骤超时中断）结束的 Job，Agent 必须在 `/complete` 或 outbox 载荷中按第 48–49 条判据上报 `process_group_stopped`（缺省按 `false` 处理）。
+52. 当任一未关闭 `flash_integrity` 欠账条目缺失可信全硬件进程停止证明（`process_group_stopped IS NOT TRUE`，覆盖 `false` 与缺失 `NULL`，包括停机 outbox、worker 先占槽、`force=true` 路径未证明收敛及失联超时无回报）时，控制面统一归还、自动清偿与人工放行入口均不得关闭该条目或释放 `MAINTENANCE` 欠账租约。
+53. 控制面必须为每台宿主持久化记录已观测的 `kernel_proc` 启动周期历史（含各周期 `boot_id` 的首次出现与被取代事实），不得仅凭无序晚到的心跳覆写当前宿主 `boot_id`。
+54. 仅当满足以下任一可信停止证据时，控制面才可以解除第 52 条门禁并允许后续清偿或人工放行：
+    - 当宿主呈现的候选新 `boot_id` 与该条目记录的 `worker_boot_id` 均满足 `boot_id_source="kernel_proc"`（严格读自 Linux `/proc/sys/kernel/random/boot_id`，排除随机回退 `pseudo_fallback`）、两者不同、候选新 `boot_id` 不属于该宿主已被取代的历史启动周期，**且**该候选新 `boot_id` 经由本次尝试预登记时刻 `T_arm` 之后建立的新认证会话或控制面下发单次 nonce 的在位宿主探针证实为当前运行内核（排除旧内核晚到心跳）时，控制面可以认定内核已在本次尝试之后真实重启并解除第 52 条门禁；
+    - 当同一宿主内核启动周期内发生进程重启后的新 Agent 或经授权的宿主探针，在控制面已按第 42 条完成该尝试权威进程清单封口提交且外层脚本已终结的前提下，核验尝试专属 cgroup v2 整棵子树 `cgroup.events` 为 `populated=0`、或按该已提交封口快照核验全部受追踪 `(pgid, start_time)` 均返回 `ESRCH` 时，控制面可以解除第 52 条门禁。
+55. 面对伪造或回退 `boot_id`、晚到的旧启动周期心跳、未完成封口提交或未知的权威进程清单、cgroup 子树仍 `populated=1` 或探针探测失败的情形，控制面不得解除第 52 条停止证明门禁。
 
 ### D5 按子类型区分终态口径、混合 Plan 边界与在途版本交错兼容
 
@@ -265,7 +269,7 @@
    - **心跳回复缺字段时的在途 Job**：对启动前已冻结 `atomic_commit` 能力的在途 Job，Agent 必须继续按已冻结能力并依赖控制面预登记与激活接口响应决策，若任一接口不可用则必须向脚本回复 `deny` 安全退化；
    - **回滚前关门提交屏障**：运维人员与发布流程计划将控制面回滚至不支持 `finishing_guard_v2` 的旧版本时，必须先在单一全局降级准入门禁行上获取 `FOR UPDATE` 独占锁、写入 `admission_open=false` 并提交（与所有在途预登记事务在该行持有的 `FOR SHARE` 锁严格串行，确保关门提交后不再有任何在途预登记提交）；
    - **回滚前排空活跃作业至零**：上述关门事务提交后，运维人员与发布流程必须确认全部已提交预登记或已获得 `grant` 的活跃 Job（含仍投影为 `"running"` 的刷机 Job）计数为 `0`；
-   - **回滚前核验停止证明欠账为零**：在上述排空完成后，运维人员与发布流程必须确认全库不存在缺失可信全硬件进程停止证明的未关闭 `flash_integrity` 欠账条目（查询谓词必须采用 `process_group_stopped IS NOT TRUE` 以同时计入 `false` 与缺失 `NULL`，不得使用漏计 `NULL` 的 `!= TRUE`，防止旧版人工放行绕过 D4 第 49–51 条释放 `MAINTENANCE` 欠账租约）；
+   - **回滚前核验停止证明欠账为零**：在上述排空完成后，运维人员与发布流程必须确认全库不存在缺失可信全硬件进程停止证明的未关闭 `flash_integrity` 欠账条目（查询谓词必须采用 `process_group_stopped IS NOT TRUE` 以同时计入 `false` 与缺失 `NULL`，不得使用漏计 `NULL` 的 `!= TRUE`，防止旧版人工放行绕过 D4 第 53–56 条释放 `MAINTENANCE` 欠账租约）；
    - **切换全部消费者**：仅在关门已提交、活跃计数为 `0` 且无未确认停组的 `flash_integrity` 欠账后，运维人员与发布流程才可以切换控制面 API、`device_return`、`abort reaper` 与 `recycler` 至旧版本；
    - **重连恢复与 `force` 同步**：Agent 重连执行 `agent_recovery`（含 `ABORT_LOCAL` 路径）或控制面重试下发中止时，控制面必须按 D2 第 10 条在所有适用主体上取最高 `force` 强度并同步下发，不得仅按较早时钟主体降级强度；
    - **旧版无法兑现 `force=true` 的显式反馈**：当操作者对锁定旧版能力（无 `force_abort`）的 Agent 主机下发 `force=true` 时，控制面不得静默宣称已强杀，必须在响应中显式返回 `force_unsupported_hosts`；
@@ -279,9 +283,9 @@
 |---|---|---|
 | **方案 1：拆分为两个对外过渡态名称（`中止中` + `收尾中`）** | 人工中止显示「中止中」，自然到点显示「收尾中」。 | Owner 裁定合并为单一顶层概念 **`收尾中`（`finishing`）**，通过子类型（`teardown_disarm` / `atomic_commit`）与触发源字段表达差异，避免界面与 API 状态词表碎片化。 |
 | **方案 2：在 `disarm_guard` 上直接加 `if is_flash` 特例补丁** | 保持 `disarm_guard` 只面向 B6，把刷机硬塞进解除逻辑里。 | A 类（后置解除，终态正交、失败转欠账）与 B 类（原子交付闭环，含刷前完整性义务与整体成败口径）语义本质不同，硬塞会导致代码和契约持续腐化；抽成统一 `FinishingGuard` 集合 + 两类子模型才能一劳永逸。 |
-| **方案 3：激活仅查租约而不校验宿主心跳，或在激活确认前即投递 `grant`** | `activate_permit` 不核验宿主在线态即写 `granted`，或事后补发激活心跳。 | 宿主心跳已超期时 `session_watchdog` 会独立将 Job 置 `UNKNOWN` 导致在途烧写失租；改为在全库无环锁序 `Host FOR SHARE → JobInstance FOR UPDATE → PlanRun FOR NO KEY UPDATE` 内同步确立宿主在线、未过期租约与 `granted` 保护后方投递 `grant`。 |
-| **方案 4：预登记采用 `PlanRun FOR UPDATE → JobInstance` 锁序** | 先强锁父 `PlanRun` 行再锁子 `JobInstance` 行。 | 在 PostgreSQL 中与 `/complete`（先锁 `JobInstance`、再因写入 `plan_run_pending_aggregation` 触发父行外键 `FOR KEY SHARE`）成环产生 `40P01` 死锁；改采 `Host → JobInstance → PlanRun → 准入门禁行` 全库无环锁序彻底消除死锁。 |
-| **方案 5：仅凭外层脚本 PGID、顶层 `cgroup.procs` 或任意 `boot_id` 变化判定已停止** | 不要求内层独立会话先获权威清单持久确认，或单看顶层 `cgroup.procs`，或不区分 `boot_id` 来源即放行欠账。 | 上报丢失会让恢复探针漏检内层 `flash_tool` 会话；顶层 `cgroup.procs` 为空时子 cgroup 仍可能 `populated=1`；随机回退 `boot_id` 会伪造重启；改为权威清单先确认后 I/O + 封口核验、`cgroup.events` `populated=0` 与 `kernel_proc` `boot_id` 真值。 |
+| **方案 3：激活仅查租约而不校验宿主心跳，或在激活确认前即投递 `grant`** | `activate_permit` 不核验宿主在线态即写 `granted`，或事后补发激活心跳。 | 宿主心跳已超期时 `session_watchdog` 会独立将 Job 置 `UNKNOWN` 导致在途烧写失租；改为在在飞 Job 竞争路径无环锁序 `Host FOR SHARE → JobInstance FOR UPDATE → PlanRun FOR NO KEY UPDATE` 内同步确立宿主在线、未过期租约与 `granted` 保护后方投递 `grant`。 |
+| **方案 4：预登记采用 `PlanRun FOR UPDATE → JobInstance` 锁序** | 先强锁父 `PlanRun` 行再锁子 `JobInstance` 行。 | 在 PostgreSQL 中与 `/complete`（先锁 `JobInstance`、再因写入 `plan_run_pending_aggregation` 触发父行外键 `FOR KEY SHARE`）成环产生 `40P01` 死锁；改采 `Host → JobInstance → PlanRun → 准入门禁行` 在飞 Job 竞争路径无环锁序彻底消除死锁。 |
+| **方案 5：无行锁屏障直接追加/封口权威清单，或仅凭顶层 `cgroup.procs` 与无序 `boot_id` 变化判定已停止** | 不对权威清单追加与封口加同行 `FOR UPDATE` 屏障，或单看顶层 `cgroup.procs`，或接受任意无序 `boot_id` 变化即放行欠账。 | 无屏障时封口后并发追加会遗漏内层 `flash_tool`；顶层 `cgroup.procs` 为空时子 cgroup 仍可能 `populated=1`；旧内核晚到心跳或随机回退 `boot_id` 会伪造重启；改为同行 `FOR UPDATE` 提交屏障、`cgroup.events` `populated=0` 及排除旧周期且经预登记后新会话/nonce 探针证实的 `kernel_proc` `boot_id`。 |
 | **方案 6：默认吞并同 Plan `init` 阶段全部剩余步骤作为原子尾段** | 不显式声明 `atomic_group`，收到 `enter` 后默认放行所有剩余 `init` 步骤。 | 容易误把第二段刷机或无关的专项足迹建立步骤卷入中止后放行范围，且无法覆盖不在 `PlanStep` 列表里的引擎插入 VBUS 刷后 `return_check`；改为两层显式冻结全必需成员的 `atomic_group` 可控且无歧义。 |
 | **方案 7：临界区烧写成功后跳过 `oobe` 并把 Job 标 `ABORTED`** | 烧写完立刻跳后续步骤并强制标 `ABORTED`。 | 会留下「已刷机但未过 OOBE」的半成品设备，且运维无法从 Job 终态直接看出该机已完成交付；Owner 裁定单台纯刷机流程按整体执行并按整体成败落 `COMPLETED` / `FAILED`。 |
 | **方案 8：在 DB `status` 枚举新增 `FINISHING` 持久化状态** | 改数据库状态机与部分唯一索引。 | 触及 `uq_job_active_per_device`、claim、reaper、聚合器、热更新全链路，迁移与回归风险远高于权威投影方案。 |
@@ -298,9 +302,9 @@
   - `backend/agent/graceful_shutdown.py`：纳入在途 `atomic_commit` 的有界停机结算、按 `job_id` 单次终态提交 CAS 槽位互斥与入口封口，以及全硬件进程树停止核验与 `process_group_stopped` 记录；
   - 刷机脚本族（`flash_firmware_unisoc_bsl`、`flash_firmware`）：新版本声明 `critical_section_guard`、`min_critical_section_seconds`、接入同步进入许可握手与 `critical_section="exit"`，并配合尝试专属 cgroup v2 子树或独立会话子工具持久登记确认满足全硬件进程树停止证明。
 - **控制面侧**：
-  - `backend/services/plan_run_abort.py`、`backend/tasks/session_watchdog.py` 与 `backend/core/job_timeout_config.py`：新增 `force` 参数、按主体持久化单调 `force` 状态、维持全库无环锁序 `Host → JobInstance → PlanRun → 准入门禁行`、修正全 Run 级重复中止保留首次 `at`（ADR-0043 D2）、实现多主体时钟取早与强度取高、将 `UNKNOWN` 纳入中止候选、SocketIO 下发携带有效 `force` 并汇报 `already_terminal` / `force_unsupported_hosts`；
-  - `backend/services/agent_recovery.py`：重连 `ABORT_LOCAL` 路径按所有适用主体取最高 `force` 强度透传；
-  - `backend/services/device_return.py` 与 `backend/services/agent_completion.py`：新增兼容锁序预登记端点（`JobInstance → PlanRun → 准入门禁行 FOR SHARE` + 双预算准入 + 冻结 `D_atomic` 与 VBUS 展开列表 + 绑定 `request_id` 许可 + 写入 `pre_registered` 与 `flash_integrity` 义务）、行锁互斥 `activate_permit` 端点（`Host FOR SHARE → JobInstance FOR UPDATE → PlanRun FOR NO KEY UPDATE` 复核宿主心跳新鲜与未过期 `ACTIVE JOB` 租约）及权威进程清单持久登记与封口端点；按阶段核销 `flash_integrity` 后统一走同步/异步归还入口裁定全设备欠账；在统一归还/自动清偿/人工放行入口强制校验 `process_group_stopped IS NOT TRUE` 门禁与 `kernel_proc` `boot_id` 重启真值；保留只读重放 `200` / B6 同源迟到确认 / `terminal_payload_conflict` 区分；
+  - `backend/services/plan_run_abort.py`、`backend/tasks/session_watchdog.py` 与 `backend/core/job_timeout_config.py`：新增 `force` 参数、按主体持久化单调 `force` 状态、维持在飞 Job 竞争路径无环锁序 `Host → JobInstance → PlanRun → 准入门禁行`、修正全 Run 级重复中止保留首次 `at`（ADR-0043 D2）、实现多主体时钟取早与强度取高、将 `UNKNOWN` 纳入中止候选、SocketIO 下发携带有效 `force` 并汇报 `already_terminal` / `force_unsupported_hosts`；
+  - `backend/services/agent_recovery.py` 与 `backend/api/routes/heartbeat.py`：重连 `ABORT_LOCAL` 路径按所有适用主体取最高 `force` 强度透传；宿主心跳持久维护已观测 `kernel_proc` 启动周期历史并拒绝旧周期晚到心跳覆写；
+  - `backend/services/device_return.py` 与 `backend/services/agent_completion.py`：新增兼容锁序预登记端点（`JobInstance → PlanRun → 准入门禁行 FOR SHARE` + 双预算准入 + 冻结 `D_atomic` 与 VBUS 展开列表 + 绑定 `request_id` 许可 + 写入 `pre_registered` 与 `flash_integrity` 义务）、行锁互斥 `activate_permit` 端点（`Host FOR SHARE → JobInstance FOR UPDATE → PlanRun FOR NO KEY UPDATE` 复核宿主心跳新鲜与未过期 `ACTIVE JOB` 租约）及同行 `FOR UPDATE` 提交屏障的权威进程清单追加与封口端点；按阶段核销 `flash_integrity` 后统一走同步/异步归还入口裁定全设备欠账；在统一归还/自动清偿/人工放行入口强制校验 `process_group_stopped IS NOT TRUE` 门禁与晚于本次尝试的 `kernel_proc` `boot_id` 重启证明；保留只读重放 `200` / B6 同源迟到确认 / `terminal_payload_conflict` 区分；
   - `backend/scheduler/device_lease_reconciler.py` 与 `backend/scheduler/recycler.py`：收敛到统一 `FinishingGuard` 判定入口，识别有界 `pre_registered` 与 `granted` 保护态，实行候选与行锁 CAS 双次复读及 `clock_regressed` 持久失效；
   - `backend/services/plan_run_devices.py`、`backend/services/plan_run_catalog.py` 与 `backend/services/host_upgrade_gate.py`：实现全量 `ui_status`（分页表与 Job 详情含子类型）与 Minimap 七字段 `job_exec_status` 投影（含刷机预期掉 ADB 不误降 `unknown` 与无截止收尾返回 `null`）、列表筛选计数与热更新拒绝提示；
   - `backend/models/job_instance.py` 与 `plan_snapshot`：扩展 `finishing_guard` / `negotiated_capabilities` / 权威进程清单 / 两层冻结 `atomic_group` 结构与单一全局降级准入门禁行。
