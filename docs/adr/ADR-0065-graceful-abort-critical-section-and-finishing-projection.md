@@ -22,7 +22,7 @@
 1. **刷机烧写临界区被直接 `abort` 砍砖（2026-11-25 PlanRun `#1679` / `job=210319`）**：
    - `P525AAN` 批量刷机期间，操作者对运行中的 PlanRun 执行 `POST /api/v1/plan-runs/{id}/abort`。
    - 控制面立即向 Agent host 下发 `command=abort`，Agent `PipelineEngine.cancel()` 仅豁免 `phase == "teardown"`（`backend/agent/pipeline_engine.py:1237`），对 `phase == "init"` 正在执行 `spd_dump` 烧写分区的进程直接发送 `SIGTERM`（`rc=-15`）。
-   - 目标设备（`AUXMNX6A08000239`）分区写入被腰斩，滞留于展锐下载态（`1782:4d00`）且 USB 端点死锁，软件复位（`spd_dump reset`、`usbreset`、端口重枚举）均报 `LIBUSB_ERROR_TIMEOUT`，只能现场强复位后离线手刷救砖。
+   - 目标设备（`AUXMNX6A****0239`）分区写入被腰斩，滞留于展锐下载态（`1782:4d00`）且 USB 端点死锁，软件复位（`spd_dump reset`、`usbreset`、端口重枚举）均报 `LIBUSB_ERROR_TIMEOUT`，只能现场强复位后离线手刷救砖。
 2. **多专项共用「受保护收尾」诉求，但缺乏统一顶层模型与对外过渡态**：
    - 开关机、休眠、GPU、Monkey、MTBF 等专项在手动中止或自然到点后，均需在 `teardown` 阶段执行设备解除与回读（例如开关机等待每台回到开机态后停止 AutoTestTool 并回读确认，Monkey 终止设备侧脚本并清理残留）。
    - B6（ADR-0061 v1.1）已针对 `teardown` 解除落地了 `EXECUTING_DISARM` 与 `disarm_guard` 有界保护，但此前只针对 A 类（后置解除）存在，既未把「收尾中」抽成对用户可见的一等过渡态，也未覆盖 B 类（刷机等 `init` 阶段的不可中断原子交付流程）。
