@@ -172,7 +172,27 @@ function mapHostToTableData(host: Host): HostTableData {
           : undefined,
         strike_open: typeof probeRaw.strike_open === 'boolean' ? probeRaw.strike_open : undefined,
         strike_need: typeof probeRaw.strike_need === 'number' ? probeRaw.strike_need : undefined,
+        uhubctl_status:
+          typeof probeRaw.uhubctl_status === 'string' ? probeRaw.uhubctl_status : undefined,
+        powered_off_ports: Array.isArray(probeRaw.powered_off_ports)
+          ? probeRaw.powered_off_ports.filter((s): s is string => typeof s === 'string')
+          : undefined,
       }
+    : null;
+  const powerSlotsRaw =
+    capRaw.usb_power_slots && typeof capRaw.usb_power_slots === 'object'
+      ? (capRaw.usb_power_slots as Record<string, unknown>)
+      : null;
+  const usbPowerSlotSerials: Record<string, string> | null = powerSlotsRaw
+    ? (() => {
+        const inverted: Record<string, string> = {};
+        for (const [serial, entry] of Object.entries(powerSlotsRaw)) {
+          if (Array.isArray(entry) && typeof entry[0] === 'string' && entry[0].trim()) {
+            inverted[entry[0].trim()] = serial;
+          }
+        }
+        return Object.keys(inverted).length > 0 ? inverted : null;
+      })()
     : null;
   const selfHealCandidate =
     (host as { self_heal?: unknown }).self_heal ?? extra.self_heal;
@@ -243,6 +263,7 @@ function mapHostToTableData(host: Host): HostTableData {
       : [],
     device_count: onlineDevices,
     ledger_device_count: optionalNumber(host.ledger_device_count) ?? null,
+    ledger_latest_seen_at: host.ledger_latest_seen_at ?? null,
     usb_device_count: optionalNumber(host.capacity?.usb_device_count) ?? null,
     adb_interface_count: optionalNumber(capRaw.adb_interface_count) ?? null,
     adb_state_counts: adbStateCounts,
@@ -250,6 +271,7 @@ function mapHostToTableData(host: Host): HostTableData {
     usb_hub_topology: usbHubTopology,
     usb_kernel_errors_1h: usbKernelErrors1h,
     usb_controller_health: usbControllerHealth,
+    usb_power_slot_serials: usbPowerSlotSerials,
     health_probe: healthProbe,
     self_heal: selfHeal,
     claim_hint: claimHint,
@@ -1218,14 +1240,15 @@ export default function HostsPage() {
     </label>
   );
 
-  const pageHeaderActions = (
-    <div className="flex items-center gap-2">
+  const workbenchActions = (
+    <div className="flex items-center gap-1.5">
       {!opPanelOpen && hostOps.length > 0 && (
         <Button
           variant="outline"
           size="sm"
           data-testid="host-op-panel-reopen"
           onClick={() => setOpPanelOpen(true)}
+          className="h-7 px-2.5 text-xs"
         >
           {hostOps.some((o) => o.kind === 'flash_prereqs')
             ? '刷机前置进度'
@@ -1238,7 +1261,12 @@ export default function HostsPage() {
         </Button>
       )}
       {isAdmin && (
-        <Button size="sm" data-testid="host-add-button" onClick={() => setIsModalOpen(true)}>
+        <Button
+          size="sm"
+          data-testid="host-add-button"
+          onClick={() => setIsModalOpen(true)}
+          className="h-7 gap-1 px-2.5 text-xs"
+        >
           <Plus className="h-3.5 w-3.5" />
           添加主机
         </Button>
@@ -1249,7 +1277,7 @@ export default function HostsPage() {
   if (isLoading) {
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         <PageSkeleton>
           <PageSkeleton.Stats count={4} />
           <PageSkeleton.Block size="lg" />
@@ -1266,7 +1294,7 @@ export default function HostsPage() {
     const unreachable = apiError.status == null;
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         <ErrorState
           title={unreachable ? '无法连接后端服务' : `加载主机失败（${apiError.status}）`}
           description={unreachable ? '请检查后端服务连接与网络。' : apiError.message}
@@ -1300,7 +1328,7 @@ export default function HostsPage() {
   if (showFullPageEmpty) {
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         {/* #2051：空态也要给「显示已退役」开关，否则全退役后无法解除退役 */}
         <div className="flex items-center justify-end gap-2 py-2">{retiredToggle}</div>
         <EmptyState
@@ -1322,17 +1350,14 @@ export default function HostsPage() {
   }
 
   return (
-    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-      <PageHeader
-        title="主机集群"
-        subtitle="管理和监控测试执行节点 · 点击主机行查看详情，勾选后可批量运维"
-        action={pageHeaderActions}
-      />
+    <PageContainer width="wide" scrollable={false} className="py-2.5 lg:py-2.5">
+      <PageHeader title="主机集群" />
 
       {/* Host Table */}
       <ExpandableHostTable
         hosts={tableData}
         serverMode
+        extraHeaderRight={workbenchActions}
         serverFacets={facetsQ.data}
         serverFilteredTotal={filteredTotal}
         page={page}

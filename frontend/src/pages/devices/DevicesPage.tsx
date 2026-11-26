@@ -703,7 +703,7 @@ export default function DevicesPage() {
       disabled={!isAdmin}
       title={!isAdmin ? '需要管理员权限' : undefined}
       onClick={() => setIsModalOpen(true)}
-      className="gap-1.5"
+      className="h-7 gap-1 px-2.5 text-xs"
     >
       <Plus className="h-3.5 w-3.5" />
       添加设备
@@ -713,7 +713,7 @@ export default function DevicesPage() {
   if (pageQ.isLoading) {
     return (
       <PageContainer width="wide" className="py-4">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
+        <PageHeader title="物理设备" />
         <PageSkeleton>
           <PageSkeleton.Stats count={5} />
           <PageSkeleton.Block size="lg" />
@@ -726,7 +726,7 @@ export default function DevicesPage() {
     const isProject404 = toApiError(pageQ.error).status === 404 && !unassignedOnly;
     return (
       <PageContainer width="wide" className="py-4">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
+        <PageHeader title="物理设备" />
         <ErrorState
           title={isProject404 ? '项目不存在' : '加载设备失败'}
           description={isProject404
@@ -747,7 +747,7 @@ export default function DevicesPage() {
   if (formattedDevices.length === 0 && baseAllCount === 0 && !hasActivePageFilter) {
     return (
       <PageContainer width="wide" className="py-4">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
+        <PageHeader title="物理设备" />
         <EmptyState
           title="还没有设备"
           description="添加您的第一台测试设备"
@@ -789,17 +789,14 @@ export default function DevicesPage() {
   const pageDeviceMap = new Map(formattedDevices.map((d) => [d.id, d]));
 
   return (
-    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-      <PageHeader
-        title="物理设备"
-        subtitle="管理和监控测试设备 · 点击设备行查看详情，勾选后可批量处理"
-        action={addDeviceAction}
-      />
+    <PageContainer width="wide" scrollable={false} className="py-2.5 lg:py-2.5">
+      <PageHeader title="物理设备" />
 
-      {/* Device Table（服务端分页 + 独立三级 Facets） */}
-      <div>
+      {/* Device Table（视口锁高 + 服务端分页 + 独立三级 Facets + 固定分页底栏） */}
+      <div className="flex flex-1 min-h-0 flex-col">
         <ExpandableDeviceTable
           serverMode
+          extraHeaderRight={addDeviceAction}
           serverFacets={facetsQ.data}
           serverFilteredTotal={filteredTotal}
           devices={formattedDevices}

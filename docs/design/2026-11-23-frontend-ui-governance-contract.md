@@ -57,9 +57,9 @@
 
 1. 所有位于 `AppShell` 内的业务路由页（含其 loading、error、invalid-id 与 empty 分支）必须由 `PageContainer` 包裹；实施者不得裸渲染无容器或零边距的错误态。
 2. `PageContainer` 宽度档维持 4 档（`form` / `content` / `wide` / `bleed`）；自管理内部滚动与高密边距的页面，实施者必须使用 `scrollable={false}` 加 `flex-1 min-h-0`（或经 `PageContainer` 正式支持的紧凑边距变体），不得对 `width="bleed"` 叠加临时手写 `p-4 lg:p-6`，也不得使用 `h-[calc(100vh-...)]` 硬算高度。
-3. `AppShell` 顶栏为全站唯一页头，所有业务页必须通过 `PageHeader` 或 `useHeaderSlot` 写入标题与上下文，实施者不得在正文区自绘页头或与顶栏重复的标题栏。
-4. 页面级主新建或主触发操作（例如「添加设备」「添加主机」「新建 Plan」「新建套件」「扫描脚本目录」）必须统一放置在 `PageHeader.action`；筛选工作台 `FilterWorkbench.headerRight` 仅可以放置命中统计、重置筛选与视图切换等筛选相关控件。
-5. 共享壳层维护者必须在 `AppShell` 全局工具区与左侧页面动作区之间提供清晰分隔，并消除 `HeaderSlotContext` 根级非 memo 重渲染与 `useSocketIO` 广播触发 `AppShell` 双重渲染、卸载误删全局 `online` 监听的缺陷。
+3. `AppShell` 顶栏为全站唯一紧凑单行页头（`48px`），所有业务页必须通过 `PageHeader` 或 `useHeaderSlot` 写入标题、面包屑或轻量动态上下文；实施者不得在列表页顶栏堆叠说明书式静态副标题，也不得在正文区自绘与顶栏重复的标题栏。
+4. 在物理设备（`/devices`）与 Agent host（`/hosts`）高密列表工作台页中，实施者必须将页面级创建与运维进度操作（例如「添加设备」「添加主机」「安装/热更新进度」）放置在页面内容区 `FilterWorkbench` 右侧操作区，不得将其与 `AppShell` 全局壳层工具混排在顶栏右侧；其余未迁移页的 `PageHeader.action` 可以保留兼容直至按批收口。
+5. 共享壳层维护者必须在 `AppShell` 全局工具区与左侧页面上下文区之间提供清晰分隔，将实时连接态常态静音为紧凑状态指示器（仅在断线异常态展开警示徽标），移除侧栏收起态悬浮覆盖内容区的居中展开按钮并持久化侧栏折叠态，且默认展开高频核心导航组（仅默认折叠「更多功能」）；同时必须消除 `HeaderSlotContext` 根级非 memo 重渲染与 `useSocketIO` 广播触发 `AppShell` 双重渲染、卸载误删全局 `online` 监听的缺陷。
 
 ### 3.2 视觉密度与首屏预算标准
 

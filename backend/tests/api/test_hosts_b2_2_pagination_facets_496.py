@@ -575,3 +575,114 @@ class TestUsbControllerHealthAndEmptyCabinetDistinction:
         assert r_detail.status_code == 200
         assert r_detail.json()["ledger_device_count"] == 0
 
+    def test_empty_tree_72h_stale_ledger_excluded_and_uhubctl_powered_off_surfaced(
+        self, client, db_session, auth_headers
+    ):
+        """纯空树按 72h 最近活跃窗口消噪；uhubctl 断电端口（P1）与硬件故障绝不豁免。"""
+        from backend.models.host import Device
+
+        prefix = f"usb72h-{uuid4().hex[:6]}"
+        now = datetime.now(timezone.utc)
+        base = client.get("/api/v1/hosts/facets", headers=auth_headers).json()["data"]
+
+        # 1) 长期空置机：台账有设备但 last_seen 为 5 天前（>72h）且硬件全绿 -> 自动排除出 usb_anomaly（P0）
+        h_stale = _make_host(
+            db_session,
+            host_id=f"{prefix}-stale",
+            name=f"StaleEmpty-{prefix}",
+            ip=f"10.75.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "DEGRADED", "reasons": ["usb_tree_empty"]},
+                "capacity": {
+                    "usb_device_count": 0,
+                    "usb_controller_health": {
+                        "unbound_xhci_controllers": 0,
+                        "disabled_root_ports": 0,
+                        "disabled_hub_ports": 0,
+                        "over_current_ports": 0,
+                        "stuck_default_ports": 0,
+                    },
+                },
+            },
+        )
+        db_session.add(
+            Device(
+                serial=f"{prefix}-STALE-01",
+                host_id=h_stale.id,
+                model="TEST",
+                platform="mtk",
+                status="OFFLINE",
+                last_seen=now - timedelta(days=5),
+            )
+        )
+
+        # 2) 近期掉光机：台账设备 6 小时前还在活跃（<=72h）-> 保留在 usb_anomaly（P2）
+        h_recent = _make_host(
+            db_session,
+            host_id=f"{prefix}-recent",
+            name=f"RecentEmpty-{prefix}",
+            ip=f"10.75.2.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "DEGRADED", "reasons": ["usb_tree_empty"]},
+                "capacity": {"usb_device_count": 0},
+            },
+        )
+        db_session.add(
+            Device(
+                serial=f"{prefix}-RECENT-01",
+                host_id=h_recent.id,
+                model="TEST",
+                platform="mtk",
+                status="OFFLINE",
+                last_seen=now - timedelta(hours=6),
+            )
+        )
+
+        # 3) VBUS 断电机：无硬件损坏，但 uhubctl 巡检到 2 个 0000 off 端口 -> 计入 usb_anomaly（P1）
+        h_vbus_off = _make_host(
+            db_session,
+            host_id=f"{prefix}-vbus",
+            name=f"VbusOff-{prefix}",
+            ip=f"10.75.3.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "HEALTHY", "reasons": []},
+                "capacity": {"usb_device_count": 2},
+                "health_probe": {
+                    "verdict": "aligned",
+                    "topology": "ok",
+                    "uhubctl_status": "ok",
+                    "powered_off_ports": ["1-5.1:2", "1-5.1:4"],
+                },
+            },
+        )
+        db_session.commit()
+
+        cur = client.get("/api/v1/hosts/facets", headers=auth_headers).json()["data"]
+        assert cur["usb_anomaly"] - base["usb_anomaly"] == 2
+
+        r_usb = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "usb_anomaly": "true", "sort_by": "priority", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert r_usb.status_code == 200
+        items = r_usb.json()["items"]
+        assert [h["id"] for h in items] == [h_recent.id, h_vbus_off.id]
+        assert items[0]["ledger_latest_seen_at"] is not None
+        assert items[1]["health_probe"]["powered_off_ports"] == ["1-5.1:2", "1-5.1:4"]
+
+        # 按关键词搜索 VBUS / 具体端口可命中
+        r_q = client.get(
+            "/api/v1/hosts",
+            params={"q": f"{prefix} 1-5.1:2", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert r_q.status_code == 200
+        assert [h["id"] for h in r_q.json()["items"]] == [h_vbus_off.id]
+
+        # 长期空置机单机详情带 ledger_latest_seen_at
+        r_stale = client.get(f"/api/v1/hosts/{h_stale.id}", headers=auth_headers)
+        assert r_stale.status_code == 200
+        assert r_stale.json()["ledger_device_count"] == 1
+        assert r_stale.json()["ledger_latest_seen_at"] is not None
+

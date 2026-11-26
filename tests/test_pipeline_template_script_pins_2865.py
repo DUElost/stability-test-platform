@@ -28,7 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = REPO_ROOT / "backend/schemas/pipeline_templates"
 SCRIPTS_DIR = REPO_ROOT / "backend/agent/scripts"  # 族树（Phase 3 后无版本目录）
 
-# 全 16 族：模板里出现过的每个 `action: script:<name>`（#2998 扩面；名单由
+# 全 28 族：模板里出现过的每个 `action: script:<name>`（#2998 扩面；名单由
 # `grep -h "script:" backend/schemas/pipeline_templates/*.json` 派生，新增
 # 脚本族进模板时必须同步加行——漏加会被 test_template_script_actions_covered
 # 抓住，见文件底部）。
@@ -59,6 +59,8 @@ PINNED_SCRIPTS: dict[str, str] = {
     "script:sleep_check": "sleep_check",
     "script:sleep_finish": "sleep_finish",
     "script:sleep_setup": "sleep_setup",
+    "script:sync_device_time": "sync_device_time",
+    "script:unisoc_sysdump_config": "unisoc_sysdump_config",
 }
 
 #: 故意钉旧/滞后豁免：action → (pin 版本, 理由+删除条件)。

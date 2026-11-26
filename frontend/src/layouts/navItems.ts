@@ -27,6 +27,8 @@ export interface NavItem {
 export interface NavGroup {
   label: string;
   items: NavItem[];
+  /** 仅低频长尾组默认折叠，核心工作组默认展开减少跨组点击 */
+  defaultCollapsed?: boolean;
 }
 
 
@@ -49,7 +51,7 @@ export const navGroups: NavGroup[] = [
     ],
   },
   {
-    // 中频：排查/维护期使用，默认折叠
+    // 核心运维资源：与工作区同为日常高频入口，默认展开
     label: '资源',
     items: [
       { path: '/hosts', label: '主机集群', icon: Server },
@@ -60,8 +62,9 @@ export const navGroups: NavGroup[] = [
     ],
   },
   {
-    // 低频长尾：有但不必显眼
+    // 低频长尾：默认折叠，活跃时自动展开
     label: '更多功能',
+    defaultCollapsed: true,
     items: [
       // #2360（裁决 A）：页面全部接口 admin-only，入口对非 admin 隐藏——
       // 与 /storage 同形态（可见但必 403 是最差组合）。

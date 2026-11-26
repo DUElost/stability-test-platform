@@ -179,6 +179,7 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     onPageChange,
     onSortChange,
     drawerHostOverride,
+    extraHeaderRight,
   }: {
     hosts: any[];
     selectedIds?: Set<string | number>;
@@ -193,8 +194,10 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     onPageChange?: (page: number) => void;
     onSortChange?: (key: string, dir: string) => void;
     drawerHostOverride?: any;
+    extraHeaderRight?: React.ReactNode;
   }) => (
     <div data-testid="host-table">
+      {extraHeaderRight}
       {drawerHostOverride && (
         <div data-testid="drawer-host-override">{drawerHostOverride.name || drawerHostOverride.id}</div>
       )}
@@ -522,7 +525,7 @@ describe('HostsPage', () => {
     render(<HostsPage />, { wrapper: createWrapper() });
 
     expect(screen.getByText('主机集群')).toBeInTheDocument();
-    expect(screen.getByText('管理和监控测试执行节点')).toBeInTheDocument();
+    expect(screen.queryByText('管理和监控测试执行节点')).not.toBeInTheDocument();
   });
 
   it('renders page header and add button', async () => {

@@ -2640,6 +2640,14 @@
           "retired": false,
           "script": "sync_device_time.py",
           "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/sync_device_time/1.0.1.tar.gz",
+          "package_sha256": "bb573e9f626b048e8cc907fd912d2404fd06d92c43c31c34e44b86e4fe78bcc2",
+          "python": null,
+          "retired": false,
+          "script": "sync_device_time.py",
+          "version": "1.0.1"
         }
       ]
     },
@@ -2690,6 +2698,19 @@
           "retired": false,
           "script": "unisoc_signal_trigger.py",
           "version": "1.0.2"
+        }
+      ]
+    },
+    "unisoc_sysdump_config": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/unisoc_sysdump_config/1.0.0.tar.gz",
+          "package_sha256": "51f32b3de43f43b245a62a541a964d38d1fe827747deb4f4f2ecaf5d401f25b0",
+          "python": null,
+          "retired": false,
+          "script": "unisoc_sysdump_config.py",
+          "version": "1.0.0"
         }
       ]
     }

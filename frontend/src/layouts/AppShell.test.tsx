@@ -12,10 +12,23 @@ const { mockUseSocketIO } = vi.hoisted(() => ({
 }));
 
 vi.mock('./Sidebar', () => ({
-  default: ({ onCloseMobile }: { onCloseMobile?: () => void }) => (
-    <div data-testid="sidebar-stub">
+  default: ({
+    onCloseMobile,
+    collapsed,
+    onToggleCollapse,
+  }: {
+    onCloseMobile?: () => void;
+    collapsed?: boolean;
+    onToggleCollapse?: () => void;
+  }) => (
+    <div data-testid="sidebar-stub" data-collapsed={String(Boolean(collapsed))}>
       {onCloseMobile && (
         <button type="button" onClick={onCloseMobile}>关闭侧栏</button>
+      )}
+      {onToggleCollapse && (
+        <button type="button" onClick={onToggleCollapse}>
+          {collapsed ? '展开侧边栏' : '收起侧边栏'}
+        </button>
       )}
     </div>
   ),
@@ -83,5 +96,46 @@ describe('AppShell 移动抽屉焦点顺序（#1197）', () => {
       DASHBOARD_SUBSCRIPTION,
       expect.objectContaining({ trackLastMessage: false }),
     );
+  });
+});
+
+describe('AppShell 紧凑顶栏、静音连接指示器与侧栏持久化（#4117 PR 2）', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    Object.defineProperty(window, 'innerWidth', { value: 1440, writable: true, configurable: true });
+    mockUseSocketIO.mockReturnValue({ isConnected: true });
+  });
+
+  it('常态连接为紧凑状态圆点（无宽胶囊），断线展开红色已断开徽标', () => {
+    const { rerender } = renderShell();
+    const indicator = screen.getByTestId('ws-connection-status');
+    expect(indicator).toHaveAttribute('title', '实时数据通道已连接');
+    expect(indicator.textContent).toBe('');
+
+    mockUseSocketIO.mockReturnValue({ isConnected: false });
+    rerender(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route index element={<div>内容区</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId('ws-connection-status')).toHaveTextContent('已断开');
+  });
+
+  it('桌面侧栏折叠态持久化到 localStorage 且不再渲染中部悬浮展开圆钮', () => {
+    const { unmount } = renderShell();
+    const toggleBtn = screen.getByRole('button', { name: '收起侧边栏' });
+    fireEvent.click(toggleBtn);
+    expect(window.localStorage.getItem('stp_sidebar_collapsed')).toBe('1');
+    // 仅存在侧栏内部展开按钮，不再有悬浮覆盖内容区的第二枚按钮
+    expect(screen.getAllByRole('button', { name: '展开侧边栏' })).toHaveLength(1);
+    unmount();
+
+    // 重新挂载应从 localStorage 恢复折叠态
+    renderShell();
+    expect(screen.getAllByTestId('sidebar-stub')[0]).toHaveAttribute('data-collapsed', 'true');
   });
 });

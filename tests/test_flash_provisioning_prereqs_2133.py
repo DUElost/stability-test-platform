@@ -179,7 +179,8 @@ def test_update_playbook_covers_dialout_rule_packages():
     text = UPDATE_PLAYBOOK.read_text(encoding="utf-8")
     assert re.search(r"groups: dialout", text)
     assert ("(agent_flash_prereq_packages + agent_flash_prereq_packages_v6"
-                " + agent_flash_prereq_packages_unisoc) | join(' ')") in text
+                " + agent_flash_prereq_packages_unisoc"
+                " + agent_flash_prereq_packages_vbus) | join(' ')") in text
 
     rule_tasks = [
         t for t in tasks
@@ -244,6 +245,9 @@ def test_group_vars_package_list_matches_preflight():
     assert data["agent_flash_prereq_packages_unisoc"] == list(pf._UNISOC_PACKAGES), (
         "展锐包集合必须与 flash_preflight._UNISOC_PACKAGES 逐项一致（刷机前置并轨）"
     )
+    assert data["agent_flash_prereq_packages_vbus"] == ["uhubctl"], (
+        "VBUS 刷机与供电状态巡检工具 uhubctl 必须通过刷机前置包集合下发"
+    )
     assert data["agent_ensure_flash_prereqs"] is False, "默认必须关闭（opt-in）"
 
 
@@ -265,7 +269,8 @@ def test_ensure_flash_prereqs_playbook_matches_preflight_udev():
     text = ENSURE_PLAYBOOK.read_text(encoding="utf-8")
     assert "groups: dialout" in text
     assert ("(agent_flash_prereq_packages + agent_flash_prereq_packages_v6"
-                " + agent_flash_prereq_packages_unisoc) | join(' ')") in text
+                " + agent_flash_prereq_packages_unisoc"
+                " + agent_flash_prereq_packages_vbus) | join(' ')") in text
     assert "stp-agent-priv restart" in text
 
 
