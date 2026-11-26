@@ -184,11 +184,16 @@ class _FakeSSH:
         self.commands.append(cmd)
         if "lsusb" in cmd:
             key = "lsusb"
+        elif "uhubctl" in cmd:
+            key = "uhubctl"
         elif "--lines=1" in cmd and "journal_kernel_readable" in self.outputs:
             key = "journal_kernel_readable"
         else:
             key = "journal_kernel_2h"
-        rc, out, err = self.outputs[key]
+        rc, out, err = self.outputs.get(
+            key,
+            (127, "", "uhubctl: not found") if key == "uhubctl" else (1, "", "missing"),
+        )
         ch = _FakeChannel(rc)
         return (
             _FakeFile(channel=ch),
@@ -458,3 +463,132 @@ def test_quiet_2h_journal_with_unreadable_boot_probe_stays_probe_error():
     round_ = collect_probe_round_via_ssh(client, sudo_password="pw")
     assert round_.collect_failed == ("journal_kernel_2h:empty_stdout",)
     assert reconcile_agent_health(["usb_tree_empty"], round_).verdict == ProbeVerdict.PROBE_ERROR
+
+
+_UHUBCTL_MIXED = """\
+Current status for hub 1-5.1 [0bda:5411 Generic 4-Port USB 2.0 Hub, USB 2.10, 4 ports, ppps]
+  Port 1: 0100 power
+  Port 2: 0000 off
+  Port 3: 0503 power highspeed enable connect [0e8d:201c]
+  Port 4: 0000 off
+Current status for hub 1-5 [0bda:5411 Generic 4-Port USB 2.0 Hub, USB 2.10, 4 ports, ppps]
+  Port 1: 0503 power highspeed enable connect [0bda:5411]
+"""
+
+
+def test_parse_uhubctl_powered_off_ports():
+    from backend.services.host_health_probe import parse_uhubctl_powered_off_ports
+
+    ports = parse_uhubctl_powered_off_ports(_UHUBCTL_MIXED.splitlines())
+    assert ports == ("1-5.1:2", "1-5.1:4")
+
+
+def test_collect_probe_round_uhubctl_outcomes_do_not_pollute_collect_failed():
+    from backend.services.host_health_probe import (
+        UHUBCTL_STATUS_OK,
+        UHUBCTL_STATUS_SKIPPED_UNBOUND_HUB,
+        UHUBCTL_STATUS_TIMEOUT,
+        UHUBCTL_STATUS_UNAVAILABLE,
+    )
+
+    # 1) 正常解析 0000 off 端口
+    c_ok = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_OK) + "\n", ""),
+            "journal_kernel_2h": (0, "unrelated line\n", ""),
+            "uhubctl": (0, _UHUBCTL_MIXED, ""),
+        }
+    )
+    r_ok = collect_probe_round_via_ssh(c_ok, sudo_password="pw")
+    assert r_ok.collect_failed == ()
+    assert r_ok.uhubctl.status == UHUBCTL_STATUS_OK
+    assert r_ok.uhubctl.powered_off_ports == ("1-5.1:2", "1-5.1:4")
+
+    # 2) 未安装 uhubctl (rc=127) -> unavailable，不污染 collect_failed
+    c_missing = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_OK) + "\n", ""),
+            "journal_kernel_2h": (0, "unrelated line\n", ""),
+            "uhubctl": (127, "", "timeout: failed to run command 'uhubctl'"),
+        }
+    )
+    r_missing = collect_probe_round_via_ssh(c_missing, sudo_password="pw")
+    assert r_missing.collect_failed == ()
+    assert r_missing.uhubctl.status == UHUBCTL_STATUS_UNAVAILABLE
+    assert r_missing.uhubctl.powered_off_ports == ()
+
+    # 3) 超时 (rc=124) -> timeout，不污染 collect_failed
+    c_timeout = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_OK) + "\n", ""),
+            "journal_kernel_2h": (0, "unrelated line\n", ""),
+            "uhubctl": (124, "", ""),
+        }
+    )
+    r_timeout = collect_probe_round_via_ssh(c_timeout, sudo_password="pw")
+    assert r_timeout.collect_failed == ()
+    assert r_timeout.uhubctl.status == UHUBCTL_STATUS_TIMEOUT
+
+    # 4) 半枚举 Hub 主机跳过 uhubctl，完全不下发 uhubctl 命令
+    c_skip = _FakeSSH(
+        {
+            "lsusb": (0, "\n".join(_LSUSB_OK) + "\n", ""),
+            "journal_kernel_2h": (0, "unrelated line\n", ""),
+            "uhubctl": (0, _UHUBCTL_MIXED, ""),
+        }
+    )
+    r_skip = collect_probe_round_via_ssh(c_skip, sudo_password="pw", skip_uhubctl=True)
+    assert r_skip.uhubctl.status == UHUBCTL_STATUS_SKIPPED_UNBOUND_HUB
+    assert r_skip.uhubctl.powered_off_ports == ()
+    assert all("uhubctl" not in cmd for cmd in c_skip.commands)
+
+
+def test_apply_probe_result_uhubctl_debounce_for_active_jobs():
+    from backend.services.host_health_probe import (
+        HEALTH_PROBE_EXTRA_KEY,
+        UHUBCTL_STATUS_OK,
+        apply_probe_result_to_extra,
+    )
+
+    now = datetime(2026, 11, 26, 6, 0, tzinfo=timezone.utc)
+    # 空闲主机：单轮即确认
+    idle_extra = apply_probe_result_to_extra(
+        {},
+        verdict=ProbeVerdict.ALIGNED.value,
+        signals=(),
+        topology=TOPOLOGY_OK,
+        now=now,
+        strike_need=2,
+        uhubctl_status=UHUBCTL_STATUS_OK,
+        raw_powered_off_ports=("1-5.1:2",),
+        active_jobs=0,
+    )
+    assert idle_extra[HEALTH_PROBE_EXTRA_KEY]["powered_off_ports"] == ["1-5.1:2"]
+
+    # 忙碌主机（可能有 12s vbus_cycle 刷机）：首轮暂不确认，连续两轮才确认
+    busy_r1 = apply_probe_result_to_extra(
+        {},
+        verdict=ProbeVerdict.ALIGNED.value,
+        signals=(),
+        topology=TOPOLOGY_OK,
+        now=now,
+        strike_need=2,
+        uhubctl_status=UHUBCTL_STATUS_OK,
+        raw_powered_off_ports=("1-5.1:2", "1-5.1:4"),
+        active_jobs=1,
+    )
+    assert busy_r1[HEALTH_PROBE_EXTRA_KEY]["powered_off_ports"] == []
+    assert busy_r1[HEALTH_PROBE_EXTRA_KEY]["uhubctl_raw_off_ports"] == ["1-5.1:2", "1-5.1:4"]
+
+    busy_r2 = apply_probe_result_to_extra(
+        busy_r1,
+        verdict=ProbeVerdict.ALIGNED.value,
+        signals=(),
+        topology=TOPOLOGY_OK,
+        now=now + timedelta(minutes=10),
+        strike_need=2,
+        uhubctl_status=UHUBCTL_STATUS_OK,
+        raw_powered_off_ports=("1-5.1:2",),
+        active_jobs=1,
+    )
+    assert busy_r2[HEALTH_PROBE_EXTRA_KEY]["powered_off_ports"] == ["1-5.1:2"]

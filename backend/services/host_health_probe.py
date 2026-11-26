@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -46,6 +47,16 @@ TOPOLOGY_UNKNOWN = "unknown"
 _ROOT_HUB_VID = "1d6b"
 _CASCADE_HUB_VIDS = frozenset({"0bda", "2109", "05e3", "1a40"})  # Realtek / VIA / Genesys / Terminus
 
+# uhubctl 端口 VBUS 供电巡检状态枚举（纯只读观测，不影响 lsusb/journal 对账 verdict）
+UHUBCTL_STATUS_OK = "ok"
+UHUBCTL_STATUS_UNAVAILABLE = "unavailable"
+UHUBCTL_STATUS_SKIPPED_UNBOUND_HUB = "skipped_unbound_hub"
+UHUBCTL_STATUS_TIMEOUT = "timeout"
+UHUBCTL_STATUS_ERROR = "error"
+
+_UHUBCTL_HUB_RE = re.compile(r"^Current status for hub\s+([0-9A-Za-z._-]+)\b")
+_UHUBCTL_PORT_RE = re.compile(r"^\s*Port\s+(\d+):\s+([0-9a-fA-F]{4})\s+(.*)$")
+
 
 class ProbeVerdict(str, Enum):
     """单轮探针相对 agent 自报的对账结论（连续 N 轮才转红由调用方做）。"""
@@ -78,11 +89,46 @@ class TopologyFacts:
 
 
 @dataclass(frozen=True)
+class UhubctlProbeFacts:
+    """``uhubctl`` 只读巡检解析出的 Hub 端口 VBUS 断电事实（``0000 off``）。"""
+
+    status: str = UHUBCTL_STATUS_UNAVAILABLE
+    powered_off_ports: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ProbeRound:
     journal: JournalProbeFacts
     topology: TopologyFacts
     #: 采集失败的探针（``name:reason``）；空 = 本轮两条都拿到了数据（#2983 复核）。
     collect_failed: tuple[str, ...] = ()
+    #: 可选的 ``uhubctl`` VBUS 供电状态（未安装 / 跳过 / 超时不计入 ``collect_failed``）。
+    uhubctl: UhubctlProbeFacts = UhubctlProbeFacts()
+
+
+def parse_uhubctl_powered_off_ports(lines: Iterable[str]) -> tuple[str, ...]:
+    """解析 ``uhubctl`` 文本输出，返回处于 VBUS 断电态（``0000 off``）的 ``<hub>:<port>`` 列表。"""
+    current_hub: Optional[str] = None
+    off_ports: set[str] = set()
+    for raw in lines:
+        line = (raw or "").rstrip("\r\n")
+        if not line.strip():
+            continue
+        hub_match = _UHUBCTL_HUB_RE.match(line)
+        if hub_match:
+            current_hub = hub_match.group(1)
+            continue
+        if not current_hub:
+            continue
+        port_match = _UHUBCTL_PORT_RE.match(line)
+        if not port_match:
+            continue
+        port_num = port_match.group(1)
+        status_hex = port_match.group(2).lower()
+        flags = port_match.group(3).lower().split()
+        if status_hex == "0000" or ("off" in flags and "power" not in flags):
+            off_ports.add(f"{current_hub}:{port_num}")
+    return tuple(sorted(off_ports))
 
 
 @dataclass(frozen=True)
@@ -268,6 +314,8 @@ PROBE_ARGV_WHITELIST: dict[str, tuple[str, ...]] = {
         "--boot",
         "--lines=1",
     ),
+    # 只读巡检 Hub 端口 VBUS 供电状态（0000 off）；加 8s 超时硬顶防半枚举 Hub 卡死。
+    "uhubctl": ("timeout", "8", "uhubctl"),
 }
 
 _JOURNAL_BLIND_HINT_MARKERS = (
@@ -364,8 +412,9 @@ def collect_probe_round_via_ssh(
     *,
     sudo_password: str,
     timeout: int = 10,
+    skip_uhubctl: bool = False,
 ) -> ProbeRound:
-    """一次 SSH 会话采集 lsusb + journal，折成 ``ProbeRound``。
+    """一次 SSH 会话采集 lsusb + journal（+ 可选 uhubctl），折成 ``ProbeRound``。
 
     ``rc`` / ``stderr`` 此前被算出来却从不检查 ⇒ ``sudo`` 失败（密码错、sudoers
     缺规则、未装 sudo ⇒ rc 127）与「真的干净」不可区分，被判 ALIGNED（#2983 复核）。
@@ -374,6 +423,10 @@ def collect_probe_round_via_ssh(
     2h 内核日志在安静主机上可能合法返回空 stdout；仅当 ``rc == 0``、stderr 无权限
     盲区提示且正向可读性探针 ``journal_kernel_readable``（``--boot --lines=1``）
     返回至少一行时，才认定为「可读且安静」，否则维持 ``journal_kernel_2h:empty_stdout``。
+
+    ``uhubctl`` 为辅助 VBUS 断电观测：若主机存在未绑定驱动的半枚举 Hub
+    （``skip_uhubctl=True``）则跳过，避免触发 20–30s 阻塞；未安装（rc=127）或
+    超时（rc=124）仅记录 ``uhubctl.status``，不污染 ``collect_failed``。
     """
     lsusb = run_whitelisted_sudo(
         client, "lsusb", sudo_password=sudo_password, timeout=timeout
@@ -405,10 +458,37 @@ def collect_probe_round_via_ssh(
     if journal_fail:
         failures_list.append(journal_fail)
 
+    if skip_uhubctl:
+        uhubctl_facts = UhubctlProbeFacts(status=UHUBCTL_STATUS_SKIPPED_UNBOUND_HUB)
+    else:
+        try:
+            uhubctl_out = run_whitelisted_sudo(
+                client,
+                "uhubctl",
+                sudo_password=sudo_password,
+                timeout=max(timeout, 10),
+            )
+            if uhubctl_out.rc == 0:
+                uhubctl_facts = UhubctlProbeFacts(
+                    status=UHUBCTL_STATUS_OK,
+                    powered_off_ports=parse_uhubctl_powered_off_ports(
+                        uhubctl_out.stdout.splitlines()
+                    ),
+                )
+            elif uhubctl_out.rc == 127:
+                uhubctl_facts = UhubctlProbeFacts(status=UHUBCTL_STATUS_UNAVAILABLE)
+            elif uhubctl_out.rc == 124:
+                uhubctl_facts = UhubctlProbeFacts(status=UHUBCTL_STATUS_TIMEOUT)
+            else:
+                uhubctl_facts = UhubctlProbeFacts(status=UHUBCTL_STATUS_ERROR)
+        except Exception:
+            uhubctl_facts = UhubctlProbeFacts(status=UHUBCTL_STATUS_ERROR)
+
     return ProbeRound(
         journal=parse_journal_probe(journal.stdout.splitlines()),
         topology=classify_lsusb_topology(lsusb.stdout.splitlines()),
         collect_failed=tuple(failures_list),
+        uhubctl=uhubctl_facts,
     )
 
 
@@ -471,8 +551,17 @@ def apply_probe_result_to_extra(
     topology: str,
     now: datetime,
     strike_need: int,
+    uhubctl_status: Optional[str] = None,
+    raw_powered_off_ports: Sequence[str] = (),
+    active_jobs: int = 0,
 ) -> dict[str, Any]:
-    """写 ``health_probe`` 摘要；返回可赋回 ``host.extra`` 的新 dict。"""
+    """写 ``health_probe`` 摘要；返回可赋回 ``host.extra`` 的新 dict。
+
+    ``uhubctl`` VBUS 断电防抖：
+    - 空闲主机（``active_jobs <= 0``）：单轮命中 ``0000 off`` 即刻确认上报；
+    - 有在跑任务的主机（``active_jobs > 0``）：可能正处于 12s ``vbus_cycle`` 瞬时切电窗，
+      需连续两轮巡检都处于 ``0000 off`` 才确认为持续断电端口。
+    """
     payload = dict(extra or {})
     prev = dict(payload.get(HEALTH_PROBE_EXTRA_KEY) or {})
     recent = append_probe_verdict(prev.get("recent_verdicts") or [], verdict)
@@ -483,7 +572,29 @@ def apply_probe_result_to_extra(
         except ValueError:
             continue
     strike = consecutive_strike_open(verdict_enums, need=strike_need)
-    payload[HEALTH_PROBE_EXTRA_KEY] = {
+
+    prev_raw_off = {
+        str(p).strip()
+        for p in (prev.get("uhubctl_raw_off_ports") or [])
+        if isinstance(p, str) and p.strip()
+    }
+    if uhubctl_status == UHUBCTL_STATUS_OK:
+        cur_raw_off = sorted(
+            {
+                str(p).strip()
+                for p in raw_powered_off_ports
+                if isinstance(p, str) and p.strip()
+            }
+        )
+        if active_jobs > 0:
+            confirmed_off = sorted(set(cur_raw_off) & prev_raw_off)
+        else:
+            confirmed_off = cur_raw_off
+    else:
+        cur_raw_off = []
+        confirmed_off = []
+
+    probe_entry: dict[str, Any] = {
         "checked_at": now.isoformat(),
         "verdict": verdict,
         "signals": list(signals),
@@ -491,7 +602,12 @@ def apply_probe_result_to_extra(
         "recent_verdicts": recent,
         "strike_open": strike,
         "strike_need": strike_need,
+        "powered_off_ports": confirmed_off,
+        "uhubctl_raw_off_ports": cur_raw_off,
     }
+    if uhubctl_status is not None:
+        probe_entry["uhubctl_status"] = uhubctl_status
+    payload[HEALTH_PROBE_EXTRA_KEY] = probe_entry
     return payload
 
 
@@ -549,9 +665,31 @@ def probe_one_host(
                 known_hosts_path=creds.known_hosts_path,
                 timeout=timeout,
             )
-            round_ = collect_round(
-                client, sudo_password=creds.password, timeout=timeout,
+            cap = (host.extra or {}).get("capacity") if isinstance(host.extra, dict) else {}
+            topo_cap = cap.get("usb_hub_topology") if isinstance(cap, dict) else {}
+            raw_unbound = topo_cap.get("unbound_hubs") if isinstance(topo_cap, dict) else 0
+            unbound_hubs = (
+                int(raw_unbound)
+                if isinstance(raw_unbound, (int, float)) and not isinstance(raw_unbound, bool)
+                else 0
             )
+            raw_active = cap.get("active_jobs") if isinstance(cap, dict) else 0
+            active_jobs = (
+                int(raw_active)
+                if isinstance(raw_active, (int, float)) and not isinstance(raw_active, bool)
+                else 0
+            )
+            if collect_round is collect_probe_round_via_ssh:
+                round_ = collect_round(
+                    client,
+                    sudo_password=creds.password,
+                    timeout=timeout,
+                    skip_uhubctl=unbound_hubs > 0,
+                )
+            else:
+                round_ = collect_round(
+                    client, sudo_password=creds.password, timeout=timeout,
+                )
             result = reconcile_agent_health(
                 _agent_reasons_from_extra(host.extra), round_,
             )
@@ -562,10 +700,13 @@ def probe_one_host(
                 topology=round_.topology.classification,
                 now=now,
                 strike_need=strike_need,
+                uhubctl_status=round_.uhubctl.status,
+                raw_powered_off_ports=round_.uhubctl.powered_off_ports,
+                active_jobs=active_jobs,
             )
-            strike_open = bool(
-                (host.extra or {}).get(HEALTH_PROBE_EXTRA_KEY, {}).get("strike_open")
-            )
+            probe_block = (host.extra or {}).get(HEALTH_PROBE_EXTRA_KEY, {})
+            strike_open = bool(probe_block.get("strike_open"))
+            powered_off_ports = list(probe_block.get("powered_off_ports") or [])
             if strike_open and result.verdict == ProbeVerdict.AGENT_MUTE:
                 record_audit(
                     db,
@@ -588,6 +729,7 @@ def probe_one_host(
                     "verdict": result.verdict.value,
                     "strike_open": strike_open,
                     "topology": round_.topology.classification,
+                    "powered_off_ports": powered_off_ports,
                 }
             )
             return summary

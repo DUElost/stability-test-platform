@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import func
@@ -54,6 +54,10 @@ ALLOWED_HEALTH_FILTERS = frozenset({"HEALTHY", "DEGRADED", "UNSCHEDULABLE", "unh
 ALLOWED_SYNC_FILTERS = frozenset({"upgrade_pending", "drift", "matched", "pending", "unknown"})
 ALLOWED_SORT_BY = frozenset({"default", "priority", "id", "name", "devices", "cpu", "ram", "disk", "heartbeat"})
 ALLOWED_SORT_DIR = frozenset({"asc", "desc"})
+
+# 硬件体检全绿的纯 usb_tree_empty 仅在台账设备最近活跃时间落在该窗口内时计入 usb_fault；
+# 超过窗口且硬件正常的主机自动视作长期空置（减少人工逐台点 emptied_at 负荷）。
+EMPTY_TREE_RECENT_LEDGER_HOURS = 72
 
 
 class HostQueryError(Exception):
@@ -108,13 +112,17 @@ def sanitize_host_extra(raw_extra: Any) -> Dict[str, Any]:
     return extra
 
 
-def load_host_ledger_device_counts(
+def load_host_ledger_summary(
     db: Session,
     host_ids: Optional[Sequence[str]] = None,
-) -> Dict[str, int]:
-    """只读统计各主机在册（未退役）设备台账行数。"""
+) -> Dict[str, Tuple[int, Optional[datetime]]]:
+    """只读统计各主机在册（未退役）设备台账行数与最近活跃时间（``last_seen`` 缺省回落 ``created_at``）。"""
     query = (
-        db.query(Device.host_id, func.count(Device.id))
+        db.query(
+            Device.host_id,
+            func.count(Device.id),
+            func.max(func.coalesce(Device.last_seen, Device.created_at)),
+        )
         .filter(Device.retired_at.is_(None), Device.host_id.is_not(None))
     )
     if host_ids is not None:
@@ -123,7 +131,22 @@ def load_host_ledger_device_counts(
             return {}
         query = query.filter(Device.host_id.in_(id_list))
     rows = query.group_by(Device.host_id).all()
-    return {str(hid): int(cnt) for hid, cnt in rows if hid is not None}
+    return {
+        str(hid): (int(cnt), latest_seen)
+        for hid, cnt, latest_seen in rows
+        if hid is not None
+    }
+
+
+def load_host_ledger_device_counts(
+    db: Session,
+    host_ids: Optional[Sequence[str]] = None,
+) -> Dict[str, int]:
+    """只读统计各主机在册（未退役）设备台账行数。"""
+    return {
+        hid: cnt
+        for hid, (cnt, _) in load_host_ledger_summary(db, host_ids).items()
+    }
 
 
 def build_host_out_readonly(
@@ -134,6 +157,7 @@ def build_host_out_readonly(
     now: Optional[datetime] = None,
     host_key_trust: Optional[str] = None,
     ledger_device_count: Optional[int] = None,
+    ledger_latest_seen_at: Optional[datetime] = None,
 ) -> HostOut:
     """只读构造 ``HostOut``（不含 DB 查询；不修改 ORM 对象）。"""
     out = HostOut.model_validate(host)
@@ -147,6 +171,8 @@ def build_host_out_readonly(
     out.host_key_trust = host_key_trust
     if ledger_device_count is not None:
         out.ledger_device_count = int(ledger_device_count)
+    if ledger_latest_seen_at is not None:
+        out.ledger_latest_seen_at = ledger_latest_seen_at
     installed, installed_at = derive_agent_installed(host)
     out.agent_installed = installed
     out.agent_installed_at = installed_at
@@ -174,16 +200,53 @@ def _cap_int(mapping: Any, key: str) -> int:
     return 0
 
 
-def host_usb_fault_priority(out: HostOut) -> int:
-    """计算主机 USB/Hub/探针故障优先级（3=严重需人工 2=劣化/未豁免空树 1=待办/闲置半枚举 0=正常）。
+def _powered_off_ports_from_probe(out: HostOut) -> List[str]:
+    probe = out.health_probe if isinstance(out.health_probe, dict) else {}
+    raw = probe.get("powered_off_ports")
+    if not isinstance(raw, list):
+        return []
+    return [str(p).strip() for p in raw if isinstance(p, str) and p.strip()]
+
+
+def _has_recent_ledger_activity(
+    out: HostOut,
+    *,
+    now: Optional[datetime] = None,
+) -> bool:
+    """判断台账在册设备是否存在近期活跃（72h 内）。
+
+    - ``ledger_device_count == 0``：明确无在册设备 → ``False``；
+    - ``ledger_device_count is None`` 或 ``ledger_latest_seen_at is None``：
+      未下发时间摘要时保守返回 ``True``（兼容旧调用方）；
+    - 其余按 ``now - ledger_latest_seen_at <= 72h`` 判定。
+    """
+    if out.ledger_device_count == 0:
+        return False
+    if out.ledger_device_count is None or out.ledger_latest_seen_at is None:
+        return True
+    ref_now = now or datetime.now(timezone.utc)
+    if ref_now.tzinfo is None:
+        ref_now = ref_now.replace(tzinfo=timezone.utc)
+    seen = out.ledger_latest_seen_at
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    return (ref_now - seen) <= timedelta(hours=EMPTY_TREE_RECENT_LEDGER_HOURS)
+
+
+def host_usb_fault_priority(
+    out: HostOut,
+    *,
+    now: Optional[datetime] = None,
+) -> int:
+    """计算主机 USB/Hub/探针故障优先级（3=严重需人工 2=劣化/未豁免空树 1=待办/VBUS 断电/闲置半枚举 0=正常）。
 
     与前端 ``ExpandableHostTable.tsx::hostUsbFaultPriority`` 严格保持同口径：
     - 退役主机恒为 0；
     - 硬件硬证据（主控死亡、PCI xHCI 失绑、根口禁用、过流、在用总线 Hub 半枚举、
-      Hub 口禁用、端口卡死 ``default``）不受 ``emptied_at`` 或空台账豁免；
-    - 纯 ``usb_tree_empty`` 仅在未置位 ``emptied_at`` 且台账仍有设备
-      （``ledger_device_count != 0``）时计入 P2（对齐 ``StabilityHostUsbBlind``，
-      避免无设备空柜淹没真实故障）。
+      Hub 口禁用、端口卡死 ``default``）与 ``uhubctl`` VBUS 断电端口不受 ``emptied_at``
+      或 72h 窗口豁免；
+    - 纯 ``usb_tree_empty`` 仅在未置位 ``emptied_at``、台账有设备且最近活跃时间
+      在 72 小时内时计入 P2（超过 72h 且硬件全绿自动归为长期空置，避免空柜淹没真实故障）。
     """
     if out.retired_at is not None:
         return 0
@@ -210,6 +273,7 @@ def host_usb_fault_priority(out: HostOut) -> int:
 
     probe = out.health_probe if isinstance(out.health_probe, dict) else {}
     self_heal = out.self_heal if isinstance(out.self_heal, dict) else {}
+    powered_off_count = len(_powered_off_ports_from_probe(out))
 
     if (
         "usb_host_controller_dead" in reasons
@@ -226,7 +290,7 @@ def host_usb_fault_priority(out: HostOut) -> int:
         or (
             "usb_tree_empty" in reasons
             and out.emptied_at is None
-            and out.ledger_device_count != 0
+            and _has_recent_ledger_activity(out, now=now)
         )
         or "adb_multiple_servers" in reasons
         or disabled_hub_ports > 0
@@ -236,6 +300,7 @@ def host_usb_fault_priority(out: HostOut) -> int:
         "adb_interfaces_missing" in reasons
         or unbound_hubs > 0
         or stuck_default_ports > 0
+        or powered_off_count > 0
     ):
         return 1
     return 0
@@ -356,7 +421,12 @@ def validate_host_sort_params(
     return norm_by, norm_dir
 
 
-def _matches_host_filters(out: HostOut, filters: HostQueryFilters) -> bool:
+def _matches_host_filters(
+    out: HostOut,
+    filters: HostQueryFilters,
+    *,
+    now: Optional[datetime] = None,
+) -> bool:
     if filters.status is not None and out.status != filters.status:
         return False
 
@@ -375,9 +445,9 @@ def _matches_host_filters(out: HostOut, filters: HostQueryFilters) -> bool:
         elif out.agent_code_sync_status != filters.sync_status:
             return False
 
-    if filters.usb_anomaly is True and host_usb_fault_priority(out) == 0:
+    if filters.usb_anomaly is True and host_usb_fault_priority(out, now=now) == 0:
         return False
-    if filters.usb_anomaly is False and host_usb_fault_priority(out) > 0:
+    if filters.usb_anomaly is False and host_usb_fault_priority(out, now=now) > 0:
         return False
 
     if filters.mount_anomaly is True and not host_has_mount_anomaly(out):
@@ -396,6 +466,9 @@ def _matches_host_filters(out: HostOut, filters: HostQueryFilters) -> bool:
                     code = str(reason)
                     label = HEALTH_REASON_LABELS.get(code, "")
                     reason_parts.append(f"{code} {label}")
+            powered_off = _powered_off_ports_from_probe(out)
+            if powered_off:
+                reason_parts.append("vbus 断电 uhubctl " + " ".join(powered_off))
             haystack = " ".join(
                 str(part)
                 for part in (
@@ -454,6 +527,7 @@ def sort_host_outs(
     *,
     sort_by: Optional[str],
     sort_dir: Optional[str],
+    now: Optional[datetime] = None,
 ) -> List[HostOut]:
     """在分页切片前执行全局稳定排序，统一以 ``Host.id ASC`` 为尾键。"""
     # 兼容旧路径：未传 sort_by 时维持既有 Host.id ASC 顺序
@@ -464,8 +538,8 @@ def sort_host_outs(
     if sort_by in ("default", "priority"):
         # 严重 USB/Hub/探针异常优先置顶，同优先级按 Host.id ASC 稳定排序
         if sort_dir == "asc":
-            return sorted(items, key=lambda h: (host_usb_fault_priority(h), str(h.id)))
-        return sorted(items, key=lambda h: (-host_usb_fault_priority(h), str(h.id)))
+            return sorted(items, key=lambda h: (host_usb_fault_priority(h, now=now), str(h.id)))
+        return sorted(items, key=lambda h: (-host_usb_fault_priority(h, now=now), str(h.id)))
 
     # 显式列排序：先按 Host.id ASC 预排，再利用 Python Timsort 稳定性按目标列排序，
     # 保证无论 asc/desc，同值行始终按 Host.id ASC 确定输出。
@@ -508,7 +582,7 @@ def _load_base_host_outs(
     # 单请求外层只求一次 expected_code_revision（facets/preview 不消费此溯源字段则跳过），
     # 避免按 N 台主机循环重复调用 get_agent_code_version()。
     expected_rev = get_agent_code_version() if include_expected_revision else ""
-    ledger_counts = load_host_ledger_device_counts(
+    ledger_summary = load_host_ledger_summary(
         db,
         [str(h.id) for h in hosts],
     )
@@ -518,7 +592,8 @@ def _load_base_host_outs(
             desired_artifact_digest=desired_artifact_digest,
             expected_code_revision=expected_rev,
             now=now,
-            ledger_device_count=ledger_counts.get(str(h.id), 0),
+            ledger_device_count=ledger_summary.get(str(h.id), (0, None))[0],
+            ledger_latest_seen_at=ledger_summary.get(str(h.id), (0, None))[1],
         )
         for h in hosts
     ]
@@ -543,8 +618,8 @@ def query_hosts_page(
         desired_artifact_digest=desired_artifact_digest,
         now=ref_now,
     )
-    matched = [h for h in all_outs if _matches_host_filters(h, filters)]
-    ordered = sort_host_outs(matched, sort_by=sort_by, sort_dir=sort_dir)
+    matched = [h for h in all_outs if _matches_host_filters(h, filters, now=ref_now)]
+    ordered = sort_host_outs(matched, sort_by=sort_by, sort_dir=sort_dir, now=ref_now)
     total = len(ordered)
     return ordered[skip : skip + limit], total
 
@@ -565,10 +640,14 @@ def build_host_facets(
         now=ref_now,
         include_expected_revision=False,
     )
-    return _aggregate_host_facets(hosts)
+    return _aggregate_host_facets(hosts, now=ref_now)
 
 
-def _aggregate_host_facets(hosts: Sequence[HostOut]) -> HostFacetsOut:
+def _aggregate_host_facets(
+    hosts: Sequence[HostOut],
+    *,
+    now: Optional[datetime] = None,
+) -> HostFacetsOut:
     online = 0
     degraded = 0
     offline = 0
@@ -587,7 +666,7 @@ def _aggregate_host_facets(hosts: Sequence[HostOut]) -> HostFacetsOut:
         else:
             offline += 1
 
-        if host_usb_fault_priority(h) > 0:
+        if host_usb_fault_priority(h, now=now) > 0:
             usb_anomaly += 1
 
         if host_is_trackable_agent(h):
@@ -633,8 +712,8 @@ def build_host_selection_preview(
         now=ref_now,
         include_expected_revision=False,
     )
-    matched = [h for h in all_outs if _matches_host_filters(h, filters)]
-    ordered = sort_host_outs(matched, sort_by="id", sort_dir="asc")
+    matched = [h for h in all_outs if _matches_host_filters(h, filters, now=ref_now)]
+    ordered = sort_host_outs(matched, sort_by="id", sort_dir="asc", now=ref_now)
 
     retired_count = 0
     online_count = 0
