@@ -1344,7 +1344,7 @@ export default function HostsPage() {
   }
 
   return (
-    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
+    <PageContainer width="wide" scrollable={false} className="py-2.5 lg:py-2.5">
       <PageHeader
         title="主机集群"
         subtitle="管理和监控测试执行节点 · 点击主机行查看详情，勾选后可批量运维"

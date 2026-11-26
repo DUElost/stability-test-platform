@@ -473,3 +473,35 @@ it('scopes version, model, product, and host filter options to active status and
   expect(screen.queryByRole('option', { name: 'P-OFFLINE' })).not.toBeInTheDocument();
   fireEvent.keyDown(document, { key: 'Escape' });
 });
+
+it('表格滚动区采用弹性锁高且分页底栏固定在卡片底部（无 calc(100vh-...)）', () => {
+  const { container } = render(
+    <ExpandableDeviceTable
+      devices={Array.from({ length: 5 }, (_, idx) => ({
+        id: idx + 1,
+        serial: `SER-PIN-${idx + 1}`,
+        model: 'MLD-LX3',
+        status: 'idle' as const,
+        host_name: 'Host-A',
+      }))}
+      serverMode
+      serverFilteredTotal={1176}
+      totalCount={1176}
+      pageSize={50}
+      currentPage={1}
+      onPageChange={vi.fn()}
+      onPageSizeChange={vi.fn()}
+    />,
+  );
+
+  const scrollBox = container.querySelector('[data-slot="table-scroll-container"]');
+  expect(scrollBox).not.toBeNull();
+  expect(scrollBox?.className).toContain('flex-1');
+  expect(scrollBox?.className).toContain('min-h-0');
+  expect(scrollBox?.className).not.toContain('calc(100vh');
+
+  const paginationBar = screen.getByTestId('devices-pagination-bar');
+  expect(paginationBar).toHaveTextContent('第 1–50 / 共 1176 台');
+  expect(paginationBar.className).toContain('shrink-0');
+  expect(paginationBar.parentElement).toBe(scrollBox?.parentElement);
+});

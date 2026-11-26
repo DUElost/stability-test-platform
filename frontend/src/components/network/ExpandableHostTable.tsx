@@ -36,6 +36,8 @@ import {
   ArrowUp,
   ArrowUpDown,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CircleSlash,
   MoreHorizontal,
   Pencil,
@@ -1220,10 +1222,11 @@ export function ExpandableHostTable({
 
   return (
     <TooltipProvider>
-      <div className="space-y-2">
+      <div className="flex flex-1 min-h-0 flex-col gap-2">
         {/* 统一单行工作台：顶行合并状态统计与快捷视角，主筛选行严格单行 */}
-        <FilterWorkbench
-          headerLeft={unifiedStatusViews}
+        <div className="shrink-0">
+          <FilterWorkbench
+            headerLeft={unifiedStatusViews}
           headerRight={workbenchHeaderRight}
           hiddenChips={hiddenChips}
           hasAnyActiveFilter={hasAnyActiveFilter}
@@ -1295,12 +1298,16 @@ export function ExpandableHostTable({
               ) : null}
             </MoreFiltersPopover>
           </div>
-        </FilterWorkbench>
+          </FilterWorkbench>
+        </div>
 
-        {/* 虚拟化高密主表：点击行打开右侧标准 HostDetailDrawer，1280×800 核心列免横滚 */}
-        <div ref={tableContainerRef} className="overflow-hidden rounded-xl border border-border bg-card">
+        {/* 虚拟化高密主表：视口弹性锁高 + sticky top-0 表头 + 卡片底栏固定分页，1280×800 核心列免横滚 */}
+        <div
+          ref={tableContainerRef}
+          className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card"
+        >
           <Table
-            containerClassName="max-h-[calc(100vh-235px)] min-h-[240px] overflow-auto"
+            containerClassName="flex-1 min-h-0 overflow-auto"
             className="w-full min-w-[860px]"
           >
             <TableHeader className="sticky top-0 z-10 bg-muted/95 backdrop-blur-xs">
@@ -1853,71 +1860,73 @@ export function ExpandableHostTable({
               ) : null}
             </TableBody>
           </Table>
-        </div>
 
-        {/* B3-2 服务端分页栏 */}
-        {serverMode && onPageChange ? (
-          <div
-            data-testid="hosts-pagination-bar"
-            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
-          >
-            <div className="flex items-center gap-2">
-              <span className="font-mono tabular-nums">
-                {totalMatched === 0
-                  ? '共 0 台主机'
-                  : `第 ${rangeStart}–${rangeEnd} / 共 ${totalMatched} 台`}
-              </span>
-              {isFetchingPage ? <span className="text-muted-foreground/70">刷新中…</span> : null}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {onPageSizeChange ? (
-                <div className="inline-flex items-center gap-1" role="group" aria-label="每页显示条数">
-                  <span>每页</span>
-                  {pageSizeOptions.map((size) => (
-                    <button
-                      key={size}
-                      type="button"
-                      data-testid={`hosts-page-size-${size}`}
-                      aria-pressed={pageSize === size}
-                      onClick={() => onPageSizeChange(size)}
-                      className={cn(
-                        'rounded border px-2 py-0.5 font-mono text-xs transition-colors',
-                        pageSize === size
-                          ? 'border-primary bg-primary/10 font-medium text-primary'
-                          : 'border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground',
-                      )}
-                    >
-                      {size}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              <div className="inline-flex items-center gap-1.5">
-                <button
-                  type="button"
-                  data-testid="hosts-prev-page"
-                  disabled={currentPage <= 1}
-                  onClick={() => onPageChange(Math.max(1, currentPage - 1))}
-                  className="rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  上一页
-                </button>
-                <span className="font-mono tabular-nums text-foreground" data-testid="hosts-page-indicator">
-                  {currentPage} / {totalPages}
+          {/* B3-2 服务端分页栏（固定在卡片底部，不随表格滚动移出视口） */}
+          {serverMode && onPageChange ? (
+            <div
+              data-testid="hosts-pagination-bar"
+              className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono tabular-nums">
+                  {totalMatched === 0
+                    ? '共 0 台主机'
+                    : `第 ${rangeStart}–${rangeEnd} / 共 ${totalMatched} 台`}
                 </span>
-                <button
-                  type="button"
-                  data-testid="hosts-next-page"
-                  disabled={currentPage >= totalPages}
-                  onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
-                  className="rounded border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  下一页
-                </button>
+                {isFetchingPage ? <span className="text-muted-foreground/70">刷新中…</span> : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                {onPageSizeChange ? (
+                  <div className="inline-flex items-center gap-1" role="group" aria-label="每页显示条数">
+                    <span>每页</span>
+                    {pageSizeOptions.map((size) => (
+                      <button
+                        key={size}
+                        type="button"
+                        data-testid={`hosts-page-size-${size}`}
+                        aria-pressed={pageSize === size}
+                        onClick={() => onPageSizeChange(size)}
+                        className={cn(
+                          'rounded border px-2 py-0.5 font-mono text-xs transition-colors',
+                          pageSize === size
+                            ? 'border-primary bg-primary/10 font-medium text-primary'
+                            : 'border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                        )}
+                      >
+                        {size}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="inline-flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    data-testid="hosts-prev-page"
+                    disabled={currentPage <= 1}
+                    onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+                    className="inline-flex items-center gap-0.5 rounded border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <span>上一页</span>
+                  </button>
+                  <span className="px-1 font-mono tabular-nums text-foreground" data-testid="hosts-page-indicator">
+                    {currentPage} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="hosts-next-page"
+                    disabled={currentPage >= totalPages}
+                    onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+                    className="inline-flex items-center gap-0.5 rounded border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span>下一页</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         {/* 右侧标准化主机详情抽屉（D2 / #465 / #4117 U3-1） */}
         <HostDetailDrawer
