@@ -13,6 +13,16 @@
         "params": {}
       },
       {
+        "step_id": "sync_device_time",
+        "action": "script:sync_device_time",
+        "version": "1.0.1",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "timezone": "Asia/Shanghai"
+        }
+      },
+      {
         "step_id": "ensure_root",
         "action": "script:ensure_root",
         "version": "1.0.2",
