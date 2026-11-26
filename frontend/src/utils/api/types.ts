@@ -381,8 +381,6 @@ export interface Device {
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   last_seen: string | null;
   tags: string[];
-  /** #496 / #4117 Q2：列表投影因单行载荷预算发生截断时置 true，写标签前需按需拉取单机完整标签 */
-  tags_truncated?: boolean;
   extra?: Record<string, unknown>;
   adb_state?: string | null;
   adb_connected?: boolean | null;
