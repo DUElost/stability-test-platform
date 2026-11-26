@@ -62,6 +62,7 @@ STP agent script contract:
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import math
@@ -662,11 +663,17 @@ def check_battery(adb_bin: str, serial: str, min_level: int, route: Optional[dic
     return level
 
 
-def _sysfs_read(path: str) -> str:
+def _sysfs_read(path: str, *, raise_on_io_error: bool = False) -> str:
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             return fh.read().strip()
-    except OSError:
+    except OSError as exc:
+        if (
+            raise_on_io_error
+            and not isinstance(exc, FileNotFoundError)
+            and exc.errno not in (errno.ENOENT, errno.ENODEV)
+        ):
+            raise
         return ""
 
 
@@ -678,8 +685,8 @@ def find_unisoc_download_ports(base: Optional[str] = None) -> List[str]:
         if ":" in name or "-" not in name:
             continue
         dev_dir = os.path.join(usb_base, name)
-        vid = _sysfs_read(os.path.join(dev_dir, "idVendor")).lower()
-        pid = _sysfs_read(os.path.join(dev_dir, "idProduct")).lower()
+        vid = _sysfs_read(os.path.join(dev_dir, "idVendor"), raise_on_io_error=True).lower()
+        pid = _sysfs_read(os.path.join(dev_dir, "idProduct"), raise_on_io_error=True).lower()
         if vid == _UNISOC_DOWNLOAD_VID and pid == _UNISOC_DOWNLOAD_PID:
             hits.append(name)
     return hits
@@ -714,6 +721,7 @@ def check_no_unisoc_download_port(
     poll_interval: Optional[float] = None,
     target_usb_port: Optional[str] = None,
     log: Optional[list] = None,
+    progress: Optional[Progress] = None,
 ) -> List[str]:
     usb_base = _SYSFS_USB_BASE if base is None else base
     interval = _DOWNLOAD_PORT_POLL_INTERVAL if poll_interval is None else poll_interval
@@ -723,7 +731,7 @@ def check_no_unisoc_download_port(
             hits = find_unisoc_download_ports(usb_base)
         except OSError as exc:
             raise FlashRejectedError(
-                f"USB bus directory unreadable at {usb_base}: {exc} "
+                f"USB bus directory or attribute unreadable at {usb_base}: {exc} "
                 f"(expected readable sysfs directory with no {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID})",
                 route=route,
             ) from exc
@@ -734,12 +742,21 @@ def check_no_unisoc_download_port(
             blocking = hits
             ignored = []
         if not blocking:
-            if ignored and log is not None:
-                log.append(
+            if ignored:
+                warn_msg = (
                     f"WARNING: non-target Unisoc download port(s) {_UNISOC_DOWNLOAD_VID}:{_UNISOC_DOWNLOAD_PID} "
                     f"present on USB bus (ports={ignored}, target={target_usb_port!r}); "
                     "proceeding under --usb-port binding"
                 )
+                if log is not None:
+                    log.append(warn_msg)
+                if progress is not None:
+                    progress.stamp(
+                        stage="download-port-warning",
+                        target_usb_port=target_usb_port,
+                        ignored_ports=",".join(ignored),
+                        warning=warn_msg,
+                    )
             return ignored
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -874,6 +891,21 @@ def resolve_device_usb_port(
 
 
 
+def _release_host_lock(lock_fd: int, *, locked: bool = True) -> None:
+    """Release flock (if acquired) and always close lock_fd even if LOCK_UN fails."""
+    try:
+        if locked:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        try:
+            os.close(lock_fd)
+        except OSError:
+            pass
+
+
 def acquire_host_lock(progress: Progress, timeout_seconds: int = 7200, lock_path: str = _HOST_LOCK_PATH) -> int:
     """Blocking flock(LOCK_EX) with 5s lock-wait PROGRESS stamps."""
     try:
@@ -881,19 +913,24 @@ def acquire_host_lock(progress: Progress, timeout_seconds: int = 7200, lock_path
     except PermissionError:
         # protected_regular=2 blocks O_CREAT in sticky /tmp when owned by another user (e.g. android vs root).
         fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW)
+    locked = False
     waited = 0
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            progress.stamp(stage="lock-held", waited_seconds=waited)
-            return fd
-        except BlockingIOError:
-            if waited >= timeout_seconds:
-                os.close(fd)
-                raise RuntimeError(f"timed out waiting for host flash lock {lock_path} after {waited}s") from None
-            progress.stamp(stage="lock-wait", waited_seconds=waited)
-            time.sleep(5)
-            waited += 5
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                progress.stamp(stage="lock-held", waited_seconds=waited)
+                return fd
+            except BlockingIOError:
+                if waited >= timeout_seconds:
+                    raise RuntimeError(f"timed out waiting for host flash lock {lock_path} after {waited}s") from None
+                progress.stamp(stage="lock-wait", waited_seconds=waited)
+                time.sleep(5)
+                waited += 5
+    except BaseException:
+        _release_host_lock(fd, locked=locked)
+        raise
 
 
 def build_spd_dump_args(
@@ -1128,19 +1165,35 @@ def run_spd_dump(
 
 
 def wait_boot_completed(adb_bin: str, serial: str, progress: Progress, timeout_seconds: int) -> float:
-    t0 = time.time()
-    last_stamp = 0.0
-    while time.time() - t0 < timeout_seconds:
-        rc, out, _ = run_adb(adb_bin, serial, ["shell", "getprop", "sys.boot_completed"], timeout=10)
+    t0 = time.monotonic()
+    deadline = t0 + max(0.0, float(timeout_seconds))
+    last_stamp: Optional[float] = None
+    while True:
+        now = time.monotonic()
+        remaining = deadline - now
+        if remaining <= 0:
+            break
+        rc, out, _ = run_adb(
+            adb_bin,
+            serial,
+            ["shell", "getprop", "sys.boot_completed"],
+            timeout=min(10.0, remaining),
+        )
         if rc == 0 and out.strip() == "1":
-            elapsed = round(time.time() - t0, 1)
+            elapsed = round(time.monotonic() - t0, 1)
             progress.stamp(stage="boot-ready", boot_seconds=elapsed)
             return elapsed
-        now = time.time()
-        if now - last_stamp >= 5.0:
+        now = time.monotonic()
+        remaining = deadline - now
+        if remaining <= 0:
+            break
+        if last_stamp is None or now - last_stamp >= 5.0:
             progress.stamp(stage="boot-wait", elapsed_s=round(now - t0, 1))
             last_stamp = now
-        time.sleep(2.0)
+        time.sleep(min(2.0, remaining))
+        if time.monotonic() <= now:
+            # Sleep mocked as no-op without advancing clock; avoid infinite spin in unit tests.
+            break
     raise RuntimeError(f"device {serial} did not reach sys.boot_completed=1 within {timeout_seconds}s")
 
 
@@ -1294,29 +1347,59 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
 
         dry_ignored_ports: List[str] = []
         if is_dry_run:
-            # #4066 / #3995: dry_run checks download ports before strict port resolution
-            # so missing target serial still surfaces bus-wide 1782:4d00 first; when
-            # port binding is enabled and target serial resolves uniquely, only reject
-            # the target port itself and report non-target orphans.
-            dry_target_port: Optional[str] = None
+            # #4066 / #3995: keep dry_run gate and returned usb_port on one validated
+            # binding; if target serial cannot be resolved under require_port_binding,
+            # still surface any bus-wide 1782:4d00 before reporting missing serial.
             if require_port_binding:
                 try:
-                    dry_hits = find_usb_ports_for_serial(serial)
-                except OSError:
-                    dry_hits = []
-                if len(dry_hits) == 1 and _USB_PORT_RE.match(dry_hits[0]):
-                    dry_target_port = dry_hits[0]
-            dry_ignored_ports = check_no_unisoc_download_port(
+                    usb_port = resolve_device_usb_port(
+                        serial,
+                        require_port_binding=True,
+                        route=route,
+                    )
+                except FlashRejectedError:
+                    check_no_unisoc_download_port(
+                        route=route,
+                        target_usb_port=None,
+                        log=log,
+                        progress=progress,
+                    )
+                    raise
+                dry_ignored_ports = check_no_unisoc_download_port(
+                    route=route,
+                    target_usb_port=usb_port,
+                    log=log,
+                    progress=progress,
+                )
+                rechecked_port = resolve_device_usb_port(
+                    serial,
+                    require_port_binding=True,
+                    route=route,
+                )
+                if rechecked_port != usb_port:
+                    raise FlashRejectedError(
+                        f"target USB port changed during dry-run validation: "
+                        f"{usb_port!r} -> {rechecked_port!r}",
+                        route=route,
+                    )
+            else:
+                dry_ignored_ports = check_no_unisoc_download_port(
+                    route=route,
+                    target_usb_port=None,
+                    log=log,
+                    progress=progress,
+                )
+                usb_port = resolve_device_usb_port(
+                    serial,
+                    require_port_binding=False,
+                    route=route,
+                )
+        else:
+            usb_port = resolve_device_usb_port(
+                serial,
+                require_port_binding=require_port_binding,
                 route=route,
-                target_usb_port=dry_target_port,
-                log=log,
             )
-
-        usb_port = resolve_device_usb_port(
-            serial,
-            require_port_binding=require_port_binding,
-            route=route,
-        )
 
         spd_dump_timeout = _parse_positive_finite_float(
             args.get("spd_dump_timeout_seconds"),
@@ -1377,6 +1460,7 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                     "hold_lock_until_boot": hold_lock_until_boot,
                     "boot_stabilize_seconds": boot_stabilize_seconds,
                     "non_target_download_ports_ignored": dry_ignored_ports,
+                    "warnings": [entry for entry in log if entry.startswith("WARNING:")],
                 }
             }
 
@@ -1428,21 +1512,22 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                 boot_seconds: Optional[float] = None
                 stabilize_actual = 0.0
                 try:
-                    live_usb_port = resolve_device_usb_port(
-                        serial,
-                        require_port_binding=require_port_binding,
-                        route=route,
-                    )
-                    if live_usb_port != usb_port:
-                        raise FlashRejectedError(
-                            f"target USB port changed while waiting for host lock: "
-                            f"{usb_port!r} -> {live_usb_port!r}",
+                    def _assert_live_usb_port(stage_label: str) -> None:
+                        live_port = resolve_device_usb_port(
+                            serial,
+                            require_port_binding=require_port_binding,
                             route=route,
                         )
-                    cmd = build_spd_dump_args(
-                        spd_dump_bin, local_images, cached_super, spec=spec, usb_port=usb_port
-                    )
+                        if live_port != usb_port:
+                            raise FlashRejectedError(
+                                f"target USB port changed {stage_label}: "
+                                f"{usb_port!r} -> {live_port!r}",
+                                route=route,
+                            )
+
+                    _assert_live_usb_port("while waiting for host lock")
                     pre_reboot = _capture_pre_reboot_evidence(adb_bin, serial)
+                    _assert_live_usb_port("before download-port gate")
                     raw_clear_wait = args.get("download_port_clear_wait_seconds")
                     if raw_clear_wait is None or str(raw_clear_wait).strip() == "":
                         clear_wait = _DEFAULT_DOWNLOAD_PORT_CLEAR_WAIT_SECONDS
@@ -1454,6 +1539,11 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                         wait_seconds=clear_wait,
                         target_usb_port=gate_target_port,
                         log=log,
+                        progress=progress,
+                    )
+                    _assert_live_usb_port("before launching spd_dump")
+                    cmd = build_spd_dump_args(
+                        spd_dump_bin, local_images, cached_super, spec=spec, usb_port=usb_port
                     )
                     reboot_anchor = time.monotonic()
                     _LAST_REBOOT_SENT_AT["value"] = None
@@ -1488,11 +1578,7 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                         )
                         stabilize_actual = _wait_boot_stabilize(boot_stabilize_seconds, progress)
                 finally:
-                    try:
-                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                        os.close(lock_fd)
-                    except OSError:
-                        pass
+                    _release_host_lock(lock_fd, locked=True)
 
                 if boot_seconds is None:
                     boot_seconds = wait_boot_completed(
@@ -1564,6 +1650,7 @@ def run(args: dict, serial: str, progress: Progress, log: list) -> dict:
                         "lock_held_until_boot": hold_lock_until_boot,
                         "boot_stabilize_seconds": stabilize_actual,
                         "non_target_download_ports_ignored": ignored_download_ports,
+                        "warnings": [entry for entry in log if entry.startswith("WARNING:")],
                         "duration_seconds": round(time.time() - t0, 1),
                         "firmware_cache": fc_metrics,
                     }

@@ -3240,3 +3240,396 @@ def test_v1010_rejects_invalid_boot_stabilize_seconds(
             mod.Progress(),
             [],
         )
+
+
+def test_v1010_acquire_host_lock_releases_and_closes_fd_when_stamp_raises(
+    tmp_path: Path,
+) -> None:
+    """PR #4177 R1: BrokenPipeError on lock-held stamp must unlock & close fd so peers can lock."""
+    import fcntl as _fcntl
+
+    mod = _load_module()
+    lock_file = tmp_path / "host.lock"
+
+    class BrokenStampProgress(mod.Progress):
+        def stamp(self, **fields: object) -> None:
+            if fields.get("stage") == "lock-held":
+                raise BrokenPipeError("stderr pipe closed")
+
+    with pytest.raises(BrokenPipeError):
+        mod.acquire_host_lock(BrokenStampProgress(), timeout_seconds=5, lock_path=str(lock_file))
+
+    probe_fd = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        _fcntl.flock(probe_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        _fcntl.flock(probe_fd, _fcntl.LOCK_UN)
+    finally:
+        os.close(probe_fd)
+
+
+def test_v1010_run_closes_lock_fd_even_when_lock_un_raises_eio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #4177 R1: LOCK_UN raising EIO must not skip os.close(lock_fd); second fd must acquire lock."""
+    import errno as _errno
+    import fcntl as _fcntl
+
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(tmp_path, [("1-5.4.4", "18d1", "4ee8", "SN1")])
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: mod.acquire_host_lock.__wrapped__(progress, timeout_seconds, str(lock_file))
+        if hasattr(mod.acquire_host_lock, "__wrapped__")
+        else (
+            lambda fd: (_fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB) or fd)
+        )(os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)),
+    )
+
+    real_flock = _fcntl.flock
+
+    def flaky_unlock(fd, op):
+        if op == _fcntl.LOCK_UN:
+            raise OSError(_errno.EIO, "simulated unlock EIO")
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(mod.fcntl, "flock", flaky_unlock)
+
+    def fake_run_spd_dump(*_a, **_kw):
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+
+    res = mod.run(
+        {"firmware_dir": str(ver_dir), "verify_root": False, "boot_stabilize_seconds": 0},
+        "SN1",
+        mod.Progress(),
+        [],
+    )
+    assert res["metrics"]["post_version"] == "v36"
+
+    probe_fd = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        real_flock(probe_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        real_flock(probe_fd, _fcntl.LOCK_UN)
+    finally:
+        os.close(probe_fd)
+
+
+@pytest.mark.parametrize("require_port_binding", [True, False])
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_v1010_unreadable_idproduct_eacces_fails_closed_all_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    require_port_binding: bool,
+    dry_run: bool,
+) -> None:
+    """PR #4177 R1: EACCES reading idProduct must fail-closed (not silently treated as non-matching)."""
+    import builtins
+    import errno as _errno
+
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-4.1.2", "18d1", "4ee8", "SN1"),
+            ("1-4.2.4", "1782", "4d00"),
+        ],
+    )
+    lock_file = tmp_path / "host.lock"
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+    spd_called = {"n": 0}
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
+
+    blocked_path = str(sysfs_base / "1-4.2.4" / "idProduct")
+    real_open = builtins.open
+
+    def guarded_open(path, *a, **kw):
+        if os.fspath(path) == blocked_path:
+            raise PermissionError(_errno.EACCES, "Permission denied", blocked_path)
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+
+    with pytest.raises(mod.FlashRejectedError, match="unreadable"):
+        mod.run(
+            {
+                "firmware_dir": str(ver_dir),
+                "dry_run": dry_run,
+                "require_port_binding": require_port_binding,
+                "verify_root": False,
+            },
+            "SN1",
+            mod.Progress(),
+            [],
+        )
+    assert spd_called["n"] == 0
+
+
+def test_v1010_disappearing_sysfs_node_enoent_is_tolerated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #4177 R1: transient ENOENT on a disappearing sibling USB node must not falsely fail-closed."""
+    import builtins
+
+    mod = _load_module()
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-4.1.2", "18d1", "4ee8", "SN1"),
+            ("1-4.9.9", "18d1", "4ee8"),
+        ],
+    )
+    gone_path = str(sysfs_base / "1-4.9.9" / "idProduct")
+    real_open = builtins.open
+
+    def flaky_open(path, *a, **kw):
+        if os.fspath(path) == gone_path:
+            raise FileNotFoundError("device unplugged mid-scan")
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", flaky_open)
+    assert mod.find_unisoc_download_ports(str(sysfs_base)) == []
+
+
+def test_v1010_non_target_orphan_warning_visible_on_stderr_and_metrics_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """PR #4177 R1: both dry_run and run success paths emit collectible stderr PROGRESS warning and metrics.warnings."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-4.2.4", "1782", "4d00"),
+            ("1-4.1.2", "18d1", "4ee8", "SN1"),
+        ],
+    )
+    lock_file = tmp_path / "host.lock"
+    clock = _patch_advancing_clock(monkeypatch, mod)
+    adb_state = _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+        post_props={
+            "ro.product.model": "MLY-LX2",
+            "ro.product.device": "MLY",
+            "ro.product.name": "MLY-LX2",
+            "ro.build.type": "userdebug",
+            "ro.build.sw_internal_version": "v36",
+        },
+        clock=clock,
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    def fake_run_spd_dump(*_a, **_kw):
+        adb_state["rebooted"] = True
+        clock["now"] += 30.0
+        return 1.0
+
+    monkeypatch.setattr(mod, "run_spd_dump", fake_run_spd_dump)
+
+    # 1) dry_run via main()
+    monkeypatch.setenv("STP_DEVICE_SERIAL", "SN1")
+    monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({"firmware_dir": str(ver_dir), "dry_run": True}))
+    monkeypatch.setattr(mod.sys, "argv", ["flash_firmware_unisoc_bsl.py"])
+    mod.main()
+    cap_dry = capsys.readouterr()
+    dry_out = json.loads(cap_dry.out.strip())
+    assert dry_out["success"] is True
+    assert dry_out["metrics"]["non_target_download_ports_ignored"] == ["1-4.2.4"]
+    assert any("1-4.2.4" in w for w in dry_out["metrics"]["warnings"])
+    assert "download-port-warning" in cap_dry.err and "1-4.2.4" in cap_dry.err
+
+    # 2) run via main()
+    monkeypatch.setenv(
+        "STP_STEP_PARAMS",
+        json.dumps({"firmware_dir": str(ver_dir), "verify_root": False, "boot_stabilize_seconds": 0}),
+    )
+    mod.main()
+    cap_run = capsys.readouterr()
+    run_out = json.loads(cap_run.out.strip())
+    assert run_out["success"] is True
+    assert run_out["metrics"]["non_target_download_ports_ignored"] == ["1-4.2.4"]
+    assert any("1-4.2.4" in w for w in run_out["metrics"]["warnings"])
+    assert "download-port-warning" in cap_run.err and "1-4.2.4" in cap_run.err
+
+
+def test_v1010_dry_run_rejects_usb_port_drift_during_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #4177 R1: dry_run must never return a usb_port that was ignored as non-target 1782:4d00."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-2", "18d1", "4ee8", "SN1"),
+            ("1-3", "1782", "4d00"),
+        ],
+    )
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+
+    real_check = mod.check_no_unisoc_download_port
+
+    def drift_during_gate(*a, **kw):
+        res = real_check(*a, **kw)
+        # Simulate SN1 moving from 1-2 to 1-3 right after gate ignored 1-3
+        (sysfs_base / "1-2" / "serial").unlink()
+        (sysfs_base / "1-3" / "serial").write_text("SN1\n", encoding="utf-8")
+        return res
+
+    monkeypatch.setattr(mod, "check_no_unisoc_download_port", drift_during_gate)
+
+    with pytest.raises(mod.FlashRejectedError, match="target USB port changed during dry-run"):
+        mod.run({"firmware_dir": str(ver_dir), "dry_run": True}, "SN1", mod.Progress(), [])
+
+
+@pytest.mark.parametrize("drift_phase", ["boot_id_read", "download_port_gate"])
+def test_v1010_runtime_rejects_usb_port_drift_after_lock_recheck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift_phase: str
+) -> None:
+    """PR #4177 R1: USB port drift during boot_id read or download-port gate must fail-closed before spd_dump."""
+    mod = _load_module()
+    ver_dir = _create_firmware_dir(tmp_path / "fw", family="P525AA", version="v36", models=["MLY-LX2"])
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-2", "18d1", "4ee8", "SN1"),
+            ("1-4", "18d1", "4ee8"),
+        ],
+    )
+    lock_file = tmp_path / "host.lock"
+    _install_fake_adb(
+        monkeypatch,
+        mod,
+        props={"ro.product.model": "MLY-LX2", "ro.product.device": "MLY", "ro.product.name": "MLY-LX2"},
+    )
+    monkeypatch.setattr(mod, "_SYSFS_USB_BASE", str(sysfs_base))
+    monkeypatch.setattr(mod, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(mod, "resolve_spd_dump", lambda route=None: "/tmp/spd_dump")
+    monkeypatch.setattr(
+        mod,
+        "acquire_host_lock",
+        lambda progress, timeout_seconds=7200: os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666),
+    )
+
+    def _move_sn1_to_1_4() -> None:
+        (sysfs_base / "1-2" / "serial").unlink()
+        (sysfs_base / "1-4" / "serial").write_text("SN1\n", encoding="utf-8")
+
+    if drift_phase == "boot_id_read":
+        real_capture = mod._capture_pre_reboot_evidence
+
+        def drift_capture(*a, **kw):
+            out = real_capture(*a, **kw)
+            _move_sn1_to_1_4()
+            return out
+
+        monkeypatch.setattr(mod, "_capture_pre_reboot_evidence", drift_capture)
+    else:
+        real_gate = mod.check_no_unisoc_download_port
+
+        def drift_gate(*a, **kw):
+            out = real_gate(*a, **kw)
+            _move_sn1_to_1_4()
+            return out
+
+        monkeypatch.setattr(mod, "check_no_unisoc_download_port", drift_gate)
+
+    spd_called = {"n": 0}
+    monkeypatch.setattr(mod, "run_spd_dump", lambda *_a, **_kw: spd_called.__setitem__("n", spd_called["n"] + 1))
+
+    with pytest.raises(mod.FlashRejectedError, match="target USB port changed"):
+        mod.run({"firmware_dir": str(ver_dir), "verify_root": False}, "SN1", mod.Progress(), [])
+    assert spd_called["n"] == 0
+
+
+@pytest.mark.parametrize("wall_jump_seconds", [-120.0, +120.0])
+def test_v1010_wait_boot_completed_uses_monotonic_clock_and_bounds_adb_timeout(
+    monkeypatch: pytest.MonkeyPatch, wall_jump_seconds: float
+) -> None:
+    """PR #4177 R1: wait_boot_completed must follow monotonic clock (immune to wall jumps) and bound run_adb timeout."""
+    mod = _load_module()
+    state = {"mono": 100.0, "wall": 1_700_000_000.0, "calls": 0}
+    adb_timeouts: List[float] = []
+
+    def fake_monotonic() -> float:
+        return state["mono"]
+
+    def fake_wall() -> float:
+        return state["wall"]
+
+    def fake_sleep(sec: float) -> None:
+        state["mono"] += sec
+        state["wall"] += sec
+
+    def fake_run_adb(adb_bin, serial, args, timeout=30):
+        adb_timeouts.append(float(timeout))
+        state["calls"] += 1
+        if state["calls"] == 1:
+            # Trigger wall-clock rollback or forward jump after first poll
+            state["wall"] += wall_jump_seconds
+        state["mono"] += 0.5
+        return 1, "", "offline"
+
+    monkeypatch.setattr(mod, "time", SimpleNamespace(time=fake_wall, monotonic=fake_monotonic, sleep=fake_sleep))
+    monkeypatch.setattr(mod, "run_adb", fake_run_adb)
+
+    t0 = state["mono"]
+    with pytest.raises(RuntimeError, match="did not reach sys.boot_completed=1 within 4s"):
+        mod.wait_boot_completed("adb", "SN1", mod.Progress(), 4)
+    elapsed_mono = round(state["mono"] - t0, 3)
+    assert elapsed_mono == 4.0
+    assert adb_timeouts
+    assert all(0 < t <= 4.0 for t in adb_timeouts)
+    assert adb_timeouts[-1] <= 1.5
+

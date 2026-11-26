@@ -15,12 +15,15 @@ Class: bug-fix
 1. **锁内覆盖刷后冷启动稳定窗**：
    - 新增步骤参数 `hold_lock_until_boot`（默认 `True`）与 `boot_stabilize_seconds`（默认 `5.0`，必须为有限非负数；`0` 关闭额外静置）。
    - `hold_lock_until_boot=True` 时，主机锁 `/tmp/stp-flash-firmware.lock` 保持持有至 `wait_boot_completed` 返回 `sys.boot_completed=1` 且完成 `boot_stabilize_seconds` 静置（期间打 `stage="boot-stabilize"` PROGRESS 戳）后再于 `finally` 释放，避免前一台冷启动二次 USB 重枚举干扰后一台烧写。
+   - `wait_boot_completed` 切至单调时钟 `time.monotonic()` 并按剩余预算约束单次 `run_adb` 超时与轮询间隔，避免系统墙钟回拨/跳变拉长或提前截断锁内开机等待。
+   - 主机锁交接（`acquire_host_lock` 异常路径与 `run()` `finally`）通过 `_release_host_lock` 独立执行 `LOCK_UN` 与 `os.close(fd)`，保证 `lock-held` 打戳异常或 `LOCK_UN` 返回 `OSError` 时仍可靠关闭文件描述符释放锁。
    - `metrics` 新增 `lock_held_until_boot` 与 `boot_stabilize_seconds` 供回溯。
 2. **口级绑定模式下收窄 `1782:4d00` 门禁为仅拦截目标物理口**：
-   - `check_no_unisoc_download_port` 新增 `target_usb_port` 与 `log` 参数，返回被忽略的非目标口列表 `List[str]`。
-   - 当 `require_port_binding=True` 且已解析唯一 `usb_port`（配合 `spd_dump@20261119` 的 `--usb-port <port>` 与退出后 `Opened 1782:4d00 on usb-port <port>` 回显校验）时：仅当 `usb_port` 自身仍在 `1782:4d00` 时在宽限窗内轮询并 fail-closed；若仅存在非目标口孤儿 `1782:4d00`，记明确告警日志并写入 `metrics.non_target_download_ports_ignored`，不再连坐同主机正常设备。
-   - 当 `require_port_binding=False`（`usb_port=None`，未绑口）或 `sysfs` 目录不可读时，仍严格维持全总线 fail-closed。
-   - `dry_run=True` 对齐同一解析顺序（先 `resolve_device_usb_port` 再校验下载口），并在 dry-run `metrics` 中同样回报 `non_target_download_ports_ignored`。
+   - `check_no_unisoc_download_port` 新增 `target_usb_port`、`log` 与 `progress` 参数，返回被忽略的非目标口列表 `List[str]`；当存在被忽略的非目标口孤儿时，同步通过 `stderr` PROGRESS（`stage="download-port-warning"`）与成功路径 `metrics.warnings` 输出可采集告警。
+   - `_sysfs_read` 在 `find_unisoc_download_ports` 读取 `idVendor` / `idProduct` 时区分节点瞬态消失（`ENOENT` / `ENODEV`）与属性不可读故障（如 `EACCES` / `EIO`），属性不可读一律 fail-closed 拒绝，防止门禁被权限或 I/O 异常绕过。
+   - 当 `require_port_binding=True` 且已解析唯一 `usb_port`（配合 `spd_dump@20261119` 的 `--usb-port <port>` 与退出后 `Opened 1782:4d00 on usb-port <port>` 回显校验）时：仅当 `usb_port` 自身仍在 `1782:4d00` 时在宽限窗内轮询并 fail-closed；若仅存在非目标口孤儿 `1782:4d00`，记录告警并写入 `metrics.non_target_download_ports_ignored` 与 `metrics.warnings`，不再连坐同主机正常设备。
+   - 当 `require_port_binding=False`（即使仍能解析出信息性 `usb_port`）或 `sysfs` 目录/属性不可读时，门禁仍严格维持全总线 fail-closed。
+   - `dry_run=True` 与运行期均保证门禁与最终 `usb_port` 使用同一次有效校验的绑定：绑口模式下 `dry_run` 先解析 `usb_port`（若串号缺失仍先走全总线门禁报 `1782:4d00`），通过门禁后复验绑定未漂移；运行期在锁内完成 `boot_id` 读取与下载口门禁后、启动 `spd_dump` 前再次复验目标口未漂移，杜绝过时 USB 口进入刷写器参数。
 3. **涉及文件**：
    - `backend/agent/scripts/flash_firmware_unisoc_bsl/flash_firmware_unisoc_bsl.py`
    - `backend/agent/tests/test_flash_firmware_unisoc_bsl.py`
