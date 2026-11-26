@@ -1,7 +1,8 @@
 import { useId } from 'react';
 import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty, TestSuiteSummary, ParameterProjection } from '@/utils/api/types';
-import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Copy, Trash2, AlertTriangle } from 'lucide-react';
 import {
+  ALERT_BANNER,
   PIPELINE_EDITOR,
   PIPELINE_PHASE_HEAD,
   STATUS_CHIP,
@@ -13,7 +14,7 @@ import {
   PlanSettingsEditor,
   type PlanSettingsValues,
 } from '@/components/parameters/PlanSettingsEditor';
-import { parsePlanPositiveIntInput } from '@/pages/orchestration/planEditUtils';
+import { hasEnabledMtbfSteps, parsePlanPositiveIntInput } from '@/pages/orchestration/planEditUtils';
 
 const PHASE_LABELS: Record<PipelinePhase, string> = {
   init: 'Init',
@@ -213,6 +214,7 @@ export default function PlanCanvas({
           suiteName={suiteName}
           onSuiteNameChange={onSuiteNameChange}
           suites={suites}
+          mtbfSuiteRequired={hasEnabledMtbfSteps(lifecycle) && !suiteName}
           readOnly={readOnly}
         />
 
@@ -273,6 +275,7 @@ interface PlanHeaderProps {
   suiteName?: string;
   onSuiteNameChange?: (next: string) => void;
   suites?: TestSuiteSummary[];
+  mtbfSuiteRequired?: boolean;
   readOnly?: boolean;
 }
 
@@ -298,6 +301,7 @@ function PlanHeader({
   suiteName,
   onSuiteNameChange,
   suites,
+  mtbfSuiteRequired,
   readOnly,
 }: PlanHeaderProps) {
   const metaInputCls = cn('h-6 px-2 text-xs', PIPELINE_EDITOR.inputInline);
@@ -404,6 +408,17 @@ function PlanHeader({
               </select>
             </MetaItem>
           )}
+        </div>
+      )}
+
+      {mtbfSuiteRequired && (
+        <div
+          role="status"
+          data-testid="mtbf-suite-required-notice"
+          className={cn('flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs', ALERT_BANNER.warning)}
+        >
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>当前步骤包含 MTBF 脚本，保存并干跑预览前请在上方绑定「套件」。</span>
         </div>
       )}
 

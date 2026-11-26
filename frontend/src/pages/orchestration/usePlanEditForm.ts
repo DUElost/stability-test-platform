@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { useNavigate, useBeforeUnload } from 'react-router-dom';
+import { useNavigate, useBeforeUnload, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/useToast';
 import {
@@ -11,6 +11,7 @@ import {
   type PlanUpdate,
   type PipelineDef,
   type PipelineStep,
+  type PipelineTemplate,
   type ScriptEntry,
 } from '@/utils/api';
 import type { ParameterProjection, DraftParameterProjectionRequest } from '@/utils/api/types';
@@ -18,6 +19,8 @@ import { projectKeys } from '@/utils/api/queryKeys';
 import { planKeys } from '@/utils/api/queryKeys';
 import {
   EMPTY_LIFECYCLE,
+  buildDraftFromClonePlan,
+  buildDraftFromTemplate,
   buildStepsForApi,
   cloneWatcherPolicy,
   draftSnapshot,
@@ -27,6 +30,7 @@ import {
   rebuildLifecycleFromPlan,
   validatePlanSettingsDraft,
   validateStepRuntimeDraft,
+  type PlanFormDraft,
 } from './planEditUtils';
 
 export type ConfirmLeaveState = null | { type: 'switch' | 'execute'; targetPlanId?: number };
@@ -60,8 +64,18 @@ function scriptCapabilitiesForStep(
 export function usePlanEditForm(planId: number | null) {
   const isNew = planId == null;
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const toast = useToast();
   const queryClient = useQueryClient();
+
+  const templateParam = isNew ? (searchParams.get('template') || '').trim() || null : null;
+  const rawCloneParam = isNew ? searchParams.get('clone') : null;
+  const parsedCloneId = rawCloneParam != null && rawCloneParam.trim() !== '' ? Number(rawCloneParam) : Number.NaN;
+  const clonePlanId = isNew && Number.isInteger(parsedCloneId) && parsedCloneId > 0 ? parsedCloneId : null;
+
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const [pendingTemplate, setPendingTemplate] = useState<PipelineTemplate | null>(null);
+  const [appliedSeedKey, setAppliedSeedKey] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -146,6 +160,45 @@ export function usePlanEditForm(planId: number | null) {
     staleTime: 60_000,
   });
 
+  // #4182 Phase 2：新建态按需拉取模板列表、?template=<name> 与 ?clone=<id> 种子。
+  const {
+    data: templates,
+    isLoading: templatesLoading,
+    isError: templatesIsError,
+    error: templatesError,
+    refetch: refetchTemplates,
+  } = useQuery({
+    queryKey: planKeys.templates(),
+    queryFn: () => api.pipeline.listTemplates(),
+    enabled: templatePickerOpen,
+    staleTime: 60_000,
+  });
+
+  const {
+    data: templateSeed,
+    isLoading: templateSeedLoading,
+    isError: templateSeedIsError,
+    error: templateSeedError,
+  } = useQuery({
+    queryKey: ['pipeline-template', templateParam],
+    queryFn: () => api.pipeline.getTemplate(templateParam!),
+    enabled: isNew && Boolean(templateParam),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const {
+    data: cloneSeed,
+    isLoading: cloneSeedLoading,
+    isError: cloneSeedIsError,
+    error: cloneSeedError,
+  } = useQuery({
+    queryKey: planKeys.detail(clonePlanId!),
+    queryFn: () => api.plans.get(clonePlanId!),
+    enabled: isNew && clonePlanId != null,
+    retry: false,
+  });
+
   const [prevPlanState, setPrevPlanState] = useState<{ plan: typeof plan; isNew: boolean } | null>(null);
   // #967：用户已选择「继续编辑」的远端版本快照；同版本的重复刷新不再提示。
   const [dismissedRemote, setDismissedRemote] = useState<string | null>(null);
@@ -215,6 +268,23 @@ export function usePlanEditForm(planId: number | null) {
     setBaseUpdatedAt(next.updated_at);
   };
 
+  const applyDraftToNewForm = (draft: PlanFormDraft) => {
+    setName(draft.name);
+    setDescription(draft.description);
+    setNextPlanId(draft.nextPlanId);
+    setProjectKey(draft.projectKey);
+    setSpecialtyKey(draft.specialtyKey);
+    setSuiteName(draft.suiteName);
+    setLifecycle(draft.lifecycle);
+    setPatrolIntervalSeconds(draft.patrolIntervalSeconds);
+    setTimeoutSeconds(draft.timeoutSeconds);
+    setBarrierTimeoutSeconds(draft.barrierTimeoutSeconds);
+    setBarrierMaxWaitSeconds(draft.barrierMaxWaitSeconds);
+    setAutoArchiveIntervalSeconds(draft.autoArchiveIntervalSeconds);
+    setWatcherPolicy(cloneWatcherPolicy(draft.watcherPolicy));
+    setSelectedStepKey(null);
+  };
+
   if (prevPlanState?.plan !== plan || prevPlanState?.isNew !== isNew) {
     setPrevPlanState({ plan, isNew });
     if (plan && !isNew) {
@@ -227,8 +297,73 @@ export function usePlanEditForm(planId: number | null) {
       setOrigStepsSnapshot(lifecycleStepsOnlySnapshot(EMPTY_LIFECYCLE));
       setBaseUpdatedAt(undefined);
       setDismissedRemote(null);
+      setAppliedSeedKey(null);
     }
   }
+
+  // #4182 Phase 2：URL 种子（?template= / ?clone=）只应用一次，避免覆盖用户后续编辑。
+  const currentSeedKey = isNew
+    ? templateParam && templateSeed
+      ? `template:${templateParam}`
+      : clonePlanId != null && cloneSeed
+        ? `clone:${clonePlanId}`
+        : null
+    : null;
+
+  if (currentSeedKey && appliedSeedKey !== currentSeedKey) {
+    setAppliedSeedKey(currentSeedKey);
+    if (templateParam && templateSeed) {
+      applyDraftToNewForm(buildDraftFromTemplate(templateSeed));
+    } else if (clonePlanId != null && cloneSeed) {
+      applyDraftToNewForm(buildDraftFromClonePlan(cloneSeed));
+    }
+  }
+
+  const reportedSeedErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (isNew && templateParam && templateSeedIsError) {
+      const key = `template:${templateParam}`;
+      if (reportedSeedErrorRef.current !== key) {
+        reportedSeedErrorRef.current = key;
+        toast.error(`加载模板「${templateParam}」失败：${(templateSeedError as Error)?.message || '模板不存在'}`);
+      }
+    } else if (isNew && clonePlanId != null && cloneSeedIsError) {
+      const key = `clone:${clonePlanId}`;
+      if (reportedSeedErrorRef.current !== key) {
+        reportedSeedErrorRef.current = key;
+        toast.error(`加载源 Plan #${clonePlanId} 失败：${(cloneSeedError as Error)?.message || '请稍后重试'}`);
+      }
+    }
+  }, [isNew, templateParam, templateSeedIsError, templateSeedError, clonePlanId, cloneSeedIsError, cloneSeedError, toast]);
+
+  const applyTemplateNow = (tpl: PipelineTemplate) => {
+    const draft = buildDraftFromTemplate(tpl, {
+      existingName: name,
+      existingProjectKey: projectKey,
+    });
+    applyDraftToNewForm(draft);
+    toast.success(`已导入模板「${tpl.display_name}」`);
+  };
+
+  const handleSelectTemplate = (tpl: PipelineTemplate) => {
+    if (isDirty) {
+      setPendingTemplate(tpl);
+      return;
+    }
+    applyTemplateNow(tpl);
+  };
+
+  const confirmApplyPendingTemplate = () => {
+    if (!pendingTemplate) return;
+    const target = pendingTemplate;
+    setPendingTemplate(null);
+    applyTemplateNow(target);
+  };
+
+  const handleCloneCurrent = () => {
+    if (planId == null) return;
+    navigate(`/orchestration/plans/new?clone=${planId}`);
+  };
 
   // 远端版本与本地草稿基准不同且用户尚未「继续编辑」该版本 → 展示提示条。
   const remoteSnapshot = useMemo(
@@ -708,10 +843,22 @@ export function usePlanEditForm(planId: number | null) {
     projectionUnavailable,
     projectionIsDraft,
     planId,
-    planLoading,
+    planLoading: planLoading || (isNew && (templateSeedLoading || cloneSeedLoading)),
     planIsError,
     planError,
     refetchPlan,
+    templates,
+    templatesLoading,
+    templatesIsError,
+    templatesError,
+    refetchTemplates,
+    templatePickerOpen,
+    setTemplatePickerOpen,
+    pendingTemplate,
+    setPendingTemplate,
+    handleSelectTemplate,
+    confirmApplyPendingTemplate,
+    handleCloneCurrent,
     dependenciesError: allPlansError ?? scriptsError,
     dependenciesIsError: allPlansIsError || scriptsIsError,
     refetchDependencies: () => {

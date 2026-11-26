@@ -3,6 +3,7 @@ import type {
   PipelineDef,
   PipelinePhase,
   PipelineStep,
+  PipelineTemplate,
   PlanStepCreate,
 } from '@/utils/api';
 import type { WatcherPolicy, WatcherUnavailableAction } from '@/utils/api/types';
@@ -365,4 +366,101 @@ export function validateStepRuntimeDraft(
     return '停滞上限 >0 要求脚本版本已接入 PROGRESS（progress_stamps）';
   }
   return null;
+}
+
+function normalizeTemplateSteps(steps: PipelineStep[] | undefined, phase: PipelinePhase): PipelineStep[] {
+  return (steps ?? []).map((step, index) => ({
+    step_id: step.step_id || `${phase}_${index + 1}`,
+    action: step.action,
+    version: step.version,
+    params: step.params ? (structuredClone(step.params) as Record<string, unknown>) : {},
+    ...(step.timeout_seconds != null ? { timeout_seconds: step.timeout_seconds } : {}),
+    ...(step.stall_seconds != null ? { stall_seconds: step.stall_seconds } : {}),
+    retry: step.retry ?? 0,
+    enabled: step.enabled !== false,
+  }));
+}
+
+/**
+ * #4182 Phase 2：把内置 JSON 模板展开为可编辑的新建 Plan 草稿。
+ * 保留模板步骤的脚本版本、参数、超时与重试，并带出专项归属与可选 plan_defaults。
+ */
+export function buildDraftFromTemplate(
+  template: PipelineTemplate,
+  options?: { existingName?: string; existingProjectKey?: string },
+): PlanFormDraft {
+  const rawLc = template.pipeline_def?.lifecycle;
+  const init = normalizeTemplateSteps(rawLc?.init, 'init');
+  const patrolSteps = normalizeTemplateSteps(rawLc?.patrol?.steps, 'patrol');
+  const teardown = normalizeTemplateSteps(rawLc?.teardown, 'teardown');
+  const patrolIntervalSeconds =
+    patrolSteps.length > 0 && rawLc?.patrol?.interval_seconds != null
+      ? rawLc.patrol.interval_seconds
+      : null;
+  const timeoutSeconds = rawLc?.timeout_seconds ?? null;
+  const defaults = template.plan_defaults ?? null;
+
+  const lifecycle: PipelineDef = {
+    lifecycle: {
+      init,
+      ...(patrolSteps.length > 0
+        ? {
+            patrol: {
+              interval_seconds: patrolIntervalSeconds ?? 300,
+              steps: patrolSteps,
+            },
+          }
+        : {}),
+      teardown,
+      ...(timeoutSeconds != null ? { timeout_seconds: timeoutSeconds } : {}),
+    },
+  };
+
+  return {
+    name: options?.existingName ?? '',
+    description: template.description || '',
+    nextPlanId: null,
+    projectKey: options?.existingProjectKey ?? '',
+    specialtyKey: template.specialty_key || '',
+    suiteName: '',
+    lifecycle,
+    patrolIntervalSeconds,
+    timeoutSeconds,
+    barrierTimeoutSeconds: defaults?.barrier_timeout_seconds ?? null,
+    barrierMaxWaitSeconds: defaults?.barrier_max_wait_seconds ?? null,
+    autoArchiveIntervalSeconds: defaults?.auto_archive_interval_seconds ?? null,
+    watcherPolicy: cloneWatcherPolicy(defaults?.watcher_policy ?? null),
+  };
+}
+
+/**
+ * #4182 Phase 2：把已有 Plan 复制为独立新建草稿（不继承 next_plan_id 与乐观锁基准）。
+ */
+export function buildDraftFromClonePlan(source: Plan): PlanFormDraft {
+  return {
+    name: `${source.name}（副本）`,
+    description: source.description || '',
+    nextPlanId: null,
+    projectKey: source.project_key || '',
+    specialtyKey: source.specialty_key || '',
+    suiteName: source.suite_name || '',
+    lifecycle: rebuildLifecycleFromPlan(source),
+    patrolIntervalSeconds: source.patrol_interval_seconds ?? null,
+    timeoutSeconds: source.timeout_seconds ?? null,
+    barrierTimeoutSeconds: source.barrier_timeout_seconds ?? null,
+    barrierMaxWaitSeconds: source.barrier_max_wait_seconds ?? null,
+    autoArchiveIntervalSeconds: source.auto_archive_interval_seconds ?? null,
+    watcherPolicy: cloneWatcherPolicy(source.watcher_policy),
+  };
+}
+
+/** 判断草稿中是否包含启用中的 MTBF 步骤（ADR-0030 v1.8 要求必须绑定套件）。 */
+export function hasEnabledMtbfSteps(lifecycle: PipelineDef): boolean {
+  const lc = lifecycle.lifecycle;
+  const all = [
+    ...(lc.init ?? []),
+    ...(lc.patrol?.steps ?? []),
+    ...(lc.teardown ?? []),
+  ];
+  return all.some((s) => s.enabled !== false && (s.action ?? '').startsWith('script:mtbf_'));
 }

@@ -75,6 +75,8 @@ interface HarnessProps {
   onSelectStep?: (key: string | null) => void;
   onPatrolIntervalChange?: (next: number | null) => void;
   onTimeoutChange?: (next: number | null) => void;
+  suiteName?: string;
+  onSuiteNameChange?: (next: string) => void;
 }
 
 /** 把受控 props 接回本地 state，让多步交互（改完再点）能像真页面一样连续。 */
@@ -89,6 +91,8 @@ function Harness({
   onSelectStep,
   onPatrolIntervalChange,
   onTimeoutChange,
+  suiteName,
+  onSuiteNameChange,
 }: HarnessProps) {
   const [lifecycle, setLifecycle] = useState(initialLifecycle);
   const [selected, setSelected] = useState<string | null>(initialSelected);
@@ -118,6 +122,8 @@ function Harness({
         onTimeoutChange?.(n);
         setTimeoutSeconds(n);
       }}
+      suiteName={suiteName}
+      onSuiteNameChange={onSuiteNameChange}
       nextPlanName={nextPlanName}
       isCurrentEditing={isCurrentEditing}
       lifecycle={lifecycle}
@@ -714,6 +720,27 @@ describe('PlanCanvas', () => {
       fireEvent.click(rowOf('init_b'));
 
       expect(onSelectStep).toHaveBeenCalledWith('init_b');
+    });
+  });
+
+  describe('MTBF 套件绑定提示 (#4182)', () => {
+    const mtbfLifecycle: PipelineDef = {
+      lifecycle: {
+        init: [
+          { step_id: 'mtbf_setup', action: 'script:mtbf_setup', version: '1.4.2', params: {}, timeout_seconds: 900, retry: 1, enabled: true },
+        ],
+        teardown: [],
+      },
+    };
+
+    it('包含 MTBF 步骤且未绑定套件时展示提醒', () => {
+      render(<Harness lifecycle={mtbfLifecycle} suiteName="" onSuiteNameChange={vi.fn()} />);
+      expect(screen.getByTestId('mtbf-suite-required-notice')).toBeInTheDocument();
+    });
+
+    it('已绑定套件后隐藏提醒', () => {
+      render(<Harness lifecycle={mtbfLifecycle} suiteName="MTBF-legacy" onSuiteNameChange={vi.fn()} />);
+      expect(screen.queryByTestId('mtbf-suite-required-notice')).not.toBeInTheDocument();
     });
   });
 });

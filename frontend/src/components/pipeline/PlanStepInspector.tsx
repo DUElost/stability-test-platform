@@ -37,6 +37,7 @@ interface PlanStepInspectorProps {
   step: PipelineStep | null;
   phase: PipelinePhase | null;
   index: number | null;
+  specialtyKey?: string;
   scripts: ScriptEntry[];
   onUpdateStep: (next: PipelineStep) => void;
   readOnly?: boolean;
@@ -57,6 +58,7 @@ export default function PlanStepInspector({
   step,
   phase,
   index,
+  specialtyKey,
   scripts,
   onUpdateStep,
   readOnly,
@@ -171,6 +173,8 @@ export default function PlanStepInspector({
           <>
             <ScriptInfoCard
               step={step}
+              phase={phase}
+              specialtyKey={specialtyKey}
               scriptName={scriptName}
               matchedScript={matchedScript}
               scripts={scripts}
@@ -264,8 +268,20 @@ function StepEmptyState() {
   );
 }
 
+type ScriptTagFilter = 'all' | 'recommended' | 'common_init' | 'specialty' | 'ops';
+
+const SCRIPT_ROLE_LABEL: Record<string, string> = {
+  common_init: '公共前置',
+  specialty_init: '专项初始化',
+  patrol: '巡检',
+  teardown: '收尾',
+  ops: '运维/工具',
+};
+
 interface ScriptInfoCardProps {
   step: PipelineStep;
+  phase: PipelinePhase | null;
+  specialtyKey?: string;
   scriptName: string;
   matchedScript: ScriptEntry | null;
   scripts: ScriptEntry[];
@@ -276,6 +292,8 @@ interface ScriptInfoCardProps {
 
 function ScriptInfoCard({
   step,
+  phase,
+  specialtyKey,
   scriptName,
   matchedScript,
   scripts,
@@ -283,8 +301,43 @@ function ScriptInfoCard({
   onPickScript,
   readOnly,
 }: ScriptInfoCardProps) {
+  const [tagFilter, setTagFilter] = useState<ScriptTagFilter>('all');
   const allActive = scripts.filter(s => s.is_active);
-  const knownNames = Array.from(new Set(allActive.map(s => s.name))).sort();
+  const hasAnyTags = useMemo(() => allActive.some(s => Boolean(s.tags)), [allActive]);
+  const tagsByName = useMemo(() => {
+    const map = new Map<string, NonNullable<ScriptEntry['tags']>>();
+    for (const s of allActive) {
+      if (s.tags && !map.has(s.name)) map.set(s.name, s.tags);
+    }
+    return map;
+  }, [allActive]);
+
+  const knownNames = useMemo(() => {
+    const names = Array.from(new Set(allActive.map(s => s.name))).sort();
+    if (!hasAnyTags || tagFilter === 'all') return names;
+    return names.filter((name) => {
+      const tags = tagsByName.get(name);
+      if (!tags) return false;
+      if (tagFilter === 'common_init') return tags.role === 'common_init';
+      if (tagFilter === 'ops') return tags.role === 'ops';
+      if (tagFilter === 'specialty') {
+        return Boolean(specialtyKey) && tags.specialties.includes(specialtyKey!);
+      }
+      // recommended: matches current phase role and specialty (or cross-specialty)
+      const phaseMatches =
+        phase === 'init'
+          ? tags.role === 'common_init' || tags.role === 'specialty_init'
+          : phase === 'patrol'
+            ? tags.role === 'patrol'
+            : phase === 'teardown'
+              ? tags.role === 'teardown'
+              : true;
+      const specialtyMatches =
+        !specialtyKey || tags.specialties.length === 0 || tags.specialties.includes(specialtyKey);
+      return phaseMatches && specialtyMatches;
+    });
+  }, [allActive, hasAnyTags, tagFilter, tagsByName, specialtyKey, phase]);
+
   // matchedScript 不过滤 is_active（参数表单仍需要停用版本的 schema 才能显示已填的值），
   // 所以「异常」判定必须自己补上 is_active——只写 !matchedScript 的话，停用版本会被
   // 当成正常匹配，下面 deactivatedMatch 是它的严格子集，那条提示永远不会出现。
@@ -302,10 +355,22 @@ function ScriptInfoCard({
   const scriptOptions = useMemo(() => {
     const opts = knownNames.map((n) => ({ value: n, label: n }));
     if (scriptName && !knownNames.includes(scriptName)) {
-      opts.push({ value: scriptName, label: `${scriptName} (未匹配)` });
+      const inAllActive = allActive.some((s) => s.name === scriptName);
+      opts.push({
+        value: scriptName,
+        label: inAllActive ? scriptName : `${scriptName} (未匹配)`,
+      });
     }
     return opts;
-  }, [knownNames, scriptName]);
+  }, [knownNames, scriptName, allActive]);
+
+  const filterChips: Array<{ id: ScriptTagFilter; label: string }> = [
+    { id: 'all', label: '全部' },
+    { id: 'recommended', label: '推荐' },
+    { id: 'common_init', label: '公共前置' },
+    ...(specialtyKey ? [{ id: 'specialty' as const, label: '当前专项' }] : []),
+    { id: 'ops', label: '运维/刷机' },
+  ];
 
   return (
     <Card>
@@ -322,6 +387,27 @@ function ScriptInfoCard({
             <span>
               {warningMessage}
             </span>
+          </div>
+        )}
+
+        {hasAnyTags && !readOnly && (
+          <div className="flex flex-wrap items-center gap-1" role="group" aria-label="按标签筛选脚本">
+            {filterChips.map((chip) => (
+              <button
+                key={chip.id}
+                type="button"
+                data-testid={`script-tag-filter-${chip.id}`}
+                onClick={() => setTagFilter(chip.id)}
+                className={cn(
+                  'rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors',
+                  tagFilter === chip.id
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                {chip.label}
+              </button>
+            ))}
           </div>
         )}
 
@@ -369,6 +455,21 @@ function ScriptInfoCard({
             {matchedScript ? `${matchedScript.script_type} / ${matchedScript.category ?? '—'}` : '—'}
           </span>
         </Row>
+
+        {matchedScript?.tags && (
+          <Row label="标签">
+            <span className="flex flex-wrap justify-end gap-1 text-[10px]">
+              <span className={cn('rounded-full px-1.5 py-0.5 font-medium', STATUS_CHIP.muted)}>
+                {SCRIPT_ROLE_LABEL[matchedScript.tags.role] ?? matchedScript.tags.role}
+              </span>
+              {matchedScript.tags.platforms.map((plat) => (
+                <span key={plat} className={cn('rounded-full px-1.5 py-0.5 font-mono uppercase', STATUS_CHIP.primary)}>
+                  {plat}
+                </span>
+              ))}
+            </span>
+          </Row>
+        )}
       </CardBody>
     </Card>
   );
