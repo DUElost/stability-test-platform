@@ -797,6 +797,13 @@ def _wait_boot_stabilize(stabilize_seconds: float, progress: Progress) -> float:
     return round(time.monotonic() - t0, 1)
 
 
+def _is_unisoc_download_port(usb_base: str, port: str) -> bool:
+    dev_dir = os.path.join(usb_base, port)
+    vid = _sysfs_read(os.path.join(dev_dir, "idVendor"), raise_on_io_error=True).lower()
+    pid = _sysfs_read(os.path.join(dev_dir, "idProduct"), raise_on_io_error=True).lower()
+    return vid == _UNISOC_DOWNLOAD_VID and pid == _UNISOC_DOWNLOAD_PID
+
+
 def _wait_download_port_clear(
     usb_port: Optional[str],
     log: list,
@@ -812,9 +819,15 @@ def _wait_download_port_clear(
     while True:
         try:
             hits = find_unisoc_download_ports(usb_base)
+            still_present = (usb_port in hits) if usb_port is not None else bool(hits)
         except OSError:
-            return
-        still_present = (usb_port in hits) if usb_port is not None else bool(hits)
+            if usb_port is None:
+                return
+            try:
+                still_present = _is_unisoc_download_port(usb_base, usb_port)
+            except OSError:
+                return
+            hits = [usb_port] if still_present else []
         if not still_present:
             return
         remaining = deadline - time.monotonic()
@@ -919,15 +932,18 @@ def acquire_host_lock(progress: Progress, timeout_seconds: int = 7200, lock_path
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                locked = True
-                progress.stamp(stage="lock-held", waited_seconds=waited)
-                return fd
             except BlockingIOError:
                 if waited >= timeout_seconds:
-                    raise RuntimeError(f"timed out waiting for host flash lock {lock_path} after {waited}s") from None
+                    raise RuntimeError(
+                        f"timed out waiting for host flash lock {lock_path} after {waited}s"
+                    ) from None
                 progress.stamp(stage="lock-wait", waited_seconds=waited)
                 time.sleep(5)
                 waited += 5
+                continue
+            locked = True
+            progress.stamp(stage="lock-held", waited_seconds=waited)
+            return fd
     except BaseException:
         _release_host_lock(fd, locked=locked)
         raise
@@ -1179,17 +1195,20 @@ def wait_boot_completed(adb_bin: str, serial: str, progress: Progress, timeout_s
             ["shell", "getprop", "sys.boot_completed"],
             timeout=min(10.0, remaining),
         )
+        now = time.monotonic()
+        if now > deadline:
+            break
         if rc == 0 and out.strip() == "1":
-            elapsed = round(time.monotonic() - t0, 1)
+            elapsed = round(now - t0, 1)
             progress.stamp(stage="boot-ready", boot_seconds=elapsed)
             return elapsed
-        now = time.monotonic()
-        remaining = deadline - now
-        if remaining <= 0:
-            break
         if last_stamp is None or now - last_stamp >= 5.0:
             progress.stamp(stage="boot-wait", elapsed_s=round(now - t0, 1))
             last_stamp = now
+            now = time.monotonic()
+        remaining = deadline - now
+        if remaining <= 0:
+            break
         time.sleep(min(2.0, remaining))
         if time.monotonic() <= now:
             # Sleep mocked as no-op without advancing clock; avoid infinite spin in unit tests.

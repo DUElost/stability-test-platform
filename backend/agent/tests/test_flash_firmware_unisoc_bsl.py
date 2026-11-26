@@ -3633,3 +3633,130 @@ def test_v1010_wait_boot_completed_uses_monotonic_clock_and_bounds_adb_timeout(
     assert all(0 < t <= 4.0 for t in adb_timeouts)
     assert adb_timeouts[-1] <= 1.5
 
+
+def test_v1010_acquire_host_lock_releases_and_closes_fd_when_stamp_raises_eagain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #4177 R2: BlockingIOError (EAGAIN) from lock-held stamp must NOT be treated as flock contention."""
+    import errno as _errno
+    import fcntl as _fcntl
+
+    mod = _load_module()
+    lock_file = tmp_path / "host.lock"
+    sleep_calls: List[float] = []
+    monkeypatch.setattr(mod.time, "sleep", lambda sec: sleep_calls.append(sec))
+
+    class NonBlockingPipeProgress(mod.Progress):
+        def stamp(self, **fields: object) -> None:
+            if fields.get("stage") == "lock-held":
+                raise BlockingIOError(_errno.EAGAIN, "Resource temporarily unavailable")
+
+    with pytest.raises(BlockingIOError):
+        mod.acquire_host_lock(NonBlockingPipeProgress(), timeout_seconds=5, lock_path=str(lock_file))
+
+    assert sleep_calls == []
+    probe_fd = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        _fcntl.flock(probe_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        _fcntl.flock(probe_fd, _fcntl.LOCK_UN)
+    finally:
+        os.close(probe_fd)
+
+
+def test_v1010_post_flash_wait_download_port_clear_ignores_sibling_eacces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #4177 R2: sibling port EACCES must not short-circuit _wait_download_port_clear for known usb_port."""
+    import builtins
+    import errno as _errno
+
+    mod = _load_module()
+    sysfs_base = _make_fake_sysfs(
+        tmp_path,
+        [
+            ("1-4.1.2", "1782", "4d00"),
+            ("1-4.9.9", "18d1", "4ee8"),
+        ],
+    )
+    sibling_pid = str(sysfs_base / "1-4.9.9" / "idProduct")
+    real_open = builtins.open
+    sleep_calls = {"n": 0}
+    real_sleep = mod.time.sleep
+
+    def guarded_open(path, *a, **kw):
+        if os.fspath(path) == sibling_pid:
+            raise PermissionError(_errno.EACCES, "Permission denied", sibling_pid)
+        return real_open(path, *a, **kw)
+
+    def clear_on_second_sleep(sec: float) -> None:
+        sleep_calls["n"] += 1
+        if sleep_calls["n"] >= 2:
+            (sysfs_base / "1-4.1.2" / "idVendor").write_text("18d1\n", encoding="utf-8")
+            (sysfs_base / "1-4.1.2" / "idProduct").write_text("4ee8\n", encoding="utf-8")
+        real_sleep(0)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    monkeypatch.setattr(mod.time, "sleep", clear_on_second_sleep)
+    log: List[str] = []
+    mod._wait_download_port_clear(
+        "1-4.1.2",
+        log,
+        timeout_seconds=1.0,
+        poll_interval=0.01,
+        base=str(sysfs_base),
+    )
+    assert sleep_calls["n"] == 2
+    assert (sysfs_base / "1-4.1.2" / "idVendor").read_text(encoding="utf-8").strip() == "18d1"
+    assert log == []
+
+
+def test_v1010_wait_boot_completed_recomputes_deadline_after_stamp_and_rejects_late_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #4177 R2: recompute remaining after boot-wait stamp delay and reject boot_completed=1 arriving past deadline."""
+    mod = _load_module()
+
+    # Subcase 1: 0.75s boot-wait stamp delay inside a 1s budget must clamp sleep to 0.25s (total 1.0s, not 1.75s)
+    state = {"mono": 50.0}
+    sleeps: List[float] = []
+
+    class SlowStampProgress(mod.Progress):
+        def stamp(self, **fields: object) -> None:
+            if fields.get("stage") == "boot-wait":
+                state["mono"] += 0.75
+
+    monkeypatch.setattr(
+        mod,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: state["mono"],
+            sleep=lambda sec: (sleeps.append(sec), state.__setitem__("mono", state["mono"] + sec)),
+        ),
+    )
+    monkeypatch.setattr(mod, "run_adb", lambda *_a, **_kw: (1, "", "offline"))
+
+    t0 = state["mono"]
+    with pytest.raises(RuntimeError, match="within 1s"):
+        mod.wait_boot_completed("adb", "SN1", SlowStampProgress(), 1)
+    assert round(state["mono"] - t0, 3) == 1.0
+    assert sleeps == [0.25]
+
+    # Subcase 2: run_adb returning boot_completed=1 after deadline (1.1s for 1s budget) must be rejected
+    state2 = {"mono": 200.0}
+    monkeypatch.setattr(
+        mod,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: state2["mono"],
+            sleep=lambda sec: state2.__setitem__("mono", state2["mono"] + sec),
+        ),
+    )
+
+    def slow_adb(*_a, **_kw):
+        state2["mono"] += 1.1
+        return 0, "1\n", ""
+
+    monkeypatch.setattr(mod, "run_adb", slow_adb)
+    with pytest.raises(RuntimeError, match="within 1s"):
+        mod.wait_boot_completed("adb", "SN1", mod.Progress(), 1)
+
