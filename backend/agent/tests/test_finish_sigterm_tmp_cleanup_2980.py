@@ -67,6 +67,8 @@ lib.parse_sleep_result = lambda b: {"final_status": "PASS", "cycles_done": 0,
 lib.parse_powercycle_result = lambda b: {"final_status": "PASS", "cycles_done": 0,
                                          "expected_cycles": 0, "reboot_failures": 0,
                                          "entries": []}
+lib.parse_r30_powercycle_result = lib.parse_powercycle_result
+lib.resolve_apk_flavor = lambda cfg: "stp"
 lib.parse_size_from_ls = lambda s: 10
 lib.result_log_bytes = lambda: 1
 lib.result_paths = lambda: ["/sdcard/Android/data/x/files/STP/result.txt"]

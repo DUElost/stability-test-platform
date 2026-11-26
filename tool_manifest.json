@@ -2070,6 +2070,14 @@
           "retired": false,
           "script": "powercycle_check.py",
           "version": "1.0.11"
+        },
+        {
+          "artifact": "packages/powercycle_check/1.0.12.tar.gz",
+          "package_sha256": "5eaec8e3281b619dbdae2c6d1f287fd5f78af70608920d7bf1bebb82a7fc3d2b",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_check.py",
+          "version": "1.0.12"
         }
       ]
     },
@@ -2155,6 +2163,14 @@
           "retired": false,
           "script": "powercycle_disarm.py",
           "version": "1.0.9"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.10.tar.gz",
+          "package_sha256": "652217c40546d532e1d46f984bbe58abf1431c3fa505a88ae32270211e90c690",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.10"
         }
       ]
     },
@@ -2240,6 +2256,14 @@
           "retired": false,
           "script": "powercycle_finish.py",
           "version": "1.1.0"
+        },
+        {
+          "artifact": "packages/powercycle_finish/1.1.1.tar.gz",
+          "package_sha256": "0989b0e2e740eaad5c46b87b0a56eaa60e77566153fe25dec7faee439ead221b",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_finish.py",
+          "version": "1.1.1"
         }
       ]
     },
@@ -2365,6 +2389,14 @@
           "retired": false,
           "script": "powercycle_setup.py",
           "version": "1.2.10"
+        },
+        {
+          "artifact": "packages/powercycle_setup/1.2.11.tar.gz",
+          "package_sha256": "b71d906a4bfb1268f6a580b0fe75c7b465873a2d78bf4d0e6c45f48c26302bdc",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_setup.py",
+          "version": "1.2.11"
         }
       ]
     },
