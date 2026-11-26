@@ -73,7 +73,10 @@ from _lib import (
     permission_model,
     progress_stamp,
     read_prefs_classified,
+    read_r30_prefs_classified,
+    resolve_apk_flavor,
     stop_task,
+    stop_task_r30,
     _root_read_prefs,
 )
 
@@ -190,19 +193,23 @@ def _resolve_category(cfg: dict, *, can_detect: bool) -> tuple[str, str]:
     return platform or "UNKNOWN", model or ""
 
 
-def _read_prefs_evidence() -> dict[str, Any]:
+def _read_prefs_evidence(apk_flavor: str = "stp") -> dict[str, Any]:
     """读取 prefs 并按 §3.6.6 第 2、3 条给出原始 readback 与 evidence。
 
     kind: ok / not_installed / absent / denied / empty / transient。
     readback: footprint / clear / absent / not_installed / readback_failed。
     """
-    kind, xml, installed = read_prefs_classified()
+    kind, xml, installed = (
+        read_r30_prefs_classified() if apk_flavor == "r30" else read_prefs_classified()
+    )
     evidence: dict[str, Any] = {
         "root": bool(is_root()),
         "kind": kind,
         "autotesttool_installed": installed,
         "prefs_len": len(xml or ""),
     }
+    if apk_flavor == "r30":
+        evidence["apk_flavor"] = "r30"
     if kind == "not_installed":
         return {
             "readback": "not_installed",
@@ -219,6 +226,33 @@ def _read_prefs_evidence() -> dict[str, Any]:
         }
     if kind != "ok":
         # 被拒 / 未知 / 超时 / 空文件：原始读取失败，不据此判无足迹
+        return {
+            "readback": "readback_failed",
+            "running": None,
+            "auto_resume": None,
+            "evidence": evidence,
+        }
+
+    if apk_flavor == "r30":
+        going_true = 'name="reboot_service_going" value="true"' in xml
+        going_false = 'name="reboot_service_going" value="false"' in xml
+        evidence["reboot_service_going_token"] = (
+            "true" if going_true else ("false" if going_false else "absent")
+        )
+        if going_true:
+            return {
+                "readback": "footprint",
+                "running": True,
+                "auto_resume": True,
+                "evidence": evidence,
+            }
+        if going_false:
+            return {
+                "readback": "clear",
+                "running": False,
+                "auto_resume": False,
+                "evidence": evidence,
+            }
         return {
             "readback": "readback_failed",
             "running": None,
@@ -263,6 +297,7 @@ _READ_TRANSIENT_RETRY_DELAY_SECONDS = 1.0
 
 def _read_prefs_evidence_with_retry(
     *,
+    apk_flavor: str = "stp",
     max_attempts: int = _READ_TRANSIENT_MAX_ATTEMPTS,
     delay_seconds: float = _READ_TRANSIENT_RETRY_DELAY_SECONDS,
 ) -> dict[str, Any]:
@@ -274,7 +309,7 @@ def _read_prefs_evidence_with_retry(
     return immediately without extra delay.
     """
     attempts = max(1, int(max_attempts))
-    snap = _read_prefs_evidence()
+    snap = _read_prefs_evidence() if apk_flavor == "stp" else _read_prefs_evidence(apk_flavor)
     attempt = 1
     while (
         attempt < attempts
@@ -291,7 +326,7 @@ def _read_prefs_evidence_with_retry(
         if delay_seconds > 0:
             time.sleep(delay_seconds)
         attempt += 1
-        snap = _read_prefs_evidence()
+        snap = _read_prefs_evidence() if apk_flavor == "stp" else _read_prefs_evidence(apk_flavor)
     if attempt > 1:
         evidence = dict(snap.get("evidence") or {})
         evidence["transient_retries"] = attempt - 1
@@ -370,6 +405,7 @@ def _run(cfg: dict) -> dict:
     ).strip().lower()
     if mode not in ("probe", "disarm"):
         raise RuntimeError(f"mode 必须是 probe 或 disarm，收到: {mode!r}")
+    apk_flavor = resolve_apk_flavor(cfg)
 
     wait_online = int(
         str(
@@ -410,7 +446,11 @@ def _run(cfg: dict) -> dict:
             == "true"
         )
         # 先只读分类，再决定是否需要停服务/写标志（§3.6.6 第 4、5 条）。
-        pre = _read_prefs_evidence_with_retry()
+        pre = (
+            _read_prefs_evidence_with_retry()
+            if apk_flavor == "stp"
+            else _read_prefs_evidence_with_retry(apk_flavor=apk_flavor)
+        )
         pre_evidence = pre.get("evidence") or {}
         kind = str(pre_evidence.get("kind") or "")
         installed = pre_evidence.get("autotesttool_installed")
@@ -422,7 +462,11 @@ def _run(cfg: dict) -> dict:
             action_completed = True
         else:
             try:
-                stop_steps = stop_task(force=force, kind=kind, installed=installed)
+                stop_steps = (
+                    stop_task_r30(force=force, kind=kind, installed=installed)
+                    if apk_flavor == "r30"
+                    else stop_task(force=force, kind=kind, installed=installed)
+                )
                 action_completed = True
             except StopNotConfirmed as exc:
                 # §3.6.6 第 1 条 v1.7.8：查询/STOP/force-stop 任一失败即未确认
@@ -465,7 +509,11 @@ def _run(cfg: dict) -> dict:
     platform, model = _resolve_category(cfg, can_detect=True)
     identity = _device_identity_evidence()
 
-    snap = _read_prefs_evidence_with_retry()
+    snap = (
+        _read_prefs_evidence_with_retry()
+        if apk_flavor == "stp"
+        else _read_prefs_evidence_with_retry(apk_flavor=apk_flavor)
+    )
     readback = str(snap["readback"])
 
     if stop_error:
