@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Suspense } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { Menu, ChevronRight, FileText, LogOut, Loader2, KeyRound, Wifi, WifiOff, Users, Shield, Settings, BellRing } from 'lucide-react';
+import { Menu, FileText, LogOut, Loader2, KeyRound, WifiOff, Users, Shield, Settings, BellRing } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { clearAppQueryCache } from '@/components/QueryProvider';
@@ -15,14 +15,24 @@ import { NotificationBell } from '@/components/ui/NotificationBell';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { api } from '@/utils/api';
 import { DASHBOARD_SUBSCRIPTION } from '@/config';
-import { BORDER, ELEVATION, INTERACTIVE, SIDEBAR, SURFACE, TEXT } from '@/design-system/tokens';
+import { BORDER, INTERACTIVE, SIDEBAR, SURFACE, TEXT } from '@/design-system/tokens';
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'stp_sidebar_collapsed';
+
+function readInitialSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 /**
  * 主应用布局 - 源自 web 样板设计风格
  */
 export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readInitialSidebarCollapsed);
   const [isMobile, setIsMobile] = useState(false);
   // #1197：移动抽屉关闭后把焦点还给触发按钮（链接已 inert，不能原地留焦）
   const sidebarToggleRef = useRef<HTMLButtonElement | null>(null);
@@ -68,7 +78,17 @@ export default function AppShell() {
   }, [isMobile, sidebarOpen]);
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
-  const toggleSidebarCollapse = () => setSidebarCollapsed(!sidebarCollapsed);
+  const toggleSidebarCollapse = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        // ignore storage errors in private mode
+      }
+      return next;
+    });
+  };
 
   const handleLogout = async () => {
     try {
@@ -92,11 +112,11 @@ export default function AppShell() {
 
       <aside
         className={cn(
-          'hidden lg:flex flex-col transition-all duration-300 border-r',
+          'hidden lg:flex flex-col transition-all duration-200 border-r shrink-0',
           SIDEBAR.root,
           SIDEBAR.border,
         )}
-        style={{ width: sidebarCollapsed ? 72 : 224 }}
+        style={{ width: sidebarCollapsed ? 56 : 208 }}
       >
         <Sidebar
           onNavigate={() => isMobile && setSidebarOpen(false)}
@@ -110,7 +130,7 @@ export default function AppShell() {
         // #1197：关闭态抽屉仅位移动画隐藏，链接仍在 DOM——inert 让整棵子树退出焦点顺序
         inert={!sidebarOpen}
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-56 transform transition-transform duration-300 lg:hidden border-r',
+          'fixed inset-y-0 left-0 z-50 w-52 transform transition-transform duration-300 lg:hidden border-r',
           SIDEBAR.root,
           SIDEBAR.border,
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
@@ -124,30 +144,16 @@ export default function AppShell() {
         />
       </aside>
 
-      {!isMobile && sidebarCollapsed && (
-        <button
-          onClick={toggleSidebarCollapse}
-          aria-label="展开侧边栏"
-          className={cn(
-            'fixed left-[60px] top-1/2 -translate-y-1/2 z-40 h-6 w-6 rounded-full flex items-center justify-center transition-all duration-200',
-            SIDEBAR.root,
-            SIDEBAR.border,
-            'border',
-            ELEVATION.sm,
-            'hover:bg-sidebar-accent',
-          )}
-        >
-          <ChevronRight size={14} className={TEXT.subtitle} />
-        </button>
-      )}
-
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className={cn('sticky top-0 z-30 border-b', SURFACE.header, BORDER.default)}>
-          <div className="flex items-center justify-between h-20 px-4 lg:px-6">
+        <header
+          data-testid="app-shell-header"
+          className={cn('sticky top-0 z-30 shrink-0 border-b', SURFACE.header, BORDER.default)}
+        >
+          <div className="flex items-center justify-between h-12 px-4 lg:px-5 gap-2">
             <button
               ref={sidebarToggleRef}
               onClick={toggleSidebar}
-              className={cn('lg:hidden p-2', INTERACTIVE.iconButton)}
+              className={cn('lg:hidden p-1.5', INTERACTIVE.iconButton)}
               aria-label="打开侧边栏"
             >
               <Menu className="w-5 h-5" />
@@ -159,20 +165,32 @@ export default function AppShell() {
 
             {headerSlot && (
               <div
-                className="mx-3 hidden h-5 w-px shrink-0 bg-border sm:block"
+                className="mx-1.5 hidden h-4 w-px shrink-0 bg-border sm:block"
                 aria-hidden="true"
               />
             )}
 
-            <div className="flex shrink-0 items-center gap-2">
-              <Badge
-                variant={dashConnected ? 'success' : 'destructive'}
-                className="hidden gap-1.5 sm:inline-flex"
-                title={dashConnected ? '实时数据通道已连接' : '实时连接已断开'}
-              >
-                {dashConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
-                {dashConnected ? '实时连接' : '已断开'}
-              </Badge>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {dashConnected ? (
+                <span
+                  data-testid="ws-connection-status"
+                  title="实时数据通道已连接"
+                  aria-label="实时数据通道已连接"
+                  className="hidden sm:inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground"
+                >
+                  <span className="h-2 w-2 rounded-full bg-success ring-2 ring-success/20" />
+                </span>
+              ) : (
+                <Badge
+                  data-testid="ws-connection-status"
+                  variant="destructive"
+                  className="hidden gap-1 px-2 py-0.5 text-[11px] sm:inline-flex"
+                  title="实时连接已断开"
+                >
+                  <WifiOff size={12} />
+                  已断开
+                </Badge>
+              )}
 
               <ThemeToggle />
 
