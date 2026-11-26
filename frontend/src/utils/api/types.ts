@@ -71,6 +71,8 @@ export interface Host {
       over_current_ports: number;
       stuck_default_ports: number;
     } | null;
+    /** VBUS 槽位在位映射：{ serial: [hub:port, vid:pid | null] } */
+    usb_power_slots?: Record<string, [string, string | null]> | null;
   };
   health?: {
     status: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
@@ -90,6 +92,8 @@ export interface Host {
     recent_verdicts?: string[];
     strike_open?: boolean;
     strike_need?: number;
+    uhubctl_status?: 'ok' | 'unavailable' | 'skipped_unbound_hub' | 'timeout' | 'error' | string;
+    powered_off_ports?: string[];
   } | null;
   /** #2972 / S4：Agent 侧 USB/ADB 自愈与持久化熔断状态 */
   self_heal?: {
@@ -148,8 +152,9 @@ export interface Host {
   emptied_at?: string | null;
   emptied_by?: string | null;
   emptied_reason?: string | null;
-  /** 台账在册（未退役）设备数（用于区分纯空主机与台账有设备但 USB 空树的疑似失明主机） */
+  /** 台账在册（未退役）设备数与最近活跃时间（用于按 72h 窗口区分长期空置主机与近期失联空树主机） */
   ledger_device_count?: number | null;
+  ledger_latest_seen_at?: string | null;
 }
 
 /** #496 / #4117 B2-2：`GET /hosts/facets` 10 项全局计数模型。 */

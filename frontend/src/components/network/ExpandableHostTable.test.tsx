@@ -861,6 +861,92 @@ describe('S2：USB / Hub 故障工作台（快捷视图、主行外显、异常�
     expect(within(card).getByText('主控与端口体检（sysfs）')).toBeInTheDocument();
     expect(within(card).getByText('根口禁用: 16')).toBeInTheDocument();
   });
+
+  it('按 72 小时活跃窗口消噪长期空置主机，并在主行与抽屉独立展示 uhubctl VBUS 断电端口', () => {
+    const staleSeen = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const recentSeen = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+    const staleEmptyHost: HostTableData = {
+      ...host,
+      id: 'host-stale-empty',
+      name: 'Host-Stale-Empty',
+      ip: '10.0.15.20',
+      health_status: 'DEGRADED',
+      health_reasons: ['usb_tree_empty'],
+      device_count: 0,
+      usb_device_count: 0,
+      ledger_device_count: 4,
+      ledger_latest_seen_at: staleSeen,
+      usb_controller_health: {
+        unbound_xhci_controllers: 0,
+        disabled_root_ports: 0,
+        disabled_hub_ports: 0,
+        over_current_ports: 0,
+        stuck_default_ports: 0,
+      },
+    };
+    const recentEmptyHost: HostTableData = {
+      ...host,
+      id: 'host-recent-empty',
+      name: 'Host-Recent-Empty',
+      ip: '10.0.15.43',
+      health_status: 'DEGRADED',
+      health_reasons: ['usb_tree_empty'],
+      device_count: 0,
+      usb_device_count: 0,
+      ledger_device_count: 6,
+      ledger_latest_seen_at: recentSeen,
+    };
+    const vbusOffHost: HostTableData = {
+      ...host,
+      id: 'host-vbus-off',
+      name: 'Host-Vbus-Off',
+      ip: '10.0.15.66',
+      health_status: 'HEALTHY',
+      health_reasons: [],
+      device_count: 2,
+      usb_device_count: 2,
+      usb_power_slot_serials: {
+        '1-5.1:2': 'SER-VBUS-02',
+      },
+      health_probe: {
+        verdict: 'aligned',
+        topology: 'ok',
+        strike_open: false,
+        uhubctl_status: 'ok',
+        powered_off_ports: ['1-5.1:2', '1-5.1:4'],
+      },
+    };
+
+    render(
+      <ExpandableHostTable
+        hosts={[staleEmptyHost, vbusOffHost, recentEmptyHost]}
+      />,
+    );
+
+    const rows = screen.getAllByRole('button', { name: /^查看主机 / });
+    expect(rows[0]).toHaveTextContent('Host-Recent-Empty');
+    expect(rows[1]).toHaveTextContent('Host-Vbus-Off');
+    expect(rows[2]).toHaveTextContent('Host-Stale-Empty');
+
+    expect(screen.getByTestId('host-inline-faults-host-stale-empty')).toHaveTextContent('长期空置');
+    expect(screen.getByTestId('host-inline-faults-host-recent-empty')).toHaveTextContent('USB 空树');
+    expect(screen.getByTestId('host-inline-faults-host-vbus-off')).toHaveTextContent('VBUS 断电(2)');
+
+    // 切到「USB / Hub 异常」：排除 >72h 长期空置主机，保留近期掉光(P2)与 VBUS 断电(P1)
+    fireEvent.click(screen.getByText(/USB \/ Hub 异常/));
+    expect(screen.getByText('Host-Recent-Empty')).toBeInTheDocument();
+    expect(screen.getByText('Host-Vbus-Off')).toBeInTheDocument();
+    expect(screen.queryByText('Host-Stale-Empty')).not.toBeInTheDocument();
+
+    // 打开 VBUS 断电主机抽屉，确认列出具体 hub:port 与映射串号
+    fireEvent.click(screen.getByText('Host-Vbus-Off'));
+    const card = screen.getByTestId('host-usb-diagnostics-host-vbus-off');
+    expect(within(card).getByText('VBUS 供电（uhubctl）')).toBeInTheDocument();
+    expect(within(card).getByText('2 口断电（0000 off）')).toBeInTheDocument();
+    expect(within(card).getByText('1-5.1:2 (SER-VBUS-02)')).toBeInTheDocument();
+    expect(within(card).getByText('1-5.1:4')).toBeInTheDocument();
+  });
 });
 
 describe('B3-2 服务端分页模式（serverMode + 10 项 Facets + upgrade_pending）', () => {

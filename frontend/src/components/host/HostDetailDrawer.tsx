@@ -780,6 +780,16 @@ export function HostDetailDrawer({
                       </span>
                     </div>
                   ) : null}
+                  {host.ledger_latest_seen_at ? (
+                    <div className="flex justify-between gap-2 text-[11px]">
+                      <span className="shrink-0 whitespace-nowrap text-muted-foreground">
+                        台账最近活跃
+                      </span>
+                      <span className="font-mono text-foreground">
+                        {formatDateTimeFull(host.ledger_latest_seen_at)}
+                      </span>
+                    </div>
+                  ) : null}
                   {host.adb_state_counts ? (
                     <div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
                       <span>device {host.adb_state_counts.device ?? 0}</span>
@@ -941,6 +951,51 @@ export function HostDetailDrawer({
                           {host.health_probe.strike_open ? '已触发（需核查）' : '正常'}
                         </span>
                       </div>
+                      {(host.health_probe.uhubctl_status ||
+                        (host.health_probe.powered_off_ports?.length ?? 0) > 0) ? (
+                        <div className="mt-1.5 space-y-1 border-t border-border/60 pt-1.5 text-[11px]">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="shrink-0 whitespace-nowrap text-muted-foreground">
+                              VBUS 供电（uhubctl）
+                            </span>
+                            {(host.health_probe.powered_off_ports?.length ?? 0) > 0 ? (
+                              <span className="font-medium text-info">
+                                {host.health_probe.powered_off_ports!.length} 口断电（0000 off）
+                              </span>
+                            ) : host.health_probe.uhubctl_status === 'ok' ? (
+                              <span className="text-success">全部已供电</span>
+                            ) : host.health_probe.uhubctl_status === 'unavailable' ? (
+                              <span className="text-muted-foreground">未安装（可点刷机前置补装）</span>
+                            ) : host.health_probe.uhubctl_status === 'skipped_unbound_hub' ? (
+                              <span className="text-muted-foreground">已跳过（存在半枚举 Hub）</span>
+                            ) : host.health_probe.uhubctl_status === 'timeout' ? (
+                              <span className="text-warning">巡检超时</span>
+                            ) : (
+                              <span className="text-muted-foreground">未采集</span>
+                            )}
+                          </div>
+                          {(host.health_probe.powered_off_ports?.length ?? 0) > 0 ? (
+                            <>
+                              <div className="flex flex-wrap gap-1">
+                                {host.health_probe.powered_off_ports!.map((port) => {
+                                  const serial = host.usb_power_slot_serials?.[port];
+                                  return (
+                                    <span
+                                      key={port}
+                                      className="rounded bg-info/10 px-1.5 py-0.5 font-mono text-[11px] text-info"
+                                    >
+                                      {serial ? `${port} (${serial})` : port}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                              <div className="text-[10px] leading-snug text-muted-foreground">
+                                端口供电被 uhubctl 关闭（非端口损坏），可用 uhubctl -a on 恢复供电
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </>
                   ) : (
                     <div className="text-muted-foreground">暂无探针记录</div>

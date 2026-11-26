@@ -82,7 +82,7 @@ from backend.services.host_inventory_query import (
     build_host_out_readonly,
     build_host_selection_preview,
     derive_agent_installed,
-    load_host_ledger_device_counts,
+    load_host_ledger_summary,
     normalize_host_filters,
     query_hosts_page,
     validate_host_sort_params,
@@ -156,6 +156,7 @@ def _host_to_out(
     desired_artifact_digest: str | None = None,
     now: datetime | None = None,
     ledger_device_count: int | None = None,
+    ledger_latest_seen_at: datetime | None = None,
 ) -> HostOut:
     """从 ORM 对象构造 HostOut，从 host.extra 中提取 capacity/health。
 
@@ -163,11 +164,14 @@ def _host_to_out(
     的嵌套 key 映射到顶层字段。此 helper 在 validate 后补充。
 
     若提供 ``db``，会一并查询 host 上的活跃 Job 列表（ADR-0021 hot-update gate）
-    与在册设备台账数（``ledger_device_count``）。
+    与在册设备台账摘要（``ledger_device_count`` / ``ledger_latest_seen_at``）。
     """
     resolved_ledger = ledger_device_count
+    resolved_latest_seen = ledger_latest_seen_at
     if resolved_ledger is None and db is not None:
-        resolved_ledger = load_host_ledger_device_counts(db, [str(h.id)]).get(str(h.id), 0)
+        resolved_ledger, resolved_latest_seen = load_host_ledger_summary(
+            db, [str(h.id)]
+        ).get(str(h.id), (0, None))
 
     out = build_host_out_readonly(
         h,
@@ -175,6 +179,7 @@ def _host_to_out(
         now=now,
         host_key_trust=host_key_trust,
         ledger_device_count=resolved_ledger,
+        ledger_latest_seen_at=resolved_latest_seen,
     )
 
     if db is not None:
@@ -453,13 +458,14 @@ def list_hosts(
         query = query.order_by(Host.id)
         total = query.count()
         hosts = query.offset(skip).limit(limit).all()
-        ledger_counts = load_host_ledger_device_counts(db, [str(h.id) for h in hosts])
+        ledger_summary = load_host_ledger_summary(db, [str(h.id) for h in hosts])
         items = [
             _host_to_out(
                 h,
                 desired_artifact_digest=desired,
                 now=now,
-                ledger_device_count=ledger_counts.get(str(h.id), 0),
+                ledger_device_count=ledger_summary.get(str(h.id), (0, None))[0],
+                ledger_latest_seen_at=ledger_summary.get(str(h.id), (0, None))[1],
             )
             for h in hosts
         ]
