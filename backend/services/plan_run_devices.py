@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 import os
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from backend.api.schemas.plan_run import (
@@ -284,6 +284,41 @@ class _LightweightDeviceStub:
 
 
 @dataclass(frozen=True)
+class _LightweightTimeoutJobStub:
+    """与 ``JobInstance`` 等价的轻量超时输入，供 ``running_heartbeat_deadline`` 与
+    ``job_guard_deadline`` / ``guard_owner_valid`` / ``running_heartbeat_timeout_seconds`` 共用。"""
+
+    id: int
+    device_id: int
+    host_id: Optional[str]
+    status: str
+    execution_state: Optional[str]
+    last_execution_heartbeat_at: Optional[datetime]
+    started_at: Optional[datetime]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
+    disarm_guard: Optional[Dict[str, Any]]
+    patrol_cycle_count: int
+    last_patrol_heartbeat_at: Optional[datetime]
+    current_patrol_step: Optional[str]
+    next_retry_at: Optional[datetime]
+    pipeline_def: Dict[str, Any]
+
+
+def _minimal_patrol_pipeline_def(
+    patrol_json_type: Optional[str],
+    patrol_interval_raw: Any,
+) -> Dict[str, Any]:
+    """仅从 SQL JSONB 标量重建 ``running_heartbeat_timeout_seconds`` 所需的 patrol 最小视图。"""
+    if patrol_json_type != "object":
+        return {}
+    patrol: Dict[str, Any] = {}
+    if patrol_interval_raw is not None:
+        patrol["interval_seconds"] = patrol_interval_raw
+    return {"lifecycle": {"patrol": patrol}}
+
+
+@dataclass(frozen=True)
 class _LightPlanRunRow:
     """窄投影中间行：驱动 Minimap 响应与表格过滤/排序/切片，避免先构造重对象。"""
 
@@ -332,8 +367,10 @@ def _load_lightweight_plan_run_rows(
     run_id: int,
     *,
     now: datetime,
+    include_stuck: bool = True,
 ) -> Tuple[List[_LightPlanRunRow], Dict[str, int], Dict[str, int], Dict[str, int], Dict[str, str], List[int]]:
     """一次窄列联表扫描生成全集轻量投影、facets、主机显示名映射与全局 ``stuck_job_ids``。"""
+    patrol_json = JobInstance.pipeline_def["lifecycle"]["patrol"]
     raw_rows = db.execute(
         select(
             JobInstance.id.label("job_id"),
@@ -344,11 +381,16 @@ def _load_lightweight_plan_run_rows(
             JobInstance.next_retry_at.label("next_retry_at"),
             JobInstance.log_signal_count.label("log_signal_count"),
             JobInstance.patrol_cycle_count.label("patrol_cycle_count"),
+            JobInstance.last_patrol_heartbeat_at.label("last_patrol_heartbeat_at"),
+            JobInstance.current_patrol_step.label("current_patrol_step"),
             JobInstance.execution_state.label("execution_state"),
             JobInstance.last_execution_heartbeat_at.label("last_execution_heartbeat_at"),
             JobInstance.started_at.label("started_at"),
             JobInstance.created_at.label("created_at"),
+            JobInstance.updated_at.label("updated_at"),
             JobInstance.disarm_guard.label("disarm_guard"),
+            func.jsonb_typeof(patrol_json).label("patrol_json_type"),
+            patrol_json["interval_seconds"].label("patrol_interval_raw"),
             Device.id.label("dev_pk"),
             Device.serial.label("device_serial"),
             Device.status.label("device_status"),
@@ -374,7 +416,7 @@ def _load_lightweight_plan_run_rows(
     if not raw_rows:
         return [], by_status, by_link_status, by_host, hosts_map, stuck_job_ids
 
-    coord_heartbeat_by_host = _load_coord_heartbeats(db, run_id)
+    coord_heartbeat_by_host = _load_coord_heartbeats(db, run_id) if include_stuck else {}
     light_rows: List[_LightPlanRunRow] = []
 
     for row in raw_rows:
@@ -389,12 +431,35 @@ def _load_lightweight_plan_run_rows(
         )
         exec_status = job_exec_status_for_job(row, now)
         link_status = derive_device_link_status(dev_stub, row.host_status)
-        hb_deadline = running_heartbeat_deadline(
-            row, coord_heartbeat_by_host, db=db, now=now,
-        )
-        stuck = bool(hb_deadline and now >= hb_deadline)
-        if stuck:
-            stuck_job_ids.append(int(row.job_id))
+        if include_stuck:
+            timeout_stub = _LightweightTimeoutJobStub(
+                id=int(row.job_id),
+                device_id=int(row.device_id),
+                host_id=row.host_id,
+                status=row.status,
+                execution_state=row.execution_state,
+                last_execution_heartbeat_at=row.last_execution_heartbeat_at,
+                started_at=row.started_at,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                disarm_guard=row.disarm_guard,
+                patrol_cycle_count=int(row.patrol_cycle_count or 0),
+                last_patrol_heartbeat_at=row.last_patrol_heartbeat_at,
+                current_patrol_step=row.current_patrol_step,
+                next_retry_at=row.next_retry_at,
+                pipeline_def=_minimal_patrol_pipeline_def(
+                    row.patrol_json_type,
+                    row.patrol_interval_raw,
+                ),
+            )
+            hb_deadline = running_heartbeat_deadline(
+                timeout_stub, coord_heartbeat_by_host, db=db, now=now,
+            )
+            stuck = bool(hb_deadline and now >= hb_deadline)
+            if stuck:
+                stuck_job_ids.append(int(row.job_id))
+        else:
+            stuck = False
 
         host_label = _host_display_name(row.host_id, row.host_name, row.host_ip)
         light_rows.append(
@@ -708,7 +773,7 @@ def build_plan_run_devices(
     norm_sort_by, norm_sort_dir = _validate_sort(sort_by, sort_dir)
     now = datetime.now(timezone.utc)
     light_rows, by_status, by_link_status, by_host, _hosts_map, _stuck = (
-        _load_lightweight_plan_run_rows(db, run_id, now=now)
+        _load_lightweight_plan_run_rows(db, run_id, now=now, include_stuck=False)
     )
     if not light_rows:
         return PlanRunDevicesOut(

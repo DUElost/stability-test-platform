@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Server } from 'lucide-react';
@@ -314,8 +314,12 @@ async function resolveHostRecordsForIds(
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedHostIds, setSelectedHostIds] = useState<Set<string | number>>(new Set());
-  const [crossPagePreview, setCrossPagePreview] = useState<HostSelectionPreview | null>(null);
+  const [crossPagePreviewEntry, setCrossPagePreviewEntry] = useState<{
+    scopeKey: string;
+    preview: HostSelectionPreview;
+  } | null>(null);
   const [crossPagePreviewLoading, setCrossPagePreviewLoading] = useState(false);
+  const previewRequestSeqRef = useRef(0);
   const queryClient = useQueryClient();
   const toast = useToast();
   const confirmDialog = useConfirm();
@@ -330,8 +334,10 @@ export default function HostsPage() {
   const { getString, getBool, updateParams, clearParams } = useUrlFilterParams();
 
   const clearSelection = useCallback(() => {
+    previewRequestSeqRef.current += 1;
+    setCrossPagePreviewLoading(false);
     setSelectedHostIds(new Set());
-    setCrossPagePreview(null);
+    setCrossPagePreviewEntry(null);
   }, []);
 
   const updateFilterParams = useCallback(
@@ -411,6 +417,26 @@ export default function HostsPage() {
     if (searchQuery.trim()) params.q = searchQuery.trim();
     return params;
   }, [showRetired, statusFilter, healthFilter, syncFilter, searchQuery]);
+
+  const hostFilterScopeKey = useMemo(() => JSON.stringify(hostFilterParams), [hostFilterParams]);
+  const crossPagePreview =
+    crossPagePreviewEntry?.scopeKey === hostFilterScopeKey ? crossPagePreviewEntry.preview : null;
+  const activeFilterScopeKeyRef = useRef(hostFilterScopeKey);
+  useEffect(() => {
+    activeFilterScopeKeyRef.current = hostFilterScopeKey;
+    previewRequestSeqRef.current += 1;
+  }, [hostFilterScopeKey]);
+  useEffect(() => () => {
+    previewRequestSeqRef.current += 1;
+  }, []);
+
+  const [prevHostFilterScopeKey, setPrevHostFilterScopeKey] = useState(hostFilterScopeKey);
+  if (prevHostFilterScopeKey !== hostFilterScopeKey) {
+    setPrevHostFilterScopeKey(hostFilterScopeKey);
+    if (selectedHostIds.size > 0) setSelectedHostIds(new Set());
+    if (crossPagePreviewEntry !== null) setCrossPagePreviewEntry(null);
+    if (crossPagePreviewLoading) setCrossPagePreviewLoading(false);
+  }
 
   const apiSortBy: HostListSortBy = sortKey === 'default' ? 'priority' : sortKey;
   const apiSortDir: HostSortDirection = sortKey === 'default' ? 'desc' : sortDirection;
@@ -517,25 +543,43 @@ export default function HostsPage() {
   }, [crossPagePreview, selectedHostIds, liveHostIds, hosts]);
 
   const handlePageSelectionChange = useCallback((nextIds: Set<string | number>) => {
-    setCrossPagePreview(null);
+    previewRequestSeqRef.current += 1;
+    setCrossPagePreviewLoading(false);
+    setCrossPagePreviewEntry(null);
     setSelectedHostIds(nextIds);
   }, []);
 
   const handleSelectAllFiltered = useCallback(async () => {
+    const requestSeq = ++previewRequestSeqRef.current;
+    const requestScopeKey = hostFilterScopeKey;
     setCrossPagePreviewLoading(true);
     try {
       const preview = await api.hosts.selectionPreview(hostFilterParams);
-      setCrossPagePreview(preview);
+      if (
+        requestSeq !== previewRequestSeqRef.current ||
+        requestScopeKey !== activeFilterScopeKeyRef.current
+      ) {
+        return;
+      }
+      setCrossPagePreviewEntry({ scopeKey: requestScopeKey, preview });
       setSelectedHostIds(
         new Set(preview.host_ids.map((id) => resolveSelectedHostId(id, hosts))),
       );
       toast.info(`已冻结全部筛选结果（共 ${preview.total_matched} 台主机）`);
     } catch (err: unknown) {
+      if (
+        requestSeq !== previewRequestSeqRef.current ||
+        requestScopeKey !== activeFilterScopeKeyRef.current
+      ) {
+        return;
+      }
       toast.error(`冻结筛选结果失败: ${toApiError(err).message}`);
     } finally {
-      setCrossPagePreviewLoading(false);
+      if (requestSeq === previewRequestSeqRef.current) {
+        setCrossPagePreviewLoading(false);
+      }
     }
-  }, [hostFilterParams, hosts, toast]);
+  }, [hostFilterParams, hostFilterScopeKey, hosts, toast]);
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof api.hosts.create>[0]) => api.hosts.create(data),
@@ -1138,7 +1182,8 @@ export default function HostsPage() {
         );
         const skippedOnly = await startHotUpdateBatch([], { skipped: skippedSeeds });
         if (skippedOnly) {
-          setCrossPagePreview(null);
+          previewRequestSeqRef.current += 1;
+          setCrossPagePreviewEntry(null);
           setSelectedHostIds(
             new Set(
               skippedOnly.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts)),
@@ -1176,7 +1221,8 @@ export default function HostsPage() {
         ...result.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts)),
         ...result.failed.map((item) => resolveSelectedHostId(item.hostId, hosts)),
       ]);
-      setCrossPagePreview(null);
+      previewRequestSeqRef.current += 1;
+      setCrossPagePreviewEntry(null);
       setSelectedHostIds(remainingIds);
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       queryClient.invalidateQueries({ queryKey: ['host-detail'] });
