@@ -87,6 +87,7 @@ function toDeviceTableData(device: DeviceListItem | Device): DeviceTableData {
     host_name: hostName,
     last_seen: device.last_seen ?? undefined,
     tags: Array.isArray(device.tags) ? device.tags : [],
+    tags_truncated: 'tags_truncated' in device ? Boolean(device.tags_truncated) : false,
     project_key: device.project_key ?? null,
     attribution_source: device.attribution_source ?? null,
     retired_at: device.retired_at ?? null,
@@ -495,7 +496,7 @@ export default function DevicesPage() {
           const cached = pageById.get(targetId);
           try {
             let currentTags = cached?.tags ?? [];
-            if (!cached && operation !== 'replace') {
+            if ((!cached || cached.tags_truncated) && operation !== 'replace') {
               const fetched = await api.devices.get(targetId);
               currentTags = Array.isArray(fetched.tags) ? fetched.tags : [];
             }

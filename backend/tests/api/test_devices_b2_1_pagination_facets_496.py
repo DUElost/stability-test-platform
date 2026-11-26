@@ -586,3 +586,60 @@ class TestCrossPageSelectionPreviewAndBulkLimit:
         )
         assert r_retire.status_code == 422
         assert r_retire.json()["detail"]["code"] == "BULK_LIMIT_EXCEEDED"
+
+
+class TestDeviceListStrictPayloadBoundQ2:
+    """Q2 回归：50 条合法超长标签与超长文本记录下，projection=list 严格 ≤ 100 KiB，详情保留全文。"""
+
+    def test_50_long_tag_devices_stay_under_100kib_and_detail_preserves_full_tags(
+        self, client, db_session, auth_headers
+    ):
+        prefix = f"B21-Q2-{uuid4().hex[:6]}"
+        host = _make_host(
+            db_session,
+            host_id=f"hq2-{prefix}",
+            name=f"LongTagHost-{prefix}",
+            ip=f"10.95.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+        )
+        # 复现审查报告场景：每台 50 条设备携带 20 个 120 字符的合法长标签（单台 >2.4 KiB 标签），
+        # 未收敛时 50 条将超 120,885 字节；收敛后必须严格 ≤ 100 KiB。
+        huge_tags = [f"tag-{idx:02d}-" + ("长标签值X" * 24) for idx in range(20)]
+        long_reason = "报废原因-" + ("详细说明" * 120)
+        created_ids = []
+        for i in range(50):
+            dev = _make_device(
+                db_session,
+                serial=f"{prefix}-{i:03d}",
+                host_id=host.id,
+                model="MLD-NX3",
+                product="MLD-NX3",
+                build_display_id="BUILD-LONG-" + ("V" * 100),
+                tags=huge_tags,
+                extra={"blob": "Z" * 4096},
+            )
+            dev.retire_reason = long_reason
+            created_ids.append(dev.id)
+        db_session.commit()
+
+        resp_list = client.get(
+            "/api/v1/devices",
+            params={"q": prefix, "projection": "list", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert resp_list.status_code == 200
+        raw_bytes = len(resp_list.content)
+        assert raw_bytes <= 100 * 1024, (
+            f"50 long-tag devices projection=list exceeded 100 KiB: {raw_bytes} bytes"
+        )
+        items = resp_list.json()["items"]
+        assert len(items) == 50
+        assert all(item["tags_truncated"] is True for item in items)
+        assert all(sum(len(t.encode("utf-8")) for t in item["tags"]) <= 512 for item in items)
+        assert all(len(item["retire_reason"].encode("utf-8")) <= 256 for item in items)
+
+        # 单机详情接口必须保留完整未截断标签与退役原因
+        resp_detail = client.get(f"/api/v1/devices/{created_ids[0]}", headers=auth_headers)
+        assert resp_detail.status_code == 200
+        detail = resp_detail.json()
+        assert detail["tags"] == huge_tags
+        assert detail["retire_reason"] == long_reason
