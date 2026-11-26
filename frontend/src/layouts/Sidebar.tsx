@@ -77,12 +77,13 @@ export default function Sidebar({
   const isItemActive = (path: string) =>
     location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
 
-  // 方案 B：默认折叠非活跃组（首屏一级只有 3 个组名），活跃组自动展开。
-  // 仅挂载时初始化一次；此后用户手动开合优先。
+  // 默认展开高频核心组（工作区 / 分析报告 / 资源），仅默认折叠标记 defaultCollapsed 的低频组；
+  // 若低频组含当前活跃路由则自动展开。此后用户手动开合优先。
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
     const map: Record<string, boolean> = {};
     for (const group of navGroups) {
-      map[group.label] = !group.items.some((item) => isItemActive(item.path));
+      const hasActive = group.items.some((item) => isItemActive(item.path));
+      map[group.label] = Boolean(group.defaultCollapsed) && !hasActive;
     }
     return map;
   });
@@ -130,15 +131,21 @@ export default function Sidebar({
 
   return (
     <div className={cn('flex flex-col h-full', SIDEBAR.root)}>
-      {/* Logo */}
-      <div className={cn('h-20 flex items-center px-5 border-b', SIDEBAR.border)}>
-        <div className="flex items-center gap-3 overflow-hidden">
-          <BrandLogo size={32} className="rounded-lg" />
+      {/* Logo（与 AppShell h-12 顶栏严格等高） */}
+      <div
+        className={cn(
+          'h-12 shrink-0 flex items-center border-b',
+          collapsed && !isMobile ? 'justify-center px-2' : 'px-4',
+          SIDEBAR.border,
+        )}
+      >
+        <div className="flex items-center gap-2.5 overflow-hidden">
+          <BrandLogo size={32} className="h-6 w-6 shrink-0 rounded-md" />
           <span
             className={cn(
-              'font-semibold text-base whitespace-nowrap transition-all duration-300 tracking-[-0.02em]',
+              'font-semibold text-[15px] whitespace-nowrap transition-all duration-300 tracking-[-0.02em]',
               'text-sidebar-foreground',
-              collapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100',
+              collapsed && !isMobile ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100',
             )}
           >
             稳定性测试平台
@@ -159,18 +166,18 @@ export default function Sidebar({
 
       {/* ADR-0031 / FRONTEND_NAV_IA_REDESIGN §5.1：AI 助手 pinned 入口——
           横切能力不占业务组坑位；与业务项的区分 = 描边 + 图标 + 文案（不依赖纯颜色） */}
-      <div className="px-3 pt-3">
+      <div className={cn('pt-2.5 pb-1', collapsed && !isMobile ? 'px-2' : 'px-2.5')}>
         <NavLink
           to="/assistant"
           onClick={onNavigate}
           aria-label="AI 助手"
           title={collapsed && !isMobile ? 'AI 助手' : undefined}
           className={cn(
-            'relative flex items-center gap-3 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200',
+            'relative flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5 text-[13px] font-medium transition-all duration-200',
             assistantActive
               ? 'border-primary/60 bg-primary/10 text-primary'
               : 'border-primary/25 bg-primary/5 text-primary hover:bg-primary/10',
-            collapsed && !isMobile && 'justify-center px-2',
+            collapsed && !isMobile && 'justify-center px-0',
           )}
         >
           <Sparkles className="h-4 w-4 shrink-0" />
@@ -189,13 +196,13 @@ export default function Sidebar({
       </div>
 
       {/* Navigation Groups */}
-      <nav className="p-3 overflow-y-auto flex-1 sidebar-scroll">
+      <nav className={cn('py-2 overflow-y-auto flex-1 sidebar-scroll', collapsed && !isMobile ? 'px-2' : 'px-2.5')}>
         {visibleGroups.map((group) => {
           const isGroupCollapsed = !collapsed && !!collapsedGroups[group.label];
           return (
             <div
               key={group.label}
-              className={cn('pb-3 mb-3 border-b last:mb-0 last:border-b-0 last:pb-0', SIDEBAR.border)}
+              className={cn('pb-2.5 mb-2.5 border-b last:mb-0 last:border-b-0 last:pb-0', SIDEBAR.border)}
             >
               {!collapsed && (
                 <button
@@ -203,7 +210,7 @@ export default function Sidebar({
                   onClick={() => toggleGroup(group.label)}
                   aria-expanded={!isGroupCollapsed}
                   className={cn(
-                    'w-full flex items-center justify-between px-3 mb-2 text-xs font-medium uppercase tracking-wider transition-colors',
+                    'w-full flex items-center justify-between px-2.5 mb-1 text-[11px] font-medium uppercase tracking-wider transition-colors',
                     'text-sidebar-foreground/45 hover:text-sidebar-foreground/80',
                   )}
                 >
@@ -220,7 +227,7 @@ export default function Sidebar({
                 // #1197：折叠组内链接退出键盘焦点顺序（inert 同时移出焦点与辅助技术树）
                 inert={isGroupCollapsed}
                 className={cn(
-                  'space-y-1 overflow-hidden transition-all duration-200',
+                  'space-y-0.5 overflow-hidden transition-all duration-200',
                   isGroupCollapsed ? 'max-h-0 opacity-0' : 'max-h-96 opacity-100',
                 )}
               >
@@ -259,11 +266,12 @@ export default function Sidebar({
 
       {/* Collapse Toggle Button - Desktop only */}
       {!isMobile && onToggleCollapse && (
-        <div className={cn('p-3 border-t', SIDEBAR.border)}>
+        <div className={cn('py-2 border-t', collapsed ? 'px-2' : 'px-2.5', SIDEBAR.border)}>
           <button
             onClick={onToggleCollapse}
             className={navLinkClass(false, collapsed)}
             aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+            title={collapsed ? '展开侧边栏' : '收起侧边栏'}
           >
             {collapsed ? (
               <ChevronRight className="w-4 h-4" />

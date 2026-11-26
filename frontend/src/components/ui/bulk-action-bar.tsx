@@ -10,7 +10,7 @@
 
 /** 悬浮条外层：不接指针事件，左右留白处可穿透（几何规格，两页共用）。 */
 export const BULK_BAR_OUTER_CLASS =
-  'pointer-events-none fixed bottom-4 left-4 right-4 z-40 flex justify-center lg:left-60';
+  'pointer-events-none fixed bottom-4 left-4 right-4 z-40 flex justify-center lg:left-56';
 
 /** 悬浮条内层：真正参与命中测试的实条，其横向范围随视口宽度变化。 */
 export const BULK_BAR_INNER_CLASS =

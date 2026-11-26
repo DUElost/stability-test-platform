@@ -34,15 +34,15 @@ export const UserMenu: React.FC<UserMenuProps> = ({ username, role, items }) => 
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className={cn('flex items-center gap-2 p-1.5 h-auto rounded-lg', INTERACTIVE.hover)}
+          className={cn('flex items-center gap-2 px-1.5 py-1 h-9 rounded-lg', INTERACTIVE.hover)}
           aria-label="用户菜单"
         >
-          <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', SURFACE.subtle)}>
-            <User className={cn('w-4 h-4', TEXT.subtitle)} />
+          <div className={cn('w-7 h-7 rounded-full flex items-center justify-center', SURFACE.subtle)}>
+            <User className={cn('w-3.5 h-3.5', TEXT.subtitle)} />
           </div>
-          <div className="hidden sm:flex flex-col items-start leading-tight">
-            <span className={cn('text-sm font-medium', TEXT.heading)}>{username ?? '...'}</span>
-            {role && <span className={cn('text-xs', TEXT.caption)}>{role}</span>}
+          <div className="hidden sm:flex flex-col items-start leading-none gap-0.5">
+            <span className={cn('text-xs font-medium', TEXT.heading)}>{username ?? '...'}</span>
+            {role && <span className={cn('text-[10px]', TEXT.caption)}>{role}</span>}
           </div>
         </Button>
       </DropdownMenuTrigger>

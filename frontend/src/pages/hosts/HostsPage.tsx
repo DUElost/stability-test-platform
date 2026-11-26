@@ -1240,14 +1240,15 @@ export default function HostsPage() {
     </label>
   );
 
-  const pageHeaderActions = (
-    <div className="flex items-center gap-2">
+  const workbenchActions = (
+    <div className="flex items-center gap-1.5">
       {!opPanelOpen && hostOps.length > 0 && (
         <Button
           variant="outline"
           size="sm"
           data-testid="host-op-panel-reopen"
           onClick={() => setOpPanelOpen(true)}
+          className="h-7 px-2.5 text-xs"
         >
           {hostOps.some((o) => o.kind === 'flash_prereqs')
             ? '刷机前置进度'
@@ -1260,7 +1261,12 @@ export default function HostsPage() {
         </Button>
       )}
       {isAdmin && (
-        <Button size="sm" data-testid="host-add-button" onClick={() => setIsModalOpen(true)}>
+        <Button
+          size="sm"
+          data-testid="host-add-button"
+          onClick={() => setIsModalOpen(true)}
+          className="h-7 gap-1 px-2.5 text-xs"
+        >
           <Plus className="h-3.5 w-3.5" />
           添加主机
         </Button>
@@ -1271,7 +1277,7 @@ export default function HostsPage() {
   if (isLoading) {
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         <PageSkeleton>
           <PageSkeleton.Stats count={4} />
           <PageSkeleton.Block size="lg" />
@@ -1288,7 +1294,7 @@ export default function HostsPage() {
     const unreachable = apiError.status == null;
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         <ErrorState
           title={unreachable ? '无法连接后端服务' : `加载主机失败（${apiError.status}）`}
           description={unreachable ? '请检查后端服务连接与网络。' : apiError.message}
@@ -1322,7 +1328,7 @@ export default function HostsPage() {
   if (showFullPageEmpty) {
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         {/* #2051：空态也要给「显示已退役」开关，否则全退役后无法解除退役 */}
         <div className="flex items-center justify-end gap-2 py-2">{retiredToggle}</div>
         <EmptyState
@@ -1345,16 +1351,13 @@ export default function HostsPage() {
 
   return (
     <PageContainer width="wide" scrollable={false} className="py-2.5 lg:py-2.5">
-      <PageHeader
-        title="主机集群"
-        subtitle="管理和监控测试执行节点 · 点击主机行查看详情，勾选后可批量运维"
-        action={pageHeaderActions}
-      />
+      <PageHeader title="主机集群" />
 
       {/* Host Table */}
       <ExpandableHostTable
         hosts={tableData}
         serverMode
+        extraHeaderRight={workbenchActions}
         serverFacets={facetsQ.data}
         serverFilteredTotal={filteredTotal}
         page={page}
