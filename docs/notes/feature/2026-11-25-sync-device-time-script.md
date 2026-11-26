@@ -39,12 +39,14 @@ AEE/mobilelog 对拍困难与跨 run 基线误判。
    `tz == target_tz` 且 `|dev_epoch - ref_epoch| <= max_drift_seconds`（默认 5s），并把
    `drift_before_seconds` / `drift_after_seconds` 写入 `metrics`；不达标显式失败。
 
-**合入后上线收尾边界（本 PR 不直接改写模板）**：按 `docs/development/script-versioning.md`
-约束，未在站点发包并 `scan` 注册为 active 的新版本不得预先 pin 进
-`backend/schemas/pipeline_templates/*.json`（否则新建 Plan 触发 422 `INVALID_SCRIPT_REFS`）。
-合入后运维按顺序收尾：`--publish --packages-root /mnt/stp-aee/packages` → 控制面发版 +
-`POST /api/v1/scripts/scan` → 单台预热验证 → 再按需接入稳定性计划模板（显式传
-`params.timezone="Asia/Shanghai"`）与存量 Plan 的 `init` 阶段（刷机类计划不强制挂此步）。
+**模板接入与上线收尾**：`sync_device_time@1.0.1` 已于 2026-11-26 完成站点发包
+（`/mnt/stp-aee/packages/sync_device_time/1.0.1.tar.gz`，`sha=bb573e9f626b`）、控制面切版
+（`ed4ee1149`）与 `POST /api/v1/scripts/scan` 注册激活（`id=292`，`is_active=true`）。
+随本变更已将全部 9 个稳定性测试模板（`aging_ddr` / `ddr` / `gpu` / `monkey` /
+`monkey_watcher_patrol` / `mtbf` / `powercycle` / `sleep` / `standby`）的 `init` 阶段
+在 `check_device` 之后接入 `script:sync_device_time@1.0.1`（显式固定
+`params.timezone="Asia/Shanghai"`、`timeout_seconds=60`、`retry=1`）；2 个刷机模板
+（`flash_unisoc` / `flash_unisoc_bsl`）按「刷机属前置而非日志产出过程」原则保持不接入。
 
 ## Alternatives
 

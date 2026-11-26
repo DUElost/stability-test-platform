@@ -102,3 +102,27 @@ def test_get_pipeline_template_rejects_path_traversal_like_names(tmp_path, monke
         with pytest.raises(HTTPException) as excinfo:
             pipeline_routes.get_pipeline_template(name)
         assert excinfo.value.status_code == 404
+
+
+def test_stability_templates_pin_sync_device_time_after_check_device():
+    template_files = sorted(TEMPLATES_DIR.glob("*.json"))
+    stability_templates = [p for p in template_files if not p.name.startswith("flash_")]
+    flash_templates = [p for p in template_files if p.name.startswith("flash_")]
+    assert stability_templates
+
+    for path in stability_templates:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        init = data["lifecycle"]["init"]
+        assert len(init) >= 2, f"{path.name} should include check_device and sync_device_time"
+        assert init[0]["action"] == "script:check_device"
+        assert init[1]["step_id"] == "sync_device_time"
+        assert init[1]["action"] == "script:sync_device_time"
+        assert init[1]["version"] == "1.0.1"
+        assert init[1]["params"].get("timezone") == "Asia/Shanghai"
+
+    for path in flash_templates:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        actions = [s.get("action") for s in data["lifecycle"]["init"]]
+        assert "script:sync_device_time" not in actions, (
+            f"flash template {path.name} should not force sync_device_time before flashing"
+        )
