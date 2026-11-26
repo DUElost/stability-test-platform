@@ -2171,6 +2171,14 @@
           "retired": false,
           "script": "powercycle_disarm.py",
           "version": "1.0.10"
+        },
+        {
+          "artifact": "packages/powercycle_disarm/1.0.11.tar.gz",
+          "package_sha256": "b06f3142dc1c86d05907fd9c611bc60792a47e9981405fd021704a5d3b21849d",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_disarm.py",
+          "version": "1.0.11"
         }
       ]
     },

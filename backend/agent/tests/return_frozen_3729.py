@@ -126,10 +126,25 @@ _DISARM_1010_TO_109_HUNKS = (
     resolve_apk_flavor,
     stop_task,
     stop_task_r30,
+    try_adb_root,
     _root_read_prefs,''',
         '''    read_prefs_classified,
     stop_task,
     _root_read_prefs,''',
+    ),
+    (
+        '''        if apk_flavor == "r30" and not is_root():
+            # R30 原厂 APK 不可 run-as，且 Release_user_root 重启后 adbd 回落 non-root；
+            # 读/写 restart_preference.xml 前尽力提权（已 root 时零开销）。
+            try_adb_root()
+''',
+        "",
+    ),
+    (
+        '''        if apk_flavor == "r30" and not is_root():
+            try_adb_root()
+''',
+        "",
     ),
     (
         '''def _read_prefs_evidence(apk_flavor: str = "stp") -> dict[str, Any]:

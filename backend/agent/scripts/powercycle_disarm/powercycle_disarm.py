@@ -77,6 +77,7 @@ from _lib import (
     resolve_apk_flavor,
     stop_task,
     stop_task_r30,
+    try_adb_root,
     _root_read_prefs,
 )
 
@@ -440,6 +441,10 @@ def _run(cfg: dict) -> dict:
         # 等待成功即 boot_completed==1；开启上线后打戳
         boot_completed = "1"
         enable_exec_progress()
+        if apk_flavor == "r30" and not is_root():
+            # R30 原厂 APK 不可 run-as，且 Release_user_root 重启后 adbd 回落 non-root；
+            # 读/写 restart_preference.xml 前尽力提权（已 root 时零开销）。
+            try_adb_root()
         force = (
             str(param_or_env(cfg, "force_stop", "STP_POWER_CYCLE_FORCE_STOP", "true"))
             .lower()
@@ -504,6 +509,8 @@ def _run(cfg: dict) -> dict:
                 model=model,
             )
         enable_exec_progress()
+        if apk_flavor == "r30" and not is_root():
+            try_adb_root()
         stop_error = ""
 
     platform, model = _resolve_category(cfg, can_detect=True)
