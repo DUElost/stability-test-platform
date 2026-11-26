@@ -277,6 +277,76 @@ def test_disarm_r30_footprint_then_clear_readback(monkeypatch):
     assert disarm_res["success"] is True
 
 
+def test_disarm_r30_attempts_adb_root_when_non_root_after_reboot(monkeypatch):
+    """P525 Release_user_root 重启后 adbd 回落 non-root：r30 路径先 try_adb_root，stp 路径不触发。"""
+    mod = _load("pc_disarm_mod_r30_root", "powercycle_disarm/powercycle_disarm.py")
+    lib_globals = mod.stop_task_r30.__globals__
+
+    monkeypatch.setenv("STP_DEVICE_SERIAL", "SER-R30")
+    monkeypatch.setattr(mod, "device_online", lambda timeout=15: True)
+    monkeypatch.setattr(mod, "adb_shell", lambda cmd, timeout=30: "1" if "sys.boot_completed" in cmd else "")
+    monkeypatch.setattr(mod, "autotesttool_apk_sha256", lambda timeout=30: "deadbeef")
+    monkeypatch.setattr(mod, "time", _AdvancingClock())
+
+    state = {"root": False, "xml": _R30_PREFS_RUNNING, "root_calls": 0}
+
+    def fake_is_root():
+        return state["root"]
+
+    def fake_try_adb_root():
+        state["root_calls"] += 1
+        state["root"] = True
+        return True
+
+    def fake_read_r30():
+        if not state["root"]:
+            return ("denied", "", True)
+        return ("ok", state["xml"], True)
+
+    def fake_stop_r30(*, force: bool = True, kind: str = "", installed=True):
+        assert state["root"] is True
+        state["xml"] = _R30_PREFS_CLEAR
+        return {
+            "force_stop_rc": 0,
+            "service_state": "stopped",
+            "write_ok": True,
+            "write_method": "root_push",
+            "write_error": "",
+        }
+
+    monkeypatch.setattr(mod, "is_root", fake_is_root)
+    monkeypatch.setattr(mod, "try_adb_root", fake_try_adb_root)
+    monkeypatch.setattr(mod, "permission_model", lambda: "root" if state["root"] else "non-root")
+    monkeypatch.setattr(mod, "read_r30_prefs_classified", fake_read_r30)
+    monkeypatch.setattr(mod, "stop_task_r30", fake_stop_r30)
+    monkeypatch.setitem(lib_globals, "is_root", fake_is_root)
+
+    # 1. R30 disarm: non-root → try_adb_root → clear
+    res = mod._run({"mode": "disarm", "apk_flavor": "r30"})
+    assert state["root_calls"] == 1
+    assert res["readback"] == "clear"
+    assert res["disarm_result"] == "executed_unverified"
+    assert res["success"] is True
+
+    # 2. R30 probe when non-root again → calls try_adb_root once
+    state["root"] = False
+    state["xml"] = _R30_PREFS_RUNNING
+    probe_res = mod._run({"mode": "probe", "apk_flavor": "r30"})
+    assert state["root_calls"] == 2
+    assert probe_res["readback"] == "footprint"
+
+    # 3. Default STP path when non-root → must NOT call try_adb_root
+    state["root"] = False
+    monkeypatch.setattr(
+        mod,
+        "read_prefs_classified",
+        lambda: ("ok", '<map><boolean name="running" value="false" /></map>', True),
+    )
+    stp_res = mod._run({"mode": "probe"})
+    assert state["root_calls"] == 2
+    assert stp_res["readback"] == "clear"
+
+
 # ---------------------------------------------------------------------------
 # powercycle_finish (v1.1.1)
 # ---------------------------------------------------------------------------
