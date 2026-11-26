@@ -45,14 +45,18 @@ PowerCycle、Sleep、GPU、Aging DDR、DDR、Standby 等）。刷机类前置 Pl
 
 - 稳定性测试 Plan 的 `init` 阶段必须按顺序包含 `check_device` 与 `sync_device_time`：
   `check_device` → `sync_device_time`（`version: "1.0.1"`，`timeout_seconds: 60`，`retry: 1`，
-  `params: {"timezone": "Asia/Shanghai"}`）→ `ensure_root` / `clean_env` / `aee_prepare`（按专项需要）
-  → 专项 `*_setup`。
+  `params: {"timezone": "Asia/Shanghai"}`）→ `unisoc_sysdump_config`（`version: "1.0.0"`，
+  `timeout_seconds: 60`，`retry: 1`，`params: {"enabled": true}`；仅展锐平台生效，非展锐平台自动
+  `skipped=true`）→ `ensure_root` / `clean_env` / `aee_prepare`（按专项需要）→ 专项 `*_setup`。
+- 针对展锐（UNISOC）设备的稳定性测试 Plan，操作者必须在 `sync_device_time` 之后接入
+  `unisoc_sysdump_config@1.0.0`（`params.enabled=true`），确保首次命中 Kernel Panic / Watchdog 时
+  保留完整内存现场；刷机类 Plan 不得接入该步骤。
 - `sync_device_time` 必须排在 `clean_env`、`aee_prepare`、logger 启动及所有测试负载启动之前，
   不得在日志服务已产出文件后再跳变设备时钟（防打乱 `mobilelog` 文件名时间排序与关联窗口）。
 - `sync_device_time` 的 `params` 必须显式固定 `timezone`（默认 `"Asia/Shanghai"`），不得留空依赖单台
   Agent host 的本地 `/etc/localtime` 配置。
 - 9 个内置稳定性模板（`backend/schemas/pipeline_templates/{aging_ddr,ddr,gpu,monkey,monkey_watcher_patrol,mtbf,powercycle,sleep,standby}.json`）
-  均已默认接入 `sync_device_time@1.0.1`；新建 Plan 时操作者建议直接从内置模板派生，避免手工漏配。
+  均已默认接入 `sync_device_time@1.0.1` 与 `unisoc_sysdump_config@1.0.0`；新建 Plan 时操作者建议直接从内置模板派生，避免手工漏配。
 - 为存量稳定性 Plan 追加或更新步骤时，操作者必须同步核对 `specialty_key`、精确 `script_version`、
   `barrier_timeout_seconds`（含长耗时 `init` 前置时抬高预算）、以及 `stall_seconds`（仅可用于具备
   `progress_stamps` 能力的脚本）。
