@@ -829,6 +829,14 @@
           "retired": false,
           "script": "flash_firmware_unisoc_bsl.py",
           "version": "1.0.9"
+        },
+        {
+          "artifact": "packages/flash_firmware_unisoc_bsl/1.0.10.tar.gz",
+          "package_sha256": "2fcb4b3a38fa36e5b30938047f3df019a74f1f9225291edafd75a490d4f78228",
+          "python": null,
+          "retired": false,
+          "script": "flash_firmware_unisoc_bsl.py",
+          "version": "1.0.10"
         }
       ]
     },
