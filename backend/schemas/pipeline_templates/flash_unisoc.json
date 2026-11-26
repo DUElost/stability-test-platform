@@ -1,5 +1,8 @@
 {
   "version": 2,
+  "display_name": "展锐常规刷机",
+  "specialty_key": "ops",
+  "status": "ready",
   "description": "Unisoc/SPRD full firmware switch: check device, flash every partition from the NFS PAC artifact, wipe userdata/metadata/misc, then skip OOBE and verify the unit is usable. OOBE is skipped because a freshly wiped unit left at the setup wizard powers itself off after a while.",
   "lifecycle": {
     "timeout_seconds": 3600,

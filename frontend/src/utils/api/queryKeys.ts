@@ -21,6 +21,7 @@ export const planKeys = {
   allLists: () => ['plans'] as const,
   detail: (id: number) => ['plan', id] as const,
   parameterProjection: (id: number) => ['plan', id, 'parameter-projection'] as const,
+  templates: (specialtyKey?: string | null) => ['pipeline-templates', specialtyKey ?? null] as const,
 } as const;
 
 export const hostKeys = {

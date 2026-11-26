@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "display_name": "GPU 压测",
+  "specialty_key": "gpu",
+  "status": "ready",
   "description": "GPU stress test (Antutu): RAM-based variant split, install APK, run instrument loop, collect log",
   "lifecycle": {
     "timeout_seconds": 604800,

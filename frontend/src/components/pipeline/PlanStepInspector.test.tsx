@@ -851,3 +851,47 @@ it('嵌套默认对象进入编辑草稿时复制内部事实，敏感兄弟保�
   expect(step.params).toEqual({ untouched: 0 });
   expect(script.default_params?.wifi).toEqual({ ssid: 'default-ssid', password: secret });
 });
+
+it('按脚本轻标签筛选下拉选项并支持往返切回全部 (#4182)', () => {
+  const scripts = [
+    makeScript({ id: 1, name: 'check_device', version: '1.0.2', tags: { role: 'common_init', specialties: [], platforms: [] } }),
+    makeScript({ id: 2, name: 'monkey_setup', version: '2.3.13', tags: { role: 'specialty_init', specialties: ['monkey'], platforms: [] } }),
+    makeScript({ id: 3, name: 'mtbf_setup', version: '1.4.2', tags: { role: 'specialty_init', specialties: ['mtbf'], platforms: [] } }),
+    makeScript({ id: 4, name: 'flash_firmware_unisoc', version: '1.0.7', tags: { role: 'ops', specialties: ['ops'], platforms: ['unisoc'] } }),
+  ];
+  const step = makeStep({ action: 'script:check_device', version: '1.0.2' });
+
+  render(
+    <MemoryRouter>
+      <PlanStepInspector
+        step={step}
+        phase="init"
+        index={0}
+        specialtyKey="monkey"
+        scripts={scripts}
+        onUpdateStep={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+
+  // 切到「当前专项」(monkey)：mtbf_setup 与 flash_firmware_unisoc 互斥被过滤掉
+  fireEvent.click(screen.getByTestId('script-tag-filter-specialty'));
+  fireEvent.click(screen.getByRole('combobox', { name: '脚本名' }));
+  expect(screen.getByRole('option', { name: 'monkey_setup' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'mtbf_setup' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'flash_firmware_unisoc' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('combobox', { name: '脚本名' }));
+
+  // 切到「运维/刷机」，再往返切回「全部」
+  fireEvent.click(screen.getByTestId('script-tag-filter-ops'));
+  fireEvent.click(screen.getByRole('combobox', { name: '脚本名' }));
+  expect(screen.getByRole('option', { name: 'flash_firmware_unisoc' })).toBeInTheDocument();
+  expect(screen.queryByRole('option', { name: 'monkey_setup' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('combobox', { name: '脚本名' }));
+
+  fireEvent.click(screen.getByTestId('script-tag-filter-all'));
+  fireEvent.click(screen.getByRole('combobox', { name: '脚本名' }));
+  expect(screen.getByRole('option', { name: 'monkey_setup' })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'mtbf_setup' })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'flash_firmware_unisoc' })).toBeInTheDocument();
+});

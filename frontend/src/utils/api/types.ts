@@ -779,10 +779,22 @@ export interface JiraRunRecord {
   created_at: string;
 }
 
+export interface PipelineTemplatePlanDefaults {
+  barrier_timeout_seconds?: number | null;
+  barrier_max_wait_seconds?: number | null;
+  auto_archive_interval_seconds?: number | null;
+  watcher_policy?: WatcherPolicy | Record<string, unknown> | null;
+}
+
 export interface PipelineTemplate {
   name: string;
+  display_name: string;
+  specialty_key: string;
+  status: 'ready' | 'skeleton';
+  requires_suite: boolean;
   description: string;
-  pipeline_def: Record<string, unknown>;
+  pipeline_def: PipelineDef;
+  plan_defaults?: PipelineTemplatePlanDefaults | null;
 }
 
 export interface AgentLogOut {
@@ -1401,6 +1413,12 @@ export interface ProjectMapPreview {
 
 // ─── 编排模型类型 ──────────────────────────────────────────────────────────────
 
+export interface ScriptTags {
+  role: 'common_init' | 'specialty_init' | 'patrol' | 'teardown' | 'ops' | string;
+  specialties: string[];
+  platforms: string[];
+}
+
 export interface ScriptEntry {
   id: number;
   name: string;
@@ -1416,6 +1434,8 @@ export interface ScriptEntry {
   default_params: Record<string, unknown>;
   /** #3653 U1：掩码后的脚本参数投影。原始 default_params / param_schema 仍保留。 */
   parameter_projection?: ScriptParameterProjection;
+  /** #4182 Phase 2：轻量脚本分类标签（仅服务 UI 筛选，不改脚本发布单元）。 */
+  tags?: ScriptTags | null;
   is_active: boolean;
   capabilities?: string[];
   description?: string | null;

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
@@ -21,7 +21,8 @@ import { api, toApiError, type Plan } from '@/utils/api';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { Plus, Edit, Trash2, FileText, Play, Layers } from 'lucide-react';
+import { Plus, Edit, Trash2, FileText, Play, Layers, LayoutTemplate, Copy } from 'lucide-react';
+import TemplatePickerDialog from '@/components/pipeline/TemplatePickerDialog';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
@@ -66,6 +67,7 @@ export default function PlanListPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
   const queryClient = useQueryClient();
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const { getString, updateParams, clearParams } = useUrlFilterParams();
   // ADR-0029 / D4：页面级筛选与 URL 双向同步（?q= / ?project= / ?specialty=），刷新与跨页深链不丢
   const search = getString('q', '');
@@ -102,6 +104,18 @@ export default function PlanListPage() {
   const { data: specialties } = useQuery({
     queryKey: ['specialties'],
     queryFn: () => api.plans.listSpecialties(),
+  });
+  const {
+    data: templates,
+    isLoading: templatesLoading,
+    isError: templatesIsError,
+    error: templatesError,
+    refetch: refetchTemplates,
+  } = useQuery({
+    queryKey: planKeys.templates(),
+    queryFn: () => api.pipeline.listTemplates(),
+    enabled: templateDialogOpen,
+    staleTime: 60_000,
   });
   const specialtyLabel = useMemo(() => {
     const byKey = new Map((specialties ?? []).map((s) => [s.key, s.display_name]));
@@ -160,9 +174,20 @@ export default function PlanListPage() {
         title="Plan 编排"
         subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"
         action={
-          <Button size="sm" onClick={() => navigate('/orchestration/plans/new')} className="shrink-0">
-            <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setTemplateDialogOpen(true)}
+              data-testid="create-from-template-btn"
+              className="shrink-0"
+            >
+              <LayoutTemplate className="w-4 h-4 mr-1.5" /> 从模板创建
+            </Button>
+            <Button size="sm" onClick={() => navigate('/orchestration/plans/new')} className="shrink-0">
+              <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
+            </Button>
+          </div>
         }
       />
 
@@ -328,6 +353,15 @@ export default function PlanListPage() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              onClick={() => navigate(`/orchestration/plans/new?clone=${plan.id}`)}
+                              title="复制为草稿"
+                              aria-label={`复制 ${plan.name} 为草稿`}
+                            >
+                              <Copy className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               onClick={() => void handleDelete(plan)}
                               className={cn(TEXT.destructive, 'hover:text-destructive')}
                               title="删除"
@@ -346,6 +380,21 @@ export default function PlanListPage() {
           ))}
         </div>
       )}
+
+      <TemplatePickerDialog
+        open={templateDialogOpen}
+        onOpenChange={setTemplateDialogOpen}
+        templates={templates ?? []}
+        isLoading={templatesLoading}
+        isError={templatesIsError}
+        errorMessage={templatesIsError ? toApiError(templatesError).message : undefined}
+        onRetry={() => void refetchTemplates()}
+        specialties={specialties}
+        initialSpecialtyKey={specialtyKey}
+        onSelectTemplate={(tpl) => {
+          navigate(`/orchestration/plans/new?template=${encodeURIComponent(tpl.name)}`);
+        }}
+      />
     </PageContainer>
   );
 }

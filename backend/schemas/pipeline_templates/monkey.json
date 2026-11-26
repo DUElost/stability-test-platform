@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "display_name": "Monkey 标准长稳",
+  "specialty_key": "monkey",
+  "status": "ready",
   "description": "Standard Android Monkey test: run monkey with specified packages, event count, and throttle",
   "lifecycle": {
     "timeout_seconds": 604800,
