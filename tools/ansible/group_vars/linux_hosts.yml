@@ -113,4 +113,10 @@ agent_flash_prereq_packages_v6:
 agent_flash_prereq_packages_unisoc:
   - fastboot
 
+# USB Hub 端口供电控制工具（VBUS 刷机 trigger_mode="vbus_cycle" + 控制面
+# host_health_probe 只读巡检 `0000 off` 断电端口）。独立于 flash_preflight
+# 脚本固定包集，通过主机页「刷机前置」与 update_agent opt-in 段统一下发。
+agent_flash_prereq_packages_vbus:
+  - uhubctl
+
 # 进程日志轮转（#2205）变量已移至 group_vars/all.yml（#2218：两面共享）。

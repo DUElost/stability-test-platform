@@ -169,9 +169,10 @@ class HostOut(ORMBaseModel):
     emptied_at: Optional[datetime] = None
     emptied_by: Optional[str] = None
     emptied_reason: Optional[str] = None
-    # 台账在册（未退役）设备数：用于区分「从未/不再挂设备的空置主机」与
-    # 「台账有设备但 USB 空树的疑似失明主机」（对齐 StabilityHostUsbBlind 口径）。
+    # 台账在册（未退役）设备数及最近活跃时间：用于区分「长期空置主机」与
+    # 「近期（72h 内）失联的疑似失明主机」（对齐 StabilityHostUsbBlind 口径）。
     ledger_device_count: Optional[int] = None
+    ledger_latest_seen_at: Optional[datetime] = None
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod
