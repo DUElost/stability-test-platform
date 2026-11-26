@@ -39,6 +39,8 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
     description: string;
     onDescriptionChange: (description: string) => void;
     onSpecialtyKeyChange: (key: string) => void;
+    suiteName?: string;
+    onSuiteNameChange?: (name: string) => void;
     onTimeoutChange: (value: number | null) => void;
     onSelectStep?: (key: string | null) => void;
     planSettings?: {
@@ -95,6 +97,13 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
         onClick={() => props.onSpecialtyKeyChange('SPEC-DRAFT')}
       >
         选择专项草稿
+      </button>
+      <button
+        type="button"
+        data-testid="bind-mtbf-suite"
+        onClick={() => props.onSuiteNameChange?.('MTBF-legacy')}
+      >
+        绑定套件
       </button>
     </div>
   ),
@@ -155,6 +164,10 @@ vi.mock('@/utils/api', () => ({
     },
     scripts: {
       list: vi.fn(),
+    },
+    pipeline: {
+      listTemplates: vi.fn().mockResolvedValue([]),
+      getTemplate: vi.fn(),
     },
   },
 }));
@@ -697,5 +710,178 @@ describe('B5 U3 编辑器投影代次与安全保存', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '关闭步骤属性' }));
     expect(screen.queryByTestId('plan-step-inspector')).not.toBeInTheDocument();
+  });
+
+  it('loads Monkey template via ?template=monkey_watcher_patrol with watcher_policy and creates Plan (#4182)', async () => {
+    vi.mocked(api.pipeline.getTemplate).mockResolvedValue({
+      name: 'monkey_watcher_patrol',
+      display_name: 'Monkey Watcher 巡检',
+      specialty_key: 'monkey',
+      status: 'ready',
+      requires_suite: false,
+      description: 'Monkey watcher template',
+      plan_defaults: { watcher_policy: { enabled: true } },
+      pipeline_def: {
+        lifecycle: {
+          timeout_seconds: 604800,
+          init: [
+            { step_id: 'check_device', action: 'script:check_device', version: '1.0.2', timeout_seconds: 180, retry: 1, params: {} },
+            { step_id: 'monkey_launch', action: 'script:monkey_launch', version: '5.2.0', timeout_seconds: 1200, retry: 0, params: { throttle_ms: 300 } },
+          ],
+          patrol: {
+            interval_seconds: 300,
+            steps: [
+              { step_id: 'monkey_check', action: 'script:monkey_check', version: '2.0.3', timeout_seconds: 60, retry: 0, params: {} },
+            ],
+          },
+          teardown: [
+            { step_id: 'monkey_teardown', action: 'script:monkey_teardown', version: '1.0.3', timeout_seconds: 600, retry: 0, params: {} },
+          ],
+        },
+      },
+    });
+    vi.mocked(api.plans.create).mockResolvedValue({
+      id: 201,
+      name: 'Monkey-Watcher-验证',
+      description: 'Monkey watcher template',
+      specialty_key: 'monkey',
+      timeout_seconds: 604800,
+      patrol_interval_seconds: 300,
+      watcher_policy: { enabled: true },
+      steps: [],
+      created_at: '2026-11-26T00:00:00Z',
+      updated_at: '2026-11-26T00:00:00Z',
+    });
+
+    renderPage('/orchestration/plans/new?template=monkey_watcher_patrol');
+    await waitFor(() => expect(api.pipeline.getTemplate).toHaveBeenCalledWith('monkey_watcher_patrol'));
+    await waitFor(() => expect(screen.getByTestId('plan-description-input')).toHaveValue('Monkey watcher template'));
+
+    fireEvent.change(screen.getByTestId('plan-name-input'), { target: { value: 'Monkey-Watcher-验证' } });
+    fireEvent.click(screen.getByRole('button', { name: /创建/ }));
+
+    await waitFor(() => expect(api.plans.create).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(api.plans.create).mock.calls[0][0];
+    expect(payload.specialty_key).toBe('monkey');
+    expect(payload.timeout_seconds).toBe(604800);
+    expect(payload.patrol_interval_seconds).toBe(300);
+    expect(payload.watcher_policy).toEqual({ enabled: true });
+    expect(payload.steps?.map((s) => `${s.stage}:${s.script_name}@${s.script_version}`)).toEqual([
+      'init:check_device@1.0.2',
+      'init:monkey_launch@5.2.0',
+      'patrol:monkey_check@2.0.3',
+      'teardown:monkey_teardown@1.0.3',
+    ]);
+    expect(payload.steps?.[1].params).toEqual({ throttle_ms: 300 });
+  });
+
+  it('loads MTBF template via ?template=mtbf, binds suite, and saves full steps (#4182)', async () => {
+    vi.mocked(api.pipeline.getTemplate).mockResolvedValue({
+      name: 'mtbf',
+      display_name: 'MTBF 稳定性',
+      specialty_key: 'mtbf',
+      status: 'ready',
+      requires_suite: true,
+      description: 'MTBF template',
+      pipeline_def: {
+        lifecycle: {
+          timeout_seconds: 604800,
+          init: [
+            { step_id: 'check_device', action: 'script:check_device', version: '1.0.2', timeout_seconds: 180, retry: 1, params: {} },
+            { step_id: 'mtbf_setup', action: 'script:mtbf_setup', version: '1.4.2', timeout_seconds: 900, retry: 1, params: {} },
+          ],
+          patrol: {
+            interval_seconds: 300,
+            steps: [
+              { step_id: 'mtbf_check', action: 'script:mtbf_check', version: '1.5.0', timeout_seconds: 60, retry: 0, params: {} },
+            ],
+          },
+          teardown: [
+            { step_id: 'mtbf_finish', action: 'script:mtbf_finish', version: '1.6.0', timeout_seconds: 600, retry: 1, params: {} },
+          ],
+        },
+      },
+    });
+    vi.mocked(api.plans.create).mockResolvedValue({
+      id: 202,
+      name: 'MTBF-模板验证',
+      specialty_key: 'mtbf',
+      suite_name: 'MTBF-legacy',
+      steps: [],
+      created_at: '2026-11-26T00:00:00Z',
+      updated_at: '2026-11-26T00:00:00Z',
+    });
+
+    renderPage('/orchestration/plans/new?template=mtbf');
+    await waitFor(() => expect(api.pipeline.getTemplate).toHaveBeenCalledWith('mtbf'));
+    await waitFor(() => expect(screen.getByTestId('plan-description-input')).toHaveValue('MTBF template'));
+
+    fireEvent.change(screen.getByTestId('plan-name-input'), { target: { value: 'MTBF-模板验证' } });
+    fireEvent.click(screen.getByTestId('bind-mtbf-suite'));
+    fireEvent.click(screen.getByRole('button', { name: /创建/ }));
+
+    await waitFor(() => expect(api.plans.create).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(api.plans.create).mock.calls[0][0];
+    expect(payload.specialty_key).toBe('mtbf');
+    expect(payload.suite_name).toBe('MTBF-legacy');
+    expect(payload.steps?.map((s) => `${s.stage}:${s.script_name}@${s.script_version}`)).toEqual([
+      'init:check_device@1.0.2',
+      'init:mtbf_setup@1.4.2',
+      'patrol:mtbf_check@1.5.0',
+      'teardown:mtbf_finish@1.6.0',
+    ]);
+  });
+
+  it('clones an existing Plan into an independent draft via ?clone=42 without next_plan_id (#4182)', async () => {
+    vi.mocked(api.plans.get).mockResolvedValue({
+      id: 42,
+      name: '原计划',
+      description: '源描述',
+      project_key: 'V552AA',
+      specialty_key: 'monkey',
+      suite_name: null,
+      next_plan_id: 99,
+      timeout_seconds: 86400,
+      patrol_interval_seconds: 300,
+      watcher_policy: { enabled: true },
+      steps: [
+        {
+          id: 1,
+          step_key: 'check_device',
+          stage: 'init',
+          sort_order: 0,
+          script_name: 'check_device',
+          script_version: '1.0.2',
+          params: {},
+          timeout_seconds: 180,
+          retry: 1,
+          enabled: true,
+        },
+      ],
+      created_at: '2026-11-26T00:00:00Z',
+      updated_at: '2026-11-26T00:00:00Z',
+    });
+    vi.mocked(api.plans.create).mockResolvedValue({
+      id: 203,
+      name: '原计划（副本）',
+      specialty_key: 'monkey',
+      steps: [],
+      created_at: '2026-11-26T00:00:00Z',
+      updated_at: '2026-11-26T00:00:00Z',
+    });
+
+    renderPage('/orchestration/plans/new?clone=42');
+    await waitFor(() => expect(screen.getByTestId('plan-name-input')).toHaveValue('原计划（副本）'));
+
+    fireEvent.click(screen.getByRole('button', { name: /创建/ }));
+    await waitFor(() => expect(api.plans.create).toHaveBeenCalledTimes(1));
+    expect(api.plans.update).not.toHaveBeenCalled();
+
+    const payload = vi.mocked(api.plans.create).mock.calls[0][0];
+    expect(payload.name).toBe('原计划（副本）');
+    expect(payload.project_key).toBe('V552AA');
+    expect(payload.specialty_key).toBe('monkey');
+    expect(payload.next_plan_id).toBeNull();
+    expect(payload.watcher_policy).toEqual({ enabled: true });
   });
 });

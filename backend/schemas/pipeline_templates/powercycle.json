@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "display_name": "开关机压测",
+  "specialty_key": "power-cycle",
+  "status": "ready",
   "description": "Power cycle stress test (AutoTestTool): install APK, reboot loop, collect result file",
   "lifecycle": {
     "timeout_seconds": 604800,

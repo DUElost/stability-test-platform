@@ -30,6 +30,7 @@ from backend.models.script import Script
 from backend.services.plan_parameter_projection import project_script
 from backend.services.script_catalog import default_packages_root, sync_scripts_from_manifest
 from backend.services.script_catalog_version import invalidate_script_catalog_version_cache
+from backend.services.script_tags import get_script_tags
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
@@ -130,6 +131,14 @@ class ScriptUpdate(BaseModel):
         return self
 
 
+class ScriptTagsOut(BaseModel):
+    """Lightweight UI filtering metadata for a script family (#4182 Phase 2)."""
+
+    role: str
+    specialties: List[str] = Field(default_factory=list)
+    platforms: List[str] = Field(default_factory=list)
+
+
 class ScriptOut(BaseModel):
     id: int
     name: str
@@ -148,6 +157,7 @@ class ScriptOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     parameter_projection: Optional[ScriptParameterProjection] = None
+    tags: Optional[ScriptTagsOut] = None
 
 
 class ScriptScanRetireBlocked(BaseModel):
@@ -219,6 +229,7 @@ def _script_out(script: Script) -> ScriptOut:
         created_at=script.created_at,
         updated_at=script.updated_at,
         parameter_projection=projection,
+        tags=ScriptTagsOut(**get_script_tags(script.name)),
     )
 
 
