@@ -43,8 +43,8 @@ from backend.services.device_inventory_query import (
     DeviceQueryFilters,
     build_device_facets,
     build_device_selection_preview,
-    build_filtered_device_query,
     enforce_bulk_write_limit,
+    query_filtered_devices_page,
     serialize_device_full_readonly,
     serialize_device_list_item,
     validate_projection,
@@ -467,6 +467,7 @@ def list_devices(
 ):
     # 稳定次序（#3123 / #496）：排序白名单仅允许恒定身份列 {serial, host_id}，
     # 固定 NULLS LAST + Device.id ASC 尾键，严禁引入心跳遥测列避免跨页漂移。
+    want_paginated = "skip" in request.query_params or "limit" in request.query_params
     try:
         norm_sort_by, norm_sort_dir = validate_sort_params(sort_by, sort_dir)
         norm_projection = validate_projection(projection)
@@ -485,25 +486,26 @@ def list_devices(
             include_stale=include_stale,
             include_retired=include_retired,
         )
-        query = build_filtered_device_query(
+        devices, total = query_filtered_devices_page(
             db,
             filters,
             now=now,
+            skip=skip,
+            limit=limit,
             sort_by=norm_sort_by,
             sort_dir=norm_sort_dir,
-            eager_host=True,
+            projection=norm_projection,
+            include_total=want_paginated,
         )
     except DeviceQueryError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
-    total = query.count()
-    devices = query.offset(skip).limit(limit).all()
     model_to_project = _model_to_project_map(db)
     if norm_projection == "list":
         items = [serialize_device_list_item(d, model_to_project, now=now) for d in devices]
     else:
         items = [_serialize_device_readonly(d, model_to_project, now=now) for d in devices]
     # 兼容旧接口：未显式传分页参数时返回数组
-    if "skip" not in request.query_params and "limit" not in request.query_params:
+    if not want_paginated:
         return items
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 

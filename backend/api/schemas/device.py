@@ -297,11 +297,83 @@ class DeviceLiteOut(ORMBaseModel):
     status: str
 
 
+DEVICE_LIST_MAX_TAGS = 16
+DEVICE_LIST_MAX_TAG_BYTES = 64
+DEVICE_LIST_MAX_TAGS_TOTAL_BYTES = 512
+DEVICE_LIST_MAX_TEXT_BYTES = 256
+DEVICE_LIST_MAX_RETURN_FAMILIES = 16
+DEVICE_LIST_RETURN_VALUE_BYTES = 64
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> tuple[str, bool]:
+    """按 UTF-8 字节预算安全截断字符串，保证不切碎多字节字符。"""
+    raw = value.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return value, False
+    ellipsis = "…"
+    ellipsis_bytes = len(ellipsis.encode("utf-8"))
+    if max_bytes <= ellipsis_bytes:
+        return raw[:max_bytes].decode("utf-8", errors="ignore"), True
+    trimmed = raw[: max_bytes - ellipsis_bytes].decode("utf-8", errors="ignore")
+    return f"{trimmed}{ellipsis}", True
+
+
+def _bound_list_tags(raw_tags: Any) -> tuple[List[str], bool]:
+    """将列表投影中的标签数组收敛在固定条数与 UTF-8 字节预算内。"""
+    if not isinstance(raw_tags, list):
+        return [], False
+    bounded: List[str] = []
+    truncated = False
+    total_bytes = 0
+    for item in raw_tags:
+        if len(bounded) >= DEVICE_LIST_MAX_TAGS:
+            truncated = True
+            break
+        text = str(item)
+        clipped, was_clipped = _truncate_utf8(text, DEVICE_LIST_MAX_TAG_BYTES)
+        item_bytes = len(clipped.encode("utf-8"))
+        if total_bytes + item_bytes > DEVICE_LIST_MAX_TAGS_TOTAL_BYTES:
+            remaining = DEVICE_LIST_MAX_TAGS_TOTAL_BYTES - total_bytes
+            if remaining >= 8:
+                clipped, _ = _truncate_utf8(clipped, remaining)
+                bounded.append(clipped)
+            truncated = True
+            break
+        if was_clipped:
+            truncated = True
+        bounded.append(clipped)
+        total_bytes += item_bytes
+    return bounded, truncated
+
+
+def _bound_list_return_state(raw_state: Any) -> Optional[Dict[str, Any]]:
+    """列表投影仅保留每个专项的最小三键摘要，防异常脏数据撑爆单页载荷。"""
+    if not isinstance(raw_state, dict):
+        return None
+    out: Dict[str, Any] = {}
+    for family, entry in list(raw_state.items())[:DEVICE_LIST_MAX_RETURN_FAMILIES]:
+        fam_key, _ = _truncate_utf8(str(family), DEVICE_LIST_RETURN_VALUE_BYTES)
+        if not isinstance(entry, dict):
+            continue
+        compact: Dict[str, Any] = {}
+        for field in ("state", "source", "updated_at"):
+            val = entry.get(field)
+            if val is None:
+                continue
+            if isinstance(val, str):
+                compact[field], _ = _truncate_utf8(val, DEVICE_LIST_RETURN_VALUE_BYTES)
+            else:
+                compact[field] = val
+        out[fam_key] = compact
+    return out
+
+
 class DeviceListItemOut(ORMBaseModel):
     """#496 / #4117 B2-1：物理设备有界列表 DTO（``projection=list``）。
 
-    刻意省略无界 ``extra`` 字典以将单页（50 条）原始 UTF-8 JSON 稳定压在 100 KiB 以内，
-    同时随行透传 ``host_name`` 以消除前端表格对全量主机列表的依赖。
+    刻意省略无界 ``extra`` 字典，并对 ``tags``、长文本字段与 ``return_state`` 施加严格
+    UTF-8 字节上界，确保单页（50 条）即使在最坏合法长标签场景下仍稳定低于 100 KiB；
+    完整未截断字段由单机详情 ``GET /api/v1/devices/{id}`` 按需提供。
     """
 
     id: int
@@ -317,6 +389,7 @@ class DeviceListItemOut(ORMBaseModel):
     status: str
     last_seen: Optional[datetime] = None
     tags: List[str] = Field(default_factory=list)
+    tags_truncated: bool = False
     adb_state: Optional[str] = None
     adb_connected: Optional[bool] = None
     battery_level: Optional[int] = None
@@ -345,6 +418,28 @@ class DeviceListItemOut(ORMBaseModel):
     def _mark_lifecycle_flags(self):
         self.is_stale = is_stale(self.status, self.last_seen)
         self.retire_suggested = is_retire_suggested(self.status, self.last_seen)
+        return self
+
+    @model_validator(mode="after")
+    def _bound_list_payload(self):
+        bounded_tags, was_truncated = _bound_list_tags(self.tags)
+        self.tags = bounded_tags
+        self.tags_truncated = bool(self.tags_truncated or was_truncated)
+        for attr in (
+            "model",
+            "product",
+            "host_name",
+            "wifi_ssid",
+            "build_display_id",
+            "retired_by",
+            "retire_reason",
+        ):
+            val = getattr(self, attr, None)
+            if isinstance(val, str):
+                clipped, _ = _truncate_utf8(val, DEVICE_LIST_MAX_TEXT_BYTES)
+                setattr(self, attr, clipped)
+        if self.return_state is not None:
+            self.return_state = _bound_list_return_state(self.return_state)
         return self
 
     @field_validator("tags", mode="before")

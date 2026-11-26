@@ -94,6 +94,7 @@ export interface DeviceTableData {
   current_task?: string;
   last_seen?: string;
   tags?: string[];
+  tags_truncated?: boolean;
   /** ADR-0029：归属项目 key（F2 口径） */
   project_key?: string | null;
   /** ADR-0029 P0：归属来源四态（rule / manual / pinned / unassigned），行内 badge 用 */

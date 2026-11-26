@@ -110,6 +110,9 @@ export interface HostTableData {
   agent_code_sync_status?: AgentCodeSyncStatus;
   resources?: HostResources;
   mount_status?: MountStatus[];
+  mount_anomaly?: boolean;
+  mount_count?: number;
+  mount_failed_count?: number;
   device_count?: number;
   /** 台账在册（未退役）设备数；0 表示无在册设备（纯空置主机），null/undefined 表示未下发 */
   ledger_device_count?: number | null;
@@ -719,7 +722,7 @@ export function ExpandableHostTable({
   );
 
   const hasMountIssue = (host: HostTableData) =>
-    Boolean(host.mount_status?.some((m) => !m.mounted));
+    Boolean(host.mount_anomaly) || Boolean(host.mount_status?.some((m) => !m.mounted));
 
   const filteredHosts = useMemo(() => {
     if (serverMode) {
@@ -817,16 +820,16 @@ export function ExpandableHostTable({
     }
   };
 
-  // 右侧详情抽屉当前主机 & 上下切换索引
+  // 右侧详情抽屉当前主机 & 上下切换索引（优先采用按需加载的完整详情，未就绪时用当前页行瞬时占位）
   const activeDrawerHost = useMemo(() => {
     if (!activeDrawerHostId) return null;
+    if (drawerHostOverride && String(drawerHostOverride.id) === activeDrawerHostId) {
+      return drawerHostOverride;
+    }
     const matched =
       filteredHosts.find((h) => String(h.id) === activeDrawerHostId) ??
       hosts.find((h) => String(h.id) === activeDrawerHostId);
     if (matched) return matched;
-    if (drawerHostOverride && String(drawerHostOverride.id) === activeDrawerHostId) {
-      return drawerHostOverride;
-    }
     return null;
   }, [activeDrawerHostId, filteredHosts, hosts, drawerHostOverride]);
 

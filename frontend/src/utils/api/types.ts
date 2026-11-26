@@ -24,6 +24,10 @@ export interface Host {
   last_heartbeat: string | null;
   extra: Record<string, unknown>;
   mount_status: Record<string, unknown>;
+  /** #496 / #4117 Q4：列表投影（projection=list）裁剪完整挂载明细后的轻量摘要标量 */
+  mount_anomaly?: boolean;
+  mount_count?: number;
+  mount_failed_count?: number;
   capacity?: {
     active_jobs: number;
     active_devices: number;
@@ -206,6 +210,8 @@ export interface HostListPageQueryParams extends HostFilterQueryParams {
   limit?: number;
   sort_by?: HostListSortBy;
   sort_dir?: HostListSortDir;
+  projection?: 'full' | 'list';
+  snapshot_id?: string;
 }
 
 export type HostSelectionPreviewRequest = HostFilterQueryParams;
@@ -375,6 +381,8 @@ export interface Device {
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   last_seen: string | null;
   tags: string[];
+  /** #496 / #4117 Q2：列表投影因单行载荷预算发生截断时置 true，写标签前需按需拉取单机完整标签 */
+  tags_truncated?: boolean;
   extra?: Record<string, unknown>;
   adb_state?: string | null;
   adb_connected?: boolean | null;
@@ -494,6 +502,8 @@ export interface DeviceListItem {
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   last_seen: string | null;
   tags: string[];
+  /** #496 / #4117 Q2：列表投影因单行载荷预算发生截断时置 true，写标签前需按需拉取单机完整标签 */
+  tags_truncated?: boolean;
   adb_state?: string | null;
   adb_connected?: boolean | null;
   battery_level?: number | null;
@@ -1268,6 +1278,8 @@ export interface PaginatedResponse<T> {
   total: number;
   skip: number;
   limit: number;
+  /** 动态排序列表分页快照令牌（同一筛选/排序翻页回传，避免跨页重复与漏项） */
+  snapshot_id?: string | null;
 }
 
 // ─── API error contract ───────────────────────────────────────────────────────
