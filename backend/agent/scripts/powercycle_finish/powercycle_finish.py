@@ -88,7 +88,9 @@ from _lib import (
     param_or_env,
     params,
     parse_powercycle_result,
+    parse_r30_powercycle_result,
     parse_size_from_ls,
+    resolve_apk_flavor,
     result_paths,
     results_dir,
 )
@@ -190,9 +192,10 @@ def _wait_device_online(timeout_s: int) -> bool:
     return False
 
 
-def _pull_result_file() -> Path:
+def _pull_result_file(apk_flavor: str = "stp") -> Path:
     """拉取结果文件（主路径优先，旧路径兜底）；都不存在则报错。"""
-    for path in result_paths():
+    paths = result_paths() if apk_flavor == "stp" else result_paths(apk_flavor)
+    for path in paths:
         ls = adb_shell(f"ls -l {path}", timeout=30).strip()
         if parse_size_from_ls(ls) <= 0:
             continue
@@ -209,7 +212,7 @@ def _pull_result_file() -> Path:
     raise RuntimeError("设备端没有 powercycle_result.txt（主路径与旧路径均不存在），任务可能未真正运行")
 
 
-def _collect_with_retry(wait_s: int, attempts: int) -> Path:
+def _collect_with_retry(wait_s: int, attempts: int, *, apk_flavor: str = "stp") -> Path:
     """收取结果；撞设备重启窗口时等设备回来重拉（v1.0.4，#830；v1.1.0 调整）。
 
     v1.1.0：每次尝试（含首次）前先等设备就绪，等待预算与
@@ -223,7 +226,7 @@ def _collect_with_retry(wait_s: int, attempts: int) -> Path:
             break
         tried += 1
         try:
-            return _pull_result_file()
+            return _pull_result_file() if apk_flavor == "stp" else _pull_result_file(apk_flavor)
         except RuntimeError as exc:
             last_exc = exc
     raise RuntimeError(
@@ -233,6 +236,7 @@ def _collect_with_retry(wait_s: int, attempts: int) -> Path:
 
 def _run(cfg: dict) -> dict:
     project = str(param_or_env(cfg, "project", "STP_POWER_CYCLE_PROJECT", "legacy"))
+    apk_flavor = resolve_apk_flavor(cfg)
     collect_attempts = max(1, int(str(param_or_env(
         cfg, "collect_attempts", "STP_POWER_CYCLE_COLLECT_ATTEMPTS", _DEFAULT_COLLECT_ATTEMPTS,
     )) or _DEFAULT_COLLECT_ATTEMPTS))
@@ -243,8 +247,16 @@ def _run(cfg: dict) -> dict:
 
     serial = device_serial()
     # v1.1.0：解除已拆至 powercycle_disarm；此处不再 stop_task / 写 prefs。
-    local_file = _collect_with_retry(collect_wait, collect_attempts)
-    parsed = parse_powercycle_result(local_file.read_bytes())
+    local_file = (
+        _collect_with_retry(collect_wait, collect_attempts)
+        if apk_flavor == "stp"
+        else _collect_with_retry(collect_wait, collect_attempts, apk_flavor=apk_flavor)
+    )
+    parsed = (
+        parse_r30_powercycle_result(local_file.read_bytes())
+        if apk_flavor == "r30"
+        else parse_powercycle_result(local_file.read_bytes())
+    )
     run_id = f"powercycle_{time.strftime('%Y%m%d_%H%M%S')}_{serial}"
     final_status = parsed["final_status"] or "INCOMPLETE"
     metrics = {
