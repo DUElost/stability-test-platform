@@ -418,6 +418,67 @@ describe('HostsPage', () => {
     expect(mockHostsFacets).toHaveBeenCalledTimes(1);
   });
 
+  it('#4117 Q4：翻页携带第 1 页动态排序 snapshot_id，切排序后重置快照且抽屉按需拉完整详情', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsListPage.mockImplementation(async (params: { skip?: number; sort_by?: string }) => ({
+      items: [
+        {
+          id: params.skip ? 'h2' : 'h1',
+          name: params.skip ? 'node-2' : 'node-1',
+          ip: params.skip ? '10.0.0.2' : '10.0.0.1',
+          status: 'ONLINE',
+          extra: {},
+          mount_status: {},
+          mount_anomaly: true,
+          mount_count: 2,
+          mount_failed_count: 1,
+          agent_installed: true,
+        },
+      ],
+      total: 120,
+      skip: params.skip ?? 0,
+      limit: 50,
+      snapshot_id: params.sort_by === 'name' ? 'snap-name-2' : 'snap-prio-1',
+    }));
+    mockHostsFacets.mockResolvedValue(defaultFacets(120));
+    (api.hosts.get as any).mockResolvedValue({
+      id: 'h1',
+      name: 'node-1-full',
+      ip: '10.0.0.1',
+      status: 'ONLINE',
+      extra: {},
+      mount_status: { '/mnt/center': { ok: false } },
+      agent_installed: true,
+    });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper(['/hosts?drawer=h1']) });
+
+    await screen.findByTestId('host-row-h1');
+    // 即使 h1 就在当前页，打开抽屉仍必须按需调用 GET /hosts/h1 获取完整 mount_status 明细
+    await waitFor(() => {
+      expect(api.hosts.get).toHaveBeenCalledWith('h1');
+      expect(screen.getByTestId('drawer-host-override')).toHaveTextContent('node-1-full');
+    });
+
+    // 翻至第 2 页必须透传第 1 页返回的 snapshot_id
+    fireEvent.click(screen.getByTestId('go-page-2'));
+    await waitFor(() => {
+      expect(mockHostsListPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ skip: 50, limit: 50, snapshot_id: 'snap-prio-1' }),
+      );
+    });
+
+    // 切换排序后重置快照并回到第 1 页（不携带旧 snapshot_id）
+    fireEvent.click(screen.getByTestId('sort-by-name'));
+    await waitFor(() => {
+      const calls = mockHostsListPage.mock.calls;
+      const lastCall = calls[calls.length - 1]?.[0];
+      expect(lastCall).toMatchObject({ sort_by: 'name', sort_dir: 'asc', skip: 0 });
+      expect(lastCall?.snapshot_id).toBeUndefined();
+    });
+  });
+
   it('freezes cross-page selection via selectionPreview and resolves off-page hosts for bulk install', async () => {
     const { api } = await import('../../utils/api');
     mockHostsListPage.mockResolvedValue({
@@ -474,6 +535,70 @@ describe('HostsPage', () => {
         }),
       );
     });
+  });
+
+  it('#4117 Q3：切换筛选后晚到的旧跨页预览回包被丢弃，不会重新选中旧主机集合', async () => {
+    mockHostsListPage.mockImplementation(async (params: { sync_status?: string } = {}) => {
+      if (params.sync_status === 'upgrade_pending') {
+        return {
+          items: [
+            { id: 'h-new', name: 'node-new', ip: '10.0.0.9', status: 'ONLINE', extra: {}, agent_installed: true },
+          ],
+          total: 1,
+          skip: 0,
+          limit: 50,
+        };
+      }
+      return {
+        items: [
+          { id: 'h-old-1', name: 'node-old-1', ip: '10.0.0.1', status: 'OFFLINE', extra: {}, agent_installed: false },
+        ],
+        total: 2,
+        skip: 0,
+        limit: 50,
+      };
+    });
+    mockHostsFacets.mockResolvedValue({ ...defaultFacets(3), upgrade_pending: 1 });
+
+    let resolveStalePreview!: (value: unknown) => void;
+    mockHostsSelectionPreview.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStalePreview = resolve;
+        }),
+    );
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByTestId('host-row-h-old-1');
+    fireEvent.click(screen.getByTestId('select-all-hosts'));
+    fireEvent.click(screen.getByTestId('host-bulk-select-all-filtered'));
+    await waitFor(() => expect(mockHostsSelectionPreview).toHaveBeenCalledTimes(1));
+
+    // 在旧预览回包前切到「待热更新」筛选
+    fireEvent.click(screen.getByTestId('filter-upgrade-pending'));
+    await screen.findByTestId('host-row-h-new');
+
+    // 晚到的旧预览回包尝试返回旧集合 ['h-old-1', 'h-old-2']
+    resolveStalePreview({
+      total_matched: 2,
+      host_ids: ['h-old-1', 'h-old-2'],
+      online_count: 0,
+      offline_count: 2,
+      degraded_count: 0,
+      retired_count: 0,
+      first_install_count: 2,
+      reinstall_count: 0,
+      hot_update_count: 0,
+      flash_prereqs_count: 0,
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId('host-bulk-scope-badge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('host-bulk-action-bar')).not.toBeInTheDocument();
+    expect(screen.getByTestId('host-selected-h-new')).toHaveTextContent('no');
+    expect(mocks.toast.info).not.toHaveBeenCalledWith(expect.stringContaining('已冻结全部筛选结果'));
   });
 
   it('loads off-page ?drawer= deep-link host via api.hosts.get', async () => {

@@ -46,6 +46,16 @@ _RESULT_PATHS = (
     "/sdcard/AutoTestTool/PowerCycle/powercycle_result.txt",
 )
 
+# Tinno 原厂 R30 AutoTestTool（.reboot.RebootService + ShutdownTest/powercycle_result.txt）
+_R30_RESULT_PATHS = (
+    f"/sdcard/Android/data/{_PKG}/files/AutoTestTool/ShutdownTest/powercycle_result.txt",
+)
+_SUPPORTED_APK_FLAVORS = ("stp", "r30")
+_R30_CYCLE_RE = re.compile(r"The\s+(\d+)\s+time\s+implement\s+result-+([A-Za-z]+)")
+_R30_SCREEN_RE = re.compile(r"screenOnCheck\s+(true|false),\s*screenOffCheck\s+(true|false)")
+_R30_TOTAL_RE = re.compile(r"Total\s*:\s*(\d+)")
+_R30_FAIL_RE = re.compile(r"Fail\s*:\s*(\d+)")
+
 # lib.ps1:Read-PowerCycleConfig 内嵌默认值（文件缺键时用）
 _DEFAULT_TEST_TIMES = 100
 _DEFAULT_MODE = "reboot"
@@ -654,9 +664,67 @@ def stop_task(force: bool) -> None:
         raise RuntimeError("停止 PowerCycleService 失败（优雅停止 + force-stop 均未生效）")
 
 
-def result_paths() -> tuple[str, ...]:
-    """主路径 + 旧路径兜底（设备端 getResultDir 回退同款）。"""
-    return _RESULT_PATHS
+def resolve_apk_flavor(cfg: dict) -> str:
+    flavor = str(param_or_env(cfg, "apk_flavor", "STP_POWER_CYCLE_APK_FLAVOR", "stp")).strip().lower()
+    if flavor not in _SUPPORTED_APK_FLAVORS:
+        raise ValueError(f"apk_flavor={flavor!r} 不支持：可选 {_SUPPORTED_APK_FLAVORS}")
+    return flavor
+
+
+def result_paths(apk_flavor: str = "stp") -> tuple[str, ...]:
+    """主路径 + 旧路径兜底（设备端 getResultDir 回退同款；r30 走 ShutdownTest）。"""
+    return _R30_RESULT_PATHS if apk_flavor == "r30" else _RESULT_PATHS
+
+
+def parse_r30_powercycle_result(content: bytes) -> dict:
+    """解析 Tinno R30 ``ShutdownTest/powercycle_result.txt`` → 与 STP 同形摘要 + entries。"""
+    entries = []
+    reboot_failures = 0
+    cycles_done = 0
+    expected_cycles = 0
+    final_status = None
+    saw_summary = False
+    summary_fail = 0
+    for raw_line in content.decode("utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        cyc = _R30_CYCLE_RE.search(line)
+        if cyc:
+            n = int(cyc.group(1))
+            res = cyc.group(2).upper()
+            cycles_done = max(cycles_done, n)
+            if res != "PASS":
+                reboot_failures += 1
+            entries.append({"kind": "cycle", "cycle": n, "result": res})
+            continue
+        scr = _R30_SCREEN_RE.search(line)
+        if scr:
+            on_ok = scr.group(1) == "true"
+            off_ok = scr.group(2) == "true"
+            if not (on_ok and off_ok):
+                reboot_failures += 1
+                entries.append({"kind": "screen_check_failed", "screen_on": on_ok, "screen_off": off_ok})
+            continue
+        if "Test result" in line:
+            saw_summary = True
+        if saw_summary:
+            tot = _R30_TOTAL_RE.search(line)
+            if tot:
+                expected_cycles = int(tot.group(1))
+            fl = _R30_FAIL_RE.search(line)
+            if fl:
+                summary_fail = int(fl.group(1))
+                final_status = "PASS" if (summary_fail == 0 and reboot_failures == 0) else "FAIL"
+                entries.append({"kind": "finished", "result": final_status})
+                continue
+    return {
+        "cycles_done": cycles_done,
+        "expected_cycles": expected_cycles,
+        "reboot_failures": max(reboot_failures, summary_fail),
+        "final_status": final_status,
+        "entries": entries,
+    }
 
 
 # ---------------------------------------------------------------------------

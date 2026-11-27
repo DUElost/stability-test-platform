@@ -135,6 +135,7 @@ from _lib import (
     pcs_retry_ready_seconds,
     pcs_retry_wait_budget_seconds,
     powercycle_config,
+    prepare_r30_state,
     resources_dir,
     service_alive,
     service_probe,
@@ -142,6 +143,7 @@ from _lib import (
     set_prefs,
     sha256_file,
     start_task,
+    start_task_r30,
     try_adb_root,
     wait_system_ready,
 )
@@ -151,6 +153,7 @@ _APK_NAME = "AutoTestTool.apk"
 
 def _run(cfg_raw: dict) -> dict:
     cfg = powercycle_config(cfg_raw)
+    apk_flavor = cfg.get("apk_flavor", "stp")
 
     apk = resources_dir(cfg) / _APK_NAME
     if not apk.is_file():
@@ -176,14 +179,21 @@ def _run(cfg_raw: dict) -> dict:
     set_device_stability()
     grant_storage()
 
-    current_count = set_prefs(cfg)
-
-    ok, history, waited_ready, last_probe = _start_service_with_retry()
+    if apk_flavor == "r30":
+        current_count, resume_only = prepare_r30_state(cfg)
+        ok, history, waited_ready, last_probe = _start_service_with_retry(
+            apk_flavor="r30",
+            starter=lambda: start_task_r30(cfg, resume_only=resume_only),
+        )
+    else:
+        current_count = set_prefs(cfg)
+        ok, history, waited_ready, last_probe = _start_service_with_retry()
     if not ok:
-        raise RuntimeError(_service_failure_message(history, waited_ready, last_probe))
+        raise RuntimeError(_service_failure_message(history, waited_ready, last_probe, apk_flavor=apk_flavor))
 
     return {
         "apk_sha256": apk_sha,
+        "apk_flavor": apk_flavor,
         "test_times": cfg["test_times"],
         "mode": cfg["mode"],
         "wait_seconds": cfg["wait_seconds"],
@@ -197,27 +207,36 @@ def _run(cfg_raw: dict) -> dict:
 
 
 def _service_failure_message(
-    history: list[str], waited_ready: bool, last_probe: tuple[bool, int, str]
+    history: list[str],
+    waited_ready: bool,
+    last_probe: tuple[bool, int, str],
+    *,
+    apk_flavor: str = "stp",
 ) -> str:
     """服务启动失败报文（v1.2.4：带 attempts/history/rc/dumpsys 证据，可跨窗聚合）。"""
+    svc_name = "RebootService" if apk_flavor == "r30" else "PowerCycleService"
     return (
-        f"PowerCycleService 未在预算内启动（attempts={len(history)}/{pcs_retry_max_attempts()} "
+        f"{svc_name} 未在预算内启动（attempts={len(history)}/{pcs_retry_max_attempts()} "
         f"history=[{','.join(history)}] waited_ready={waited_ready} "
         f"rc={last_probe[1]} dumpsys={last_probe[2]!r}）"
     )
 
 
-def _wait_service(timeout_s: float = 30) -> bool:
+def _wait_service(timeout_s: float = 30, *, apk_flavor: str = "stp") -> bool:
     """前台服务启动是异步的，轮询 dumpsys 直到可见。"""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        if service_alive():
+        if service_alive() if apk_flavor == "stp" else service_alive(apk_flavor):
             return True
         time.sleep(2)
     return False
 
 
-def _start_service_with_retry() -> tuple[bool, list[str], bool, tuple[bool, int, str]]:
+def _start_service_with_retry(
+    *,
+    apk_flavor: str = "stp",
+    starter=None,
+) -> tuple[bool, list[str], bool, tuple[bool, int, str]]:
     """``start_task`` + 等服务的**有界重试**（v1.2.4，#2802 撞峰同族缺口）。
 
     r503 取证：``PowerCycleService 未在 30s 内启动`` 每窗 0–2 条地板级存在，失败全落
@@ -234,6 +253,7 @@ def _start_service_with_retry() -> tuple[bool, list[str], bool, tuple[bool, int,
     history: list[str] = []
     waited_ready = False
     last_probe: tuple[bool, int, str] = (False, -1, "no observation")
+    run_start = starter or start_task
     for attempt in range(1, max_attempts + 1):
         if attempt > 1:
             remaining = deadline - time.time()
@@ -246,11 +266,11 @@ def _start_service_with_retry() -> tuple[bool, list[str], bool, tuple[bool, int,
             if not ready:
                 history.append(f"{attempt}:not_ready({observed})")
                 break
-        start_task()
+        run_start()
         wait_s = max(1.0, min(30.0, deadline - time.time()))
-        if _wait_service(timeout_s=wait_s):
+        if _wait_service(timeout_s=wait_s, apk_flavor=apk_flavor):
             return True, history, waited_ready, last_probe
-        last_probe = service_probe()
+        last_probe = service_probe() if apk_flavor == "stp" else service_probe(apk_flavor)
         history.append(f"{attempt}:no_service(rc={last_probe[1]})")
     return False, history, waited_ready, last_probe
 

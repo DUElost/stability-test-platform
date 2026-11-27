@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "display_name": "DDR 骨架模板",
+  "specialty_key": "ops",
+  "status": "skeleton",
   "description": "DDR memory test: push memtester binary, run memtester with specified size and loops",
   "lifecycle": {
     "timeout_seconds": 7200,

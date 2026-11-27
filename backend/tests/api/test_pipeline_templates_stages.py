@@ -151,3 +151,88 @@ def test_stability_templates_pin_unisoc_sysdump_config_after_sync_device_time():
         assert "script:unisoc_sysdump_config" not in actions, (
             f"flash template {path.name} should not enable sysdump before flashing"
         )
+
+
+def test_builtin_templates_have_explicit_specialty_mapping_and_metadata():
+    templates = pipeline_routes.list_pipeline_templates(specialty_key=None)
+    by_name = {tpl.name: tpl for tpl in templates}
+    assert len(by_name) == 11
+
+    for tpl in templates:
+        assert tpl.display_name.strip(), f"{tpl.name} missing display_name"
+        assert tpl.specialty_key in pipeline_routes.KNOWN_SPECIALTY_KEYS, (
+            f"{tpl.name} specialty_key={tpl.specialty_key!r} not in KNOWN_SPECIALTY_KEYS"
+        )
+        assert tpl.status in ("ready", "skeleton")
+
+    # Explicit specialty -> template mappings (#4182 Phase 2)
+    assert by_name["powercycle"].specialty_key == "power-cycle"
+    assert by_name["monkey"].specialty_key == "monkey"
+    assert by_name["monkey_watcher_patrol"].specialty_key == "monkey"
+    assert by_name["monkey_watcher_patrol"].plan_defaults == {
+        "watcher_policy": {"enabled": True},
+    }
+    assert by_name["mtbf"].specialty_key == "mtbf"
+    assert by_name["mtbf"].requires_suite is True
+    assert by_name["ddr"].status == "skeleton"
+    assert by_name["standby"].status == "skeleton"
+
+    # Optional specialty_key query filter
+    monkey_only = pipeline_routes.list_pipeline_templates(specialty_key="monkey")
+    assert {tpl.name for tpl in monkey_only} == {"monkey", "monkey_watcher_patrol"}
+    power_only = pipeline_routes.list_pipeline_templates(specialty_key="power-cycle")
+    assert [tpl.name for tpl in power_only] == ["powercycle"]
+
+
+def test_mtbf_template_contains_complete_lifecycle_steps():
+    tpl = pipeline_routes.get_pipeline_template("mtbf")
+    lc = tpl.pipeline_def["lifecycle"]
+    assert lc["timeout_seconds"] == 604800
+    assert [s["action"] for s in lc["init"]] == [
+        "script:check_device",
+        "script:sync_device_time",
+        "script:unisoc_sysdump_config",
+        "script:ensure_root",
+        "script:mtbf_setup",
+    ]
+    assert lc["init"][-1]["version"] == "1.4.2"
+    assert lc["patrol"]["interval_seconds"] == 300
+    assert [(s["action"], s["version"]) for s in lc["patrol"]["steps"]] == [
+        ("script:mtbf_check", "1.5.0"),
+    ]
+    assert [(s["action"], s["version"]) for s in lc["teardown"]] == [
+        ("script:mtbf_finish", "1.6.0"),
+    ]
+
+
+def test_script_tag_registry_covers_all_template_scripts_with_valid_metadata():
+    from backend.services.script_tags import (
+        SCRIPT_TAG_REGISTRY,
+        VALID_SCRIPT_ROLES,
+        get_script_tags,
+    )
+
+    for name, spec in SCRIPT_TAG_REGISTRY.items():
+        assert spec.role in VALID_SCRIPT_ROLES, f"{name}: invalid role {spec.role!r}"
+        for sp in spec.specialties:
+            assert sp in pipeline_routes.KNOWN_SPECIALTY_KEYS, (
+                f"{name}: unknown specialty {sp!r}"
+            )
+
+    template_scripts: set[str] = set()
+    for tpl in pipeline_routes.list_pipeline_templates(specialty_key=None):
+        lc = tpl.pipeline_def["lifecycle"]
+        for step in (
+            list(lc.get("init") or [])
+            + list((lc.get("patrol") or {}).get("steps") or [])
+            + list(lc.get("teardown") or [])
+        ):
+            action = str(step.get("action") or "")
+            if action.startswith("script:"):
+                template_scripts.add(action[len("script:"):])
+
+    missing = sorted(template_scripts - set(SCRIPT_TAG_REGISTRY.keys()))
+    assert not missing, f"template scripts missing from SCRIPT_TAG_REGISTRY: {missing}"
+
+    fallback = get_script_tags("nonexistent_custom_script")
+    assert fallback == {"role": "ops", "specialties": [], "platforms": []}

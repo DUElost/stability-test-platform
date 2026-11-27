@@ -28,6 +28,11 @@ _RESULT_PATHS = (
     "/sdcard/AutoTestTool/PowerCycle/powercycle_result.txt",
 )
 
+# Tinno 原厂 R30 AutoTestTool（.reboot.RebootService + restart_preference.xml）
+_R30_SERVICE_TOKEN = "RebootService"
+_R30_PREFS_FILE = "restart_preference.xml"
+_SUPPORTED_APK_FLAVORS = ("stp", "r30")
+
 # lib.ps1:Read-PowerCycleConfig 内嵌默认值（文件缺键时用）
 _DEFAULT_TEST_TIMES = 100
 _DEFAULT_MODE = "reboot"
@@ -848,6 +853,164 @@ def stop_task(force: bool, kind: str = "ok", installed: bool | None = True) -> d
         set_stop_flags()
     _verify_stop_flags(kind)
     return steps
+
+
+def resolve_apk_flavor(cfg: dict) -> str:
+    flavor = str(param_or_env(cfg, "apk_flavor", "STP_POWER_CYCLE_APK_FLAVOR", "stp")).strip().lower()
+    if flavor not in _SUPPORTED_APK_FLAVORS:
+        raise ValueError(f"apk_flavor={flavor!r} 不支持：可选 {_SUPPORTED_APK_FLAVORS}")
+    return flavor
+
+
+def _root_read_r30_prefs() -> tuple[str, str]:
+    path = f"{_PREFS_DIR}/{_R30_PREFS_FILE}"
+    probe = (
+        f"if [ ! -f {path} ]; then echo {_PREFS_ABSENT_SENTINEL}; "
+        f"else cat {path} 2>&1; fi"
+    )
+    rc, out, err = adb("shell", probe, timeout=30)
+    text = (out or "").strip()
+    if rc == 0 and "<map" in text:
+        return "ok", text
+    if rc != 0:
+        if _PREFS_ABSENT_SENTINEL in text or "No such file" in text or "No such file" in (err or ""):
+            return "absent", ""
+        if "Permission denied" in text or "Permission denied" in (err or ""):
+            return "denied", ""
+        return "transient", ""
+    if text == _PREFS_ABSENT_SENTINEL:
+        return "absent", ""
+    if not text:
+        return "empty", ""
+    if "Permission denied" in text:
+        return "denied", ""
+    if "No such file" in text:
+        return "absent", ""
+    return "transient", ""
+
+
+def read_r30_prefs_classified() -> tuple[str, str, bool | None]:
+    """读取 Tinno R30 ``restart_preference.xml`` 并分类（同 read_prefs_classified）。"""
+    installed = autotesttool_installed()
+    if is_root():
+        kind, xml = _root_read_r30_prefs()
+        if kind == "absent" and installed is False:
+            kind = "not_installed"
+        if kind in ("ok", "denied") and installed is False:
+            kind = "transient"
+        return kind, xml if kind == "ok" else "", installed
+    rc, out, err = adb("shell", f"run-as {_PKG} cat shared_prefs/{_R30_PREFS_FILE}", timeout=30)
+    text = (out or "").strip()
+    if rc == 0 and "<map" in text:
+        kind = "ok"
+    else:
+        blob = (out or "") + "\n" + (err or "")
+        if "unknown package" in blob:
+            kind = "not_installed"
+        elif "No such file or directory" in blob:
+            kind = "absent"
+        elif "Permission denied" in blob:
+            kind = "denied"
+        else:
+            kind = "transient"
+    if kind == "not_installed" and installed is True:
+        kind = "transient"
+    elif kind == "absent" and installed is False:
+        kind = "not_installed"
+    elif kind in ("ok", "denied") and installed is False:
+        kind = "transient"
+    return kind, text if kind == "ok" else "", installed
+
+
+def _push_r30_prefs_xml(content: str) -> None:
+    target = f"{_PREFS_DIR}/{_R30_PREFS_FILE}"
+    if is_root():
+        uid = get_app_uid()
+        adb_shell(f"mkdir -p {_PREFS_DIR}", timeout=30)
+        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
+            tmp.write(content.encode("utf-8"))
+            tmp_path = tmp.name
+        try:
+            _push_file(Path(tmp_path), target)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+        adb_shell(f"chown {uid}:{uid} {target} && chmod 660 {target}", timeout=30)
+        ctx_rc, ctx_out, _ = adb("shell", f"ls -Zd {_PREFS_DIR.rsplit('/', 1)[0]}", timeout=15)
+        fields = (ctx_out or "").strip().split()
+        if ctx_rc == 0 and fields and fields[0].startswith("u:object_r:"):
+            adb("shell", f"chcon {fields[0]} {_PREFS_DIR} {target}", timeout=30)
+        return
+    cmd = [adb_path(), "-s", device_serial(), "shell", f"run-as {_PKG} sh -c 'cat > shared_prefs/{_R30_PREFS_FILE}'"]
+    try:
+        result = subprocess.run(cmd, input=content.encode("utf-8"), capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        exec_progress_tick()
+        raise
+    exec_progress_tick()
+    if result.returncode != 0:
+        raise RuntimeError(f"run-as 写 R30 prefs 失败: {decode_device_output(result.stderr).strip() or 'rc=%d' % result.returncode}")
+
+
+def _r30_service_state(timeout: int = 30) -> tuple[str, int]:
+    rc, out, _err = adb("shell", f"dumpsys activity services {_PKG}", timeout=max(1, int(timeout)))
+    if rc != 0:
+        return "unknown", rc
+    return ("alive" if _R30_SERVICE_TOKEN in (out or "") else "stopped"), rc
+
+
+def stop_task_r30(force: bool, kind: str = "ok", installed: bool | None = True) -> dict[str, Any]:
+    """停止 R30 ``RebootService`` → 写 ``reboot_service_going=false`` + ``Num=0`` → 回读校验。"""
+    del force
+    steps: dict[str, Any] = {}
+    state_before, rc_before = _r30_service_state()
+    steps["state_before"] = state_before
+    steps["state_before_rc"] = rc_before
+    rc, _out, _err = adb("shell", f"am force-stop {_PKG}", timeout=30)
+    steps["force_stop_rc"] = rc
+    time.sleep(1)
+    state_after, rc_after = _r30_service_state()
+    steps["state_after"] = state_after
+    steps["state_after_rc"] = rc_after
+    if steps["force_stop_rc"] != 0 or rc_after != 0 or state_after != "stopped":
+        raise StopNotConfirmed(steps)
+    if kind == "not_installed":
+        return steps
+    if kind in ("denied", "transient"):
+        raise RuntimeError("R30 prefs 读取被拒/未知：不写停止标志")
+    if kind not in ("ok", "absent", "empty"):
+        raise RuntimeError(f"未知的 R30 prefs 状态 {kind!r}：不写停止标志")
+    if installed is not True:
+        raise RuntimeError("无法确认 AutoTestTool 已安装：不写停止标志")
+
+    minimal = (
+        "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
+        "<map>\n"
+        '    <boolean name="reboot_service_going" value="false"/>\n'
+        '    <int name="Num" value="0"/>\n'
+        "</map>\n"
+    )
+    if kind in ("absent", "empty"):
+        if kind == "empty" and is_root():
+            adb("shell", f"rm -f {_PREFS_DIR}/{_R30_PREFS_FILE}", timeout=30)
+        _push_r30_prefs_xml(minimal)
+    else:
+        rk, xml = _root_read_r30_prefs() if is_root() else (read_r30_prefs_classified()[:2])
+        if rk != "ok":
+            raise RuntimeError(f"R30 prefs 写前重读失败（kind={rk}）")
+        updated = update_prefs_field(
+            update_prefs_field(xml, "reboot_service_going", "false", "boolean"),
+            "Num",
+            "0",
+            "int",
+        )
+        _push_r30_prefs_xml(updated)
+
+    for _attempt in (1, 2):
+        vk, vxml, _ = read_r30_prefs_classified()
+        if vk == "ok" and 'name="reboot_service_going" value="false"' in vxml:
+            return steps
+        _push_r30_prefs_xml(minimal)
+    raise RuntimeError("R30 prefs reboot_service_going 未置 false（残留会导致开机自启续跑）")
 
 
 def result_paths() -> tuple[str, ...]:

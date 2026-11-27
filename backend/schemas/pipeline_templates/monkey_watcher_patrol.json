@@ -1,5 +1,13 @@
 {
   "version": 2,
+  "display_name": "Monkey Watcher 巡检",
+  "specialty_key": "monkey",
+  "status": "ready",
+  "plan_defaults": {
+    "watcher_policy": {
+      "enabled": true
+    }
+  },
   "description": "Monkey watcher patrol stability test (scheduled every 3-5 min)",
   "lifecycle": {
     "timeout_seconds": 604800,

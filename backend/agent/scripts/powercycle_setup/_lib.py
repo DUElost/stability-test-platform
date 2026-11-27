@@ -52,6 +52,16 @@ _RESULT_PATHS = (
     "/sdcard/AutoTestTool/PowerCycle/powercycle_result.txt",
 )
 
+# Tinno 原厂 R30 AutoTestTool（.reboot.RebootService + restart_preference.xml）
+_R30_SERVICE = "com.tinno.autotesttool.reboot.RebootService"
+_R30_SERVICE_TOKEN = "RebootService"
+_R30_PREFS_FILE = "restart_preference.xml"
+_R30_RESULT_FILENAME = "powercycle_result.txt"
+_R30_RESULT_PATHS = (
+    f"/sdcard/Android/data/{_PKG}/files/AutoTestTool/ShutdownTest/{_R30_RESULT_FILENAME}",
+)
+_SUPPORTED_APK_FLAVORS = ("stp", "r30")
+
 # lib.ps1:Read-PowerCycleConfig 内嵌默认值（文件缺键时用）
 _DEFAULT_TEST_TIMES = 100
 _DEFAULT_MODE = "reboot"
@@ -333,8 +343,12 @@ def powercycle_config(cfg: dict) -> dict:
     mode = str(pick("mode", "STP_POWER_CYCLE_MODE", "test.mode", _DEFAULT_MODE))
     if mode != "reboot":
         raise ValueError(f"mode={mode!r} 不支持：P0 只做 reboot（poweroff 需 RTC 唤醒与充电保护评估，见 G15 D4）")
+    apk_flavor = str(pick("apk_flavor", "STP_POWER_CYCLE_APK_FLAVOR", "apk.flavor", "stp")).strip().lower()
+    if apk_flavor not in _SUPPORTED_APK_FLAVORS:
+        raise ValueError(f"apk_flavor={apk_flavor!r} 不支持：可选 {_SUPPORTED_APK_FLAVORS}")
     return {
         "project": project,
+        "apk_flavor": apk_flavor,
         "powercycle_resources_dir": cfg.get("powercycle_resources_dir") or env("STP_POWER_CYCLE_RESOURCES_DIR", ""),
         "test_times": int(pick("test_times", "STP_POWER_CYCLE_TEST_TIMES", "test.times", _DEFAULT_TEST_TIMES)),
         "mode": mode,
@@ -983,19 +997,84 @@ def install_apk(apk: Path) -> None:
         f"history=[{','.join(history[:6])}])"
     )
 
-def service_alive() -> bool:
-    return "PowerCycleService" in adb_shell(f"dumpsys activity services {_PKG}", timeout=30)
+def _service_token(apk_flavor: str = "stp") -> str:
+    return _R30_SERVICE_TOKEN if apk_flavor == "r30" else "PowerCycleService"
 
 
-def service_probe() -> tuple[bool, int, str]:
+def service_alive(apk_flavor: str = "stp") -> bool:
+    return _service_token(apk_flavor) in adb_shell(f"dumpsys activity services {_PKG}", timeout=30)
+
+
+def service_probe(apk_flavor: str = "stp") -> tuple[bool, int, str]:
     """``dumpsys activity services`` 探测（v1.2.4：带 rc 与有界片段，供失败报文取证）。
 
-    返回 (是否可见服务, rc, 片段)。与 ``service_alive`` 同判据（文本含
-    ``PowerCycleService``），只是换成 rc 感知的 ``adb`` 调用。
+    返回 (是否可见服务, rc, 片段)。与 ``service_alive`` 同判据（默认 ``PowerCycleService``，
+    ``apk_flavor="r30"`` 时为 ``RebootService``），只是换成 rc 感知的 ``adb`` 调用。
     """
     rc, out, err = adb("shell", f"dumpsys activity services {_PKG}", timeout=30)
     text = out or ""
-    return ("PowerCycleService" in text), rc, _adb_diag(text, err, limit=160)
+    return (_service_token(apk_flavor) in text), rc, _adb_diag(text, err, limit=160)
+
+
+def prepare_r30_state(cfg: dict) -> tuple[int, bool]:
+    """R30 变体启动前准备：授予浮窗权限，按 reset_count 清旧 prefs/结果或读取续跑计数。
+
+    返回 ``(current_count, resume_only)``：
+    - ``reset_count=True``：清旧 ``restart_preference.xml`` 与结果文件，返回 ``(0, False)``；
+    - ``reset_count=False``：若旧 ``restart_preference.xml`` 存在且可读，返回
+      ``(restarted_times, True)``（不带 extras 启动以从原 prefs 续跑）；若明确不存在，
+      返回 ``(0, False)``（走全新启动）；读取未知时 raise 防止覆盖续跑计数。
+    """
+    adb_shell(f"cmd appops set {_PKG} SYSTEM_ALERT_WINDOW allow", timeout=30)
+    r30_prefs = f"{_PREFS_DIR}/{_R30_PREFS_FILE}"
+    root_mode = is_root()
+    if cfg["reset_count"]:
+        adb_shell(f"am force-stop {_PKG}", timeout=30)
+        if root_mode:
+            adb_shell(f"rm -f {r30_prefs} {_R30_RESULT_PATHS[0]}", timeout=30)
+        else:
+            adb_shell(f"run-as {_PKG} rm -f shared_prefs/{_R30_PREFS_FILE}", timeout=30)
+            adb_shell(f"rm -f {_R30_RESULT_PATHS[0]}", timeout=30)
+        return 0, False
+    if root_mode:
+        probe = (
+            f"if [ ! -f {r30_prefs} ]; then echo {_PREFS_ABSENT_SENTINEL}; "
+            f"else cat {r30_prefs} 2>&1; fi"
+        )
+    else:
+        probe = (
+            f"run-as {_PKG} sh -c '"
+            f"if [ ! -f shared_prefs/{_R30_PREFS_FILE} ]; then echo {_PREFS_ABSENT_SENTINEL}; "
+            f"else cat shared_prefs/{_R30_PREFS_FILE} 2>&1; fi'"
+        )
+    rc, out, err = adb("shell", probe, timeout=30)
+    text = (out or "").strip()
+    if rc == 0 and "<map" in text:
+        match = re.search(r'name="restarted_times" value="(\d+)"', text)
+        return (int(match.group(1)) if match else 0), True
+    if _PREFS_ABSENT_SENTINEL in text or "No such file" in text or "No such file" in (err or ""):
+        return 0, False
+    raise RuntimeError(f"R30 prefs 读取未知（rc={rc}）：不得覆盖续跑计数，请重试本步骤")
+
+
+def start_task_r30(cfg: dict, *, resume_only: bool = False) -> None:
+    """启动 Tinno R30 ``.reboot.RebootService``（exported=true，命令行 Intent extras 驱动）。"""
+    adb_shell(f"am force-stop {_PKG}", timeout=30)
+    if resume_only:
+        adb_shell(f"am start-foreground-service -n {_PKG}/.{_R30_SERVICE.split(_PKG + '.', 1)[1]}", timeout=30)
+        return
+    going = "true" if cfg["auto_resume"] else "false"
+    cmd = (
+        f"am start-foreground-service -n {_PKG}/.reboot.RebootService "
+        f"--ei Num {int(cfg['test_times'])} "
+        f"--ei reboot_wait_time {int(cfg['wait_seconds'])} "
+        f"--ei reboot_fill_size 0 "
+        f"--ei SENSOR_NUM_CHECK -1 "
+        f"--ez reboot_service_going {going} "
+        f"--ez power_off_wakeup_or_reboot false "
+        f"--es on_off_filename {_R30_RESULT_FILENAME}"
+    )
+    adb_shell(cmd, timeout=30)
 
 
 def start_task() -> None:

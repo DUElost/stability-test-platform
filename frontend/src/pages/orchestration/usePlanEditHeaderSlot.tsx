@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, ChevronRight, Code2, Play, Save } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronRight, Code2, Copy, LayoutTemplate, Play, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useHeaderSlotSetter } from '@/contexts/HeaderSlotContext';
 import { STATUS_CHIP } from '@/design-system/tokens';
@@ -11,6 +11,8 @@ interface PlanEditHeaderFormLike {
   isDirty: boolean;
   saving: boolean;
   setShowJson: (v: boolean) => void;
+  setTemplatePickerOpen?: (v: boolean) => void;
+  handleCloneCurrent?: () => void;
   handleExecute: () => void;
   handleSave: () => Promise<unknown>;
 }
@@ -86,6 +88,28 @@ export function usePlanEditHeaderSlot(form: PlanEditHeaderFormLike, ready: boole
         </div>
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          {form.isNew ? (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="open-template-picker-btn"
+              onClick={() => formRef.current.setTemplatePickerOpen?.(true)}
+            >
+              <LayoutTemplate className="w-4 h-4 mr-1.5" />
+              从模板导入
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="clone-plan-draft-btn"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => formRef.current.handleCloneCurrent?.()}
+            >
+              <Copy className="w-4 h-4 mr-1.5" />
+              复制为草稿
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"

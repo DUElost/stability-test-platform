@@ -16,9 +16,13 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import threading
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from uuid import uuid4
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -54,6 +58,99 @@ ALLOWED_HEALTH_FILTERS = frozenset({"HEALTHY", "DEGRADED", "UNSCHEDULABLE", "unh
 ALLOWED_SYNC_FILTERS = frozenset({"upgrade_pending", "drift", "matched", "pending", "unknown"})
 ALLOWED_SORT_BY = frozenset({"default", "priority", "id", "name", "devices", "cpu", "ram", "disk", "heartbeat"})
 ALLOWED_SORT_DIR = frozenset({"asc", "desc"})
+ALLOWED_PROJECTIONS = frozenset({"full", "list"})
+
+# 只读动态排序快照缓存（内存 LRU + 短 TTL，零 DB 写入）：防止 cpu/ram/disk/heartbeat/priority
+# 排序在翻页间隙因心跳排名波动产生跨页重复或漏项（契约 §4 规则 6）。
+HOST_SORT_SNAPSHOT_TTL_SECONDS = 120.0
+HOST_SORT_SNAPSHOT_MAX_ENTRIES = 256
+
+
+class _HostSortSnapshotStore:
+    """线程安全、有上限的只读排序快照表：仅存主机 ID 有序列表。"""
+
+    def __init__(self, *, ttl_seconds: float, max_entries: int) -> None:
+        self._ttl = ttl_seconds
+        self._max = max_entries
+        self._lock = threading.Lock()
+        self._entries: "OrderedDict[str, Tuple[float, Tuple[Any, ...], Tuple[str, ...]]]" = OrderedDict()
+
+    def _evict_expired_locked(self, now_mono: float) -> None:
+        expired = [k for k, (exp, _, _) in self._entries.items() if exp <= now_mono]
+        for key in expired:
+            self._entries.pop(key, None)
+
+    def put(self, scope_sig: Tuple[Any, ...], ordered_ids: Sequence[str]) -> str:
+        token = uuid4().hex[:16]
+        now_mono = time.monotonic()
+        with self._lock:
+            self._evict_expired_locked(now_mono)
+            while len(self._entries) >= self._max:
+                self._entries.popitem(last=False)
+            self._entries[token] = (
+                now_mono + self._ttl,
+                scope_sig,
+                tuple(str(hid) for hid in ordered_ids),
+            )
+        return token
+
+    def get(self, token: str, scope_sig: Tuple[Any, ...]) -> Optional[Tuple[str, ...]]:
+        now_mono = time.monotonic()
+        with self._lock:
+            entry = self._entries.get(token)
+            if entry is None:
+                return None
+            exp, saved_sig, ordered_ids = entry
+            if exp <= now_mono:
+                self._entries.pop(token, None)
+                return None
+            if saved_sig != scope_sig:
+                return None
+            self._entries.move_to_end(token)
+            return ordered_ids
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_HOST_SORT_SNAPSHOTS = _HostSortSnapshotStore(
+    ttl_seconds=HOST_SORT_SNAPSHOT_TTL_SECONDS,
+    max_entries=HOST_SORT_SNAPSHOT_MAX_ENTRIES,
+)
+
+
+def clear_host_sort_snapshots() -> None:
+    """清理内存中的只读主机排序快照（供测试隔离使用）。"""
+    _HOST_SORT_SNAPSHOTS.clear()
+
+
+def summarize_host_mounts(mounts: Any) -> Tuple[int, int, bool]:
+    """统计主机挂载摘要 ``(total_count, failed_count, has_anomaly)``；空字典不计为异常。"""
+    if not isinstance(mounts, dict) or not mounts:
+        return 0, 0, False
+    total = 0
+    failed = 0
+    for info in mounts.values():
+        total += 1
+        mounted = info is True or (isinstance(info, dict) and info.get("ok") is True)
+        if not mounted:
+            failed += 1
+    return total, failed, failed > 0
+
+
+def validate_host_projection(projection: Optional[str]) -> str:
+    norm = projection.strip().lower() if isinstance(projection, str) and projection.strip() else "full"
+    if norm not in ALLOWED_PROJECTIONS:
+        raise HostQueryError(
+            status_code=422,
+            detail={
+                "code": "INVALID_PROJECTION",
+                "message": f"projection must be one of {sorted(ALLOWED_PROJECTIONS)}",
+                "allowed": sorted(ALLOWED_PROJECTIONS),
+            },
+        )
+    return norm
 
 # 硬件体检全绿的纯 usb_tree_empty 仅在台账设备最近活跃时间落在该窗口内时计入 usb_fault；
 # 超过窗口且硬件正常的主机自动视作长期空置（减少人工逐台点 emptied_at 负荷）。
@@ -158,10 +255,22 @@ def build_host_out_readonly(
     host_key_trust: Optional[str] = None,
     ledger_device_count: Optional[int] = None,
     ledger_latest_seen_at: Optional[datetime] = None,
+    projection: str = "full",
 ) -> HostOut:
-    """只读构造 ``HostOut``（不含 DB 查询；不修改 ORM 对象）。"""
+    """只读构造 ``HostOut``（不含 DB 查询；不修改 ORM 对象）。
+
+    当 ``projection == "list"`` 时，仅输出挂载摘要标量（``mount_anomaly`` / ``mount_count`` /
+    ``mount_failed_count``）并清空完整 ``mount_status`` 明细字典；完整挂载列表由
+    ``GET /api/v1/hosts/{id}`` 按需返回。
+    """
     out = HostOut.model_validate(host)
     out.status = effective_host_status(host, now=now)
+    mount_count, mount_failed_count, mount_anomaly = summarize_host_mounts(out.mount_status)
+    out.mount_count = mount_count
+    out.mount_failed_count = mount_failed_count
+    out.mount_anomaly = mount_anomaly
+    if projection == "list":
+        out.mount_status = {}
     extra = sanitize_host_extra(host.extra)
     out.extra = extra
     out.capacity = extra.get("capacity")
@@ -308,14 +417,10 @@ def host_usb_fault_priority(
 
 def host_has_mount_anomaly(out: HostOut) -> bool:
     """挂载异常判据：至少一条挂载项未挂载；空挂载字典绝不计为故障。"""
-    mounts = out.mount_status
-    if not isinstance(mounts, dict) or not mounts:
-        return False
-    for info in mounts.values():
-        mounted = info is True or (isinstance(info, dict) and info.get("ok") is True)
-        if not mounted:
-            return True
-    return False
+    if out.mount_anomaly:
+        return True
+    _, _, has_anomaly = summarize_host_mounts(out.mount_status)
+    return has_anomaly
 
 
 def host_effective_health_status(out: HostOut) -> str:
@@ -574,6 +679,7 @@ def _load_base_host_outs(
     desired_artifact_digest: Optional[str],
     now: datetime,
     include_expected_revision: bool = True,
+    projection: str = "full",
 ) -> List[HostOut]:
     query = db.query(Host)
     if not include_retired:
@@ -594,9 +700,44 @@ def _load_base_host_outs(
             now=now,
             ledger_device_count=ledger_summary.get(str(h.id), (0, None))[0],
             ledger_latest_seen_at=ledger_summary.get(str(h.id), (0, None))[1],
+            projection=projection,
         )
         for h in hosts
     ]
+
+
+def _hydrate_hosts_by_ids(
+    db: Session,
+    ordered_ids: Sequence[str],
+    *,
+    desired_artifact_digest: Optional[str],
+    now: datetime,
+    projection: str = "full",
+) -> List[HostOut]:
+    """按快照冻结顺序加载目标页主机的最新实时字段（不重排跨页归属）。"""
+    if not ordered_ids:
+        return []
+    rows = db.query(Host).filter(Host.id.in_(list(ordered_ids))).all()
+    by_id = {str(h.id): h for h in rows}
+    expected_rev = get_agent_code_version()
+    ledger_summary = load_host_ledger_summary(db, list(by_id.keys()))
+    result: List[HostOut] = []
+    for hid in ordered_ids:
+        host = by_id.get(str(hid))
+        if host is None:
+            continue
+        result.append(
+            build_host_out_readonly(
+                host,
+                desired_artifact_digest=desired_artifact_digest,
+                expected_code_revision=expected_rev,
+                now=now,
+                ledger_device_count=ledger_summary.get(str(host.id), (0, None))[0],
+                ledger_latest_seen_at=ledger_summary.get(str(host.id), (0, None))[1],
+                projection=projection,
+            )
+        )
+    return result
 
 
 def query_hosts_page(
@@ -609,19 +750,42 @@ def query_hosts_page(
     sort_dir: Optional[str],
     desired_artifact_digest: Optional[str],
     now: Optional[datetime] = None,
-) -> Tuple[List[HostOut], int]:
-    """执行只读筛选、全局排序并返回 ``(page_items, filtered_total)``。"""
+    projection: str = "full",
+    snapshot_id: Optional[str] = None,
+) -> Tuple[List[HostOut], int, str]:
+    """执行只读筛选、全局排序并返回 ``(page_items, filtered_total, snapshot_id)``。
+
+    携带有效 ``snapshot_id`` 翻页时复用同一代次的冻结 ID 顺序切片，再回填当页最新实时指标，
+    消除动态列（cpu / ram / disk / heartbeat / devices / priority）翻页间隙的重复与漏项。
+    """
     ref_now = now or datetime.now(timezone.utc)
+    scope_sig = (filters, sort_by, sort_dir)
+
+    if snapshot_id:
+        frozen_ids = _HOST_SORT_SNAPSHOTS.get(snapshot_id, scope_sig)
+        if frozen_ids is not None:
+            page_ids = frozen_ids[skip : skip + limit]
+            page_items = _hydrate_hosts_by_ids(
+                db,
+                page_ids,
+                desired_artifact_digest=desired_artifact_digest,
+                now=ref_now,
+                projection=projection,
+            )
+            return page_items, len(frozen_ids), snapshot_id
+
     all_outs = _load_base_host_outs(
         db,
         include_retired=filters.include_retired,
         desired_artifact_digest=desired_artifact_digest,
         now=ref_now,
+        projection=projection,
     )
     matched = [h for h in all_outs if _matches_host_filters(h, filters, now=ref_now)]
     ordered = sort_host_outs(matched, sort_by=sort_by, sort_dir=sort_dir, now=ref_now)
     total = len(ordered)
-    return ordered[skip : skip + limit], total
+    new_snapshot_id = _HOST_SORT_SNAPSHOTS.put(scope_sig, [str(h.id) for h in ordered])
+    return ordered[skip : skip + limit], total, new_snapshot_id
 
 
 def build_host_facets(

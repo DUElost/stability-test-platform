@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "display_name": "休眠唤醒压测",
+  "specialty_key": "sleep",
+  "status": "ready",
   "description": "Sleep wakeup stress test (AutoTestTool): install APK, run sleep/wake cycles, collect result file",
   "lifecycle": {
     "timeout_seconds": 604800,

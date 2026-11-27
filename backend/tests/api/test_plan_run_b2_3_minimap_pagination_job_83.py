@@ -9,7 +9,15 @@ from uuid import uuid4
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus, PlanRunStatus
+from backend.models.device_lease import DeviceLease
+from backend.models.enums import (
+    DeviceStatus,
+    HostStatus,
+    JobStatus,
+    LeaseStatus,
+    LeaseType,
+    PlanRunStatus,
+)
 from backend.models.host import Device, Host
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan
@@ -616,3 +624,238 @@ class TestPlanRunSingleJobDetailAndLazySubqueries:
         assert ws["items"][0]["category"] == "AEE"
         assert ws["items"][0]["artifact_uri"] == "/nfs/db.00"
         assert "first_lines" not in ws["items"][0]
+
+
+class TestPlanRunTimeoutParityAndDisarmGuard:
+    """Q5 回归：带 disarm_guard + 有效租约的 RUNNING Job 不 500；长周期巡检超时判定三端一致。"""
+
+    def test_disarm_guard_with_active_lease_returns_200_and_consistent_stuck_across_endpoints(
+        self, client, db_session, auth_headers
+    ):
+        suffix = uuid4().hex[:6]
+        now = datetime.now(timezone.utc)
+        now_ts = now.timestamp()
+        plan, run = _seed_plan_and_run(db_session, suffix=f"dg-{suffix}")
+
+        boot_id = f"boot-{suffix}"
+        agent_instance_id = f"agent-{suffix}"
+        fencing_token = f"fence-{suffix}"
+        host = Host(
+            id=f"b23-dg-h-{suffix}",
+            hostname=f"GuardNode-{suffix}",
+            name=f"GuardNode-{suffix}",
+            ip=f"10.66.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            ip_address=f"10.66.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            status=HostStatus.ONLINE.value,
+            last_heartbeat=now - timedelta(seconds=5),
+            boot_id=boot_id,
+            last_agent_instance_id=agent_instance_id,
+        )
+        db_session.add(host)
+        db_session.flush()
+
+        dev = Device(
+            serial=f"SN-DG-{suffix}",
+            host_id=host.id,
+            model="MLD_NX3",
+            status=DeviceStatus.BUSY.value,
+            adb_state="device",
+            adb_connected=True,
+        )
+        db_session.add(dev)
+        db_session.flush()
+
+        # 构造有效 disarm_guard（处于 execute 保护窗口内），同时执行心跳已很旧（若不走护栏会被判卡住）
+        guard = {
+            "protocol": 1,
+            "t0": now_ts - 30.0,
+            "job_deadline": now_ts + 600.0,
+            "queue_remaining": 120.0,
+            "step_budgets": {},
+            "step_deadlines": {"teardown_disarm": now_ts + 300.0},
+            "step_started_at": {"teardown_disarm": now_ts - 20.0},
+            "first_server_at": now_ts - 30.0,
+            "last_server_at": now_ts - 5.0,
+            "seq": 2,
+            "progress_seq": 2,
+            "progress_seen_at": now_ts - 5.0,
+            "coordinator_seen_at": now_ts - 5.0,
+            "coordinator_seq": 2,
+            "phase": "execute",
+            "step_id": "teardown_disarm",
+            "fencing_token": fencing_token,
+            "agent_instance_id": agent_instance_id,
+            "boot_id": boot_id,
+        }
+        job = JobInstance(
+            plan_run_id=run.id,
+            plan_id=plan.id,
+            device_id=dev.id,
+            host_id=host.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {}},
+            execution_state="EXECUTING_DISARM",
+            last_execution_heartbeat_at=now - timedelta(seconds=10),
+            started_at=now - timedelta(hours=1),
+            disarm_guard=guard,
+        )
+        db_session.add(job)
+        db_session.flush()
+
+        lease = DeviceLease(
+            device_id=dev.id,
+            job_id=job.id,
+            host_id=host.id,
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=fencing_token,
+            lease_generation=1,
+            agent_instance_id=agent_instance_id,
+            acquired_at=now - timedelta(hours=1),
+            renewed_at=now - timedelta(seconds=5),
+            expires_at=now + timedelta(minutes=10),
+        )
+        db_session.add(lease)
+        db_session.commit()
+
+        r_minimap = client.get(
+            f"/api/v1/plan-runs/{run.id}/devices/minimap",
+            headers=auth_headers,
+        )
+        r_page = client.get(
+            f"/api/v1/plan-runs/{run.id}/devices",
+            params={"skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        r_legacy = client.get(
+            f"/api/v1/plan-runs/{run.id}/devices",
+            headers=auth_headers,
+        )
+        r_detail = client.get(
+            f"/api/v1/plan-runs/{run.id}/jobs/{job.id}",
+            headers=auth_headers,
+        )
+
+        assert r_minimap.status_code == 200
+        assert r_page.status_code == 200
+        assert r_legacy.status_code == 200
+        assert r_detail.status_code == 200
+
+        minimap_data = r_minimap.json()["data"]
+        page_item = r_page.json()["data"]["devices"][0]
+        legacy_item = r_legacy.json()["data"]["devices"][0]
+        detail_item = r_detail.json()["data"]
+
+        assert minimap_data["stuck_job_ids"] == []
+        assert page_item["is_stuck"] is False
+        assert legacy_item["is_stuck"] is False
+        assert detail_item["is_stuck"] is False
+        assert page_item["heartbeat_deadline_at"] == detail_item["heartbeat_deadline_at"]
+        assert legacy_item["heartbeat_deadline_at"] == detail_item["heartbeat_deadline_at"]
+
+    def test_long_patrol_interval_timeout_parity_across_minimap_table_and_detail(
+        self, client, db_session, auth_headers
+    ):
+        """长周期巡检（interval=600s → 容忍 1800s，或含退避延迟）在 Minimap、分页表格和单 Job 详情判定一致。"""
+        suffix = uuid4().hex[:6]
+        now = datetime.now(timezone.utc)
+        plan, run = _seed_plan_and_run(db_session, suffix=f"lp-{suffix}")
+        host = _make_host(
+            db_session,
+            host_id=f"b23-lp-h-{suffix}",
+            name=f"PatrolNode-{suffix}",
+            ip=f"10.67.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+        )
+
+        # 设备 1：interval_seconds=600（超时窗口 1800s），仅由 last_patrol_heartbeat_at / current_patrol_step
+        # 标识进入 patrol，心跳距今 1100s（超过默认 900s，但在 1800s 内 → 不应误报超时）
+        d_ok = Device(
+            serial=f"SN-LP-OK-{suffix}",
+            host_id=host.id,
+            model="MLD_NX3",
+            status=DeviceStatus.BUSY.value,
+            adb_state="device",
+            adb_connected=True,
+        )
+        # 设备 2：interval_seconds=600，心跳距今 2200s（超过 1800s → 三端一致判超时）
+        d_stuck = Device(
+            serial=f"SN-LP-STUCK-{suffix}",
+            host_id=host.id,
+            model="MLD_NX3",
+            status=DeviceStatus.BUSY.value,
+            adb_state="device",
+            adb_connected=True,
+        )
+        db_session.add_all([d_ok, d_stuck])
+        db_session.flush()
+
+        long_patrol_pipeline = {
+            "lifecycle": {
+                "patrol": {
+                    "interval_seconds": 600,
+                    "steps": [{"action": "script:monkey_runner"}],
+                }
+            }
+        }
+        j_ok = JobInstance(
+            plan_run_id=run.id,
+            plan_id=plan.id,
+            device_id=d_ok.id,
+            host_id=host.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def=long_patrol_pipeline,
+            execution_state="EXECUTING_STEP",
+            patrol_cycle_count=0,
+            current_patrol_step="patrol_monkey",
+            last_patrol_heartbeat_at=now - timedelta(seconds=1100),
+            last_execution_heartbeat_at=now - timedelta(seconds=1100),
+            started_at=now - timedelta(hours=2),
+            updated_at=now - timedelta(seconds=1100),
+        )
+        j_stuck = JobInstance(
+            plan_run_id=run.id,
+            plan_id=plan.id,
+            device_id=d_stuck.id,
+            host_id=host.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def=long_patrol_pipeline,
+            execution_state="EXECUTING_STEP",
+            patrol_cycle_count=3,
+            current_patrol_step="patrol_monkey",
+            last_patrol_heartbeat_at=now - timedelta(seconds=2200),
+            last_execution_heartbeat_at=now - timedelta(seconds=2200),
+            started_at=now - timedelta(hours=2),
+            updated_at=now - timedelta(seconds=2200),
+        )
+        db_session.add_all([j_ok, j_stuck])
+        db_session.commit()
+
+        r_minimap = client.get(
+            f"/api/v1/plan-runs/{run.id}/devices/minimap",
+            headers=auth_headers,
+        )
+        r_page = client.get(
+            f"/api/v1/plan-runs/{run.id}/devices",
+            params={"skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        r_det_ok = client.get(
+            f"/api/v1/plan-runs/{run.id}/jobs/{j_ok.id}",
+            headers=auth_headers,
+        )
+        r_det_stuck = client.get(
+            f"/api/v1/plan-runs/{run.id}/jobs/{j_stuck.id}",
+            headers=auth_headers,
+        )
+
+        assert r_minimap.status_code == 200
+        assert r_page.status_code == 200
+        assert r_det_ok.status_code == 200
+        assert r_det_stuck.status_code == 200
+
+        assert r_minimap.json()["data"]["stuck_job_ids"] == [j_stuck.id]
+        by_jid = {d["job_id"]: d for d in r_page.json()["data"]["devices"]}
+        assert by_jid[j_ok.id]["is_stuck"] is False
+        assert by_jid[j_stuck.id]["is_stuck"] is True
+        assert r_det_ok.json()["data"]["is_stuck"] is False
+        assert r_det_stuck.json()["data"]["is_stuck"] is True

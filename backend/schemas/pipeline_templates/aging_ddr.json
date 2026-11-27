@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "display_name": "Aging DDR 压测",
+  "specialty_key": "ops",
+  "status": "ready",
   "description": "Aging DDR stress test (FacAging com.ape.aging): preflight, pure-ADB DDR launch, DST-tolerant patrol with early PASS/FAIL exit, disarm and CSV report collection",
   "lifecycle": {
     "timeout_seconds": 604800,

@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.api.schemas.base import ORMBaseModel
+from backend.api.schemas.base import ORMBaseModel, PaginatedResponse
 from backend.core.ssh_security import (
     SshSecurityConfigError,
     normalize_known_hosts_path,
@@ -120,6 +120,10 @@ class HostOut(ORMBaseModel):
     last_heartbeat: Optional[datetime] = None
     extra: Dict[str, Any] = {}
     mount_status: Dict[str, Any] = {}
+    # #496 / #4117 Q4：列表投影（projection=list）裁剪完整挂载明细后仍保留轻量挂载摘要标量
+    mount_anomaly: bool = False
+    mount_count: int = 0
+    mount_failed_count: int = 0
     # ADR-0019 Phase 3c: 结构化 capacity/health
     capacity: Optional[Dict[str, Any]] = None
     health: Optional[Dict[str, Any]] = None
@@ -208,6 +212,12 @@ class HostLiteOut(ORMBaseModel):
     name: Optional[str] = None
     ip: Optional[str] = None
     status: str
+
+
+class HostPaginatedResponse(PaginatedResponse):
+    """#496 / #4117 Q4：主机分页包络，附带只读动态排序快照令牌以防止跨页重复/漏项。"""
+
+    snapshot_id: Optional[str] = None
 
 
 class HostFacetsOut(BaseModel):
