@@ -506,6 +506,7 @@ async def _reconcile_unconfirmed_claims(db) -> int:
             JobInstance.last_patrol_heartbeat_at.is_(None),
             JobInstance.last_progress_at.is_(None),
             JobInstance.disarm_guard.is_(None),
+            JobInstance.finishing_guard.is_(None),
             JobInstance.started_at.is_not(None),
             JobInstance.started_at < cutoff,
             DeviceLease.lease_type == LeaseType.JOB.value,
@@ -543,6 +544,7 @@ async def _reconcile_unconfirmed_claims(db) -> int:
                     or job.last_patrol_heartbeat_at is not None
                     or job.last_progress_at is not None
                     or job.disarm_guard is not None
+                    or getattr(job, "finishing_guard", None) is not None
                     or job.started_at is None
                 ):
                     continue
@@ -744,16 +746,23 @@ async def _abort_reaper_recheck_job(
     current_abort, _ = _abort_reap_clock_pure(context, job.id, job.host_id)
     if current_abort is None:
         return False, None
-    if job.disarm_guard is not None:
+    finishing = getattr(job, "finishing_guard", None)
+    legacy_disarm = job.disarm_guard
+    active_guard = finishing if isinstance(finishing, dict) else legacy_disarm
+    if isinstance(active_guard, dict) and active_guard.get("t0") is not None:
         # A repeated exit cannot move a negotiated tail's earliest anchor.
-        current_abort = min(current_abort, datetime.fromtimestamp(job.disarm_guard["t0"], timezone.utc))
+        current_abort = min(
+            current_abort,
+            datetime.fromtimestamp(active_guard["t0"], timezone.utc),
+        )
     if (now - current_abort).total_seconds() <= _ABORT_REAPER_GRACE_SECONDS:
         return False, None
     abort_at = current_abort
-    # #3723 §3.0 第 5 条：EXECUTING_DISARM + 进度新鲜 → 续期至 abort_at+timeout
+    # ADR-0065 / B12 U1：统一 FinishingGuard 入口（含 teardown_disarm 与预留 atomic_commit）
+    has_guard_column = finishing is not None or legacy_disarm is not None
     guarded = (
         await db.run_sync(lambda sync_db: job_guard_deadline(sync_db, job, now)) is not None
-        if job.disarm_guard is not None else
+        if has_guard_column else
         abort_at is not None and _disarm_grace_defers_reap(job, abort_at, now)
     )
     if guarded:

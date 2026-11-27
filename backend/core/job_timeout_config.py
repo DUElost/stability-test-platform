@@ -311,8 +311,12 @@ def disarm_grace_defers_reap(
     progress_freshness_seconds: int | None = None,
 ) -> bool:
     """True → 本轮不回收（解除中且进度新鲜，且未超 abort_at+timeout 上限）。"""
-    # A negotiated guard never falls back to v1.0's looser progress clock.
-    if getattr(job, "disarm_guard", None) is not None:
+    # A negotiated FinishingGuard / B6 disarm_guard never falls back to v1.0's
+    # looser progress clock — callers must use job_guard_deadline instead.
+    if (
+        getattr(job, "finishing_guard", None) is not None
+        or getattr(job, "disarm_guard", None) is not None
+    ):
         return False
     if getattr(job, "execution_state", None) != EXECUTING_DISARM:
         return False

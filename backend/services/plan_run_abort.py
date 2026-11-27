@@ -526,16 +526,28 @@ def abort_plan_run(
                 "acknowledged_job_ids": existing_ack,
             }
         else:
-            abort_requested_payload = {
-                "at": now.isoformat(),
-                "reason": reason,
-                "triggered_by": triggered_by,
-                "deadline_at": (
-                    now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
-                ).isoformat(),
-                "requested_job_ids": list(abort_requested_jobs),
-                "acknowledged_job_ids": [],
-            }
+            # ADR-0043 D2 / ADR-0065 D4.5：run 级重复 abort **首次写入、后续不重置**
+            # `at` / `deadline_at`，且不得清空已有 `acknowledged_job_ids`。
+            existing_run = existing_abort if isinstance(existing_abort, dict) else {}
+            if existing_run.get("at"):
+                abort_requested_payload = {
+                    **existing_run,
+                    "reason": reason,
+                    "triggered_by": triggered_by,
+                    "requested_job_ids": list(abort_requested_jobs),
+                    "acknowledged_job_ids": existing_ack,
+                }
+            else:
+                abort_requested_payload = {
+                    "at": now.isoformat(),
+                    "reason": reason,
+                    "triggered_by": triggered_by,
+                    "deadline_at": (
+                        now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
+                    ).isoformat(),
+                    "requested_job_ids": list(abort_requested_jobs),
+                    "acknowledged_job_ids": [],
+                }
         run_ctx["abort_requested"] = abort_requested_payload
         # #1928 注记（**已失效**，ADR-0043 v1.1 / #2154）：本写入**曾**重置 run 级
         # `at`/`deadline_at`，使每次 host 级 abort 都把整轮宽限延长为「本次请求 +

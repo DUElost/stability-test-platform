@@ -775,3 +775,76 @@ def test_run_level_abort_does_not_write_host_clock(db_session, abort_chain):
     assert not ctx.get("abort_requested_hosts"), (
         "run 级请求不得生成 host 级时钟（主体不得串台）"
     )
+
+
+def test_c1_run_level_abort_clock_not_reset_by_later_request(db_session, abort_chain):
+    """B12 U1 / ADR-0065 D4.5 / C1：run 级重复 abort 不得重置首次 at/deadline_at，
+    也不得清空 acknowledged_job_ids。"""
+    plan = abort_chain["plan"]
+    past = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    past_deadline = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    pr = _make_plan_run(db_session, plan.id, run_context={
+        "abort_requested": {
+            "at": past,
+            "deadline_at": past_deadline,
+            "reason": "first",
+            "requested_job_ids": [],
+            "acknowledged_job_ids": [4242],
+        },
+    })
+    job = _make_job(
+        db_session, pr.id, plan.id, abort_chain["dev1"].id, "h-abort",
+        status=JobStatus.RUNNING.value,
+    )
+
+    abort_plan_run(pr.id, db=db_session, reason="second")
+
+    db_session.expire_all()
+    abort = db_session.get(PlanRun, pr.id).run_context.get("abort_requested") or {}
+    assert abort.get("at") == past
+    assert abort.get("deadline_at") == past_deadline
+    assert abort.get("acknowledged_job_ids") == [4242]
+    assert abort.get("reason") == "second"
+    assert job.id in (abort.get("requested_job_ids") or [])
+
+
+def test_c1_run_and_host_abort_clocks_coexist_min_via_reap_clock(db_session, abort_chain):
+    """C1：run 级与 host 级 abort 并存时，abort_reap_clock 取较早者。"""
+    from backend.core.job_timeout_config import abort_reap_clock
+    from backend.services.plan_run_context import max_abort_intensity, min_abort_clock
+
+    plan = abort_chain["plan"]
+    early = datetime.now(timezone.utc) - timedelta(seconds=200)
+    late = datetime.now(timezone.utc) - timedelta(seconds=30)
+    pr = _make_plan_run(db_session, plan.id, run_context={
+        "abort_requested": {
+            "at": early.isoformat(),
+            "deadline_at": early.isoformat(),
+            "reason": "run-first",
+            "requested_job_ids": [],
+            "acknowledged_job_ids": [],
+        },
+        "abort_requested_hosts": {
+            "h-abort": {
+                "at": late.isoformat(),
+                "deadline_at": late.isoformat(),
+                "reason": "host-later",
+            },
+        },
+    })
+    job = _make_job(
+        db_session, pr.id, plan.id, abort_chain["dev1"].id, "h-abort",
+        status=JobStatus.RUNNING.value,
+    )
+
+    # 再次 run 级 abort：不得把 early 重置
+    abort_plan_run(pr.id, db=db_session, reason="run-again")
+    db_session.expire_all()
+    ctx = db_session.get(PlanRun, pr.id).run_context
+    assert (ctx.get("abort_requested") or {}).get("at") == early.isoformat()
+
+    at, subject = abort_reap_clock(ctx, job.id, "h-abort")
+    assert subject == "run"
+    assert at is not None and abs((at - early).total_seconds()) < 1
+    assert min_abort_clock(early, late) == early
+    assert max_abort_intensity(False, True) == "force"

@@ -39,6 +39,9 @@ class JobInstance(Base):
     # ADR-0061 D4 / #3723 U2：按专项持久化解除结果（六值）；不写 status_reason
     disarm_results     = Column(JSONB, nullable=True)
     disarm_guard       = Column(JSONB, nullable=True)
+    # ADR-0065 / B12 U1：统一 FinishingGuard（兼容并吸收 B6 disarm_guard）
+    finishing_guard    = Column(JSONB, nullable=True)
+    negotiated_capabilities = Column(JSONB, nullable=True)
 
     # ── ADR-0022: patrol heartbeat aggregation ──
     # 取代每周期 per-step step_trace 的写入；patrol 成功 step 不再写 trace,

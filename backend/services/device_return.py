@@ -27,8 +27,20 @@ from backend.models.audit import AuditLog
 from backend.services.audit_writer import record_audit, record_audit_async
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS, running_heartbeat_timeout_seconds, abort_reap_clock
 from backend.agent.contracts.device_return import (
-    disarm_guard_deadline, freeze_disarm_guard, receive_disarm_evidence, select_disarm_steps,
+    freeze_disarm_guard, receive_disarm_evidence, select_disarm_steps,
     probe_result_policy, step_version_of, PLATFORM_INTERRUPTED_EXIT_CODES,
+)
+from backend.agent.contracts.finishing_guard import (
+    FINISHING_KIND_TEARDOWN_DISARM,
+    coerce_job_finishing_guard,
+    finishing_guard_deadline,
+    finishing_kind_of,
+    is_clock_regressed,
+    mark_clock_regressed,
+)
+from backend.models.finishing_guard_admission import (
+    FINISHING_GUARD_ADMISSION_ROW_ID,
+    FinishingGuardAdmission,
 )
 
 import logging
@@ -1603,19 +1615,53 @@ def guard_owner_valid(db: Session, job: JobInstance, now: datetime, guard: Mappi
                 and 0 <= stamp - _u8_timestamp(row.last_heartbeat) < HOST_HEARTBEAT_TIMEOUT_SECONDS)
 
 
-def job_guard_deadline(db: Session, job: JobInstance, now: datetime, *, read_only: bool = False) -> datetime | None:
+def finishing_guard_admission_open(db: Session) -> bool:
+    """读全局准入闸门单行（ADR-0065 D5.8）；缺行视为开放（迁移前兼容）。
 
+    U4 的预登记事务以 ``FOR SHARE`` 锁本行；回滚关门以 ``FOR UPDATE`` 置
+    ``admission_open=false``。本函数供控制面只读探测，不获取行锁。
+    """
+    row = db.get(FinishingGuardAdmission, FINISHING_GUARD_ADMISSION_ROW_ID)
+    if row is None:
+        return True
+    return bool(row.admission_open)
+
+
+def job_guard_deadline(db: Session, job: JobInstance, now: datetime, *, read_only: bool = False) -> datetime | None:
+    """统一 FinishingGuard 入口（ADR-0065 / B12 U1）。
+
+    优先读 ``job.finishing_guard``；缺省时吸收遗留 ``job.disarm_guard`` 为
+    ``kind=teardown_disarm``。候选筛选与行锁 CAS 复读共用本函数。
+    """
     if job.status != "RUNNING":
         return None
-    guard = job.disarm_guard
-    if not isinstance(guard, Mapping):
+    finishing = getattr(job, "finishing_guard", None)
+    legacy = getattr(job, "disarm_guard", None)
+    guard = coerce_job_finishing_guard(finishing, legacy)
+    if guard is None:
         return None
-    if now.timestamp() < guard.get("last_server_at", now.timestamp()):
+    stamp_now = now.timestamp()
+    last_server = guard.get("last_server_at", stamp_now)
+    if type(last_server) not in (int, float):
+        last_server = stamp_now
+    if stamp_now < float(last_server):
         if not read_only:
-            job.disarm_guard = {**guard, "reason": "clock_regressed"}
+            invalidated = mark_clock_regressed(guard)
+            if isinstance(finishing, Mapping):
+                job.finishing_guard = invalidated
+            if finishing_kind_of(guard) == FINISHING_KIND_TEARDOWN_DISARM and isinstance(legacy, Mapping):
+                job.disarm_guard = {**legacy, "reason": "clock_regressed"}
         return None
-    stamp = disarm_guard_deadline(
-        guard, now=now.timestamp(), owner_valid=guard_owner_valid(db, job, now, guard),
+    if is_clock_regressed(guard):
+        return None
+    owner_payload = guard
+    if finishing_kind_of(guard) == FINISHING_KIND_TEARDOWN_DISARM and isinstance(legacy, Mapping):
+        # Ownership tokens still live on the B6 wire column for teardown.
+        owner_payload = legacy if not isinstance(finishing, Mapping) else guard
+    stamp = finishing_guard_deadline(
+        guard,
+        now=stamp_now,
+        owner_valid=guard_owner_valid(db, job, now, owner_payload),
         execution_heartbeat_at=_u8_timestamp(job.last_execution_heartbeat_at),
         execution_heartbeat_timeout_seconds=running_heartbeat_timeout_seconds(job),
     )

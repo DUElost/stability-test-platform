@@ -4,6 +4,7 @@ from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
 from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.device_log_event import DeviceLogEvent
+from backend.models.finishing_guard_admission import FinishingGuardAdmission
 from backend.models.host import Device, Host
 from backend.models.issue_fact import (
     CompatRerun,
@@ -56,6 +57,7 @@ __all__ = [
     "DeviceLease",
     "DeviceReturnDebt",
     "DeviceLogEvent",
+    "FinishingGuardAdmission",
     "CompatRerun",
     "DeliveryVersion",
     "EvidencePublication",
