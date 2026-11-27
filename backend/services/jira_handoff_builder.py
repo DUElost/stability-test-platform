@@ -1000,16 +1000,31 @@ def create_handoff_bundle(
     return manifest_body
 
 
+def _find_bundle_dir_untainted(base_dir: Path, clean_id: str) -> Path:
+    """从受控根目录直接枚举定位 bundle 目录，切断用户输入直接拼接路径的污点链。"""
+    if not base_dir.is_dir():
+        raise JiraHandoffError(404, "handoff_bundle_not_found", f"handoff bundle not found: {clean_id}")
+    resolved_base = base_dir.resolve(strict=True)
+    for child in resolved_base.iterdir():
+        if child.name != clean_id:
+            continue
+        if child.is_symlink() or not child.is_dir():
+            raise JiraHandoffError(400, "handoff_symlink_rejected", "handoff bundle dir must not be a symlink")
+        return child
+    raise JiraHandoffError(404, "handoff_bundle_not_found", f"handoff bundle not found: {clean_id}")
+
+
 def _load_manifest_strict(handoff_id: str, storage_root: Optional[str] = None) -> tuple[Path, dict[str, Any]]:
     clean_id = validate_handoff_id(handoff_id)
     base_dir = _resolve_handoff_base_dir(storage_root)
-    bundle_dir = base_dir / clean_id
+    bundle_dir = _find_bundle_dir_untainted(base_dir, clean_id)
     manifest_path = bundle_dir / "manifest.json"
     if not manifest_path.exists():
         raise JiraHandoffError(404, "handoff_bundle_not_found", f"handoff bundle not found: {clean_id}")
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise JiraHandoffError(400, "handoff_symlink_rejected", "handoff manifest path must not follow symlinks")
     resolved = manifest_path.resolve(strict=True)
-    expected = (base_dir.resolve(strict=False) / clean_id / "manifest.json")
-    if resolved != expected or manifest_path.is_symlink():
+    if resolved != manifest_path:
         raise JiraHandoffError(400, "handoff_symlink_rejected", "handoff manifest path must not follow symlinks")
     try:
         data = json.loads(resolved.read_text(encoding="utf-8"))
@@ -1080,8 +1095,13 @@ def resolve_handoff_download_file(
     storage_root: Optional[str] = None,
 ) -> tuple[Path, str, str]:
     """按白名单定位 A 段可下载产物，拒绝越根与符号链接（对齐 ``delivery_download.py``）。"""
-    kind = (artifact_kind or "").strip()
-    if kind not in HANDOFF_DOWNLOAD_KINDS:
+    _kind_map = {
+        "manifest": "manifest",
+        "preview_xls": "preview_xls",
+        "review_workbook": "review_workbook",
+    }
+    kind = _kind_map.get((artifact_kind or "").strip())
+    if kind is None:
         raise JiraHandoffError(
             400,
             "handoff_invalid_artifact_kind",
@@ -1092,7 +1112,7 @@ def resolve_handoff_download_file(
 
     if kind == "manifest":
         target = bundle_dir / "manifest.json"
-        return target.resolve(strict=True), f"{handoff_id}-manifest.json", "application/json"
+        return target.resolve(strict=True), f"{bundle_dir.name}-manifest.json", "application/json"
 
     build_entries = [b for b in (manifest.get("builds") or []) if isinstance(b, dict)]
     chosen: Optional[dict[str, Any]] = None
