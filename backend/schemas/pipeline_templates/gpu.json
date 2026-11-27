@@ -52,6 +52,17 @@
         "timeout_seconds": 900,
         "retry": 1,
         "params": {}
+      },
+      {
+        "step_id": "log_prepare",
+        "action": "script:log_prepare",
+        "version": "1.0.0",
+        "timeout_seconds": 120,
+        "retry": 1,
+        "params": {
+          "mobilelog_size_mb": 10240,
+          "ylog_size_mb": 10240
+        }
       }
     ],
     "patrol": {

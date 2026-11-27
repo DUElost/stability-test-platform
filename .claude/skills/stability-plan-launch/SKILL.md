@@ -47,16 +47,20 @@ PowerCycle、Sleep、GPU、Aging DDR、DDR、Standby 等）。刷机类前置 Pl
   `check_device` → `sync_device_time`（`version: "1.0.1"`，`timeout_seconds: 60`，`retry: 1`，
   `params: {"timezone": "Asia/Shanghai"}`）→ `unisoc_sysdump_config`（`version: "1.0.0"`，
   `timeout_seconds: 60`，`retry: 1`，`params: {"enabled": true}`；仅展锐平台生效，非展锐平台自动
-  `skipped=true`）→ `ensure_root` / `clean_env` / `aee_prepare`（按专项需要）→ 专项 `*_setup`。
+  `skipped=true`）→ `ensure_root` / 清理步骤（按专项需要）→ `log_prepare`（`version: "1.0.0"`，
+  按芯片自动配置并回读 MTK `mobilelog` / 展锐 `ylog`）→ 专项启动步骤。
+- 含旧日志清理动作的专项（`monkey_setup`、`gpu_setup`、`clean_env`），操作者必须把
+  `log_prepare@1.0.0` 排在清理步骤之后，避免刚开启的日志目录被清理步骤删除；GPU 专项通过模板参数
+  将 `mobilelog_size_mb` 与 `ylog_size_mb` 显式设为 `10240`。
 - 针对展锐（UNISOC）设备的稳定性测试 Plan，操作者必须在 `sync_device_time` 之后接入
   `unisoc_sysdump_config@1.0.0`（`params.enabled=true`），确保首次命中 Kernel Panic / Watchdog 时
-  保留完整内存现场；刷机类 Plan 不得接入该步骤。
-- `sync_device_time` 必须排在 `clean_env`、`aee_prepare`、logger 启动及所有测试负载启动之前，
-  不得在日志服务已产出文件后再跳变设备时钟（防打乱 `mobilelog` 文件名时间排序与关联窗口）。
+  保留完整内存现场；刷机类 Plan 不得接入 `unisoc_sysdump_config` 与 `log_prepare`。
+- `sync_device_time` 必须排在 `clean_env`、`log_prepare`、logger 启动及所有测试负载启动之前，
+  不得在日志服务已产出文件后再跳变设备时钟（防打乱 `mobilelog` / `ylog` 文件名时间排序与关联窗口）。
 - `sync_device_time` 的 `params` 必须显式固定 `timezone`（默认 `"Asia/Shanghai"`），不得留空依赖单台
   Agent host 的本地 `/etc/localtime` 配置。
-- 9 个内置稳定性模板（`backend/schemas/pipeline_templates/{aging_ddr,ddr,gpu,monkey,monkey_watcher_patrol,mtbf,powercycle,sleep,standby}.json`）
-  均已默认接入 `sync_device_time@1.0.1` 与 `unisoc_sysdump_config@1.0.0`；新建 Plan 时操作者建议直接从内置模板派生，避免手工漏配。
+- 10 个内置稳定性模板（`backend/schemas/pipeline_templates/{aging_ddr,ddr,gpu,monkey,monkey_watcher_patrol,mtbf,powercycle,powercycle_adb,sleep,standby}.json`）
+  均已默认接入 `sync_device_time@1.0.1`、`unisoc_sysdump_config@1.0.0` 与 `log_prepare@1.0.0`；新建 Plan 时操作者建议直接从内置模板派生，避免手工漏配。
 - 为存量稳定性 Plan 追加或更新步骤时，操作者必须同步核对 `specialty_key`、精确 `script_version`、
   `barrier_timeout_seconds`（含长耗时 `init` 前置时抬高预算）、以及 `stall_seconds`（仅可用于具备
   `progress_stamps` 能力的脚本）。
