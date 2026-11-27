@@ -1,0 +1,176 @@
+"""B11-U1（#4199 / #4174）A 段只读提单表单生成 API 的 Pydantic v2 Schema。"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class HandoffPreflightIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan_run_ids: list[int] = Field(..., min_length=1, max_length=20)
+    platform: str = Field(default="mtk", description="一期仅支持 mtk；非 mtk 返回 400")
+    snapshot_cutoff: Optional[datetime] = Field(
+        default=None,
+        description="冻结快照截止时间（默认当前 UTC）",
+    )
+
+
+class HandoffBundleCreateIn(HandoffPreflightIn):
+    builds: Optional[list[str]] = Field(
+        default=None,
+        description="可选：仅针对指定 build 列表生成，空则覆盖全部 build",
+    )
+    allow_incomplete_coverage: bool = Field(
+        default=False,
+        description="是否显式放行缺 host 覆盖（放行后仍在 manifest 标注 coverage_complete=false）",
+    )
+    target_folder_hint: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="可选：仅作预览 Path 占位提示，阶段 1 不写 15.4 共享根",
+    )
+
+
+class HandoffRunCoverageOut(BaseModel):
+    plan_run_id: int
+    plan_name: str
+    status: str
+    partition_mode: str
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    project_key: Optional[str] = None
+    jira_project_key: Optional[str] = None
+    hosts_expected: list[str]
+    hosts_with_reports: list[str]
+    missing_hosts: list[str]
+    mapping_status: str
+
+
+class HandoffIdentityGateOut(BaseModel):
+    total_org_rows: int
+    unique_events: int
+    keyed_rows: int
+    compat_fallback_rows: int
+    unbound_rows: int
+    after_cutoff_skipped_rows: int
+    unbound_by_reason: dict[str, int]
+
+
+class HandoffBuildPreviewOut(BaseModel):
+    build: str
+    product: str = ""
+    device_count: int
+    unique_event_count: int
+
+
+class HandoffGatesOut(BaseModel):
+    coverage_complete: bool
+    identity_degraded: bool
+    blocking_issues: list[str]
+    warnings: list[str]
+
+
+class HandoffPreflightOut(BaseModel):
+    platform: str
+    snapshot_cutoff: str
+    first_run_started_at: Optional[str] = None
+    runs: list[HandoffRunCoverageOut]
+    identity_gate: HandoffIdentityGateOut
+    builds: list[HandoffBuildPreviewOut]
+    gates: HandoffGatesOut
+
+
+class HandoffArtifactMetaOut(BaseModel):
+    rel_path: str
+    filename: str
+    sha256: str
+    size_bytes: int
+
+
+class HandoffBaselineDistOut(BaseModel):
+    current_only: int
+    mixed: int
+    baseline_only: int
+
+
+class HandoffRepresentativeOut(BaseModel):
+    dedup_key: str
+    identity_source: str
+    occurrence_key: Optional[str] = None
+    dle_id: Optional[str] = None
+    serial: str
+    entry: str
+    evidence_location: str
+    evidence_tier: str
+
+
+class HandoffIssueOut(BaseModel):
+    issue_index: int
+    build: str
+    count: int
+    device_count: int
+    device_ids: list[str]
+    source_runs: list[int]
+    baseline_class: str
+    clock_fallback_count: int
+    preview_path: str
+    representative: HandoffRepresentativeOut
+    member_dedup_keys: list[str]
+    form_fields: dict[str, str]
+
+
+class HandoffBuildBundleOut(BaseModel):
+    build: str
+    build_slug: str
+    product: str = ""
+    device_count: int
+    unique_events: int
+    issue_count: int
+    grouped_events: int
+    filtered_events: int
+    filtered_by_reason: dict[str, int]
+    baseline_distribution: HandoffBaselineDistOut
+    artifacts: dict[str, HandoffArtifactMetaOut]
+    issues: list[HandoffIssueOut]
+    filtered_rows: list[dict[str, Any]]
+    events: list[dict[str, Any]]
+
+
+class HandoffBundleSummaryOut(BaseModel):
+    handoff_id: str
+    status: str
+    platform: str
+    created_at: str
+    created_by: str
+    plan_run_ids: list[int]
+    build_count: int
+    issue_count_total: int
+    coverage_complete: bool
+    manifest_sha256: str
+
+
+class HandoffBundleOut(BaseModel):
+    schema_name: str = Field(alias="schema")
+    schema_version: str
+    handoff_id: str
+    status: str
+    platform: str
+    created_at: str
+    created_by: str
+    plan_run_ids: list[int]
+    snapshot_cutoff: str
+    first_run_started_at: Optional[str] = None
+    allow_incomplete_coverage: bool
+    target_folder_hint: Optional[str] = None
+    gates: HandoffGatesOut
+    identity_gate: HandoffIdentityGateOut
+    runs: list[dict[str, Any]]
+    unbound_rows: list[dict[str, Any]]
+    builds: list[HandoffBuildBundleOut]
+    manifest_sha256: str
+
+    model_config = ConfigDict(populate_by_name=True)
