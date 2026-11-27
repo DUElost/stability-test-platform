@@ -194,6 +194,7 @@ def test_mtbf_template_contains_complete_lifecycle_steps():
         "script:sync_device_time",
         "script:unisoc_sysdump_config",
         "script:ensure_root",
+        "script:log_prepare",
         "script:mtbf_setup",
     ]
     assert lc["init"][-1]["version"] == "1.4.2"
@@ -237,3 +238,46 @@ def test_script_tag_registry_covers_all_template_scripts_with_valid_metadata():
 
     fallback = get_script_tags("nonexistent_custom_script")
     assert fallback == {"role": "ops", "specialties": [], "platforms": []}
+
+
+def test_stability_templates_pin_log_prepare_after_cleanup_and_exclude_flash():
+    template_files = sorted(TEMPLATES_DIR.glob("*.json"))
+    stability_templates = [p for p in template_files if not p.name.startswith("flash_")]
+    flash_templates = [p for p in template_files if p.name.startswith("flash_")]
+    assert len(stability_templates) == 10
+
+    for path in stability_templates:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        init = data["lifecycle"]["init"]
+        actions = [s.get("action") for s in init]
+        assert "script:log_prepare" in actions, f"{path.name} missing script:log_prepare"
+        idx = actions.index("script:log_prepare")
+        step = init[idx]
+        assert step["step_id"] == "log_prepare"
+        assert step["version"] == "1.0.0"
+        assert idx > actions.index("script:sync_device_time")
+        assert idx > actions.index("script:unisoc_sysdump_config")
+
+        if "script:monkey_setup" in actions:
+            assert idx > actions.index("script:monkey_setup"), (
+                f"{path.name}: log_prepare must run after monkey_setup log cleanup"
+            )
+            assert idx < actions.index("script:monkey_launch"), (
+                f"{path.name}: log_prepare must run before monkey_launch"
+            )
+        if "script:gpu_setup" in actions:
+            assert idx > actions.index("script:gpu_setup"), (
+                f"{path.name}: log_prepare must run after gpu_setup log cleanup"
+            )
+            assert step["params"].get("mobilelog_size_mb") == 10240
+            assert step["params"].get("ylog_size_mb") == 10240
+        else:
+            assert step["params"].get("mobilelog_size_mb") == 4096
+            assert step["params"].get("ylog_size_mb") == 4096
+
+    for path in flash_templates:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        actions = [s.get("action") for s in data["lifecycle"]["init"]]
+        assert "script:log_prepare" not in actions, (
+            f"flash template {path.name} should not run log_prepare before flashing"
+        )

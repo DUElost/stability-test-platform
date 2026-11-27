@@ -47,6 +47,7 @@ PINNED_SCRIPTS: dict[str, str] = {
     "script:gpu_disarm": "gpu_disarm",
     "script:gpu_finish": "gpu_finish",
     "script:gpu_setup": "gpu_setup",
+    "script:log_prepare": "log_prepare",
     "script:monkey_check": "monkey_check",
     "script:monkey_launch": "monkey_launch",
     "script:monkey_resource_push": "monkey_resource_push",
