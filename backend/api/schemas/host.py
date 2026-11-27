@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.api.schemas.base import ORMBaseModel
+from backend.api.schemas.base import ORMBaseModel, PaginatedResponse
 from backend.core.ssh_security import (
     SshSecurityConfigError,
     normalize_known_hosts_path,
@@ -120,6 +120,10 @@ class HostOut(ORMBaseModel):
     last_heartbeat: Optional[datetime] = None
     extra: Dict[str, Any] = {}
     mount_status: Dict[str, Any] = {}
+    # #496 / #4117 Q4：列表投影（projection=list）裁剪完整挂载明细后仍保留轻量挂载摘要标量
+    mount_anomaly: bool = False
+    mount_count: int = 0
+    mount_failed_count: int = 0
     # ADR-0019 Phase 3c: 结构化 capacity/health
     capacity: Optional[Dict[str, Any]] = None
     health: Optional[Dict[str, Any]] = None
@@ -169,9 +173,10 @@ class HostOut(ORMBaseModel):
     emptied_at: Optional[datetime] = None
     emptied_by: Optional[str] = None
     emptied_reason: Optional[str] = None
-    # 台账在册（未退役）设备数：用于区分「从未/不再挂设备的空置主机」与
-    # 「台账有设备但 USB 空树的疑似失明主机」（对齐 StabilityHostUsbBlind 口径）。
+    # 台账在册（未退役）设备数及最近活跃时间：用于区分「长期空置主机」与
+    # 「近期（72h 内）失联的疑似失明主机」（对齐 StabilityHostUsbBlind 口径）。
     ledger_device_count: Optional[int] = None
+    ledger_latest_seen_at: Optional[datetime] = None
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod
@@ -207,6 +212,12 @@ class HostLiteOut(ORMBaseModel):
     name: Optional[str] = None
     ip: Optional[str] = None
     status: str
+
+
+class HostPaginatedResponse(PaginatedResponse):
+    """#496 / #4117 Q4：主机分页包络，附带只读动态排序快照令牌以防止跨页重复/漏项。"""
+
+    snapshot_id: Optional[str] = None
 
 
 class HostFacetsOut(BaseModel):

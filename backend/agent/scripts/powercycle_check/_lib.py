@@ -46,6 +46,18 @@ _RESULT_PATHS = (
     "/sdcard/AutoTestTool/PowerCycle/powercycle_result.txt",
 )
 
+# Tinno 原厂 R30 AutoTestTool（.reboot.RebootService + restart_preference.xml）
+_R30_SERVICE_TOKEN = "RebootService"
+_R30_PREFS_FILE = "restart_preference.xml"
+_R30_RESULT_PATHS = (
+    f"/sdcard/Android/data/{_PKG}/files/AutoTestTool/ShutdownTest/powercycle_result.txt",
+)
+_SUPPORTED_APK_FLAVORS = ("stp", "r30")
+_R30_CYCLE_RE = re.compile(r"The\s+(\d+)\s+time\s+implement\s+result-+([A-Za-z]+)")
+_R30_SCREEN_RE = re.compile(r"screenOnCheck\s+(true|false),\s*screenOffCheck\s+(true|false)")
+_R30_TOTAL_RE = re.compile(r"Total\s*:\s*(\d+)")
+_R30_FAIL_RE = re.compile(r"Fail\s*:\s*(\d+)")
+
 # lib.ps1:Read-PowerCycleConfig 内嵌默认值（文件缺键时用）
 _DEFAULT_TEST_TIMES = 100
 _DEFAULT_MODE = "reboot"
@@ -622,8 +634,71 @@ def install_apk(apk: Path) -> None:
         raise RuntimeError(f"安装失败: {apk.name}: {out.strip() or 'rc=%d' % rc}")
 
 
-def service_alive() -> bool:
-    return "PowerCycleService" in adb_shell(f"dumpsys activity services {_PKG}", timeout=30)
+def resolve_apk_flavor(cfg: dict) -> str:
+    flavor = str(param_or_env(cfg, "apk_flavor", "STP_POWER_CYCLE_APK_FLAVOR", "stp")).strip().lower()
+    if flavor not in _SUPPORTED_APK_FLAVORS:
+        raise ValueError(f"apk_flavor={flavor!r} 不支持：可选 {_SUPPORTED_APK_FLAVORS}")
+    return flavor
+
+
+def service_alive(apk_flavor: str = "stp") -> bool:
+    token = _R30_SERVICE_TOKEN if apk_flavor == "r30" else "PowerCycleService"
+    return token in adb_shell(f"dumpsys activity services {_PKG}", timeout=30)
+
+
+def get_r30_prefs_xml() -> str:
+    """读取 Tinno R30 ``restart_preference.xml``（root 优先，无 root 回落 run-as）。"""
+    path = f"{_PREFS_DIR}/{_R30_PREFS_FILE}"
+    if is_root():
+        rc, out, _ = adb("shell", f"cat {path} 2>&1", timeout=30)
+        text = (out or "").strip()
+        return text if rc == 0 and "<map" in text else ""
+    rc, out, _ = adb("shell", f"run-as {_PKG} cat shared_prefs/{_R30_PREFS_FILE}", timeout=30)
+    text = (out or "").strip()
+    return text if rc == 0 and "<map" in text else ""
+
+
+def _push_r30_prefs_xml(content: str) -> None:
+    """写 R30 ``restart_preference.xml`` 并对齐属主与 SELinux context。"""
+    target = f"{_PREFS_DIR}/{_R30_PREFS_FILE}"
+    if is_root():
+        uid = get_app_uid()
+        adb_shell(f"mkdir -p {_PREFS_DIR}", timeout=30)
+        with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
+            tmp.write(content.encode("utf-8"))
+            tmp_path = tmp.name
+        try:
+            _push_file(Path(tmp_path), target)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+        adb_shell(f"chown {uid}:{uid} {target} && chmod 660 {target}", timeout=30)
+        ctx_rc, ctx_out, _ = adb("shell", f"ls -Zd {_PREFS_DIR.rsplit('/', 1)[0]}", timeout=15)
+        fields = (ctx_out or "").strip().split()
+        if ctx_rc == 0 and fields and fields[0].startswith("u:object_r:"):
+            adb("shell", f"chcon {fields[0]} {_PREFS_DIR} {target}", timeout=30)
+        return
+    cmd = [adb_path(), "-s", device_serial(), "shell", f"run-as {_PKG} sh -c 'cat > shared_prefs/{_R30_PREFS_FILE}'"]
+    result = subprocess.run(cmd, input=content.encode("utf-8"), capture_output=True, timeout=60)
+    if result.returncode != 0:
+        raise RuntimeError(f"run-as 写 R30 prefs 失败: {decode_device_output(result.stderr).strip() or 'rc=%d' % result.returncode}")
+
+
+def pause_task_r30() -> None:
+    """R30 窗口收取暂停：先 force-stop 再写 reboot_service_going=false。"""
+    adb_shell(f"am force-stop {_PKG}", timeout=30)
+    xml = get_r30_prefs_xml()
+    if not xml:
+        raise RuntimeError("R30 prefs 读取失败：不执行 pause 写入，请重试")
+    _push_r30_prefs_xml(update_prefs_field(xml, "reboot_service_going", "false", "boolean"))
+
+
+def resume_task_r30() -> None:
+    """R30 窗口收取恢复：写 reboot_service_going=true 后无 extras 拉起 RebootService 续跑。"""
+    xml = get_r30_prefs_xml()
+    if not xml:
+        raise RuntimeError("R30 prefs 读取失败：不执行 resume 写入，请重试")
+    _push_r30_prefs_xml(update_prefs_field(xml, "reboot_service_going", "true", "boolean"))
+    adb_shell(f"am start-foreground-service -n {_PKG}/.reboot.RebootService", timeout=30)
 
 
 def start_task() -> None:
@@ -720,9 +795,60 @@ def stop_task(force: bool) -> None:
         raise RuntimeError("停止 PowerCycleService 失败（优雅停止 + force-stop 均未生效）")
 
 
-def result_paths() -> tuple[str, ...]:
-    """主路径 + 旧路径兜底（设备端 getResultDir 回退同款）。"""
-    return _RESULT_PATHS
+def result_paths(apk_flavor: str = "stp") -> tuple[str, ...]:
+    """主路径 + 旧路径兜底（设备端 getResultDir 回退同款；r30 走 ShutdownTest）。"""
+    return _R30_RESULT_PATHS if apk_flavor == "r30" else _RESULT_PATHS
+
+
+def parse_r30_powercycle_result(content: bytes) -> dict:
+    """解析 Tinno R30 ``ShutdownTest/powercycle_result.txt`` → 与 STP 同形摘要 + entries。"""
+    entries = []
+    reboot_failures = 0
+    cycles_done = 0
+    expected_cycles = 0
+    final_status = None
+    saw_summary = False
+    summary_fail = 0
+    for raw_line in content.decode("utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        cyc = _R30_CYCLE_RE.search(line)
+        if cyc:
+            n = int(cyc.group(1))
+            res = cyc.group(2).upper()
+            cycles_done = max(cycles_done, n)
+            if res != "PASS":
+                reboot_failures += 1
+            entries.append({"kind": "cycle", "cycle": n, "result": res})
+            continue
+        scr = _R30_SCREEN_RE.search(line)
+        if scr:
+            on_ok = scr.group(1) == "true"
+            off_ok = scr.group(2) == "true"
+            if not (on_ok and off_ok):
+                reboot_failures += 1
+                entries.append({"kind": "screen_check_failed", "screen_on": on_ok, "screen_off": off_ok})
+            continue
+        if "Test result" in line:
+            saw_summary = True
+        if saw_summary:
+            tot = _R30_TOTAL_RE.search(line)
+            if tot:
+                expected_cycles = int(tot.group(1))
+            fl = _R30_FAIL_RE.search(line)
+            if fl:
+                summary_fail = int(fl.group(1))
+                final_status = "PASS" if (summary_fail == 0 and reboot_failures == 0) else "FAIL"
+                entries.append({"kind": "finished", "result": final_status})
+                continue
+    return {
+        "cycles_done": cycles_done,
+        "expected_cycles": expected_cycles,
+        "reboot_failures": max(reboot_failures, summary_fail),
+        "final_status": final_status,
+        "entries": entries,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -824,14 +950,18 @@ def resume_task() -> None:
     start_task()
 
 
-def collect_powercycle_result(project: str) -> dict:
+def collect_powercycle_result(project: str, apk_flavor: str = "stp") -> dict:
     """窗口收取：拉结果 → 解析 → 写中心存储（finish 同款逻辑，run_id 带设备维度防碰撞）。
 
     返回 metrics dict（含 run_id / cycles_done / final_status 等），供 check 的
     PROGRESS 摘要与落盘校验。
     """
-    local_file = _pull_result_file()
-    parsed = parse_powercycle_result(local_file.read_bytes())
+    local_file = _pull_result_file(apk_flavor=apk_flavor)
+    parsed = (
+        parse_r30_powercycle_result(local_file.read_bytes())
+        if apk_flavor == "r30"
+        else parse_powercycle_result(local_file.read_bytes())
+    )
     run_id = f"powercycle_{time.strftime('%Y%m%d_%H%M%S')}_{device_serial()}"
     final_status = parsed["final_status"] or "INCOMPLETE"
     metrics = {
@@ -852,9 +982,10 @@ def collect_powercycle_result(project: str) -> dict:
     return metrics
 
 
-def _pull_result_file() -> Path:
+def _pull_result_file(apk_flavor: str = "stp") -> Path:
     """拉取结果文件（主路径优先，旧路径兜底）；都不存在则报错（finish 同款）。"""
-    for path in result_paths():
+    paths = result_paths() if apk_flavor == "stp" else result_paths(apk_flavor)
+    for path in paths:
         ls = adb_shell(f"ls -l {path}", timeout=30).strip()
         if parse_size_from_ls(ls) <= 0:
             continue

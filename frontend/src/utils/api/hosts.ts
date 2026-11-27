@@ -71,15 +71,17 @@ export const hosts = {
     id: number | string,
     data: { watcher_admin_active: boolean },
   ) => apiClient.patch<Host>(`/hosts/${id}/watcher-admin-state`, data).then(r => r.data),
-  /** #496 / #4117 B2-2：服务端分页主机列表（支持筛选、全局 USB 优先级与显式排序）。 */
+  /** #496 / #4117 B2-2 / Q4：服务端分页主机列表（默认 projection=list 裁剪挂载明细，透传动态排序快照令牌）。 */
   listPage: (params: HostListPageQueryParams = {}) => {
     const queryParams: Record<string, string | number | boolean> = {
       ...compactHostFilterParams(params),
       skip: params.skip ?? 0,
       limit: params.limit ?? 50,
+      projection: params.projection ?? 'list',
     };
     if (params.sort_by) queryParams.sort_by = params.sort_by;
     if (params.sort_dir) queryParams.sort_dir = params.sort_dir;
+    if (params.snapshot_id) queryParams.snapshot_id = params.snapshot_id;
     return apiClient
       .get<PaginatedResponse<Host>>('/hosts', { params: queryParams })
       .then(r => r.data);

@@ -1051,6 +1051,8 @@ _MODEL_UNREGISTERED: dict[str, str] = {
     "接入前端时在 types.ts 建 interface 并转登记 _MODEL_PAIRS",
     "PaginatedResponse": "通用分页壳（items: List[Any]，schemas/base.py）——"
     "声明面无业务字段，内层形状由其成员模型对拍承担，不为壳本身建 TS 配对",
+    "HostPaginatedResponse": "继承 PaginatedResponse 的主机分页壳（仅增可选只读翻页令牌 snapshot_id，"
+    "schemas/host.py）——与前端泛型 PaginatedResponse<Host> 对应，内层成员由 HostOut ↔ Host 双向对拍覆盖",
     # 第 7 批：agent_api 的 6 个协议模型。消费方全在 backend/agent（Python），
     # 无 TS 声明面可对拍；协议契约的守门人是 backend/agent/tests 的 fake-agent
     # 用例与 `tests/test_agent_env_selfsufficiency.py` 一族。若未来前端直连这些

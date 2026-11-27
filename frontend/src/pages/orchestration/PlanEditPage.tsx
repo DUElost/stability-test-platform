@@ -16,6 +16,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet';
 import PlanChainPanel from '@/components/pipeline/PlanChainPanel';
 import PlanCanvas from '@/components/pipeline/PlanCanvas';
 import PlanStepInspector from '@/components/pipeline/PlanStepInspector';
+import TemplatePickerDialog from '@/components/pipeline/TemplatePickerDialog';
 import { SURFACE, TEXT, FORM, ALERT_BANNER } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { PageContainer } from '@/components/layout';
@@ -281,6 +282,7 @@ export default function PlanEditPage() {
             step={form.selectedStep}
             phase={form.selectedRef.phase}
             index={form.selectedRef.index >= 0 ? form.selectedRef.index : null}
+            specialtyKey={form.specialtyKey}
             scripts={form.scripts || []}
             onUpdateStep={form.handleStepUpdate}
             stepPosition={currentStepIdx >= 0 ? currentStepIdx + 1 : undefined}
@@ -379,6 +381,39 @@ export default function PlanEditPage() {
               }}
             >
               创建并追加
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <TemplatePickerDialog
+        open={form.templatePickerOpen}
+        onOpenChange={form.setTemplatePickerOpen}
+        templates={form.templates ?? []}
+        isLoading={form.templatesLoading}
+        isError={form.templatesIsError}
+        errorMessage={form.templatesIsError ? ((form.templatesError as Error)?.message || '加载失败') : undefined}
+        onRetry={() => void form.refetchTemplates()}
+        specialties={form.specialties}
+        initialSpecialtyKey={form.specialtyKey || undefined}
+        onSelectTemplate={form.handleSelectTemplate}
+      />
+
+      <AlertDialog
+        open={!!form.pendingTemplate}
+        onOpenChange={(open) => !open && form.setPendingTemplate(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>覆盖当前未保存草稿？</AlertDialogTitle>
+            <AlertDialogDescription>
+              导入模板「{form.pendingTemplate?.display_name}」将替换当前的步骤编排、专项与默认时序（Plan 名称与归属项目会保留）。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={form.confirmApplyPendingTemplate}>
+              确认导入
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

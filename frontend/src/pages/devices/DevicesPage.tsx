@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Smartphone } from 'lucide-react';
@@ -87,6 +87,7 @@ function toDeviceTableData(device: DeviceListItem | Device): DeviceTableData {
     host_name: hostName,
     last_seen: device.last_seen ?? undefined,
     tags: Array.isArray(device.tags) ? device.tags : [],
+    tags_truncated: 'tags_truncated' in device ? Boolean(device.tags_truncated) : false,
     project_key: device.project_key ?? null,
     attribution_source: device.attribution_source ?? null,
     retired_at: device.retired_at ?? null,
@@ -131,7 +132,10 @@ async function fetchAllMatchingDevicesForReadOnly(
 export default function DevicesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
-  const [crossPagePreview, setCrossPagePreview] = useState<DeviceSelectionPreview | null>(null);
+  const [crossPagePreviewEntry, setCrossPagePreviewEntry] = useState<{
+    scopeKey: string;
+    preview: DeviceSelectionPreview;
+  } | null>(null);
   const [crossPageLoading, setCrossPageLoading] = useState(false);
   const [readOnlyExportPending, setReadOnlyExportPending] = useState(false);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
@@ -312,13 +316,26 @@ export default function DevicesPage() {
     updateParams,
   ]);
 
-  // 筛选条件或页码变化时清空当前页勾选与跨页冻结集合，防止操作误作用于旧筛选结果
-  const filterScopeKey = JSON.stringify([activeFilterParams, currentPage, pageSize, sortState]);
+  // 筛选条件或页码变化时清空当前页勾选与跨页冻结集合，并递增代次丢弃晚到预览回包
+  const filterScopeKey = JSON.stringify([activeFilterParams, searchQuery, currentPage, pageSize, sortState]);
+  const crossPagePreview =
+    crossPagePreviewEntry?.scopeKey === filterScopeKey ? crossPagePreviewEntry.preview : null;
+  const previewRequestSeqRef = useRef(0);
+  const activeFilterScopeKeyRef = useRef(filterScopeKey);
+  useEffect(() => {
+    activeFilterScopeKeyRef.current = filterScopeKey;
+    previewRequestSeqRef.current += 1;
+  }, [filterScopeKey]);
+  useEffect(() => () => {
+    previewRequestSeqRef.current += 1;
+  }, []);
+
   const [prevFilterScopeKey, setPrevFilterScopeKey] = useState(filterScopeKey);
   if (prevFilterScopeKey !== filterScopeKey) {
     setPrevFilterScopeKey(filterScopeKey);
     if (selectedDeviceIds.size > 0) setSelectedDeviceIds(new Set());
-    if (crossPagePreview !== null) setCrossPagePreview(null);
+    if (crossPagePreviewEntry !== null) setCrossPagePreviewEntry(null);
+    if (crossPageLoading) setCrossPageLoading(false);
   }
 
   // 当页设备刷新后，剔除已不在当前页的普通勾选 ID
@@ -409,23 +426,33 @@ export default function DevicesPage() {
   }, [crossPagePreview, isCrossPageMode, selectedPageDevices]);
 
   const handleClearSelection = () => {
+    previewRequestSeqRef.current += 1;
+    setCrossPageLoading(false);
     setSelectedDeviceIds(new Set());
-    setCrossPagePreview(null);
+    setCrossPagePreviewEntry(null);
   };
 
-  // 契约 §3.4 规则 1：跨页全选调用独立 selection-preview 冻结匹配 ID 与影响摘要
+  // 契约 §3.4 规则 1：跨页全选调用独立 selection-preview 冻结匹配 ID 与影响摘要（带筛选代次校验防旧回包覆盖）
   const handleSelectAllFiltered = async () => {
+    const requestSeq = ++previewRequestSeqRef.current;
+    const requestScopeKey = filterScopeKey;
     setCrossPageLoading(true);
     try {
       const preview = await api.devices.selectionPreview({
         action: 'assign_project',
         ...activeFilterParams,
       });
+      if (
+        requestSeq !== previewRequestSeqRef.current ||
+        requestScopeKey !== activeFilterScopeKeyRef.current
+      ) {
+        return;
+      }
       if (preview.total_matched === 0) {
         toast.error('当前筛选条件下没有匹配的设备');
         return;
       }
-      setCrossPagePreview(preview);
+      setCrossPagePreviewEntry({ scopeKey: requestScopeKey, preview });
       if (preview.exceeds_limit) {
         toast.error(
           `当前筛选共命中 ${preview.total_matched} 台，超出单次写操作上限（${preview.max_allowed ?? 500} 台）；仅支持复制串号与导出 CSV，请收窄筛选后再执行写操作`,
@@ -434,9 +461,17 @@ export default function DevicesPage() {
         toast.success(`已冻结全部筛选结果 ${preview.total_matched} 台设备`);
       }
     } catch (err: unknown) {
+      if (
+        requestSeq !== previewRequestSeqRef.current ||
+        requestScopeKey !== activeFilterScopeKeyRef.current
+      ) {
+        return;
+      }
       toast.error(`跨页预览失败: ${toApiError(err).message}`);
     } finally {
-      setCrossPageLoading(false);
+      if (requestSeq === previewRequestSeqRef.current) {
+        setCrossPageLoading(false);
+      }
     }
   };
 
@@ -461,7 +496,7 @@ export default function DevicesPage() {
           const cached = pageById.get(targetId);
           try {
             let currentTags = cached?.tags ?? [];
-            if (!cached && operation !== 'replace') {
+            if ((!cached || cached.tags_truncated) && operation !== 'replace') {
               const fetched = await api.devices.get(targetId);
               currentTags = Array.isArray(fetched.tags) ? fetched.tags : [];
             }
@@ -703,7 +738,7 @@ export default function DevicesPage() {
       disabled={!isAdmin}
       title={!isAdmin ? '需要管理员权限' : undefined}
       onClick={() => setIsModalOpen(true)}
-      className="gap-1.5"
+      className="h-7 gap-1 px-2.5 text-xs"
     >
       <Plus className="h-3.5 w-3.5" />
       添加设备
@@ -713,7 +748,7 @@ export default function DevicesPage() {
   if (pageQ.isLoading) {
     return (
       <PageContainer width="wide" className="py-4">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
+        <PageHeader title="物理设备" />
         <PageSkeleton>
           <PageSkeleton.Stats count={5} />
           <PageSkeleton.Block size="lg" />
@@ -726,7 +761,7 @@ export default function DevicesPage() {
     const isProject404 = toApiError(pageQ.error).status === 404 && !unassignedOnly;
     return (
       <PageContainer width="wide" className="py-4">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
+        <PageHeader title="物理设备" />
         <ErrorState
           title={isProject404 ? '项目不存在' : '加载设备失败'}
           description={isProject404
@@ -747,7 +782,7 @@ export default function DevicesPage() {
   if (formattedDevices.length === 0 && baseAllCount === 0 && !hasActivePageFilter) {
     return (
       <PageContainer width="wide" className="py-4">
-        <PageHeader title="物理设备" subtitle="管理和监控测试设备" action={addDeviceAction} />
+        <PageHeader title="物理设备" />
         <EmptyState
           title="还没有设备"
           description="添加您的第一台测试设备"
@@ -789,17 +824,14 @@ export default function DevicesPage() {
   const pageDeviceMap = new Map(formattedDevices.map((d) => [d.id, d]));
 
   return (
-    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-      <PageHeader
-        title="物理设备"
-        subtitle="管理和监控测试设备 · 点击设备行查看详情，勾选后可批量处理"
-        action={addDeviceAction}
-      />
+    <PageContainer width="wide" scrollable={false} className="py-2.5 lg:py-2.5">
+      <PageHeader title="物理设备" />
 
-      {/* Device Table（服务端分页 + 独立三级 Facets） */}
-      <div>
+      {/* Device Table（视口锁高 + 服务端分页 + 独立三级 Facets + 固定分页底栏） */}
+      <div className="flex flex-1 min-h-0 flex-col">
         <ExpandableDeviceTable
           serverMode
+          extraHeaderRight={addDeviceAction}
           serverFacets={facetsQ.data}
           serverFilteredTotal={filteredTotal}
           devices={formattedDevices}
@@ -818,7 +850,9 @@ export default function DevicesPage() {
           drawerDeviceOverride={drawerDeviceOverride}
           selectedIds={selectedDeviceIds}
           onSelectionChange={(nextIds) => {
-            if (crossPagePreview !== null) setCrossPagePreview(null);
+            previewRequestSeqRef.current += 1;
+            setCrossPageLoading(false);
+            if (crossPagePreviewEntry !== null) setCrossPagePreviewEntry(null);
             setSelectedDeviceIds(nextIds);
           }}
           isAdmin={isAdmin}

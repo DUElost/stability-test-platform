@@ -38,7 +38,6 @@ from backend.api.schemas import (
     HostUpdate,
     HostOut,
     HostWatcherAdminStatePatch,
-    PaginatedResponse,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.services.agent_installer import (
@@ -76,15 +75,17 @@ from backend.services.artifact_digest import (
     plan_convergence,
 )
 from backend.services.agent_version_info import finalize_hot_update_outcome
+from backend.api.schemas.host import HostPaginatedResponse
 from backend.services.host_inventory_query import (
     HostQueryError,
     build_host_facets,
     build_host_out_readonly,
     build_host_selection_preview,
     derive_agent_installed,
-    load_host_ledger_device_counts,
+    load_host_ledger_summary,
     normalize_host_filters,
     query_hosts_page,
+    validate_host_projection,
     validate_host_sort_params,
 )
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
@@ -156,6 +157,8 @@ def _host_to_out(
     desired_artifact_digest: str | None = None,
     now: datetime | None = None,
     ledger_device_count: int | None = None,
+    ledger_latest_seen_at: datetime | None = None,
+    projection: str = "full",
 ) -> HostOut:
     """从 ORM 对象构造 HostOut，从 host.extra 中提取 capacity/health。
 
@@ -163,11 +166,14 @@ def _host_to_out(
     的嵌套 key 映射到顶层字段。此 helper 在 validate 后补充。
 
     若提供 ``db``，会一并查询 host 上的活跃 Job 列表（ADR-0021 hot-update gate）
-    与在册设备台账数（``ledger_device_count``）。
+    与在册设备台账摘要（``ledger_device_count`` / ``ledger_latest_seen_at``）。
     """
     resolved_ledger = ledger_device_count
+    resolved_latest_seen = ledger_latest_seen_at
     if resolved_ledger is None and db is not None:
-        resolved_ledger = load_host_ledger_device_counts(db, [str(h.id)]).get(str(h.id), 0)
+        resolved_ledger, resolved_latest_seen = load_host_ledger_summary(
+            db, [str(h.id)]
+        ).get(str(h.id), (0, None))
 
     out = build_host_out_readonly(
         h,
@@ -175,6 +181,8 @@ def _host_to_out(
         now=now,
         host_key_trust=host_key_trust,
         ledger_device_count=resolved_ledger,
+        ledger_latest_seen_at=resolved_latest_seen,
+        projection=projection,
     )
 
     if db is not None:
@@ -369,7 +377,7 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
     return _host_to_out(host, host_key_trust=host_key_trust)
 
 
-@router.get("", response_model=Union[List[HostOut], PaginatedResponse])
+@router.get("", response_model=Union[List[HostOut], HostPaginatedResponse])
 def list_hosts(
     request: Request,
     skip: int = Query(0, ge=0),
@@ -410,6 +418,15 @@ def list_hosts(
         None,
         description="排序方向：asc | desc（所有排序均以 Host.id ASC 为尾键）",
     ),
+    projection: Optional[str] = Query(
+        None,
+        description="响应投影：full（默认兼容完整 mount_status）或 list（裁剪完整挂载明细，仅保留摘要标量）",
+    ),
+    snapshot_id: Optional[str] = Query(
+        None,
+        max_length=64,
+        description="动态排序翻页快照令牌：复用第 1 页冻结顺序切片，防跨页重复与漏项",
+    ),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -427,6 +444,7 @@ def list_hosts(
             q=q,
         )
         norm_sort_by, norm_sort_dir = validate_host_sort_params(sort_by, sort_dir)
+        norm_projection = validate_host_projection(projection)
     except HostQueryError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
@@ -444,8 +462,10 @@ def list_hosts(
             filters.q is not None,
             norm_sort_by is not None,
             norm_sort_dir is not None,
+            snapshot_id is not None,
         )
     )
+    resolved_snapshot_id: Optional[str] = None
     if not has_query_extensions:
         query = db.query(Host)
         if not include_retired:
@@ -453,18 +473,20 @@ def list_hosts(
         query = query.order_by(Host.id)
         total = query.count()
         hosts = query.offset(skip).limit(limit).all()
-        ledger_counts = load_host_ledger_device_counts(db, [str(h.id) for h in hosts])
+        ledger_summary = load_host_ledger_summary(db, [str(h.id) for h in hosts])
         items = [
             _host_to_out(
                 h,
                 desired_artifact_digest=desired,
                 now=now,
-                ledger_device_count=ledger_counts.get(str(h.id), 0),
+                ledger_device_count=ledger_summary.get(str(h.id), (0, None))[0],
+                ledger_latest_seen_at=ledger_summary.get(str(h.id), (0, None))[1],
+                projection=norm_projection,
             )
             for h in hosts
         ]
     else:
-        items, total = query_hosts_page(
+        items, total, resolved_snapshot_id = query_hosts_page(
             db,
             filters,
             skip=skip,
@@ -473,11 +495,19 @@ def list_hosts(
             sort_dir=norm_sort_dir,
             desired_artifact_digest=desired,
             now=now,
+            projection=norm_projection,
+            snapshot_id=snapshot_id,
         )
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
-    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
+    return HostPaginatedResponse(
+        items=items,
+        total=total,
+        skip=skip,
+        limit=limit,
+        snapshot_id=resolved_snapshot_id,
+    )
 
 
 @router.get("/facets", response_model=ApiResponse[HostFacetsOut])

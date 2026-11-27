@@ -76,3 +76,14 @@ describe('Sidebar AI 助手固定入口交互（#4117 U1-3）', () => {
     expect(screen.getByRole('link', { name: 'AI 助手' })).toHaveAttribute('title', 'AI 助手');
   });
 });
+
+describe('Sidebar 核心组默认展开、仅低频更多功能默认折叠（#4117 PR 2）', () => {
+  it('首页挂载时工作区、分析报告、资源均默认展开，仅更多功能默认折叠', () => {
+    mocks.role = 'admin';
+    renderSidebar();
+    expect(screen.getByRole('button', { name: '工作区' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: '分析报告' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: '资源' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: '更多功能' })).toHaveAttribute('aria-expanded', 'false');
+  });
+});

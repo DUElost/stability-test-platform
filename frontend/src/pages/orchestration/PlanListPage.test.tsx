@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   deletePlan: vi.fn(),
   listProjects: vi.fn(),
   listSpecialties: vi.fn(),
+  listTemplates: vi.fn(),
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -37,6 +38,7 @@ vi.mock('@/utils/api', () => ({
     },
     // ADR-0029：项目筛选下拉（ProjectFilterSelect）依赖
     projects: { list: mocks.listProjects },
+    pipeline: { listTemplates: mocks.listTemplates },
   },
   toApiError: (error: unknown) => ({
     message: error instanceof Error ? error.message : '请求失败',
@@ -75,7 +77,9 @@ describe('PlanListPage', () => {
     mocks.listProjects.mockResolvedValue([]);
     mocks.listSpecialties.mockResolvedValue([
       { key: 'mtbf', display_name: 'MTBF', sort_order: 1 },
+      { key: 'monkey', display_name: 'MONKEY', sort_order: 3 },
     ]);
+    mocks.listTemplates.mockResolvedValue([]);
   });
 
   it('opens the new-plan editor without creating an empty Plan', async () => {
@@ -257,5 +261,63 @@ describe('PlanListPage grouping', () => {
     const kpiGrid = screen.getByText('Plan 总数').closest('div.grid');
     expect(kpiGrid).not.toBeNull();
     expect(within(kpiGrid as HTMLElement).getByText('260')).toBeInTheDocument();
+  });
+
+  it('opens template picker dialog, filters by specialty, and navigates with ?template= (#4182)', async () => {
+    mocks.listTemplates.mockResolvedValue([
+      {
+        name: 'monkey',
+        display_name: 'Monkey 标准长稳',
+        specialty_key: 'monkey',
+        status: 'ready',
+        requires_suite: false,
+        description: 'Standard Monkey template',
+        pipeline_def: { lifecycle: { init: [{ step_id: 'check_device', action: 'script:check_device', version: '1.0.2', params: {} }], teardown: [] } },
+      },
+      {
+        name: 'mtbf',
+        display_name: 'MTBF 稳定性',
+        specialty_key: 'mtbf',
+        status: 'ready',
+        requires_suite: true,
+        description: 'MTBF template',
+        pipeline_def: { lifecycle: { init: [{ step_id: 'mtbf_setup', action: 'script:mtbf_setup', version: '1.4.2', params: {} }], teardown: [] } },
+      },
+    ]);
+
+    renderPage();
+    await screen.findByText('Plan 编排');
+
+    fireEvent.click(screen.getByTestId('create-from-template-btn'));
+    expect(await screen.findByTestId('template-card-monkey')).toBeInTheDocument();
+    expect(screen.getByTestId('template-card-mtbf')).toBeInTheDocument();
+
+    // 互斥筛选：切到 MTBF 后 Monkey 模板不出现，切回全部可恢复
+    fireEvent.click(screen.getByTestId('template-filter-mtbf'));
+    expect(screen.queryByTestId('template-card-monkey')).not.toBeInTheDocument();
+    expect(screen.getByTestId('template-card-mtbf')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('template-filter-all'));
+    expect(screen.getByTestId('template-card-monkey')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('template-card-monkey'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/new?template=monkey');
+  });
+
+  it('navigates to clone-to-draft route when clicking clone button on a plan row (#4182)', async () => {
+    mocks.listPlans.mockResolvedValue([
+      {
+        id: 77,
+        name: '线上 Monkey 计划',
+        steps: [],
+        specialty_key: 'monkey',
+        created_at: '2026-08-26T00:00:00Z',
+        updated_at: '2026-08-26T00:00:00Z',
+      },
+    ]);
+
+    renderPage();
+    await screen.findByText('线上 Monkey 计划');
+    fireEvent.click(screen.getByRole('button', { name: '复制 线上 Monkey 计划 为草稿' }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/new?clone=77');
   });
 });

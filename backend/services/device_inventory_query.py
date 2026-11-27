@@ -15,9 +15,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import (
     String,
@@ -33,8 +33,9 @@ from sqlalchemy import (
     tuple_,
 )
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
-from sqlalchemy.orm import Session, contains_eager
+from sqlalchemy.orm import Session, contains_eager, defer
 
+from backend.agent.contracts.usb_presence import STATE_POWERED_OFF, classify_usb_presence
 from backend.api.schemas.device import (
     DeviceFacetOptionsOut,
     DeviceFacetStatusCountsOut,
@@ -45,6 +46,7 @@ from backend.api.schemas.device import (
     DeviceSelectionPreviewOut,
 )
 from backend.core.device_lifecycle import is_retire_suggested, is_stale
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.models.host import Device, Host
 from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel
@@ -369,6 +371,44 @@ def _resolve_project_id(
     return int(project.id)
 
 
+def _load_powered_off_slot_keys(
+    db: Session,
+    *,
+    now: datetime,
+) -> Set[Tuple[str, str]]:
+    """窄列提取在线主机上报为关机态的 ``(host_id, serial)`` 集合，避免整表拉取 ``Host.extra``。"""
+    if _is_postgres(db):
+        cutoff = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
+        slots_expr = Host.extra["capacity"]["usb_power_slots"]
+        rows = db.execute(
+            select(Host.id, slots_expr.label("usb_power_slots"))
+            .where(
+                Host.retired_at.is_(None),
+                Host.status == "ONLINE",
+                Host.last_heartbeat.is_not(None),
+                Host.last_heartbeat >= cutoff,
+                slots_expr.is_not(None),
+            )
+        ).all()
+        keys: Set[Tuple[str, str]] = set()
+        for host_id, slots in rows:
+            if not isinstance(slots, dict):
+                continue
+            for serial, entry in slots.items():
+                if (
+                    isinstance(serial, str)
+                    and isinstance(entry, (list, tuple))
+                    and len(entry) == 2
+                    and classify_usb_presence(entry[1]) == STATE_POWERED_OFF
+                ):
+                    keys.add((str(host_id), serial))
+        return keys
+    return powered_off_slot_keys(
+        db.query(Host).filter(Host.retired_at.is_(None)).all(),
+        now=now,
+    )
+
+
 def _scope_b_conditions(
     db: Session,
     filters: DeviceQueryFilters,
@@ -386,10 +426,7 @@ def _scope_b_conditions(
 
     if not filters.include_stale:
         stale_cond = not_stale_condition(now=now, status_expr=eff_status)
-        powered_off = powered_off_slot_keys(
-            db.query(Host).filter(Host.retired_at.is_(None)).all(),
-            now=now,
-        )
+        powered_off = _load_powered_off_slot_keys(db, now=now)
         if powered_off:
             stale_cond = or_(
                 stale_cond,
@@ -523,6 +560,26 @@ def build_device_order_by(sort_by: Optional[str], sort_dir: str):
     return (primary, Device.id.asc())
 
 
+def _build_filtered_device_conditions(
+    db: Session,
+    filters: DeviceQueryFilters,
+    *,
+    now: datetime,
+) -> List[Any]:
+    is_pg = _is_postgres(db)
+    project_id = _resolve_project_id(
+        db,
+        project_key=filters.project_key,
+        unassigned=filters.unassigned,
+    )
+    eff_status = device_effective_status_expr(now=now)
+    return [
+        *_scope_b_conditions(db, filters, now=now, eff_status=eff_status, project_id=project_id),
+        *_scope_h_extra_conditions(filters, eff_status=eff_status, is_pg=is_pg),
+        *_detail_and_search_conditions(filters, is_pg=is_pg),
+    ]
+
+
 def build_filtered_device_query(
     db: Session,
     filters: DeviceQueryFilters,
@@ -531,26 +588,66 @@ def build_filtered_device_query(
     sort_by: Optional[str] = None,
     sort_dir: str = "asc",
     eager_host: bool = True,
+    projection: str = "full",
 ):
     """构建应用全部查询条件的物理设备查询（严格一台设备一行）。"""
-    is_pg = _is_postgres(db)
-    project_id = _resolve_project_id(
-        db,
-        project_key=filters.project_key,
-        unassigned=filters.unassigned,
-    )
-    eff_status = device_effective_status_expr(now=now)
-    conditions = [
-        *_scope_b_conditions(db, filters, now=now, eff_status=eff_status, project_id=project_id),
-        *_scope_h_extra_conditions(filters, eff_status=eff_status, is_pg=is_pg),
-        *_detail_and_search_conditions(filters, is_pg=is_pg),
-    ]
+    conditions = _build_filtered_device_conditions(db, filters, now=now)
     query = db.query(Device).outerjoin(Host, Device.host_id == Host.id)
     if eager_host:
-        query = query.options(contains_eager(Device.host))
+        if projection == "list":
+            query = query.options(
+                defer(Device.extra),
+                contains_eager(Device.host).defer(Host.mount_status),
+            )
+        else:
+            query = query.options(contains_eager(Device.host))
     if conditions:
         query = query.filter(*conditions)
     return query.order_by(*build_device_order_by(sort_by, sort_dir))
+
+
+def query_filtered_devices_page(
+    db: Session,
+    filters: DeviceQueryFilters,
+    *,
+    now: datetime,
+    skip: int,
+    limit: int,
+    sort_by: Optional[str] = None,
+    sort_dir: str = "asc",
+    projection: str = "full",
+    include_total: bool = True,
+) -> Tuple[List[Device], int]:
+    """用扁平 ``COUNT(Device.id)`` 与延迟大 JSON 列单次构造条件并拉取目标页。"""
+    conditions = _build_filtered_device_conditions(db, filters, now=now)
+    total = 0
+    if include_total:
+        count_stmt = (
+            select(func.count(Device.id))
+            .select_from(Device)
+            .outerjoin(Host, Device.host_id == Host.id)
+        )
+        if conditions:
+            count_stmt = count_stmt.where(*conditions)
+        total = int(db.execute(count_stmt).scalar_one() or 0)
+
+    page_query = db.query(Device).outerjoin(Host, Device.host_id == Host.id)
+    if projection == "list":
+        page_query = page_query.options(
+            defer(Device.extra),
+            contains_eager(Device.host).defer(Host.mount_status),
+        )
+    else:
+        page_query = page_query.options(contains_eager(Device.host))
+    if conditions:
+        page_query = page_query.filter(*conditions)
+    devices = (
+        page_query.order_by(*build_device_order_by(sort_by, sort_dir))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return devices, total
 
 
 def _status_counts_for_conditions(

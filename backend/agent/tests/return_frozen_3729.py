@@ -109,6 +109,150 @@ def _read_prefs_evidence_with_retry(
 '''
 
 
+_LIB_1010_CONSTANTS = '''# Tinno 原厂 R30 AutoTestTool（.reboot.RebootService + restart_preference.xml）
+_R30_SERVICE_TOKEN = "RebootService"
+_R30_PREFS_FILE = "restart_preference.xml"
+_SUPPORTED_APK_FLAVORS = ("stp", "r30")
+
+'''
+
+_LIB_1010_START_MARKER = "def resolve_apk_flavor(cfg: dict) -> str:\n"
+_LIB_1010_END_MARKER = "def result_paths() -> tuple[str, ...]:\n"
+
+_DISARM_1010_TO_109_HUNKS = (
+    (
+        '''    read_prefs_classified,
+    read_r30_prefs_classified,
+    resolve_apk_flavor,
+    stop_task,
+    stop_task_r30,
+    try_adb_root,
+    _root_read_prefs,''',
+        '''    read_prefs_classified,
+    stop_task,
+    _root_read_prefs,''',
+    ),
+    (
+        '''        if apk_flavor == "r30" and not is_root():
+            # R30 原厂 APK 不可 run-as，且 Release_user_root 重启后 adbd 回落 non-root；
+            # 读/写 restart_preference.xml 前尽力提权（已 root 时零开销）。
+            try_adb_root()
+''',
+        "",
+    ),
+    (
+        '''        if apk_flavor == "r30" and not is_root():
+            try_adb_root()
+''',
+        "",
+    ),
+    (
+        '''def _read_prefs_evidence(apk_flavor: str = "stp") -> dict[str, Any]:
+    """读取 prefs 并按 §3.6.6 第 2、3 条给出原始 readback 与 evidence。
+
+    kind: ok / not_installed / absent / denied / empty / transient。
+    readback: footprint / clear / absent / not_installed / readback_failed。
+    """
+    kind, xml, installed = (
+        read_r30_prefs_classified() if apk_flavor == "r30" else read_prefs_classified()
+    )
+    evidence: dict[str, Any] = {
+        "root": bool(is_root()),
+        "kind": kind,
+        "autotesttool_installed": installed,
+        "prefs_len": len(xml or ""),
+    }
+    if apk_flavor == "r30":
+        evidence["apk_flavor"] = "r30"''',
+        '''def _read_prefs_evidence() -> dict[str, Any]:
+    """读取 prefs 并按 §3.6.6 第 2、3 条给出原始 readback 与 evidence。
+
+    kind: ok / not_installed / absent / denied / empty / transient。
+    readback: footprint / clear / absent / not_installed / readback_failed。
+    """
+    kind, xml, installed = read_prefs_classified()
+    evidence: dict[str, Any] = {
+        "root": bool(is_root()),
+        "kind": kind,
+        "autotesttool_installed": installed,
+        "prefs_len": len(xml or ""),
+    }''',
+    ),
+    (
+        '''    if apk_flavor == "r30":
+        going_true = 'name="reboot_service_going" value="true"' in xml
+        going_false = 'name="reboot_service_going" value="false"' in xml
+        evidence["reboot_service_going_token"] = (
+            "true" if going_true else ("false" if going_false else "absent")
+        )
+        if going_true:
+            return {
+                "readback": "footprint",
+                "running": True,
+                "auto_resume": True,
+                "evidence": evidence,
+            }
+        if going_false:
+            return {
+                "readback": "clear",
+                "running": False,
+                "auto_resume": False,
+                "evidence": evidence,
+            }
+        return {
+            "readback": "readback_failed",
+            "running": None,
+            "auto_resume": None,
+            "evidence": evidence,
+        }
+
+''',
+        "",
+    ),
+    (
+        '''def _read_prefs_evidence_with_retry(
+    *,
+    apk_flavor: str = "stp",
+    max_attempts: int = _READ_TRANSIENT_MAX_ATTEMPTS,''',
+        '''def _read_prefs_evidence_with_retry(
+    *,
+    max_attempts: int = _READ_TRANSIENT_MAX_ATTEMPTS,''',
+    ),
+    (
+        'snap = _read_prefs_evidence() if apk_flavor == "stp" else _read_prefs_evidence(apk_flavor)',
+        "snap = _read_prefs_evidence()",
+    ),
+    (
+        '    apk_flavor = resolve_apk_flavor(cfg)\n',
+        "",
+    ),
+    (
+        '''        pre = (
+            _read_prefs_evidence_with_retry()
+            if apk_flavor == "stp"
+            else _read_prefs_evidence_with_retry(apk_flavor=apk_flavor)
+        )''',
+        "        pre = _read_prefs_evidence_with_retry()",
+    ),
+    (
+        '''                stop_steps = (
+                    stop_task_r30(force=force, kind=kind, installed=installed)
+                    if apk_flavor == "r30"
+                    else stop_task(force=force, kind=kind, installed=installed)
+                )''',
+        "                stop_steps = stop_task(force=force, kind=kind, installed=installed)",
+    ),
+    (
+        '''    snap = (
+        _read_prefs_evidence_with_retry()
+        if apk_flavor == "stp"
+        else _read_prefs_evidence_with_retry(apk_flavor=apk_flavor)
+    )''',
+        "    snap = _read_prefs_evidence_with_retry()",
+    ),
+)
+
+
 def _materialize_frozen_108_source(dst: Path) -> Path:
     """Materialize the authentic pinned 1.0.8 tree without requiring git history."""
     shutil.copytree(
@@ -118,11 +262,23 @@ def _materialize_frozen_108_source(dst: Path) -> Path:
     )
     lib_path = dst / "_lib.py"
     lib_text = lib_path.read_text(encoding="utf-8")
+    assert _LIB_1010_CONSTANTS in lib_text, "unexpected _lib.py 1.0.10 constants hunk"
+    lib_text = lib_text.replace(_LIB_1010_CONSTANTS, "", 1)
+    assert _LIB_1010_START_MARKER in lib_text and _LIB_1010_END_MARKER in lib_text, (
+        "unexpected _lib.py 1.0.10 r30 block markers"
+    )
+    lib_text = (
+        lib_text[: lib_text.index(_LIB_1010_START_MARKER)]
+        + lib_text[lib_text.index(_LIB_1010_END_MARKER) :]
+    )
     assert _LIB_109_INSTALLED in lib_text, "unexpected _lib.py 1.0.9 hunk"
     lib_path.write_text(lib_text.replace(_LIB_109_INSTALLED, _LIB_108_INSTALLED, 1), encoding="utf-8")
 
     entry_path = dst / "powercycle_disarm.py"
     entry_text = entry_path.read_text(encoding="utf-8")
+    for src_hunk, dst_hunk in _DISARM_1010_TO_109_HUNKS:
+        assert src_hunk in entry_text, f"unexpected powercycle_disarm.py 1.0.10 hunk: {src_hunk[:60]!r}"
+        entry_text = entry_text.replace(src_hunk, dst_hunk)
     assert _DISARM_109_RETRY_BLOCK in entry_text, "unexpected powercycle_disarm.py retry hunk"
     entry_text = entry_text.replace(_DISARM_109_RETRY_BLOCK, "", 1)
     entry_text = entry_text.replace("_read_prefs_evidence_with_retry()", "_read_prefs_evidence()")

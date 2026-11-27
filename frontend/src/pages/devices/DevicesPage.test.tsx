@@ -453,6 +453,81 @@ describe('DevicesPage', () => {
     expect(screen.getByTestId('device-bulk-tags')).toBeDisabled();
   });
 
+  it('#4117 Q3：切换筛选后晚到的旧跨页预览回包被丢弃，不会复活旧集合或提交旧筛选 ID', async () => {
+    const user = userEvent.setup();
+    const onlineDevs: DeviceListItem[] = Array.from({ length: 50 }, (_, i) => ({
+      id: i + 1,
+      serial: `ONLINE-${i + 1}`,
+      model: 'M-ONLINE',
+      host_id: 'h1',
+      host_name: 'Host-1',
+      status: 'ONLINE',
+      tags: [],
+      last_seen: '2026-08-05T18:00:00+08:00',
+    }));
+    const offlineDevs: DeviceListItem[] = [
+      {
+        id: 201,
+        serial: 'OFFLINE-201',
+        model: 'M-OFFLINE',
+        host_id: 'h2',
+        host_name: 'Host-2',
+        status: 'OFFLINE',
+        tags: [],
+        last_seen: '2026-08-05T18:00:00+08:00',
+      },
+    ];
+    setServerDevices([...onlineDevs, ...offlineDevs], 120);
+
+    let resolveStalePreview!: (value: unknown) => void;
+    mockSelectionPreview.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStalePreview = resolve;
+        }),
+    );
+
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+    await waitFor(() => expect(screen.getByText('ONLINE-1')).toBeInTheDocument());
+
+    // 在初始筛选（全部）下触发跨页预览，请求挂起
+    fireEvent.click(screen.getByLabelText('选择设备 ONLINE-1'));
+    await user.click(await screen.findByTestId('device-select-all-filtered'));
+    await waitFor(() => expect(mockSelectionPreview).toHaveBeenCalledTimes(1));
+
+    // 在预览回包前切换到「需关注」筛选
+    fireEvent.click(screen.getByRole('button', { name: /需关注/ }));
+    await waitFor(() => expect(screen.getByText('OFFLINE-201')).toBeInTheDocument());
+
+    // 晚到的旧预览回包（包含不属于「需关注」的旧 ID [1, 2, 101]）
+    resolveStalePreview({
+      action: 'assign_project',
+      total_matched: 120,
+      max_allowed: 500,
+      exceeds_limit: false,
+      device_ids: [1, 2, 101],
+      status_counts: { all: 120, ONLINE: 120, BUSY: 0, OFFLINE: 0, ERROR: 0, need_attention: 0, tagged: 0 },
+      affected_models: ['M-ONLINE'],
+      devices_without_model_serials: [],
+      retired_count: 0,
+      active_count: 120,
+      stale_count: 0,
+    });
+
+    // 等微任务落地，旧跨页冻结不得复活
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId('device-selection-scope-badge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-bulk-action-bar')).not.toBeInTheDocument();
+
+    // 在新筛选下勾选 OFFLINE-201 并提交归入项目，确认只提交 201 而绝不含旧预览 ID
+    fireEvent.click(screen.getByLabelText('选择设备 OFFLINE-201'));
+    await user.click(await screen.findByTestId('device-bulk-assign-project'));
+    await user.selectOptions(await screen.findByTestId('assign-project-select'), 'proj-a');
+    await user.click(screen.getByTestId('assign-project-confirm'));
+    await waitFor(() => expect(mockAssignDevicesToProject).toHaveBeenCalledWith('proj-a', [201]));
+  });
+
   it('#496 B3-1：?drawer= 深链指向非当前页设备时独立调用 GET /devices/{id} 打开抽屉', async () => {
     mockGetDevice.mockResolvedValue({
       id: 999,

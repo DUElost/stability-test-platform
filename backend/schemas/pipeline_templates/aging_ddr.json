@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "display_name": "Aging DDR 压测",
+  "specialty_key": "ops",
+  "status": "ready",
   "description": "Aging DDR stress test (FacAging com.ape.aging): preflight, pure-ADB DDR launch, DST-tolerant patrol with early PASS/FAIL exit, disarm and CSV report collection",
   "lifecycle": {
     "timeout_seconds": 604800,
@@ -11,6 +14,26 @@
         "timeout_seconds": 180,
         "retry": 1,
         "params": {}
+      },
+      {
+        "step_id": "sync_device_time",
+        "action": "script:sync_device_time",
+        "version": "1.0.1",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "timezone": "Asia/Shanghai"
+        }
+      },
+      {
+        "step_id": "unisoc_sysdump_config",
+        "action": "script:unisoc_sysdump_config",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "enabled": true
+        }
       },
       {
         "step_id": "ensure_root",

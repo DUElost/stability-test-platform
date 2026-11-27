@@ -1,5 +1,13 @@
 {
   "version": 2,
+  "display_name": "Monkey Watcher 巡检",
+  "specialty_key": "monkey",
+  "status": "ready",
+  "plan_defaults": {
+    "watcher_policy": {
+      "enabled": true
+    }
+  },
   "description": "Monkey watcher patrol stability test (scheduled every 3-5 min)",
   "lifecycle": {
     "timeout_seconds": 604800,
@@ -11,6 +19,26 @@
         "timeout_seconds": 180,
         "retry": 1,
         "params": {}
+      },
+      {
+        "step_id": "sync_device_time",
+        "action": "script:sync_device_time",
+        "version": "1.0.1",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "timezone": "Asia/Shanghai"
+        }
+      },
+      {
+        "step_id": "unisoc_sysdump_config",
+        "action": "script:unisoc_sysdump_config",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "enabled": true
+        }
       },
       {
         "step_id": "ensure_root",

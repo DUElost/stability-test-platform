@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Server } from 'lucide-react';
@@ -172,7 +172,27 @@ function mapHostToTableData(host: Host): HostTableData {
           : undefined,
         strike_open: typeof probeRaw.strike_open === 'boolean' ? probeRaw.strike_open : undefined,
         strike_need: typeof probeRaw.strike_need === 'number' ? probeRaw.strike_need : undefined,
+        uhubctl_status:
+          typeof probeRaw.uhubctl_status === 'string' ? probeRaw.uhubctl_status : undefined,
+        powered_off_ports: Array.isArray(probeRaw.powered_off_ports)
+          ? probeRaw.powered_off_ports.filter((s): s is string => typeof s === 'string')
+          : undefined,
       }
+    : null;
+  const powerSlotsRaw =
+    capRaw.usb_power_slots && typeof capRaw.usb_power_slots === 'object'
+      ? (capRaw.usb_power_slots as Record<string, unknown>)
+      : null;
+  const usbPowerSlotSerials: Record<string, string> | null = powerSlotsRaw
+    ? (() => {
+        const inverted: Record<string, string> = {};
+        for (const [serial, entry] of Object.entries(powerSlotsRaw)) {
+          if (Array.isArray(entry) && typeof entry[0] === 'string' && entry[0].trim()) {
+            inverted[entry[0].trim()] = serial;
+          }
+        }
+        return Object.keys(inverted).length > 0 ? inverted : null;
+      })()
     : null;
   const selfHealCandidate =
     (host as { self_heal?: unknown }).self_heal ?? extra.self_heal;
@@ -241,8 +261,12 @@ function mapHostToTableData(host: Host): HostTableData {
           };
         })
       : [],
+    mount_anomaly: host.mount_anomaly,
+    mount_count: host.mount_count,
+    mount_failed_count: host.mount_failed_count,
     device_count: onlineDevices,
     ledger_device_count: optionalNumber(host.ledger_device_count) ?? null,
+    ledger_latest_seen_at: host.ledger_latest_seen_at ?? null,
     usb_device_count: optionalNumber(host.capacity?.usb_device_count) ?? null,
     adb_interface_count: optionalNumber(capRaw.adb_interface_count) ?? null,
     adb_state_counts: adbStateCounts,
@@ -250,12 +274,35 @@ function mapHostToTableData(host: Host): HostTableData {
     usb_hub_topology: usbHubTopology,
     usb_kernel_errors_1h: usbKernelErrors1h,
     usb_controller_health: usbControllerHealth,
+    usb_power_slot_serials: usbPowerSlotSerials,
     health_probe: healthProbe,
     self_heal: selfHeal,
     claim_hint: claimHint,
     active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
     health_status: host.health?.status,
     health_reasons: host.health?.reasons,
+  };
+}
+
+/** 契约 §4：将前端筛选状态映射为后端增量子集参数（upgrade_pending 复用精确谓词）。 */
+function buildHostFilterParams(
+  showRetired: boolean,
+  statusFilter: 'all' | HostTableData['status'],
+  healthFilter: HostHealthFilter,
+  syncFilter: HostSyncFilter,
+  searchQuery: string,
+): HostFilterQueryParams {
+  const trimmedQ = searchQuery.trim();
+  return {
+    ...(showRetired ? { include_retired: true } : {}),
+    ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
+    ...(healthFilter !== 'all' ? { health_status: healthFilter } : {}),
+    ...(syncFilter === 'upgrade_pending' || syncFilter === 'drift' || syncFilter === 'matched'
+      ? { sync_status: syncFilter }
+      : {}),
+    ...(syncFilter === 'usb_fault' ? { usb_anomaly: true } : {}),
+    ...(syncFilter === 'mount_error' ? { mount_anomaly: true } : {}),
+    ...(trimmedQ ? { q: trimmedQ } : {}),
   };
 }
 
@@ -292,8 +339,16 @@ async function resolveHostRecordsForIds(
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedHostIds, setSelectedHostIds] = useState<Set<string | number>>(new Set());
-  const [crossPagePreview, setCrossPagePreview] = useState<HostSelectionPreview | null>(null);
+  const [crossPagePreviewEntry, setCrossPagePreviewEntry] = useState<{
+    scopeKey: string;
+    preview: HostSelectionPreview;
+  } | null>(null);
   const [crossPagePreviewLoading, setCrossPagePreviewLoading] = useState(false);
+  const [sortSnapshotEntry, setSortSnapshotEntry] = useState<{
+    scopeKey: string;
+    snapshotId: string;
+  } | null>(null);
+  const previewRequestSeqRef = useRef(0);
   const queryClient = useQueryClient();
   const toast = useToast();
   const confirmDialog = useConfirm();
@@ -308,8 +363,10 @@ export default function HostsPage() {
   const { getString, getBool, updateParams, clearParams } = useUrlFilterParams();
 
   const clearSelection = useCallback(() => {
+    previewRequestSeqRef.current += 1;
+    setCrossPagePreviewLoading(false);
     setSelectedHostIds(new Set());
-    setCrossPagePreview(null);
+    setCrossPagePreviewEntry(null);
   }, []);
 
   const updateFilterParams = useCallback(
@@ -374,40 +431,57 @@ export default function HostsPage() {
     Boolean(searchQuery.trim());
 
   // 契约 §4：将前端筛选状态映射为后端增量子集参数（upgrade_pending 复用精确谓词）
-  const hostFilterParams = useMemo<HostFilterQueryParams>(() => {
-    const params: HostFilterQueryParams = {};
-    if (showRetired) params.include_retired = true;
-    if (statusFilter !== 'all') params.status = statusFilter;
-    if (healthFilter !== 'all') params.health_status = healthFilter;
-    if (syncFilter === 'upgrade_pending' || syncFilter === 'drift' || syncFilter === 'matched') {
-      params.sync_status = syncFilter;
-    } else if (syncFilter === 'usb_fault') {
-      params.usb_anomaly = true;
-    } else if (syncFilter === 'mount_error') {
-      params.mount_anomaly = true;
-    }
-    if (searchQuery.trim()) params.q = searchQuery.trim();
-    return params;
-  }, [showRetired, statusFilter, healthFilter, syncFilter, searchQuery]);
+  const hostFilterParams = buildHostFilterParams(
+    showRetired,
+    statusFilter,
+    healthFilter,
+    syncFilter,
+    searchQuery,
+  );
+
+  const hostFilterScopeKey = JSON.stringify(hostFilterParams);
+  const crossPagePreview =
+    crossPagePreviewEntry?.scopeKey === hostFilterScopeKey ? crossPagePreviewEntry.preview : null;
+  const activeFilterScopeKeyRef = useRef(hostFilterScopeKey);
+  useEffect(() => {
+    activeFilterScopeKeyRef.current = hostFilterScopeKey;
+    previewRequestSeqRef.current += 1;
+  }, [hostFilterScopeKey]);
+  useEffect(() => () => {
+    previewRequestSeqRef.current += 1;
+  }, []);
+
+  const [prevHostFilterScopeKey, setPrevHostFilterScopeKey] = useState(hostFilterScopeKey);
+  if (prevHostFilterScopeKey !== hostFilterScopeKey) {
+    setPrevHostFilterScopeKey(hostFilterScopeKey);
+    if (selectedHostIds.size > 0) setSelectedHostIds(new Set());
+    if (crossPagePreviewEntry !== null) setCrossPagePreviewEntry(null);
+    if (crossPagePreviewLoading) setCrossPagePreviewLoading(false);
+  }
 
   const apiSortBy: HostListSortBy = sortKey === 'default' ? 'priority' : sortKey;
   const apiSortDir: HostSortDirection = sortKey === 'default' ? 'desc' : sortDirection;
-  const pageQueryParams = useMemo(
-    () => ({
-      ...hostFilterParams,
-      skip: (page - 1) * pageSize,
-      limit: pageSize,
-      sort_by: apiSortBy,
-      sort_dir: apiSortDir,
-    }),
-    [hostFilterParams, page, pageSize, apiSortBy, apiSortDir],
-  );
+  const sortOrderScopeKey = `${hostFilterScopeKey}|${apiSortBy}|${apiSortDir}`;
+  const activeSnapshotId =
+    page > 1 && sortSnapshotEntry?.scopeKey === sortOrderScopeKey
+      ? sortSnapshotEntry.snapshotId
+      : undefined;
 
-  // B3-2：主列表走服务端单页分页（独立缓存键 hostKeys.page，不污染 ['hosts']）
+  const pageQueryParams = {
+    ...hostFilterParams,
+    skip: (page - 1) * pageSize,
+    limit: pageSize,
+    sort_by: apiSortBy,
+    sort_dir: apiSortDir,
+    ...(activeSnapshotId ? { snapshot_id: activeSnapshotId } : {}),
+  };
+
+  // B3-2 / Q4：主列表走服务端单页分页（默认 projection=list，翻页透传同代次 snapshot_id）
   const {
     data: hostsPageData,
     isLoading,
     isFetching: isFetchingPage,
+    isPlaceholderData: isPlaceholderPage,
     error,
   } = useQuery({
     queryKey: hostKeys.page(pageQueryParams),
@@ -435,20 +509,17 @@ export default function HostsPage() {
     }
   }, [hostsPageData, page, pageSize, updateParams]);
 
-  // 契约 §6.1：跨页 `?drawer=<id>` 深链不在当前页时独立拉单机详情
-  const drawerHostInPage = useMemo(
-    () => Boolean(drawerHostId && hosts.some((h) => String(h.id) === drawerHostId)),
-    [drawerHostId, hosts],
-  );
+  // 契约 §4 规则 7 / §6.1：抽屉打开时按需拉单机完整详情（含完整 mount_status 与活跃任务），
+  // 在页主机先由列表行瞬时占位，详情返回后以完整明细覆盖；跨页 `?drawer=<id>` 深链同样独立加载。
   const drawerHostQ = useQuery({
     queryKey: hostKeys.detail(drawerHostId ?? ''),
     queryFn: () => api.hosts.get(drawerHostId!),
-    enabled: Boolean(drawerHostId) && !drawerHostInPage,
+    enabled: Boolean(drawerHostId),
   });
   const drawerHostOverride = useMemo<HostTableData | null>(() => {
-    if (!drawerHostId || drawerHostInPage || !drawerHostQ.data) return null;
+    if (!drawerHostId || !drawerHostQ.data) return null;
     return mapHostToTableData(drawerHostQ.data);
-  }, [drawerHostId, drawerHostInPage, drawerHostQ.data]);
+  }, [drawerHostId, drawerHostQ.data]);
 
   // #2362：空态区分「从未接入」与「全部退役」——仅在无筛选且在用全集为 0 时探针一次含退役 Facets
   const isTrulyEmptyScope =
@@ -495,25 +566,43 @@ export default function HostsPage() {
   }, [crossPagePreview, selectedHostIds, liveHostIds, hosts]);
 
   const handlePageSelectionChange = useCallback((nextIds: Set<string | number>) => {
-    setCrossPagePreview(null);
+    previewRequestSeqRef.current += 1;
+    setCrossPagePreviewLoading(false);
+    setCrossPagePreviewEntry(null);
     setSelectedHostIds(nextIds);
   }, []);
 
   const handleSelectAllFiltered = useCallback(async () => {
+    const requestSeq = ++previewRequestSeqRef.current;
+    const requestScopeKey = hostFilterScopeKey;
     setCrossPagePreviewLoading(true);
     try {
       const preview = await api.hosts.selectionPreview(hostFilterParams);
-      setCrossPagePreview(preview);
+      if (
+        requestSeq !== previewRequestSeqRef.current ||
+        requestScopeKey !== activeFilterScopeKeyRef.current
+      ) {
+        return;
+      }
+      setCrossPagePreviewEntry({ scopeKey: requestScopeKey, preview });
       setSelectedHostIds(
         new Set(preview.host_ids.map((id) => resolveSelectedHostId(id, hosts))),
       );
       toast.info(`已冻结全部筛选结果（共 ${preview.total_matched} 台主机）`);
     } catch (err: unknown) {
+      if (
+        requestSeq !== previewRequestSeqRef.current ||
+        requestScopeKey !== activeFilterScopeKeyRef.current
+      ) {
+        return;
+      }
       toast.error(`冻结筛选结果失败: ${toApiError(err).message}`);
     } finally {
-      setCrossPagePreviewLoading(false);
+      if (requestSeq === previewRequestSeqRef.current) {
+        setCrossPagePreviewLoading(false);
+      }
     }
-  }, [hostFilterParams, hosts, toast]);
+  }, [hostFilterParams, hostFilterScopeKey, hosts, toast]);
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof api.hosts.create>[0]) => api.hosts.create(data),
@@ -1116,7 +1205,8 @@ export default function HostsPage() {
         );
         const skippedOnly = await startHotUpdateBatch([], { skipped: skippedSeeds });
         if (skippedOnly) {
-          setCrossPagePreview(null);
+          previewRequestSeqRef.current += 1;
+          setCrossPagePreviewEntry(null);
           setSelectedHostIds(
             new Set(
               skippedOnly.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts)),
@@ -1154,7 +1244,8 @@ export default function HostsPage() {
         ...result.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts)),
         ...result.failed.map((item) => resolveSelectedHostId(item.hostId, hosts)),
       ]);
-      setCrossPagePreview(null);
+      previewRequestSeqRef.current += 1;
+      setCrossPagePreviewEntry(null);
       setSelectedHostIds(remainingIds);
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       queryClient.invalidateQueries({ queryKey: ['host-detail'] });
@@ -1218,14 +1309,15 @@ export default function HostsPage() {
     </label>
   );
 
-  const pageHeaderActions = (
-    <div className="flex items-center gap-2">
+  const workbenchActions = (
+    <div className="flex items-center gap-1.5">
       {!opPanelOpen && hostOps.length > 0 && (
         <Button
           variant="outline"
           size="sm"
           data-testid="host-op-panel-reopen"
           onClick={() => setOpPanelOpen(true)}
+          className="h-7 px-2.5 text-xs"
         >
           {hostOps.some((o) => o.kind === 'flash_prereqs')
             ? '刷机前置进度'
@@ -1238,7 +1330,12 @@ export default function HostsPage() {
         </Button>
       )}
       {isAdmin && (
-        <Button size="sm" data-testid="host-add-button" onClick={() => setIsModalOpen(true)}>
+        <Button
+          size="sm"
+          data-testid="host-add-button"
+          onClick={() => setIsModalOpen(true)}
+          className="h-7 gap-1 px-2.5 text-xs"
+        >
           <Plus className="h-3.5 w-3.5" />
           添加主机
         </Button>
@@ -1249,7 +1346,7 @@ export default function HostsPage() {
   if (isLoading) {
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         <PageSkeleton>
           <PageSkeleton.Stats count={4} />
           <PageSkeleton.Block size="lg" />
@@ -1266,7 +1363,7 @@ export default function HostsPage() {
     const unreachable = apiError.status == null;
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         <ErrorState
           title={unreachable ? '无法连接后端服务' : `加载主机失败（${apiError.status}）`}
           description={unreachable ? '请检查后端服务连接与网络。' : apiError.message}
@@ -1300,7 +1397,7 @@ export default function HostsPage() {
   if (showFullPageEmpty) {
     return (
       <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" action={pageHeaderActions} />
+        <PageHeader title="主机集群" />
         {/* #2051：空态也要给「显示已退役」开关，否则全退役后无法解除退役 */}
         <div className="flex items-center justify-end gap-2 py-2">{retiredToggle}</div>
         <EmptyState
@@ -1322,17 +1419,14 @@ export default function HostsPage() {
   }
 
   return (
-    <PageContainer width="wide" className="py-2.5 lg:py-2.5">
-      <PageHeader
-        title="主机集群"
-        subtitle="管理和监控测试执行节点 · 点击主机行查看详情，勾选后可批量运维"
-        action={pageHeaderActions}
-      />
+    <PageContainer width="wide" scrollable={false} className="py-2.5 lg:py-2.5">
+      <PageHeader title="主机集群" />
 
       {/* Host Table */}
       <ExpandableHostTable
         hosts={tableData}
         serverMode
+        extraHeaderRight={workbenchActions}
         serverFacets={facetsQ.data}
         serverFilteredTotal={filteredTotal}
         page={page}
@@ -1340,6 +1434,18 @@ export default function HostsPage() {
         pageSizeOptions={PAGE_SIZE_OPTIONS}
         onPageChange={(nextPage) => {
           if (selectionScope === 'page') setSelectedHostIds(new Set());
+          if (nextPage <= 1) {
+            setSortSnapshotEntry(null);
+          } else if (
+            sortSnapshotEntry?.scopeKey !== sortOrderScopeKey &&
+            !isPlaceholderPage &&
+            hostsPageData?.snapshot_id
+          ) {
+            setSortSnapshotEntry({
+              scopeKey: sortOrderScopeKey,
+              snapshotId: hostsPageData.snapshot_id,
+            });
+          }
           updateParams({ page: nextPage > 1 ? String(nextPage) : undefined });
         }}
         onPageSizeChange={(nextSize) => {

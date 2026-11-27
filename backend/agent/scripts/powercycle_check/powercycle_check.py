@@ -88,14 +88,18 @@ from _lib import (
     device_online,
     device_serial,
     get_prefs_xml,
+    get_r30_prefs_xml,
     output_result,
     param_or_env,
     params,
     parse_size_from_ls,
     pause_task,
+    pause_task_r30,
     progress_stamp,
+    resolve_apk_flavor,
     result_paths,
     resume_task,
+    resume_task_r30,
     service_alive,
 )
 
@@ -118,7 +122,7 @@ def _save_state(state: dict) -> None:
         pass
 
 
-def _compensate_pending_resume(state: dict) -> bool:
+def _compensate_pending_resume(state: dict, *, apk_flavor: str = "stp") -> bool:
     """#813：把「已暂停但未恢复」的自动测试任务恢复续跑。
 
     返回 True 表示当前已无待恢复状态（恢复成功、或服务本就在跑）。
@@ -127,14 +131,18 @@ def _compensate_pending_resume(state: dict) -> bool:
     """
     if not state.get("paused_by_collect"):
         return True
-    if service_alive():
+    alive_now = service_alive() if apk_flavor == "stp" else service_alive(apk_flavor)
+    if alive_now:
         # 任务已在跑（恢复已生效/暂停未真正落下）——只清标记
         state["paused_by_collect"] = False
         state.pop("resume_error", None)
         _save_state(state)
         return True
     try:
-        resume_task()
+        if apk_flavor == "r30":
+            resume_task_r30()
+        else:
+            resume_task()
     except Exception as exc:  # noqa: BLE001 — 补偿失败不中断巡检，下周期重试
         state["resume_error"] = str(exc)
         _save_state(state)
@@ -145,8 +153,17 @@ def _compensate_pending_resume(state: dict) -> bool:
     return True
 
 
-def _read_prefs_progress() -> tuple[int, int] | None:
-    """prefs current_count/test_times（run-as 读）；读不到返回 None。"""
+def _read_prefs_progress(apk_flavor: str = "stp") -> tuple[int, int] | None:
+    """prefs 进度读取（stp: current_count/test_times；r30: restarted_times/Num）；读不到返回 None。"""
+    if apk_flavor == "r30":
+        xml = get_r30_prefs_xml()
+        if not xml:
+            return None
+        cur = re.search(r'name="restarted_times" value="(\d+)"', xml)
+        if not cur:
+            return None
+        total = re.search(r'name="Num" value="(\d+)"', xml)
+        return int(cur.group(1)), int(total.group(1)) if total else 0
     xml = get_prefs_xml()
     if not xml:
         return None
@@ -157,10 +174,12 @@ def _read_prefs_progress() -> tuple[int, int] | None:
     return int(cur.group(1)), int(total.group(1)) if total else 0
 
 
-def _grep_cycle_count() -> int:
-    """兜底：结果文件 'cycle ' 行数（grep -c；多路径逐个试）。"""
-    for path in result_paths():
-        rc, out, _ = _adb_grep(path)
+def _grep_cycle_count(apk_flavor: str = "stp") -> int:
+    """兜底：结果文件循环计数（stp: 'cycle '；r30: 'time implement result'）。"""
+    paths = result_paths() if apk_flavor == "stp" else result_paths(apk_flavor)
+    pattern = "time implement result" if apk_flavor == "r30" else "cycle "
+    for path in paths:
+        rc, out, _ = _adb_grep(path) if apk_flavor == "stp" else _adb_grep(path, pattern=pattern)
         if rc == 0 and out.strip():
             try:
                 return int(out.strip().splitlines()[-1])
@@ -169,8 +188,9 @@ def _grep_cycle_count() -> int:
     return 0
 
 
-def _result_bytes() -> int:
-    for path in result_paths():
+def _result_bytes(apk_flavor: str = "stp") -> int:
+    paths = result_paths() if apk_flavor == "stp" else result_paths(apk_flavor)
+    for path in paths:
         ls = adb_shell(f"ls -l {path}", timeout=30).strip()
         size = parse_size_from_ls(ls)
         if size > 0:
@@ -178,19 +198,20 @@ def _result_bytes() -> int:
     return 0
 
 
-def _result_mtime() -> int:
+def _result_mtime(apk_flavor: str = "stp") -> int:
     """结果文件 mtime（epoch 秒，stat -c %Y）；不可读返回 0。"""
-    for path in result_paths():
+    paths = result_paths() if apk_flavor == "stp" else result_paths(apk_flavor)
+    for path in paths:
         out = adb_shell(f"stat -c %Y {path}", timeout=30).strip()
         if out.isdigit():
             return int(out)
     return 0
 
 
-def _adb_grep(path: str) -> tuple[int, str, str]:
+def _adb_grep(path: str, *, pattern: str = "cycle ") -> tuple[int, str, str]:
     try:
         result = subprocess.run(
-            [adb_path(), "-s", device_serial(), "shell", f"grep -c 'cycle ' {path} 2>/dev/null"],
+            [adb_path(), "-s", device_serial(), "shell", f"grep -c '{pattern}' {path} 2>/dev/null"],
             capture_output=True, text=True, timeout=30,
         )
         return result.returncode, result.stdout or "", result.stderr or ""
@@ -198,9 +219,10 @@ def _adb_grep(path: str) -> tuple[int, str, str]:
         return -1, "", "timeout"
 
 
-def _run_finished() -> bool:
-    """结果文件是否已有 ``finished result=`` 行（测试自然收尾标记）。"""
-    for path in result_paths():
+def _run_finished(apk_flavor: str = "stp") -> bool:
+    """结果文件是否已有自然收尾标记（stp: ``finished result=``；r30: ``Test result`` + ``Total :``）。"""
+    paths = result_paths() if apk_flavor == "stp" else result_paths(apk_flavor)
+    for path in paths:
         try:
             result = subprocess.run(
                 [adb_path(), "-s", device_serial(), "shell", f"cat {path}"],
@@ -208,7 +230,11 @@ def _run_finished() -> bool:
             )
         except subprocess.TimeoutExpired:
             continue
-        if "finished result=" in (result.stdout or ""):
+        text = result.stdout or ""
+        if apk_flavor == "r30":
+            if "Test result" in text and "Total :" in text:
+                return True
+        elif "finished result=" in text:
             return True
     return False
 
@@ -258,6 +284,7 @@ def _run(cfg: dict) -> dict:
     grace = max(1, int(str(param_or_env(cfg, "dead_grace_cycles", "STP_POWER_CYCLE_DEAD_GRACE_CYCLES", "2")) or 2))
     injected = int(str(cfg.get("expected_cycles") or 0) or 0)
     project = str(param_or_env(cfg, "project", "STP_POWER_CYCLE_PROJECT", "legacy"))
+    apk_flavor = resolve_apk_flavor(cfg)
 
     state = _load_state()
     # #1028（R08-F10）：巡检状态是「单次运行」语义——新 Job 不继承上一 Job 的
@@ -300,11 +327,21 @@ def _run(cfg: dict) -> dict:
             state["paused_by_collect"] = True
             _save_state(state)
             try:
-                pause_task()
+                if apk_flavor == "r30":
+                    pause_task_r30()
+                else:
+                    pause_task()
                 if not _wait_online_short(timeout_s=120):
                     raise RuntimeError("收取窗口内设备 120s 未上线，跳过本轮收取（下个周期重试）")
-                collected = collect_powercycle_result(project)
-                resume_task()
+                collected = (
+                    collect_powercycle_result(project, apk_flavor="r30")
+                    if apk_flavor == "r30"
+                    else collect_powercycle_result(project)
+                )
+                if apk_flavor == "r30":
+                    resume_task_r30()
+                else:
+                    resume_task()
                 state["paused_by_collect"] = False
                 state.pop("resume_error", None)
                 state["last_collected"] = collected["run_id"]
@@ -314,7 +351,7 @@ def _run(cfg: dict) -> dict:
                 state["collect_error"] = str(exc)
                 # 补偿：pause 已执行而 resume 未确认时必须尝试恢复；失败则保留
                 # 标记，由窗口外周期继续补偿。
-                _compensate_pending_resume(state)
+                _compensate_pending_resume(state, apk_flavor=apk_flavor)
         payload = {
             "seq": int(state.get("seq", 0)) + 1,
             "step": "powercycle_check",
@@ -336,7 +373,7 @@ def _run(cfg: dict) -> dict:
     # 恢复成功则本轮不判死（服务启动需要时间），并清掉暂停期累积的停滞账；
     # 补偿失败保留标记继续尝试，且照常进入判死评估（不掩盖真故障）。
     if state.get("paused_by_collect"):
-        if _compensate_pending_resume(state):
+        if _compensate_pending_resume(state, apk_flavor=apk_flavor):
             payload = {
                 "seq": int(state.get("seq", 0)) + 1,
                 "step": "powercycle_check",
@@ -345,7 +382,7 @@ def _run(cfg: dict) -> dict:
                 "expected_cycles": injected,
                 "result_bytes": 0,
                 "device_online": True,
-                "service_alive": service_alive(),
+                "service_alive": service_alive() if apk_flavor == "stp" else service_alive(apk_flavor),
                 "resume_error": state.get("resume_error"),
             }
             state["dead_streak"] = 0
@@ -359,13 +396,13 @@ def _run(cfg: dict) -> dict:
     state["collecting_done_for_window"] = False
     state.pop("collect_error", None)
 
-    alive = service_alive()
-    prefs = _read_prefs_progress()
-    cycles_done = prefs[0] if prefs else _grep_cycle_count()
+    alive = service_alive() if apk_flavor == "stp" else service_alive(apk_flavor)
+    prefs = _read_prefs_progress() if apk_flavor == "stp" else _read_prefs_progress(apk_flavor)
+    cycles_done = prefs[0] if prefs else (_grep_cycle_count() if apk_flavor == "stp" else _grep_cycle_count(apk_flavor))
     expected = injected or (prefs[1] if prefs else 0)
-    result_bytes = _result_bytes()
+    result_bytes = _result_bytes() if apk_flavor == "stp" else _result_bytes(apk_flavor)
 
-    if _run_finished():
+    if _run_finished() if apk_flavor == "stp" else _run_finished(apk_flavor):
         # 自然收尾：报完成（成败由 teardown 解析 final_status 定）
         payload = {
             "seq": int(state.get("seq", 0)) + 1,
@@ -390,7 +427,7 @@ def _run(cfg: dict) -> dict:
     #   - 文件 mtime 较上轮变化（有写入）→ 清零（服务在工作）
     #   - 文件停滞（mtime 不变）→ 累计——真死永久停滞判死；偶发启动失败
     #     会在下轮 reboot 后文件增长时清零（最终验收实测的自愈场景）
-    mtime = _result_mtime()
+    mtime = _result_mtime() if apk_flavor == "stp" else _result_mtime(apk_flavor)
     # v1.0.11：cycles_done==0 不再作为「不判死」的豁免。NX3 假健康取证：
     # 应用读不到 prefs（SELinux category 不匹配）时 current_count 恒为 0，
     # 结果文件只有旧的 "cycle 1/..." 行；服务已死但 cycles_done==0 让
@@ -408,9 +445,10 @@ def _run(cfg: dict) -> dict:
     _save_state(state)
 
     if state["dead_streak"] >= grace:
+        svc_name = "RebootService" if apk_flavor == "r30" else "PowerCycleService"
         return {
             "success": False,
-            "error_message": f"PowerCycleService 连续 {state['dead_streak']} 个周期未存活",
+            "error_message": f"{svc_name} 连续 {state['dead_streak']} 个周期未存活",
             "progress": {
                 "cycles_done": cycles_done,
                 "expected_cycles": expected,

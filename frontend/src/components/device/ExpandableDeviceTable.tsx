@@ -94,6 +94,7 @@ export interface DeviceTableData {
   current_task?: string;
   last_seen?: string;
   tags?: string[];
+  tags_truncated?: boolean;
   /** ADR-0029：归属项目 key（F2 口径） */
   project_key?: string | null;
   /** ADR-0029 P0：归属来源四态（rule / manual / pinned / unassigned），行内 badge 用 */
@@ -651,18 +652,17 @@ export function ExpandableDeviceTable({
     setCurrentPage(updater(safeCurrentPage));
     const scrollEl = tableContainerRef.current?.querySelector('[data-slot="table-scroll-container"]');
     if (scrollEl) scrollEl.scrollTop = 0;
-    tableContainerRef.current?.scrollIntoView?.({ block: 'start' });
   };
 
   return (
-    <div className="space-y-2">
+    <div className="flex flex-1 min-h-0 flex-col gap-2">
       {/* #3131：列表不完整时必须说出来——下方状态统计与搜索/筛选都只作用于已加载
           部分，静默截断会让「搜不到」被读成「不存在」 */}
       {truncated && (
         <div
           role="alert"
           data-testid="device-table-truncated"
-          className={cn('flex items-start gap-2 rounded-lg px-3 py-2 text-xs', ALERT_BOX.warning)}
+          className={cn('shrink-0 flex items-start gap-2 rounded-lg px-3 py-2 text-xs', ALERT_BOX.warning)}
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
@@ -881,8 +881,9 @@ export function ExpandableDeviceTable({
         );
 
         return (
-          <FilterWorkbench
-            headerLeft={unifiedStatusViews}
+          <div className="shrink-0">
+            <FilterWorkbench
+              headerLeft={unifiedStatusViews}
             headerRight={extraHeaderRight}
             hiddenChips={hiddenChips}
             hasAnyActiveFilter={hasAnyActiveFilter}
@@ -974,14 +975,18 @@ export function ExpandableDeviceTable({
               )}
             </div>
           </FilterWorkbench>
+          </div>
         );
       })()}
 
-      {/* Table（固定视口滚容器 + sticky top-0 表头 + 虚拟化数据行 + ClickableRow） */}
-      <div ref={tableContainerRef} className="rounded-xl border border-border bg-card">
-        <Table containerClassName="max-h-[calc(100vh-225px)] min-h-[280px]">
-          <TableHeader>
-            <TableRow className="sticky top-0 z-20 bg-muted/95 hover:bg-muted/95 [&>th]:h-9">
+      {/* Table（视口弹性锁高 + sticky top-0 表头 + 虚拟化数据行 + 卡片底栏固定分页） */}
+      <div
+        ref={tableContainerRef}
+        className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card"
+      >
+        <Table containerClassName="flex-1 min-h-0 overflow-auto">
+          <TableHeader className="sticky top-0 z-20 bg-muted/95 backdrop-blur-xs">
+            <TableRow className="bg-muted/95 hover:bg-muted/95 [&>th]:h-9">
               {selectable && (
                 <TableHead className="sticky left-0 z-30 w-9 min-w-[36px] bg-muted px-2.5 py-2">
                   <input
@@ -1459,16 +1464,23 @@ export function ExpandableDeviceTable({
           </TableBody>
         </Table>
 
-        {/* Pagination */}
+        {/* Pagination（固定在卡片底部，不随表格滚动移出视口） */}
         {(effectiveFilteredCount > pageSize || (serverMode && effectiveFilteredCount > 0)) && (
-          <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs text-muted-foreground">
-              显示第 {(safeCurrentPage - 1) * pageSize + 1} - {Math.min(safeCurrentPage * pageSize, effectiveFilteredCount)} 条，
-              共 {effectiveFilteredCount} 条设备
+          <div
+            data-testid="devices-pagination-bar"
+            className="shrink-0 border-t border-border bg-card px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+          >
+            <div className="font-mono tabular-nums">
+              第 {(safeCurrentPage - 1) * pageSize + 1}–{Math.min(safeCurrentPage * pageSize, effectiveFilteredCount)} / 共 {effectiveFilteredCount} 台
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               {serverMode && onPageSizeChange && (
-                <div className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="device-page-size-group">
+                <div
+                  className="inline-flex items-center gap-1"
+                  role="group"
+                  aria-label="每页显示条数"
+                  data-testid="device-page-size-group"
+                >
                   <span>每页</span>
                   {pageSizeOptions.map((size) => (
                     <button
@@ -1478,7 +1490,7 @@ export function ExpandableDeviceTable({
                       aria-pressed={pageSize === size}
                       onClick={() => onPageSizeChange(size)}
                       className={cn(
-                        'rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors',
+                        'rounded border px-2 py-0.5 font-mono text-xs transition-colors',
                         pageSize === size
                           ? 'border-primary bg-primary/10 font-medium text-primary'
                           : 'border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground',
@@ -1489,25 +1501,29 @@ export function ExpandableDeviceTable({
                   ))}
                 </div>
               )}
-              <div className="flex items-center gap-2">
+              <div className="inline-flex items-center gap-1.5">
                 <button
+                  type="button"
                   onClick={() => handlePageChange((p) => Math.max(1, p - 1))}
                   disabled={safeCurrentPage === 1}
                   aria-label="上一页"
-                  className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-0.5 rounded border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <ChevronLeft className="w-4 h-4 text-muted-foreground" />
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  <span>上一页</span>
                 </button>
-                <span className="text-xs font-mono tabular-nums text-muted-foreground">
+                <span className="px-1 font-mono tabular-nums text-foreground" data-testid="devices-page-indicator">
                   {safeCurrentPage} / {totalPages}
                 </span>
                 <button
+                  type="button"
                   onClick={() => handlePageChange((p) => Math.min(totalPages, p + 1))}
                   disabled={safeCurrentPage === totalPages}
                   aria-label="下一页"
-                  className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-0.5 rounded border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                  <span>下一页</span>
+                  <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>

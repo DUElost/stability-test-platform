@@ -24,6 +24,10 @@ export interface Host {
   last_heartbeat: string | null;
   extra: Record<string, unknown>;
   mount_status: Record<string, unknown>;
+  /** #496 / #4117 Q4：列表投影（projection=list）裁剪完整挂载明细后的轻量摘要标量 */
+  mount_anomaly?: boolean;
+  mount_count?: number;
+  mount_failed_count?: number;
   capacity?: {
     active_jobs: number;
     active_devices: number;
@@ -71,6 +75,8 @@ export interface Host {
       over_current_ports: number;
       stuck_default_ports: number;
     } | null;
+    /** VBUS 槽位在位映射：{ serial: [hub:port, vid:pid | null] } */
+    usb_power_slots?: Record<string, [string, string | null]> | null;
   };
   health?: {
     status: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
@@ -90,6 +96,8 @@ export interface Host {
     recent_verdicts?: string[];
     strike_open?: boolean;
     strike_need?: number;
+    uhubctl_status?: 'ok' | 'unavailable' | 'skipped_unbound_hub' | 'timeout' | 'error' | string;
+    powered_off_ports?: string[];
   } | null;
   /** #2972 / S4：Agent 侧 USB/ADB 自愈与持久化熔断状态 */
   self_heal?: {
@@ -148,8 +156,9 @@ export interface Host {
   emptied_at?: string | null;
   emptied_by?: string | null;
   emptied_reason?: string | null;
-  /** 台账在册（未退役）设备数（用于区分纯空主机与台账有设备但 USB 空树的疑似失明主机） */
+  /** 台账在册（未退役）设备数与最近活跃时间（用于按 72h 窗口区分长期空置主机与近期失联空树主机） */
   ledger_device_count?: number | null;
+  ledger_latest_seen_at?: string | null;
 }
 
 /** #496 / #4117 B2-2：`GET /hosts/facets` 10 项全局计数模型。 */
@@ -201,6 +210,8 @@ export interface HostListPageQueryParams extends HostFilterQueryParams {
   limit?: number;
   sort_by?: HostListSortBy;
   sort_dir?: HostListSortDir;
+  projection?: 'full' | 'list';
+  snapshot_id?: string;
 }
 
 export type HostSelectionPreviewRequest = HostFilterQueryParams;
@@ -489,6 +500,8 @@ export interface DeviceListItem {
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   last_seen: string | null;
   tags: string[];
+  /** #496 / #4117 Q2：列表投影因单行载荷预算发生截断时置 true，写标签前需按需拉取单机完整标签 */
+  tags_truncated?: boolean;
   adb_state?: string | null;
   adb_connected?: boolean | null;
   battery_level?: number | null;
@@ -774,10 +787,22 @@ export interface JiraRunRecord {
   created_at: string;
 }
 
+export interface PipelineTemplatePlanDefaults {
+  barrier_timeout_seconds?: number | null;
+  barrier_max_wait_seconds?: number | null;
+  auto_archive_interval_seconds?: number | null;
+  watcher_policy?: WatcherPolicy | Record<string, unknown> | null;
+}
+
 export interface PipelineTemplate {
   name: string;
+  display_name: string;
+  specialty_key: string;
+  status: 'ready' | 'skeleton';
+  requires_suite: boolean;
   description: string;
-  pipeline_def: Record<string, unknown>;
+  pipeline_def: PipelineDef;
+  plan_defaults?: PipelineTemplatePlanDefaults | null;
 }
 
 export interface AgentLogOut {
@@ -1263,6 +1288,8 @@ export interface PaginatedResponse<T> {
   total: number;
   skip: number;
   limit: number;
+  /** 动态排序列表分页快照令牌（同一筛选/排序翻页回传，避免跨页重复与漏项） */
+  snapshot_id?: string | null;
 }
 
 // ─── API error contract ───────────────────────────────────────────────────────
@@ -1396,6 +1423,12 @@ export interface ProjectMapPreview {
 
 // ─── 编排模型类型 ──────────────────────────────────────────────────────────────
 
+export interface ScriptTags {
+  role: 'common_init' | 'specialty_init' | 'patrol' | 'teardown' | 'ops' | string;
+  specialties: string[];
+  platforms: string[];
+}
+
 export interface ScriptEntry {
   id: number;
   name: string;
@@ -1411,6 +1444,8 @@ export interface ScriptEntry {
   default_params: Record<string, unknown>;
   /** #3653 U1：掩码后的脚本参数投影。原始 default_params / param_schema 仍保留。 */
   parameter_projection?: ScriptParameterProjection;
+  /** #4182 Phase 2：轻量脚本分类标签（仅服务 UI 筛选，不改脚本发布单元）。 */
+  tags?: ScriptTags | null;
   is_active: boolean;
   capabilities?: string[];
   description?: string | null;

@@ -67,16 +67,27 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   useEffect(() => {
     if (isDefault) return;
     setHeaderSlot(
-      <div className="flex w-full min-w-0 items-center justify-between gap-4">
-        <div className="flex min-w-0 flex-col justify-center gap-1">
-          {breadcrumbs && breadcrumbs.length > 0 && (
-            <PageHeaderBreadcrumbs breadcrumbs={breadcrumbs} />
+      <div className="flex w-full min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5 overflow-hidden">
+          {breadcrumbs && breadcrumbs.length > 0 ? (
+            <div className="flex min-w-0 flex-col justify-center">
+              <PageHeaderBreadcrumbs breadcrumbs={breadcrumbs} />
+              <h1 className={cn('truncate text-[15px] font-semibold leading-tight tracking-[-0.015em]', TEXT.heading)}>
+                {title}
+              </h1>
+            </div>
+          ) : (
+            <h1 className={cn('truncate text-[15px] font-semibold leading-tight tracking-[-0.015em]', TEXT.heading)}>
+              {title}
+            </h1>
           )}
-          <h1 className={cn('truncate text-lg font-semibold leading-tight tracking-[-0.02em]', TEXT.heading)}>
-            {title}
-          </h1>
           {subtitle && (
-            <span className={cn('truncate text-xs leading-tight', TEXT.caption)}>
+            <span
+              className={cn(
+                'hidden xl:inline truncate border-l border-border/70 pl-2.5 text-xs leading-tight',
+                TEXT.caption,
+              )}
+            >
               {subtitle}
             </span>
           )}

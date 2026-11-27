@@ -575,3 +575,249 @@ class TestUsbControllerHealthAndEmptyCabinetDistinction:
         assert r_detail.status_code == 200
         assert r_detail.json()["ledger_device_count"] == 0
 
+    def test_empty_tree_72h_stale_ledger_excluded_and_uhubctl_powered_off_surfaced(
+        self, client, db_session, auth_headers
+    ):
+        """纯空树按 72h 最近活跃窗口消噪；uhubctl 断电端口（P1）与硬件故障绝不豁免。"""
+        from backend.models.host import Device
+
+        prefix = f"usb72h-{uuid4().hex[:6]}"
+        now = datetime.now(timezone.utc)
+        base = client.get("/api/v1/hosts/facets", headers=auth_headers).json()["data"]
+
+        # 1) 长期空置机：台账有设备但 last_seen 为 5 天前（>72h）且硬件全绿 -> 自动排除出 usb_anomaly（P0）
+        h_stale = _make_host(
+            db_session,
+            host_id=f"{prefix}-stale",
+            name=f"StaleEmpty-{prefix}",
+            ip=f"10.75.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "DEGRADED", "reasons": ["usb_tree_empty"]},
+                "capacity": {
+                    "usb_device_count": 0,
+                    "usb_controller_health": {
+                        "unbound_xhci_controllers": 0,
+                        "disabled_root_ports": 0,
+                        "disabled_hub_ports": 0,
+                        "over_current_ports": 0,
+                        "stuck_default_ports": 0,
+                    },
+                },
+            },
+        )
+        db_session.add(
+            Device(
+                serial=f"{prefix}-STALE-01",
+                host_id=h_stale.id,
+                model="TEST",
+                platform="mtk",
+                status="OFFLINE",
+                last_seen=now - timedelta(days=5),
+            )
+        )
+
+        # 2) 近期掉光机：台账设备 6 小时前还在活跃（<=72h）-> 保留在 usb_anomaly（P2）
+        h_recent = _make_host(
+            db_session,
+            host_id=f"{prefix}-recent",
+            name=f"RecentEmpty-{prefix}",
+            ip=f"10.75.2.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "DEGRADED", "reasons": ["usb_tree_empty"]},
+                "capacity": {"usb_device_count": 0},
+            },
+        )
+        db_session.add(
+            Device(
+                serial=f"{prefix}-RECENT-01",
+                host_id=h_recent.id,
+                model="TEST",
+                platform="mtk",
+                status="OFFLINE",
+                last_seen=now - timedelta(hours=6),
+            )
+        )
+
+        # 3) VBUS 断电机：无硬件损坏，但 uhubctl 巡检到 2 个 0000 off 端口 -> 计入 usb_anomaly（P1）
+        h_vbus_off = _make_host(
+            db_session,
+            host_id=f"{prefix}-vbus",
+            name=f"VbusOff-{prefix}",
+            ip=f"10.75.3.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            extra={
+                "health": {"status": "HEALTHY", "reasons": []},
+                "capacity": {"usb_device_count": 2},
+                "health_probe": {
+                    "verdict": "aligned",
+                    "topology": "ok",
+                    "uhubctl_status": "ok",
+                    "powered_off_ports": ["1-5.1:2", "1-5.1:4"],
+                },
+            },
+        )
+        db_session.commit()
+
+        cur = client.get("/api/v1/hosts/facets", headers=auth_headers).json()["data"]
+        assert cur["usb_anomaly"] - base["usb_anomaly"] == 2
+
+        r_usb = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "usb_anomaly": "true", "sort_by": "priority", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert r_usb.status_code == 200
+        items = r_usb.json()["items"]
+        assert [h["id"] for h in items] == [h_recent.id, h_vbus_off.id]
+        assert items[0]["ledger_latest_seen_at"] is not None
+        assert items[1]["health_probe"]["powered_off_ports"] == ["1-5.1:2", "1-5.1:4"]
+
+        # 按关键词搜索 VBUS / 具体端口可命中
+        r_q = client.get(
+            "/api/v1/hosts",
+            params={"q": f"{prefix} 1-5.1:2", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert r_q.status_code == 200
+        assert [h["id"] for h in r_q.json()["items"]] == [h_vbus_off.id]
+
+        # 长期空置机单机详情带 ledger_latest_seen_at
+        r_stale = client.get(f"/api/v1/hosts/{h_stale.id}", headers=auth_headers)
+        assert r_stale.status_code == 200
+        assert r_stale.json()["ledger_device_count"] == 1
+        assert r_stale.json()["ledger_latest_seen_at"] is not None
+
+
+class TestHostListMountProjectionAndDynamicSortSnapshotQ4:
+    """Q4 回归：projection=list 裁剪完整 mount_status 仅留摘要；动态排序跨页快照防重复/漏项。"""
+
+    def test_projection_list_trims_mount_detail_while_detail_and_legacy_preserve_it(
+        self, client, db_session, auth_headers, monkeypatch
+    ):
+        monkeypatch.setattr(hosts_route, "_list_desired_artifact_digest", lambda: DESIRED_DIGEST)
+        prefix = f"b22m-{uuid4().hex[:6]}"
+        host = _make_host(
+            db_session,
+            host_id=f"{prefix}-01",
+            name=f"MountNode-{prefix}",
+            ip=f"10.76.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            mount_status={
+                "/mnt/center": {"ok": True, "available_gb": 500, "total_gb": 1000},
+                "/mnt/aee_local": {"ok": False, "error": "stale file handle"},
+                "/mnt/flash_cache": {"ok": True, "available_gb": 200, "total_gb": 400},
+            },
+        )
+        db_session.commit()
+
+        # projection=list：清空完整 mount_status 明细，仅返回挂载摘要标量
+        r_list = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "projection": "list", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert r_list.status_code == 200
+        item = r_list.json()["items"][0]
+        assert item["id"] == host.id
+        assert item["mount_status"] == {}
+        assert item["mount_anomaly"] is True
+        assert item["mount_count"] == 3
+        assert item["mount_failed_count"] == 1
+
+        # mount_anomaly=true 筛选在 projection=list 下仍精确命中
+        r_flt = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "mount_anomaly": "true", "projection": "list", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert [h["id"] for h in r_flt.json()["items"]] == [host.id]
+
+        # 单机详情与默认兼容形态保留完整 mount_status
+        r_detail = client.get(f"/api/v1/hosts/{host.id}", headers=auth_headers)
+        assert r_detail.status_code == 200
+        assert set(r_detail.json()["mount_status"].keys()) == {
+            "/mnt/center",
+            "/mnt/aee_local",
+            "/mnt/flash_cache",
+        }
+
+        r_legacy = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert r_legacy.status_code == 200
+        assert "/mnt/aee_local" in r_legacy.json()["items"][0]["mount_status"]
+
+        # 非法 projection 返回 422
+        assert client.get("/api/v1/hosts", params={"projection": "bad"}, headers=auth_headers).status_code == 422
+
+    def test_dynamic_cpu_sort_snapshot_prevents_cross_page_duplicates_when_rank_flips(
+        self, client, db_session, auth_headers, monkeypatch
+    ):
+        monkeypatch.setattr(hosts_route, "_list_desired_artifact_digest", lambda: DESIRED_DIGEST)
+        prefix = f"b22snap-{uuid4().hex[:6]}"
+        hosts = []
+        for idx, cpu in enumerate([90.0, 70.0, 50.0, 30.0]):
+            hosts.append(
+                _make_host(
+                    db_session,
+                    host_id=f"{prefix}-{idx}",
+                    name=f"CpuNode-{prefix}-{idx}",
+                    ip=f"10.77.1.{10 + idx + (int(uuid4().hex[:2], 16) % 150)}",
+                    status="ONLINE",
+                    extra={"cpu_load": cpu, "agent_installed": True},
+                )
+            )
+        db_session.commit()
+
+        dml, commits, cleanup = _attach_readonly_probe(db_session)
+        try:
+            p1 = client.get(
+                "/api/v1/hosts",
+                params={"q": prefix, "sort_by": "cpu", "sort_dir": "desc", "projection": "list", "skip": 0, "limit": 2},
+                headers=auth_headers,
+            )
+            assert p1.status_code == 200
+            p1_body = p1.json()
+            snap_id = p1_body["snapshot_id"]
+            assert isinstance(snap_id, str) and len(snap_id) >= 8
+            p1_ids = [h["id"] for h in p1_body["items"]]
+            assert p1_ids == [hosts[0].id, hosts[1].id]
+            assert dml == []
+            assert commits == []
+        finally:
+            cleanup()
+
+        # 两次分页请求之间颠倒第 1 页与第 2 页主机的 CPU 排名（模拟心跳波动）
+        hosts[0].extra = {"cpu_load": 5.0, "agent_installed": True}
+        hosts[3].extra = {"cpu_load": 99.0, "agent_installed": True}
+        db_session.commit()
+
+        dml2, commits2, cleanup2 = _attach_readonly_probe(db_session)
+        try:
+            p2 = client.get(
+                "/api/v1/hosts",
+                params={
+                    "q": prefix,
+                    "sort_by": "cpu",
+                    "sort_dir": "desc",
+                    "projection": "list",
+                    "skip": 2,
+                    "limit": 2,
+                    "snapshot_id": snap_id,
+                },
+                headers=auth_headers,
+            )
+            assert p2.status_code == 200
+            p2_body = p2.json()
+            p2_ids = [h["id"] for h in p2_body["items"]]
+            # 复用快照后第 1、2 页完全互斥且覆盖全部 4 台主机，同时返回第 2 页主机的最新 CPU 读数
+            assert p2_body["snapshot_id"] == snap_id
+            assert p2_ids == [hosts[2].id, hosts[3].id]
+            assert set(p1_ids).isdisjoint(set(p2_ids))
+            assert set(p1_ids) | set(p2_ids) == {h.id for h in hosts}
+            assert p2_body["items"][1]["extra"]["cpu_load"] == 99.0
+            assert dml2 == []
+            assert commits2 == []
+        finally:
+            cleanup2()
+

@@ -1,5 +1,8 @@
 {
   "version": 2,
+  "display_name": "展锐 BSL 静默刷机",
+  "specialty_key": "ops",
+  "status": "ready",
   "description": "Unisoc/SPRD BSL (spd_dump) full firmware switch using Scheme 2 silent direct boot: check device, flash partitions with trimmed super.img and 4KB userdata.img over autodloader, verify userdebug/root, then skip OOBE.",
   "lifecycle": {
     "timeout_seconds": 7200,
@@ -15,7 +18,7 @@
       {
         "step_id": "flash_firmware_unisoc_bsl",
         "action": "script:flash_firmware_unisoc_bsl",
-        "version": "1.0.9",
+        "version": "1.0.10",
         "timeout_seconds": 7200,
         "retry": 0,
         "params": {

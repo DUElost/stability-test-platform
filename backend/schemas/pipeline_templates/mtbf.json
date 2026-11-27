@@ -1,8 +1,12 @@
 {
   "version": 1,
-  "description": "MTBF test: push resources, install APK, run instrumentation test, collect logs",
+  "display_name": "MTBF 稳定性",
+  "specialty_key": "mtbf",
+  "status": "ready",
+  "requires_suite": true,
+  "description": "MTBF test: push resources, install APK, run instrumentation test, collect logs (requires bound MTBF suite)",
   "lifecycle": {
-    "timeout_seconds": 7200,
+    "timeout_seconds": 604800,
     "init": [
       {
         "step_id": "check_device",
@@ -13,6 +17,26 @@
         "params": {}
       },
       {
+        "step_id": "sync_device_time",
+        "action": "script:sync_device_time",
+        "version": "1.0.1",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "timezone": "Asia/Shanghai"
+        }
+      },
+      {
+        "step_id": "unisoc_sysdump_config",
+        "action": "script:unisoc_sysdump_config",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "enabled": true
+        }
+      },
+      {
         "step_id": "ensure_root",
         "action": "script:ensure_root",
         "version": "1.0.2",
@@ -21,8 +45,38 @@
         "params": {
           "max_attempts": 3
         }
+      },
+      {
+        "step_id": "mtbf_setup",
+        "action": "script:mtbf_setup",
+        "version": "1.4.2",
+        "timeout_seconds": 900,
+        "retry": 1,
+        "params": {}
       }
     ],
-    "teardown": []
+    "patrol": {
+      "interval_seconds": 300,
+      "steps": [
+        {
+          "step_id": "mtbf_check",
+          "action": "script:mtbf_check",
+          "version": "1.5.0",
+          "timeout_seconds": 60,
+          "retry": 0,
+          "params": {}
+        }
+      ]
+    },
+    "teardown": [
+      {
+        "step_id": "mtbf_finish",
+        "action": "script:mtbf_finish",
+        "version": "1.6.0",
+        "timeout_seconds": 600,
+        "retry": 1,
+        "params": {}
+      }
+    ]
   }
 }
