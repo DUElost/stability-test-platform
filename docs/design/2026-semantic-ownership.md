@@ -285,7 +285,7 @@
 
 | 日期 | 变更 |
 |---|---|
-| 2026-11-27 | **ADR-0037 v0.9 草案（#4212 / ADR-0066 D6，归属域 `host-privilege-wrapper`）**：增补 D10 草案（`usbnet-*` 受限提权子命令、root 属主 `/etc/stp-usbnet.conf`、控制面 Ed25519 验签与三层网桥隔离），待独立安全复核与 Owner 裁决；`host-privilege-wrapper` 行锚点（`## 2. 决策`）与分工不变（与 `network-supply` 协同划界） |
+| 2026-11-27 | **ADR-0037 D10 v0.9 草案（`host-privilege-wrapper`，现行基线 `v0.8`）与 ADR-0066 v1.1（`network-supply`）（#4212 / PR #4213）**：ADR-0037 §2 增补 D10 v0.9 草案（`usbnet-*` 受限提权子命令、禁用全拒、仅按 `device_serial` 的单调水位、可执行 sysfs 校验、两阶段台账与 `usbnet-teardown` 零残留关闭、三层网桥隔离），待独立安全复核与 Owner 裁决；ADR-0066 v1.1 同步勘误 D6 代次比较域（移除按 `usb_devpath` 跨设备比较）及 sysfs/teardown 语义；`host-privilege-wrapper` 与 `network-supply` 锚点不变 |
 | 2026-11-27 | **ADR-0066 入表（Accepted v1.0，归属域 `network-supply`）**：经 PR #4185 第四轮独立复核通过（`f6e9252e1`）并由 Owner 同日裁决接受（含 Phase 1 允许登记 `wifi+vpn` 池）；§5.1 新增「网络供给 / 资源池」补 `0066`，§5.2 补 `network-supply` 行锚定 `## 2. 决策`（与 `device-lease`、`device-return`、`host-privilege-wrapper`、`finishing-guard` 协同划界） |
 | 2026-11-27 | **ADR-0065 入表（Accepted v1.0，归属域 `finishing-guard`）**：经 PR #4178 最终收口独立复核通过（`7208809580`、`207f298f4`）并由 Owner 同日裁决接受；§5.1「状态机 / 租约 / 调度」补 `0065`，§5.2 补 `finishing-guard` 行锚定 `## 2. 决策`（与 `device-return`、`run-terminal-semantics` 协同划界；P1-3 深度停止证明拆出至 `#4198`） |
 | 2026-11-23 | ADR-0062 v2.0（Accepted，归属域 `center-storage-model`）：经六轮独立复核通过并于同日由 Owner 裁决接受，增补 UNISOC 并入 `DEDUP_FIRST`、中心挂载强门控与阶段 D 退出（按 §9.2 阶段 A–D 分阶段激活）；`center-storage-model` 行按 S15⑤ 恢复 `## 5. 决策（按流转环节 S1–S11）` 实锚 |
