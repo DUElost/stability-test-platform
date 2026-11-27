@@ -413,6 +413,10 @@ export interface Device {
   }> | null;
   /** ADR-0063 D7 / #3918：vbus 槽位 USB 在位（只有带槽位映射的主机上报；null = 无映射/未上报） */
   usb_presence?: DeviceUsbPresence | null;
+  /** #3904 / #4185：当前 ACTIVE 租约类型（JOB / SCRIPT / MAINTENANCE；无租约为 null） */
+  active_lease_type?: 'JOB' | 'SCRIPT' | 'MAINTENANCE' | string | null;
+  /** #3904 / #4185：当前 ACTIVE 租约原因（如「归还欠账」/ manual_network_supply） */
+  active_lease_reason?: string | null;
 }
 
 /** ADR-0063 D7：分类与后端共享契约 `backend/agent/contracts/usb_presence.py` 一致。 */
@@ -525,6 +529,10 @@ export interface DeviceListItem {
     [key: string]: unknown;
   }> | null;
   usb_presence?: DeviceUsbPresence | null;
+  /** #3904 / #4185：当前 ACTIVE 租约类型（JOB / SCRIPT / MAINTENANCE；无租约为 null） */
+  active_lease_type?: 'JOB' | 'SCRIPT' | 'MAINTENANCE' | string | null;
+  /** #3904 / #4185：当前 ACTIVE 租约原因（如「归还欠账」/ manual_network_supply） */
+  active_lease_reason?: string | null;
 }
 
 export type DeviceListSortBy = 'serial' | 'host_id';

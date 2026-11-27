@@ -611,6 +611,88 @@ describe('DevicesPage', () => {
     expect(screen.getByTestId('device-return-override-1')).toBeInTheDocument();
   });
 
+  it('#3904：BUSY+MAINTENANCE 欠账首屏渲染「归还欠账」而非「测试中」', async () => {
+    setServerDevices([
+      {
+        id: 21,
+        serial: 'DEBT-BUSY',
+        model: 'TestModel',
+        host_id: 'h-debt',
+        host_name: 'host-debt',
+        status: 'BUSY',
+        tags: [],
+        last_seen: '2026-08-05T18:00:00+08:00',
+        active_lease_type: 'MAINTENANCE',
+        active_lease_reason: '归还欠账',
+        return_state: {
+          'power-cycle': { state: 'debt', source: 'job', updated_at: '2026-10-19T02:00:00Z' },
+        },
+      },
+    ]);
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    const badge = await screen.findByTestId('device-status-badge-21');
+    expect(badge).toHaveTextContent('归还欠账');
+    expect(badge).not.toHaveTextContent('测试中');
+  });
+
+  it('#3904：BUSY+MAINTENANCE 非欠账首屏渲染「维护占用」', async () => {
+    setServerDevices([
+      {
+        id: 22,
+        serial: 'MAINT-BUSY',
+        model: 'TestModel',
+        host_id: 'h-maint',
+        host_name: 'host-maint',
+        status: 'BUSY',
+        tags: [],
+        last_seen: '2026-08-05T18:00:00+08:00',
+        active_lease_type: 'MAINTENANCE',
+        active_lease_reason: 'manual_network_supply',
+      },
+    ]);
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    const badge = await screen.findByTestId('device-status-badge-22');
+    expect(badge).toHaveTextContent('维护占用');
+    expect(badge.getAttribute('title')).toBe('manual_network_supply');
+    expect(badge).not.toHaveTextContent('测试中');
+  });
+
+  it('#3904：BUSY+JOB 与缺 active_lease_type 旧响应均维持「测试中」', async () => {
+    setServerDevices([
+      {
+        id: 23,
+        serial: 'JOB-BUSY',
+        model: 'TestModel',
+        host_id: 'h-job',
+        host_name: 'host-job',
+        status: 'BUSY',
+        tags: [],
+        last_seen: '2026-08-05T18:00:00+08:00',
+        active_lease_type: 'JOB',
+        active_lease_reason: 'plan-run',
+      },
+      {
+        id: 24,
+        serial: 'LEGACY-BUSY',
+        model: 'TestModel',
+        host_id: 'h-legacy',
+        host_name: 'host-legacy',
+        status: 'BUSY',
+        tags: [],
+        last_seen: '2026-08-05T18:00:00+08:00',
+      },
+    ]);
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, { wrapper: createWrapper() });
+
+    expect(await screen.findByTestId('device-status-badge-23')).toHaveTextContent('测试中');
+    expect(screen.getByTestId('device-status-badge-24')).toHaveTextContent('测试中');
+  });
+
   it('admin can bulk-assign selected devices to a project', async () => {
     const user = userEvent.setup();
     const DevicesPage = (await import('./DevicesPage')).default;

@@ -80,6 +80,18 @@ describe("StatusBadge", () => {
     expect(screen.getByText("测试中")).toBeInTheDocument();
   });
 
+  it("renders device-ui return_debt as 归还欠账（#3904）", () => {
+    render(<StatusBadge kind="device-ui" status="return_debt" />);
+    expect(screen.getByText("归还欠账")).toBeInTheDocument();
+    expect(resolveStatusEntry("device-ui", "return_debt").variant).toBe("destructive");
+  });
+
+  it("renders device-ui maintenance as 维护占用（#3904）", () => {
+    render(<StatusBadge kind="device-ui" status="maintenance" />);
+    expect(screen.getByText("维护占用")).toBeInTheDocument();
+    expect(resolveStatusEntry("device-ui", "maintenance").variant).toBe("warning");
+  });
+
   it("renders device-ui error with destructive variant", () => {
     render(<StatusBadge kind="device-ui" status="error" />);
     expect(screen.getByText("错误")).toBeInTheDocument();
