@@ -986,9 +986,9 @@ export function ExpandableDeviceTable({
       >
         <Table containerClassName="flex-1 min-h-0 overflow-auto">
           <TableHeader className="sticky top-0 z-20 bg-muted/95 backdrop-blur-xs">
-            <TableRow className="bg-muted/95 hover:bg-muted/95 [&>th]:h-9">
+            <TableRow className="bg-muted/95 hover:bg-muted/95 [&>th]:h-9 [&>th]:px-2">
               {selectable && (
-                <TableHead className="sticky left-0 z-30 w-9 min-w-[36px] bg-muted px-2.5 py-2">
+                <TableHead className="sticky left-0 z-30 w-8 min-w-[32px] bg-muted px-2 py-2">
                   <input
                     ref={selectPageRef}
                     type="checkbox"
@@ -1009,8 +1009,8 @@ export function ExpandableDeviceTable({
                     : 'none'
                 }
                 className={cn(
-                  'sticky z-30 min-w-[160px] max-w-[240px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
-                  selectable ? 'left-9' : 'left-0',
+                  'sticky z-30 min-w-[148px] max-w-[184px] xl:max-w-[196px] 2xl:max-w-[240px] bg-muted font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]',
+                  selectable ? 'left-8' : 'left-0',
                 )}
               >
                 <button
@@ -1030,16 +1030,16 @@ export function ExpandableDeviceTable({
                   )}
                 </button>
               </TableHead>
-              <TableHead className="min-w-[64px] font-medium">版本</TableHead>
+              <TableHead className="min-w-[64px] max-w-[136px] xl:max-w-[144px] 2xl:max-w-[240px] font-medium">版本</TableHead>
               {serverMode ? (
                 <>
-                  <TableHead className="min-w-[112px] font-medium">状态</TableHead>
-                  <TableHead className="min-w-[76px] font-medium">电量</TableHead>
-                  <TableHead className="min-w-[60px] font-medium">温度</TableHead>
-                  {hasDiskData && <TableHead className="min-w-[88px] font-medium">存储</TableHead>}
-                  {hasNetworkData && <TableHead className="min-w-[60px] font-medium">网络</TableHead>}
-                  <TableHead className="min-w-[84px] font-medium">标签</TableHead>
-                  <TableHead className="min-w-[88px] font-medium">所属主机</TableHead>
+                  <TableHead className="min-w-[80px] font-medium">状态</TableHead>
+                  <TableHead className="min-w-[64px] font-medium">电量</TableHead>
+                  <TableHead className="min-w-[52px] font-medium">温度</TableHead>
+                  {hasDiskData && <TableHead className="min-w-[78px] font-medium">存储</TableHead>}
+                  {hasNetworkData && <TableHead className="min-w-[56px] font-medium">网络</TableHead>}
+                  <TableHead className="min-w-[64px] font-medium">标签</TableHead>
+                  <TableHead className="min-w-[80px] font-medium">所属主机</TableHead>
                   <TableHead className="min-w-[96px] font-medium text-right">最后活跃</TableHead>
                 </>
               ) : (
@@ -1052,7 +1052,7 @@ export function ExpandableDeviceTable({
                           : 'descending'
                         : 'none'
                     }
-                    className="min-w-[112px] font-medium"
+                    className="min-w-[80px] font-medium"
                   >
                     <button
                       type="button"
@@ -1079,7 +1079,7 @@ export function ExpandableDeviceTable({
                           : 'descending'
                         : 'none'
                     }
-                    className="min-w-[76px] font-medium"
+                    className="min-w-[64px] font-medium"
                   >
                     <button
                       type="button"
@@ -1106,7 +1106,7 @@ export function ExpandableDeviceTable({
                           : 'descending'
                         : 'none'
                     }
-                    className="min-w-[60px] font-medium"
+                    className="min-w-[52px] font-medium"
                   >
                     <button
                       type="button"
@@ -1125,9 +1125,9 @@ export function ExpandableDeviceTable({
                       )}
                     </button>
                   </TableHead>
-                  {hasDiskData && <TableHead className="min-w-[88px] font-medium">存储</TableHead>}
-                  {hasNetworkData && <TableHead className="min-w-[60px] font-medium">网络</TableHead>}
-                  <TableHead className="min-w-[84px] font-medium">标签</TableHead>
+                  {hasDiskData && <TableHead className="min-w-[78px] font-medium">存储</TableHead>}
+                  {hasNetworkData && <TableHead className="min-w-[56px] font-medium">网络</TableHead>}
+                  <TableHead className="min-w-[64px] font-medium">标签</TableHead>
                   <TableHead
                     aria-sort={
                       sortConfig?.key === 'host_name'
@@ -1136,7 +1136,7 @@ export function ExpandableDeviceTable({
                           : 'descending'
                         : 'none'
                     }
-                    className="min-w-[88px] font-medium"
+                    className="min-w-[80px] font-medium"
                   >
                     <button
                       type="button"
@@ -1224,7 +1224,7 @@ export function ExpandableDeviceTable({
                   {selectable && (
                     <TableCell
                       className={cn(
-                        'sticky left-0 z-10 w-9 min-w-[36px] px-2.5 py-1.5 transition-colors',
+                        'sticky left-0 z-10 w-8 min-w-[32px] px-2 py-1.5 transition-colors',
                         stickyCellBg,
                       )}
                     >
@@ -1240,9 +1240,9 @@ export function ExpandableDeviceTable({
                   )}
                   <TableCell
                     className={cn(
-                      'sticky z-10 min-w-[160px] max-w-[240px] px-3 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] transition-colors',
+                      'sticky z-10 min-w-[148px] max-w-[184px] xl:max-w-[196px] 2xl:max-w-[240px] px-2 py-1.5 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] transition-colors',
                       stickyCellBg,
-                      selectable ? 'left-9' : 'left-0',
+                      selectable ? 'left-8' : 'left-0',
                     )}
                   >
                     <div className="truncate font-mono text-sm text-foreground" title={device.serial}>
@@ -1281,10 +1281,13 @@ export function ExpandableDeviceTable({
                       Product: {deviceProductText(device.model, device.product)}
                     </div>
                   </TableCell>
-                    <TableCell className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
+                    <TableCell
+                      className="max-w-[136px] xl:max-w-[144px] 2xl:max-w-[240px] truncate px-2 py-1.5 font-mono text-xs text-muted-foreground"
+                      title={device.build_display_id || undefined}
+                    >
                       {device.build_display_id || '-'}
                     </TableCell>
-                    <TableCell className="px-3 py-1.5">
+                    <TableCell className="px-2 py-1.5">
                       <div className="flex flex-wrap items-center gap-1">
                         <StatusBadge kind="device-ui" status={device.status} size="sm" />
                         {/* ADR-0057 D4 第 4 面（#2962 B）：退役是人工确认的终态，
@@ -1333,12 +1336,12 @@ export function ExpandableDeviceTable({
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="px-3 py-1.5">
+                    <TableCell className="px-2 py-1.5">
                       {device.battery_level != null ? (
-                        <div className="flex items-center gap-1.5" title="最近一次上报电量">
+                        <div className="flex items-center gap-1" title="最近一次上报电量">
                           <Progress
                             value={device.battery_level}
-                            className="h-2 w-10"
+                            className="h-2 w-6 2xl:w-10"
                             indicatorClassName={resourceUsageBgClass(100 - device.battery_level)}
                           />
                           <span className={cn(
@@ -1352,7 +1355,7 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="px-3 py-1.5">
+                    <TableCell className="px-2 py-1.5">
                       {device.temperature != null ? (
                         <span
                           className={cn('font-mono text-xs', temperatureTextClass(device.temperature))}
@@ -1365,7 +1368,7 @@ export function ExpandableDeviceTable({
                       )}
                     </TableCell>
                     {hasDiskData && (
-                      <TableCell className="px-3 py-1.5">
+                      <TableCell className="px-2 py-1.5">
                         {disk ? (
                           <div
                             className="flex items-center gap-1.5"
@@ -1373,7 +1376,7 @@ export function ExpandableDeviceTable({
                           >
                             <Progress
                               value={disk.pct}
-                              className="h-2 w-10"
+                              className="hidden h-2 w-10 2xl:block"
                               indicatorClassName={resourceUsageBgClass(disk.pct)}
                             />
                             <span className={cn('font-mono text-xs whitespace-nowrap', resourceUsageTextClass(disk.pct))}>
@@ -1386,7 +1389,7 @@ export function ExpandableDeviceTable({
                       </TableCell>
                     )}
                     {hasNetworkData && (
-                      <TableCell className="px-3 py-1.5">
+                      <TableCell className="px-2 py-1.5">
                         {device.network_latency != null ? (
                           <div
                             className={cn('flex items-center gap-1 font-mono text-xs', latencyTextClass(device.network_latency))}
@@ -1402,14 +1405,14 @@ export function ExpandableDeviceTable({
                         )}
                       </TableCell>
                     )}
-                    <TableCell className="px-3 py-1.5">
+                    <TableCell className="px-2 py-1.5">
                       {device.tags?.length ? (
-                        <div className="flex max-w-[160px] items-center gap-1" title={device.tags.join(', ')}>
+                        <div className="flex max-w-[104px] 2xl:max-w-[160px] items-center gap-1 overflow-hidden" title={device.tags.join(', ')}>
                           {device.tags.slice(0, 2).map((tag) => (
                             <span
                               key={tag}
                               title={tag}
-                              className="max-w-[140px] truncate rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                              className="min-w-0 max-w-[140px] truncate rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
                             >
                               {tag}
                             </span>
@@ -1424,7 +1427,7 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="max-w-[120px] truncate px-2.5 py-1.5 text-sm text-muted-foreground" title={device.host_name || undefined}>
+                    <TableCell className="max-w-[96px] 2xl:max-w-[120px] truncate px-2 py-1.5 text-xs text-muted-foreground" title={device.host_name || undefined}>
                       {device.host_name && onNavigateToHost ? (
                         <button
                           type="button"
@@ -1441,7 +1444,7 @@ export function ExpandableDeviceTable({
                         device.host_name || '-'
                       )}
                     </TableCell>
-                    <TableCell className="px-3 py-1.5 text-right text-xs text-muted-foreground whitespace-nowrap">
+                    <TableCell className="px-2 py-1.5 text-right font-mono text-[11px] tabular-nums text-muted-foreground whitespace-nowrap">
                       {device.last_seen
                         ? formatDateTimeFull(device.last_seen)
                         : '-'}

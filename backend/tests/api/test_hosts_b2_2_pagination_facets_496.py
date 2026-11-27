@@ -821,3 +821,173 @@ class TestHostListMountProjectionAndDynamicSortSnapshotQ4:
         finally:
             cleanup2()
 
+    def test_projection_list_whitelists_heavy_extra_and_bounds_50_hosts_under_100kib(
+        self, client, db_session, auth_headers, monkeypatch
+    ):
+        """线上实测回归：50 台带完整 heartbeat_timing/探针历史/自愈细目与重复子树的重主机，
+        在 projection=list 下必须裁到 < 100 KiB，同时保持筛选/排序语义一致且单机详情完整。"""
+        monkeypatch.setattr(hosts_route, "_list_desired_artifact_digest", lambda: DESIRED_DIGEST)
+        prefix = f"b22slim-{uuid4().hex[:6]}"
+        heavy_timing = {f"stage_{i}": {"ms": i * 3.5, "detail": "x" * 60} for i in range(25)}
+        heavy_power_slots = {f"SER{i:04d}": [f"1-1.{i}", "hub"] for i in range(24)}
+        heavy_xhci = {
+            "state": "idle",
+            "fuse_open": False,
+            "fuse_reason": None,
+            "boot_attempts": 1,
+            "window_attempts": 2,
+            "episode_failures": 0,
+            "last_action_at": "2026-11-26T10:00:00Z",
+            "last_marker": "m" * 120,
+        }
+        created_ids = []
+        for idx in range(50):
+            hid = f"{prefix}-{idx:02d}"
+            created_ids.append(hid)
+            _make_host(
+                db_session,
+                host_id=hid,
+                name=f"SlimHost-{prefix}-{idx:02d}",
+                ip=f"10.88.{idx // 20 + 1}.{10 + (idx % 20)}",
+                status="ONLINE",
+                agent_artifact_digest=DESIRED_DIGEST,
+                mount_status={
+                    "/mnt/stp-aee": {"ok": True, "available_gb": 500, "total_gb": 1000},
+                    "/mnt/stp-log": {"ok": idx != 0, "available_gb": 200, "total_gb": 500},
+                },
+                extra={
+                    "agent_installed": True,
+                    "agent_version": "2.0.0",
+                    "agent_code_revision": "547e9b42",
+                    "cpu_load": float(idx % 95),
+                    "cpu_cores": 16,
+                    "ram_usage": 32.5,
+                    "ram_total_gb": 64.0,
+                    "disk_usage": {
+                        "usage_percent": 18.0,
+                        "total_gb": 512.0,
+                        "free_gb": 420.0,
+                        "used_gb": 92.0,
+                        "mount": "/",
+                    },
+                    "disk_usage_aee": {"usage_percent": 40.0, "detail": "a" * 150},
+                    "heartbeat_timing": heavy_timing,
+                    "operations": {"last_hot_update": "o" * 140},
+                    "archive": {"pending_files": 0, "detail": "r" * 120},
+                    "network": {"rx_mb": 123, "tx_mb": 456},
+                    "capacity": {
+                        "online_healthy_devices": 20,
+                        "active_devices": 12,
+                        "available_slots": 8,
+                        "active_jobs": 12,
+                        "usb_device_count": 20,
+                        "adb_interface_count": 20,
+                        "usb_kernel_log": "ok",
+                        "usb_power_slots": heavy_power_slots,
+                        "usb_kernel_errors_1h": {"link_errors": 0, "cable_suspect": 0, "disconnects": 0},
+                        "adb_state_counts": {"device": 20, "offline": 0, "unauthorized": 0, "other": 0},
+                        "usb_hub_topology": {
+                            "cascade_hubs": 4,
+                            "unbound_hubs": 1 if idx == 1 else 0,
+                            "unbound_idle_bus_hubs": 0,
+                        },
+                        "usb_controller_health": {
+                            "unbound_xhci_controllers": 0,
+                            "disabled_root_ports": 1 if idx == 2 else 0,
+                            "disabled_hub_ports": 0,
+                            "over_current_ports": 0,
+                            "stuck_default_ports": 0,
+                        },
+                    },
+                    "health": {
+                        "status": "DEGRADED" if idx in (1, 2) else "HEALTHY",
+                        "reasons": ["usb_link_degraded"] if idx == 1 else [],
+                        "cpu_load": float(idx % 95),
+                        "ram_usage": 32.5,
+                        "adb_ok": True,
+                    },
+                    "health_probe": {
+                        "checked_at": "2026-11-26T23:50:00Z",
+                        "verdict": "agent_mute" if idx == 3 else "aligned",
+                        "strike_open": idx == 3,
+                        "strike_need": 3,
+                        "topology": "ok",
+                        "signals": ["sig_a", "sig_b"],
+                        "recent_verdicts": ["aligned"] * 20,
+                        "uhubctl_status": "ok",
+                        "powered_off_ports": ["1-1.2"] if idx == 4 else [],
+                    },
+                    "self_heal": {
+                        "state": "hardware_suspect" if idx == 5 else "idle",
+                        "fuse_open": idx == 5,
+                        "fuse_reason": "too_many_resets" if idx == 5 else None,
+                        "xhci": heavy_xhci,
+                        "adb_reconnect": heavy_xhci,
+                    },
+                },
+            )
+        db_session.commit()
+
+        r_list = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "projection": "list", "sort_by": "priority", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert r_list.status_code == 200
+        raw_list_bytes = len(r_list.content)
+        body_list = r_list.json()
+        assert body_list["total"] == 50
+        assert len(body_list["items"]) == 50
+        assert raw_list_bytes < 100 * 1024, f"50-host projection=list payload exceeded 100 KiB: {raw_list_bytes} B"
+
+        by_id = {h["id"]: h for h in body_list["items"]}
+        sample = by_id[created_ids[0]]
+        # extra 仅留资源标量，无 heartbeat_timing、无重复子树、无盘外大字段
+        assert set(sample["extra"].keys()) <= {
+            "cpu_load", "cpu_cores", "ram_usage", "ram_total_gb", "disk_usage", "temperature", "uptime_seconds"
+        }
+        assert "heartbeat_timing" not in sample["extra"]
+        assert "capacity" not in sample["extra"]
+        assert "self_heal" not in sample["extra"]
+        assert "health_probe" not in sample["extra"]
+        assert set(sample["extra"]["disk_usage"].keys()) == {"usage_percent", "total_gb"}
+        # capacity / health_probe / self_heal 剔除抽屉专用细目
+        assert "usb_power_slots" not in sample["capacity"]
+        assert "usb_kernel_errors_1h" not in sample["capacity"]
+        assert "adb_state_counts" not in sample["capacity"]
+        assert "recent_verdicts" not in sample["health_probe"]
+        assert "xhci" not in sample["self_heal"]
+        assert "adb_reconnect" not in sample["self_heal"]
+        # 列表行依赖的派生字段与故障信号完好保留
+        assert sample["agent_protocol_version"] == "2.0.0"
+        assert sample["agent_code_revision"] == "547e9b42"
+        assert sample["mount_anomaly"] is True
+        assert by_id[created_ids[3]]["health_probe"]["strike_open"] is True
+        assert by_id[created_ids[4]]["health_probe"]["powered_off_ports"] == ["1-1.2"]
+        assert by_id[created_ids[5]]["self_heal"]["fuse_open"] is True
+
+        # usb_anomaly 筛选与 priority 排序在 list 与 full 下严格一致
+        r_usb_list = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "usb_anomaly": "true", "sort_by": "priority", "projection": "list", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        r_usb_full = client.get(
+            "/api/v1/hosts",
+            params={"q": prefix, "usb_anomaly": "true", "sort_by": "priority", "projection": "full", "skip": 0, "limit": 50},
+            headers=auth_headers,
+        )
+        assert [h["id"] for h in r_usb_list.json()["items"]] == [h["id"] for h in r_usb_full.json()["items"]]
+        assert len(r_usb_list.json()["items"]) == 5
+
+        # 单机详情接口保持全量（抽屉所需全部细目与挂载详情均完整返回）
+        r_detail = client.get(f"/api/v1/hosts/{created_ids[0]}", headers=auth_headers)
+        assert r_detail.status_code == 200
+        detail = r_detail.json()
+        assert "heartbeat_timing" in detail["extra"]
+        assert "usb_power_slots" in detail["capacity"]
+        assert "recent_verdicts" in detail["health_probe"]
+        assert "xhci" in detail["self_heal"]
+        assert "/mnt/stp-aee" in detail["mount_status"]
+
+

@@ -60,6 +60,43 @@ ALLOWED_SORT_BY = frozenset({"default", "priority", "id", "name", "devices", "cp
 ALLOWED_SORT_DIR = frozenset({"asc", "desc"})
 ALLOWED_PROJECTIONS = frozenset({"full", "list"})
 
+# #496 / #4117：projection=list 载荷硬边界与字段白名单（单页 50 台主机压到 < 100 KiB；
+# 完整 extra / mount_status / 探针历史 / 自愈细目由 GET /api/v1/hosts/{id} 按需提供）。
+HOST_LIST_MAX_STR_BYTES = 256
+HOST_LIST_MAX_REASONS = 32
+HOST_LIST_MAX_REASON_BYTES = 128
+HOST_LIST_MAX_POWERED_OFF_PORTS = 32
+HOST_LIST_MAX_PORT_BYTES = 64
+
+_HOST_LIST_EXTRA_SCALAR_KEYS = (
+    "cpu_load",
+    "cpu_cores",
+    "ram_usage",
+    "ram_total_gb",
+    "temperature",
+    "uptime_seconds",
+)
+_HOST_LIST_DISK_USAGE_KEYS = ("usage_percent", "total_gb")
+_HOST_LIST_CAPACITY_SCALAR_KEYS = (
+    "online_healthy_devices",
+    "active_devices",
+    "available_slots",
+    "active_jobs",
+    "usb_device_count",
+)
+_HOST_LIST_USB_TOPOLOGY_KEYS = (
+    "cascade_hubs",
+    "unbound_hubs",
+    "unbound_idle_bus_hubs",
+)
+_HOST_LIST_USB_CTRL_KEYS = (
+    "unbound_xhci_controllers",
+    "disabled_root_ports",
+    "disabled_hub_ports",
+    "over_current_ports",
+    "stuck_default_ports",
+)
+
 # 只读动态排序快照缓存（内存 LRU + 短 TTL，零 DB 写入）：防止 cpu/ram/disk/heartbeat/priority
 # 排序在翻页间隙因心跳排名波动产生跨页重复或漏项（契约 §4 规则 6）。
 HOST_SORT_SNAPSHOT_TTL_SECONDS = 120.0
@@ -209,6 +246,132 @@ def sanitize_host_extra(raw_extra: Any) -> Dict[str, Any]:
     return extra
 
 
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    raw = value.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return value
+    return raw[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _truncate_optional_str(value: Optional[str], max_bytes: int) -> Optional[str]:
+    if not isinstance(value, str):
+        return value
+    return _truncate_utf8(value, max_bytes)
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _project_host_extra_for_list(extra: Dict[str, Any]) -> Dict[str, Any]:
+    """列表投影仅保留主表资源列与排序所需标量，剔除 heartbeat_timing 及与顶层重复的子树。"""
+    projected: Dict[str, Any] = {}
+    for key in _HOST_LIST_EXTRA_SCALAR_KEYS:
+        val = extra.get(key)
+        if _is_finite_number(val):
+            projected[key] = val
+    raw_disk = extra.get("disk_usage")
+    if isinstance(raw_disk, dict):
+        disk_out = {
+            k: raw_disk[k]
+            for k in _HOST_LIST_DISK_USAGE_KEYS
+            if _is_finite_number(raw_disk.get(k))
+        }
+        if disk_out:
+            projected["disk_usage"] = disk_out
+    return projected
+
+
+def _project_host_capacity_for_list(raw: Any) -> Optional[Dict[str, Any]]:
+    """列表投影保留设备/任务计数字段与 USB 故障优先级所需的拓扑/主控体检计数。"""
+    if not isinstance(raw, dict):
+        return None
+    projected: Dict[str, Any] = {}
+    for key in _HOST_LIST_CAPACITY_SCALAR_KEYS:
+        val = raw.get(key)
+        if _is_finite_number(val):
+            projected[key] = val
+    raw_topo = raw.get("usb_hub_topology")
+    if isinstance(raw_topo, dict):
+        topo = {
+            k: raw_topo[k]
+            for k in _HOST_LIST_USB_TOPOLOGY_KEYS
+            if _is_finite_number(raw_topo.get(k))
+        }
+        if topo:
+            projected["usb_hub_topology"] = topo
+    raw_ctrl = raw.get("usb_controller_health")
+    if isinstance(raw_ctrl, dict):
+        ctrl = {
+            k: raw_ctrl[k]
+            for k in _HOST_LIST_USB_CTRL_KEYS
+            if _is_finite_number(raw_ctrl.get(k))
+        }
+        if ctrl:
+            projected["usb_controller_health"] = ctrl
+    return projected or None
+
+
+def _project_host_health_for_list(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    projected: Dict[str, Any] = {}
+    status = raw.get("status")
+    if isinstance(status, str) and status:
+        projected["status"] = _truncate_utf8(status, 32)
+    raw_reasons = raw.get("reasons")
+    if isinstance(raw_reasons, list):
+        reasons = [
+            _truncate_utf8(str(item), HOST_LIST_MAX_REASON_BYTES)
+            for item in raw_reasons[:HOST_LIST_MAX_REASONS]
+            if item is not None and str(item)
+        ]
+        projected["reasons"] = reasons
+    return projected or None
+
+
+def _project_host_health_probe_for_list(raw: Any) -> Optional[Dict[str, Any]]:
+    """列表投影仅保留探针告警芯片与 VBUS 断电筛选所需标量；历史裁决序列由详情按需返回。"""
+    if not isinstance(raw, dict):
+        return None
+    projected: Dict[str, Any] = {}
+    verdict = raw.get("verdict")
+    if isinstance(verdict, str) and verdict:
+        projected["verdict"] = _truncate_utf8(verdict, 64)
+    strike_open = raw.get("strike_open")
+    if isinstance(strike_open, bool):
+        projected["strike_open"] = strike_open
+    raw_ports = raw.get("powered_off_ports")
+    if isinstance(raw_ports, list):
+        ports = [
+            _truncate_utf8(p.strip(), HOST_LIST_MAX_PORT_BYTES)
+            for p in raw_ports[:HOST_LIST_MAX_POWERED_OFF_PORTS]
+            if isinstance(p, str) and p.strip()
+        ]
+        if ports:
+            projected["powered_off_ports"] = ports
+    return projected or None
+
+
+def _project_host_self_heal_for_list(raw: Any) -> Optional[Dict[str, Any]]:
+    """列表投影仅保留熔断徽标所需的顶层三键；xhci/adb_reconnect 诊断细目由详情按需返回。"""
+    if not isinstance(raw, dict):
+        return None
+    projected: Dict[str, Any] = {}
+    state = raw.get("state")
+    if isinstance(state, str) and state:
+        projected["state"] = _truncate_utf8(state, 64)
+    fuse_open = raw.get("fuse_open")
+    if isinstance(fuse_open, bool):
+        projected["fuse_open"] = fuse_open
+    fuse_reason = raw.get("fuse_reason")
+    if isinstance(fuse_reason, str) and fuse_reason:
+        projected["fuse_reason"] = _truncate_utf8(fuse_reason, HOST_LIST_MAX_STR_BYTES)
+    elif fuse_reason is None and "fuse_reason" in raw:
+        projected["fuse_reason"] = None
+    return projected or None
+
+
 def load_host_ledger_summary(
     db: Session,
     host_ids: Optional[Sequence[str]] = None,
@@ -259,9 +422,12 @@ def build_host_out_readonly(
 ) -> HostOut:
     """只读构造 ``HostOut``（不含 DB 查询；不修改 ORM 对象）。
 
-    当 ``projection == "list"`` 时，仅输出挂载摘要标量（``mount_anomaly`` / ``mount_count`` /
-    ``mount_failed_count``）并清空完整 ``mount_status`` 明细字典；完整挂载列表由
-    ``GET /api/v1/hosts/{id}`` 按需返回。
+    当 ``projection == "list"`` 时，仅输出主列表筛选/排序/行渲染必需的白名单字段与有界标量：
+    - 清空完整 ``mount_status`` 明细（保留 ``mount_anomaly`` / ``mount_count`` / ``mount_failed_count``）；
+    - ``extra`` 仅保留资源标量（``cpu_load`` / ``ram_usage`` / ``disk_usage.{usage_percent,total_gb}`` 等），
+      剔除 ``heartbeat_timing`` 与已提升至顶层的重复子树；
+    - ``capacity`` / ``health`` / ``health_probe`` / ``self_heal`` 仅保留列表行与故障优先级所需键，
+      抽屉专用明细由 ``GET /api/v1/hosts/{id}`` 按需返回。
     """
     out = HostOut.model_validate(host)
     out.status = effective_host_status(host, now=now)
@@ -269,14 +435,7 @@ def build_host_out_readonly(
     out.mount_count = mount_count
     out.mount_failed_count = mount_failed_count
     out.mount_anomaly = mount_anomaly
-    if projection == "list":
-        out.mount_status = {}
     extra = sanitize_host_extra(host.extra)
-    out.extra = extra
-    out.capacity = extra.get("capacity")
-    out.health = extra.get("health")
-    out.health_probe = extra.get("health_probe") if isinstance(extra.get("health_probe"), dict) else None
-    out.self_heal = extra.get("self_heal") if isinstance(extra.get("self_heal"), dict) else None
     out.host_key_trust = host_key_trust
     if ledger_device_count is not None:
         out.ledger_device_count = int(ledger_device_count)
@@ -297,6 +456,22 @@ def build_host_out_readonly(
     out.agent_code_deployed = version_view["agent_code_deployed"]
     out.agent_code_deployed_at = version_view["agent_code_deployed_at"]
     out.agent_code_sync_status = version_view["agent_code_sync_status"]
+    if projection == "list":
+        out.mount_status = {}
+        out.extra = _project_host_extra_for_list(extra)
+        out.capacity = _project_host_capacity_for_list(extra.get("capacity"))
+        out.health = _project_host_health_for_list(extra.get("health"))
+        out.health_probe = _project_host_health_probe_for_list(extra.get("health_probe"))
+        out.self_heal = _project_host_self_heal_for_list(extra.get("self_heal"))
+        out.retire_reason = _truncate_optional_str(out.retire_reason, HOST_LIST_MAX_STR_BYTES)
+        out.emptied_reason = _truncate_optional_str(out.emptied_reason, HOST_LIST_MAX_STR_BYTES)
+        out.host_key_trust = _truncate_optional_str(out.host_key_trust, HOST_LIST_MAX_STR_BYTES)
+    else:
+        out.extra = extra
+        out.capacity = extra.get("capacity")
+        out.health = extra.get("health")
+        out.health_probe = extra.get("health_probe") if isinstance(extra.get("health_probe"), dict) else None
+        out.self_heal = extra.get("self_heal") if isinstance(extra.get("self_heal"), dict) else None
     return out
 
 
