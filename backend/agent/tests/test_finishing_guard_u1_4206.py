@@ -21,7 +21,9 @@ from backend.agent.contracts.finishing_guard import (
     coerce_job_finishing_guard,
     effective_abort_force,
     finishing_guard_deadline,
+    finishing_guard_expiry,
     finishing_kind_of,
+    is_clock_regressed,
     max_abort_intensity,
     min_abort_clock,
     wrap_disarm_as_finishing_guard,
@@ -70,14 +72,23 @@ def test_c1_multi_subject_intensity_max_and_clock_min():
     late = early + timedelta(seconds=120)
     assert min_abort_clock(late, early, None) == early
     assert min_abort_clock(None, None) is None
+    # B7：naive 归一化为 UTC-aware，不与 aware 混比抛 TypeError
+    naive = datetime(2026, 11, 27, 9, 59, 0)
+    assert min_abort_clock(early, naive) == naive.replace(tzinfo=timezone.utc)
     ctx = {
-        "abort_requested": {"at": early.isoformat(), "force": False},
+        "abort_requested": {
+            "at": early.isoformat(), "force": True,
+            "requested_job_ids": [1],
+        },
         "abort_requested_hosts": {
-            "h1": {"at": late.isoformat(), "force": True},
+            "h1": {"at": late.isoformat(), "force": False},
         },
     }
-    assert effective_abort_force(ctx, "h1") is True
-    assert effective_abort_force(ctx, "h-missing") is False
+    # Job 1 同时被 run(force) 与 host 覆盖 → force
+    assert effective_abort_force(ctx, 1, "h1") is True
+    # B5：Job 2 不在 run 名单内，不得继承 run 级 force=true
+    assert effective_abort_force(ctx, 2, "h1") is False
+    assert effective_abort_force(ctx, 2, "h-missing") is False
 
 
 def test_legacy_disarm_guard_absorbed_as_teardown_disarm():
@@ -88,6 +99,39 @@ def test_legacy_disarm_guard_absorbed_as_teardown_disarm():
     assert wrapped["trigger"] == "manual_abort"
     coerced = coerce_job_finishing_guard(None, wire)
     assert coerced is not None and coerced["kind"] == FINISHING_KIND_TEARDOWN_DISARM
+
+
+def test_b1_dual_column_prefers_fresher_seq_and_absorbs_regression():
+    stale = wrap_disarm_as_finishing_guard(_gpu_execute_guard(now=1000.0))
+    live = receive_disarm_evidence(
+        _gpu_execute_guard(now=1000.0),
+        {
+            "step_id": "gpu_fin", "seq": 5, "phase": "execute", "progress_seq": 5,
+            "script_name": "gpu_finish", "script_version": "1.1.0",
+            "package_sha256": "a" * 64,
+        },
+        now=1350.0,
+        via_coordinator=True,
+    )
+    picked = coerce_job_finishing_guard(stale, live)
+    assert picked is not None and picked["seq"] == 5
+    # 任一列 clock_regressed → 吸收失效
+    regressed_live = {**live, "reason": "clock_regressed"}
+    dead = coerce_job_finishing_guard(stale, regressed_live)
+    assert dead is not None and is_clock_regressed(dead)
+    # 标准字段单独存在亦吸收
+    canon = {**stale, "guard_invalidated_reason": "clock_regressed"}
+    dead2 = coerce_job_finishing_guard(canon, live)
+    assert dead2 is not None and is_clock_regressed(dead2)
+
+
+def test_b2_canonical_regression_expires_teardown_guard():
+    g = wrap_disarm_as_finishing_guard(_gpu_execute_guard(now=1000.0))
+    g = {**g, "guard_invalidated_reason": "clock_regressed"}
+    assert finishing_guard_deadline(
+        g, now=1010.0, owner_valid=True, execution_heartbeat_at=1010.0,
+    ) is None
+    assert finishing_guard_expiry(g) == float(g["t0"])
 
 
 def test_c2_gpu_finish_600s_protected_past_300s_unknown_grace():

@@ -7,12 +7,15 @@ protection base:
 - ``atomic_commit`` — irreversible hardware critical section (handshake in U4/U5)
 
 Persistence stays ``RUNNING``; ``finishing`` is a read projection (U2).
+
+Transition dual-column authority (#4206 v1.1)：A 类并存时任一列
+``clock_regressed`` 即不可逆吸收失效；否则按单调 ``seq`` / 新鲜度取最新有效收据。
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from .device_return import (
@@ -87,6 +90,7 @@ def finishing_kind_of(guard: Mapping[str, Any] | None) -> str | None:
 
 
 def is_clock_regressed(guard: Mapping[str, Any] | None) -> bool:
+    """Recognize both canonical and legacy B6 regression marks."""
     if not isinstance(guard, Mapping):
         return False
     if guard.get("guard_invalidated_reason") == GUARD_INVALIDATED_CLOCK_REGRESSED:
@@ -103,7 +107,12 @@ def mark_clock_regressed(guard: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def as_teardown_disarm_wire(guard: Mapping[str, Any]) -> dict[str, Any]:
-    """Strip finishing envelope fields for B6 ``disarm_guard_*`` evaluators."""
+    """Strip finishing envelope fields for B6 ``disarm_guard_*`` evaluators.
+
+    Keep ``reason`` so legacy B6 expiry sees ``clock_regressed``; canonical
+    ``guard_invalidated_reason`` is handled by :func:`is_clock_regressed`
+    before calling the B6 helpers.
+    """
     out = {k: v for k, v in guard.items() if k not in {
         "kind", "trigger", "guard_state", "guard_invalidated_reason",
         "permit_id", "request_id", "permit_expires_at", "D_atomic",
@@ -129,22 +138,81 @@ def wrap_disarm_as_finishing_guard(
     return out
 
 
+def _as_teardown_view(guard: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(guard)
+    if "kind" not in out:
+        out["kind"] = FINISHING_KIND_TEARDOWN_DISARM
+    return out
+
+
+def _guard_seq(guard: Mapping[str, Any]) -> int:
+    seq = guard.get("seq")
+    return seq if type(seq) is int else -1
+
+
+def _guard_freshness_stamp(guard: Mapping[str, Any]) -> float:
+    """Monotonic-ish freshness for dual-column A-class selection."""
+    for key in (
+        "last_server_at",
+        "coordinator_seen_at",
+        "progress_seen_at",
+        "queue_seen_at",
+        "first_server_at",
+        "t0",
+    ):
+        value = guard.get(key)
+        if type(value) in (int, float):
+            return float(value)
+    return float(_guard_seq(guard))
+
+
 def coerce_job_finishing_guard(
     finishing_guard: object,
     disarm_guard: object,
 ) -> dict[str, Any] | None:
-    """Prefer ``finishing_guard`` column; else wrap legacy ``disarm_guard``."""
-    if isinstance(finishing_guard, Mapping):
-        kind = finishing_kind_of(finishing_guard)
-        if kind is None:
-            return None
-        out = dict(finishing_guard)
-        if "kind" not in out:
-            out["kind"] = kind
+    """Resolve dual-column A-class authority (#4206 v1.1).
+
+    - Either column ``clock_regressed`` ⇒ absorbing invalidate (union).
+    - Else pick the freshest A-class receipt by ``seq`` then freshness stamp
+      (live B6 ``disarm_guard`` must beat a stale ``finishing_guard`` copy).
+    - ``atomic_commit`` only lives on ``finishing_guard``.
+    """
+    finishing = finishing_guard if isinstance(finishing_guard, Mapping) else None
+    legacy = disarm_guard if isinstance(disarm_guard, Mapping) else None
+
+    finishing_kind = finishing_kind_of(finishing) if finishing is not None else None
+    legacy_kind = finishing_kind_of(legacy) if legacy is not None else None
+
+    # Atomic commit is finishing-column only.
+    if finishing_kind == FINISHING_KIND_ATOMIC_COMMIT:
+        out = dict(finishing)
+        out.setdefault("kind", FINISHING_KIND_ATOMIC_COMMIT)
         return out
-    if isinstance(disarm_guard, Mapping):
-        return wrap_disarm_as_finishing_guard(disarm_guard)
-    return None
+
+    teardown_candidates: list[dict[str, Any]] = []
+    if finishing is not None and finishing_kind == FINISHING_KIND_TEARDOWN_DISARM:
+        teardown_candidates.append(_as_teardown_view(finishing))
+    if legacy is not None and (
+        legacy_kind == FINISHING_KIND_TEARDOWN_DISARM or legacy_kind is None
+    ):
+        # Bare B6 wire without kind still counts as teardown.
+        teardown_candidates.append(wrap_disarm_as_finishing_guard(legacy))
+
+    if not teardown_candidates:
+        return None
+
+    # Absorbing fail: any column regressed ⇒ whole A-class guard is dead.
+    if any(is_clock_regressed(c) for c in teardown_candidates):
+        base = max(
+            teardown_candidates,
+            key=lambda g: (_guard_seq(g), _guard_freshness_stamp(g)),
+        )
+        return mark_clock_regressed(base)
+
+    return max(
+        teardown_candidates,
+        key=lambda g: (_guard_seq(g), _guard_freshness_stamp(g)),
+    )
 
 
 def normalize_atomic_step_timeout(raw: object) -> int:
@@ -177,34 +245,71 @@ def max_abort_intensity(*intensities: str | bool | None) -> str:
     return best
 
 
+def _aware(dt: datetime) -> datetime:
+    """Normalize naive datetimes to UTC-aware (B7); reject mixed compare crashes."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def min_abort_clock(*clocks: datetime | None) -> datetime | None:
-    """Multi-subject clock merge: take the earliest aware/naive clock."""
-    present = [c for c in clocks if isinstance(c, datetime)]
+    """Multi-subject clock merge: earliest clock; naive treated as UTC."""
+    present = [_aware(c) for c in clocks if isinstance(c, datetime)]
     if not present:
         return None
     return min(present)
 
 
-def subject_force_flags(run_context: object, host_id: str | None = None) -> tuple[bool, bool]:
-    """Return ``(run_force, host_force)`` from persisted abort subjects (U4 writes)."""
+def abort_request_covers_job(run_context: object, job_id: int) -> bool:
+    """Same coverage predicate as ``job_timeout_config.abort_request_covers_job``.
+
+    Kept in the shared contract so intensity max and clock min share one rule
+    without pulling control-plane modules into Agent contracts.
+    """
+    ctx = run_context if isinstance(run_context, dict) else {}
+    abort = ctx.get("abort_requested")
+    if not isinstance(abort, dict):
+        return True
+    requested = abort.get("requested_job_ids")
+    if not isinstance(requested, list) or not requested:
+        return True
+    try:
+        return int(job_id) in {int(x) for x in requested}
+    except (TypeError, ValueError):
+        return True
+
+
+def subject_force_flags(
+    run_context: object,
+    job_id: int,
+    host_id: str | None = None,
+) -> tuple[bool, bool]:
+    """Return ``(run_force, host_force)`` only for subjects that cover this job."""
     ctx = run_context if isinstance(run_context, dict) else {}
     run_force = False
-    abort = ctx.get("abort_requested")
-    if isinstance(abort, dict):
-        run_force = bool(abort.get("force"))
+    if abort_request_covers_job(ctx, job_id):
+        abort = ctx.get("abort_requested")
+        if isinstance(abort, dict):
+            run_force = bool(abort.get("force"))
     host_force = False
     if host_id:
         hosts = ctx.get("abort_requested_hosts")
         if isinstance(hosts, dict):
             clock = hosts.get(host_id)
+            if clock is None:
+                clock = hosts.get(str(host_id))
             if isinstance(clock, dict):
                 host_force = bool(clock.get("force"))
     return run_force, host_force
 
 
-def effective_abort_force(run_context: object, host_id: str | None = None) -> bool:
-    """Highest force across applicable subjects (run ∪ host)."""
-    run_force, host_force = subject_force_flags(run_context, host_id)
+def effective_abort_force(
+    run_context: object,
+    job_id: int,
+    host_id: str | None = None,
+) -> bool:
+    """Highest force across subjects that cover this job (same set as clock min)."""
+    run_force, host_force = subject_force_flags(run_context, job_id, host_id)
     return max_abort_intensity(run_force, host_force) == ABORT_INTENSITY_FORCE
 
 
@@ -282,11 +387,15 @@ def finishing_guard_expiry(
     *,
     execution_heartbeat_deadline: float | None = None,
 ) -> float:
-    """Absolute next applicable limit for candidate selection."""
+    """Absolute next applicable limit for candidate selection.
+
+    Canonical ``guard_invalidated_reason="clock_regressed"`` and legacy B6
+    ``reason="clock_regressed"`` both collapse to ``t0`` (B2).
+    """
+    if is_clock_regressed(guard):
+        return float(guard.get("t0", guard.get("last_server_at", 0)) or 0)
     kind = finishing_kind_of(guard)
     if kind == FINISHING_KIND_ATOMIC_COMMIT:
-        if is_clock_regressed(guard):
-            return float(guard.get("t0", guard.get("last_server_at", 0)) or 0)
         d_atomic = guard.get("D_atomic")
         deadline = float(d_atomic) if type(d_atomic) in (int, float) else float(
             guard.get("last_liveness_receipt_at", 0) or 0

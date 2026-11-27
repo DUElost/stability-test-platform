@@ -919,10 +919,25 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     # 覆盖语义并入 `_abort_reap_clock`：run 主体看 `requested_job_ids` 名单（#2050），
     # host 主体看该 host 的时钟（含 abort 之后才被 claim 的 job，D3）。无有效时钟
     # （历史 run_context / 异常形态）→ 不回收（宁漏勿杀，#782 同旨）。
+    # B3 / #4206 v1.1：候选预筛即评估统一护盾（与最终行锁复读同一入口）。
     reap_rows: list[tuple[JobInstance, PlanRun, str, datetime]] = []
     for job, plan_run in rows:
         at, subject = _abort_reap_clock(plan_run, job.id, job.host_id)
         if at is None or at >= grace_deadline:
+            continue
+        has_guard = (
+            getattr(job, "finishing_guard", None) is not None
+            or job.disarm_guard is not None
+        )
+        if has_guard:
+            still_guarded = await db.run_sync(
+                lambda sync_db, j=job: job_guard_deadline(
+                    sync_db, j, now, read_only=True,
+                ) is not None
+            )
+            if still_guarded:
+                continue
+        elif at is not None and _disarm_grace_defers_reap(job, at, now):
             continue
         reap_rows.append((job, plan_run, subject or "run", at))
 

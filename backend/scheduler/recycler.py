@@ -1322,10 +1322,16 @@ def recycle_once() -> None:
                 break
             last_running_id = batch[-1].id
             coord_hb = _coordinator_heartbeats(db, batch)
-            # 候选预筛：可陈旧；最终写入必须以 _final_disarm_grace_blocks_write 复验
+            # B3：候选预筛即评估统一护盾；最终写入仍以行锁复读复核同一事实
             run_ctxs = _plan_run_contexts(db, batch)
             for job in batch:
-                if _disarm_grace_blocks_recycle(
+                if (
+                    getattr(job, "finishing_guard", None) is not None
+                    or getattr(job, "disarm_guard", None) is not None
+                ):
+                    if job_guard_deadline(db, job, now, read_only=True) is not None:
+                        continue
+                elif _disarm_grace_blocks_recycle(
                     job, run_ctxs.get(job.plan_run_id), now,
                 ):
                     continue

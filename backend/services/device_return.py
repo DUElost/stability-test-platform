@@ -32,15 +32,12 @@ from backend.agent.contracts.device_return import (
 )
 from backend.agent.contracts.finishing_guard import (
     FINISHING_KIND_TEARDOWN_DISARM,
+    as_teardown_disarm_wire,
     coerce_job_finishing_guard,
     finishing_guard_deadline,
     finishing_kind_of,
     is_clock_regressed,
     mark_clock_regressed,
-)
-from backend.models.finishing_guard_admission import (
-    FINISHING_GUARD_ADMISSION_ROW_ID,
-    FinishingGuardAdmission,
 )
 
 import logging
@@ -1615,23 +1612,12 @@ def guard_owner_valid(db: Session, job: JobInstance, now: datetime, guard: Mappi
                 and 0 <= stamp - _u8_timestamp(row.last_heartbeat) < HOST_HEARTBEAT_TIMEOUT_SECONDS)
 
 
-def finishing_guard_admission_open(db: Session) -> bool:
-    """读全局准入闸门单行（ADR-0065 D5.8）；缺行视为开放（迁移前兼容）。
-
-    U4 的预登记事务以 ``FOR SHARE`` 锁本行；回滚关门以 ``FOR UPDATE`` 置
-    ``admission_open=false``。本函数供控制面只读探测，不获取行锁。
-    """
-    row = db.get(FinishingGuardAdmission, FINISHING_GUARD_ADMISSION_ROW_ID)
-    if row is None:
-        return True
-    return bool(row.admission_open)
-
-
 def job_guard_deadline(db: Session, job: JobInstance, now: datetime, *, read_only: bool = False) -> datetime | None:
-    """统一 FinishingGuard 入口（ADR-0065 / B12 U1）。
+    """统一 FinishingGuard 入口（ADR-0065 / B12 U1 / #4206 v1.1）。
 
-    优先读 ``job.finishing_guard``；缺省时吸收遗留 ``job.disarm_guard`` 为
-    ``kind=teardown_disarm``。候选筛选与行锁 CAS 复读共用本函数。
+    双列 A 类权威由 ``coerce_job_finishing_guard`` 裁定：任一列
+    ``clock_regressed`` 即不可逆失效；否则按单调 ``seq``/新鲜度取最新收据。
+    候选预筛与行锁 CAS 复读共用本函数。
     """
     if job.status != "RUNNING":
         return None
@@ -1644,20 +1630,38 @@ def job_guard_deadline(db: Session, job: JobInstance, now: datetime, *, read_onl
     last_server = guard.get("last_server_at", stamp_now)
     if type(last_server) not in (int, float):
         last_server = stamp_now
+
+    def _persist_regression(source: Mapping) -> None:
+        invalidated = mark_clock_regressed(source)
+        # A 类吸收态：两列都落失效，避免另一列仍被读成有效。
+        if finishing_kind_of(source) == FINISHING_KIND_TEARDOWN_DISARM:
+            job.finishing_guard = invalidated
+            wire = as_teardown_disarm_wire(invalidated)
+            if isinstance(legacy, Mapping):
+                job.disarm_guard = {
+                    **legacy,
+                    **wire,
+                    "reason": "clock_regressed",
+                    "guard_invalidated_reason": "clock_regressed",
+                }
+            else:
+                job.disarm_guard = wire
+        else:
+            job.finishing_guard = invalidated
+
     if stamp_now < float(last_server):
         if not read_only:
-            invalidated = mark_clock_regressed(guard)
-            if isinstance(finishing, Mapping):
-                job.finishing_guard = invalidated
-            if finishing_kind_of(guard) == FINISHING_KIND_TEARDOWN_DISARM and isinstance(legacy, Mapping):
-                job.disarm_guard = {**legacy, "reason": "clock_regressed"}
+            _persist_regression(guard)
         return None
     if is_clock_regressed(guard):
+        if not read_only and finishing_kind_of(guard) == FINISHING_KIND_TEARDOWN_DISARM:
+            # Propagate absorbing fail to both columns when only one was marked.
+            _persist_regression(guard)
         return None
     owner_payload = guard
     if finishing_kind_of(guard) == FINISHING_KIND_TEARDOWN_DISARM and isinstance(legacy, Mapping):
         # Ownership tokens still live on the B6 wire column for teardown.
-        owner_payload = legacy if not isinstance(finishing, Mapping) else guard
+        owner_payload = legacy
     stamp = finishing_guard_deadline(
         guard,
         now=stamp_now,

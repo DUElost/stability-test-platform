@@ -1,8 +1,10 @@
-"""B12 U1 — FinishingGuard additive schema (ADR-0065).
+"""B12 U1 — FinishingGuard additive schema (ADR-0065 / #4206 v1.1).
 
 - ``job_instance.finishing_guard`` / ``negotiated_capabilities`` (JSONB, nullable)
 - ``plan_step.atomic_group`` / ``skip_satisfies_delivery``
-- singleton ``finishing_guard_admission`` row (id=1, admission_open=true)
+
+Note (v1.1)：全局单行准入闸门表 ``finishing_guard_admission`` 归 U4 与真实持锁
+消费方同 PR 落地，不在 U1 建无消费方模型（orphan-models）。
 
 Pure additive; ``downgrade()`` fully reverses. Head prior: ``b8u5a1c2d3e4``.
 
@@ -47,33 +49,9 @@ def upgrade() -> None:
             server_default=sa.text("false"),
         ),
     )
-    op.create_table(
-        "finishing_guard_admission",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column(
-            "admission_open",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.text("true"),
-        ),
-        sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("closed_reason", sa.String(length=128), nullable=True),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.CheckConstraint("id = 1", name="ck_finishing_guard_admission_singleton"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.execute(
-        "INSERT INTO finishing_guard_admission (id, admission_open) VALUES (1, true)"
-    )
 
 
 def downgrade() -> None:
-    op.drop_table("finishing_guard_admission")
     op.drop_column("plan_step", "skip_satisfies_delivery")
     op.drop_column("plan_step", "atomic_group")
     op.drop_column("job_instance", "negotiated_capabilities")
