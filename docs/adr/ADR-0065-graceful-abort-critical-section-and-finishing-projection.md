@@ -1,12 +1,12 @@
 # ADR-0065：统一「收尾中（`finishing`）」过渡态模型与不可中断临界区有界保护
 
-- 状态：Proposed v0.11（2026-11-27 v0.11：按 v0.10 轻量定向收口独立复核修订——将 D2.13 拆为「跳过活跃 `atomic_commit`/`teardown_disarm` 保护」与「向当前受控步骤子进程组发送 `SIGTERM → SIGKILL`」两句以覆盖 B6 强杀并符合 ADR-0059；将 D5.2 拆为写 `/complete` 载荷与持久化 LocalDB outbox 两句并同步 D5 条号引用；明确 D6.3 持续隔离仅限于 `flash_integrity` 欠账未关闭期间并新增 D6.4 与 D4.29–31 清偿/放行出口对齐；对齐 §1.2 与 `README.md` 阶段口径以区分刷机组已实证完成后的 B6 欠账与未验证停机隔离路径；订正 §4 模型文件路径为 `backend/models/job.py`；v0.10：2026-11-26 按 Owner 范围裁定收束并拆出 `#4198`；v0.9：2026-11-26 七轮复核修订；v0.8：2026-11-26 六轮复核修订；v0.7：2026-11-26 五轮复核修订；v0.6：2026-11-26 四轮复核修订；v0.5：2026-11-26 三轮复核修订；v0.4：2026-11-26 二轮复核修订；v0.3：2026-11-26 首轮复核修订；v0.2：2026-11-26 吸收 Owner 裁定；v0.1：2026-11-26 初稿）
+- 状态：**Accepted** v1.0（2026-11-27 经最终收口独立复核通过（PR `#4178` 评论 `7208809580`，`207f298f4`），同日 Owner 裁决接受 v0.11 全文与 §6 三项收口项转 Accepted，按 §5 走 ADR-0058 批次待实施；v0.11：2026-11-27 按 v0.10 轻量定向收口独立复核修订；v0.10：2026-11-26 按 Owner 范围裁定收束并拆出 `#4198`；v0.9：2026-11-26 七轮复核修订；v0.8：2026-11-26 六轮复核修订；v0.7：2026-11-26 五轮复核修订；v0.6：2026-11-26 四轮复核修订；v0.5：2026-11-26 三轮复核修订；v0.4：2026-11-26 二轮复核修订；v0.3：2026-11-26 首轮复核修订；v0.2：2026-11-26 吸收 Owner 裁定；v0.1：2026-11-26 初稿）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-26
-- 决策者：Owner
+- 决策者：Owner（2026-11-27 裁决接受）
 - 标签：执行协议, 中止语义, 刷机, 设备归还, 状态投影
-- 归属域：n/a（Proposed 阶段不入语义归属表；转 Accepted 后登记至 `docs/design/2026-semantic-ownership.md`，与 `device-return`、`run-terminal-semantics` 协同划界）
+- 归属域：semantic-ownership finishing-guard
 - 关联：
   [执行协议契约](../design/07-execution-protocol.md)（§2–§3、§5、§7、§9.2、§9.5）；
   [列表分页与 Minimap 契约](../design/2026-11-24-list-pagination-and-facets-contract.md)（§5.1）；
@@ -317,23 +317,23 @@
 
 本提案跨控制面保护/欠账事务、Agent 执行引擎/停机结算、共享契约、刷机模板与在途版本交错兼容，明确命中 **ADR-0058 D7「多单元协调激活 + 数据/硬件安全」强判据**，转 `Accepted` 后按 ADR-0058 批次拆分并遵守 D8–D9（合入不等于生效，激活前全量复核通过）：
 
-1. **阶段 1（ADR 定稿与语义登记）**：轻量定向收口复核通过且 Owner 确认 §6 后转 `Accepted`，同步更新 `docs/design/07-execution-protocol.md`、`docs/design/2026-11-24-list-pagination-and-facets-contract.md`（§5.1）与 `docs/design/2026-semantic-ownership.md`。
+1. **阶段 1（ADR 定稿与语义登记，已完成）**：2026-11-27 经最终收口独立复核通过（PR `#4178` 评论 `7208809580`）且 Owner 裁决转 `Accepted v1.0`，已同步登记 `docs/design/2026-semantic-ownership.md`（`finishing-guard`）；现态契约 `docs/design/07-execution-protocol.md` 与 `docs/design/2026-11-24-list-pagination-and-facets-contract.md`（§5.1）随阶段 2–3 实施批次同步更新。
 2. **阶段 2（统一底座 + A 类投影先行）**：落地 `backend/agent/contracts/` 统一 `FinishingGuard`、补齐 ADR-0043 全 Run 首次时钟保留与多主体强度取高、收编 B6 `disarm_guard` 为 `teardown_disarm`，上线控制面全量 `ui_status` / Minimap 七字段 `job_exec_status="finishing"` 投影与前端统一展示（开关机 / Monkey / GPU / 休眠 / MTBF 立即获得「收尾中」可视性）。
 3. **阶段 3（B 类 `atomic_commit` + 全前提互斥激活 + `flash_integrity` 欠账隔离 + `force=true` 逃生阀 + 刷机接入）**：先发控制面（API + 预登记/激活 + 准入门禁行 + 统一归还欠账事务 + reaper/recycler + recovery，并将事务锁序与交错路径以可回放 PG 交错测试纳入批次验收，对接 `#3939`）与 Agent（仲裁点 + `request_id` + 激活与本地租约/心跳余量复核后放行 + 自 `grant` 持续取证 + watchdog + outbox + 优雅停机 CAS），确认机队版本齐备后迁移刷机模板 `atomic_group` 并发布支持 `critical_section_guard` 握手的 `flash_firmware_unisoc_bsl` / `flash_firmware` 新版本。
 
 ---
 
-## 6. 裁决记录与待 Owner 确认项
+## 6. 裁决记录
 
 ### 已裁决（2026-11-26，Owner）
 1. **过渡态名称与统一集合模型**：合并为单一 **`收尾中`（`finishing`）**，作为一等集合概念纳入模型，下设 `teardown_disarm`（A 类）与 `atomic_commit`（B 类）两个正交子类型，统一抽成 `FinishingGuard` 而不在 B6 上打补丁。
 2. **单台刷机流程整体语义与终态口径**：将单台纯刷机流程视为原子整体；获批进入临界区后收到普通 `abort` 时跑完本机闭环，实证成功标 `COMPLETED`，任一步失败或超期标 `FAILED`（混合 Plan 存在未执行 `patrol` 时跳过 `patrol` 并标 `ABORTED`）。
 3. **范围收束与 P1-3 深度停止证明拆出（`#4198`）**：参照 `#3933` 先例，将全硬件进程树停止证明、权威进程清单封口屏障、宿主内核重启替代证明与回滚期未确认停组核验拆出至独立 issue `#4198` 另行裁决；本 ADR 保留 `flash_integrity` 欠账生命周期核心不变量，并在 D6 显式声明威胁模型、明确不做与残余风险边界。
 
-### 本稿建议收口项（待 Owner 在转 `Accepted` 时最终拍板）
-1. **采纳两层显式冻结全必需 `atomic_group`（原选项乙，已写入 D3 第 7–13 条）**：派发前在不可变 `plan_snapshot` 声明静态全必需成员，VBUS 刷后 `return_check` 由 Agent 预登记前展开、控制面校验后写入 `JobInstance.finishing_guard`（保留 ADR-0063 D5.3 失败跳过 teardown），避免默认吞并全部剩余 `init` 导致误跑第二段刷机或无关足迹建立步骤。
-2. **Minimap 保持七字段并扩展 `job_exec_status`（已写入 D1 第 4、13、18 条）**：同批修订 `docs/design/2026-11-24-list-pagination-and-facets-contract.md` §5.1，复用 `job_exec_status="finishing"`，子类型明细由设备分页表与 Job 详情提供。
-3. **按 ADR-0058 批次拆分交付（已写入 §5）**：轻量收口复核通过并由 Owner 裁定转 `Accepted` 后，按 ADR-0058 建立批次载体 issue 推进实施与协调激活。
+### 已裁决（2026-11-27，Owner 转 `Accepted v1.0`）
+4. **采纳两层显式冻结全必需 `atomic_group`（原选项乙，D3 第 7–13 条）**：派发前在不可变 `plan_snapshot` 声明静态全必需成员，VBUS 刷后 `return_check` 由 Agent 预登记前展开、控制面校验后写入 `JobInstance.finishing_guard`（保留 ADR-0063 D5.3 失败跳过 teardown），避免默认吞并全部剩余 `init` 导致误跑第二段刷机或无关足迹建立步骤。
+5. **Minimap 保持七字段并扩展 `job_exec_status`（D1 第 4、13、18 条）**：在实施批次同批修订 `docs/design/2026-11-24-list-pagination-and-facets-contract.md` §5.1，复用 `job_exec_status="finishing"`，子类型明细由设备分页表与 Job 详情提供。
+6. **按 ADR-0058 批次拆分交付（§5）**：最终收口独立复核通过（PR `#4178` 评论 `7208809580`），接受 v1.0 全文并登记语义归属域 `finishing-guard`；后续按 ADR-0058 建立批次载体 issue 推进实施、现态契约同步与协调激活（待裁项已清零）。
 
 ---
 
