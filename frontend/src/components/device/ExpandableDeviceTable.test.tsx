@@ -505,3 +505,27 @@ it('表格滚动区采用弹性锁高且分页底栏固定在卡片底部（无 
   expect(paginationBar.className).toContain('shrink-0');
   expect(paginationBar.parentElement).toBe(scrollBox?.parentElement);
 });
+
+it('truncates long build_display_id with responsive max-width and full title tooltip', () => {
+  const longBuild = 'X6726B-15.1.2.175(OP001PF001AZ)TMP260519162209_SU';
+  render(
+    <ExpandableDeviceTable
+      devices={[
+        {
+          id: 99,
+          serial: 'SER-BUILD-99',
+          model: 'INFINIX-X6726B',
+          status: 'idle',
+          build_display_id: longBuild,
+          host_name: '172.21.15.81',
+        },
+      ]}
+    />,
+  );
+
+  const buildCell = screen.getByText(longBuild).closest('td');
+  expect(buildCell).not.toBeNull();
+  expect(buildCell?.className).toContain('truncate');
+  expect(buildCell?.className).toContain('max-w-[136px]');
+  expect(buildCell).toHaveAttribute('title', longBuild);
+});
