@@ -142,6 +142,7 @@
 | 配置 / 词表 / 站点 | 0042, 0045, 0041 | 已填 |
 | 多 Harness 执行 | 0034, 0058；细则 `execution-contract` | 已填 |
 | Schema / 审计 / 前端扩展 | 0008, 0015, 0013 | 0008/0015 已填；0013 见 TBD 触发 |
+| 网络供给 / 资源池 | 0066 | 已填（ADR-0066 统一网络供给模块 WiFi + USB 反向供网与出口策略 = §5.2 的 `network-supply`） |
 
 > **不是**全量名词 Inventory：只登记「会影响架构决策或已出现双标风险」的概念/关系。其余 Accepted ADR 以矩阵 **TBD** 占位，增补纪律见 §7。
 
@@ -164,6 +165,7 @@
 | `plan-param-projection` | concept | 计划参数的生效值分层投影（L1 计划基线 / L2 冻结设计 / L3 逐 Job 下发 / L4 运行期解析）、显示状态与服务端安全投影，以及参数说明与 Plan 级设置登记表；参数值的分层本身仍归 `project-taxonomy`（ADR-0029） | `docs/adr/ADR-0060-plan-parameter-meaning-and-effective-values.md :: ## 2. 决策` | 说明需由非开发人员高频编辑（重议 ADR-0060 方案丙）；出现新的派发期决定类型；新增 Agent 回报运行期取值的通路 |
 | `device-return` | concept | 设备归还状态（设备 × 专项）、六值解除结果、欠账条目与占用不变量：任何结束路径后设备是否回到受控状态以经验证的设备侧回读为准，与 job 终态和租约状态正交；欠账由 `MAINTENANCE` 租约承载（租约机制本身仍归 `device-lease`） | `docs/adr/ADR-0061-device-return-contract.md :: ## 3. 决策` | 出现绕过统一入口释放 ACTIVE 租约的路径；专项接入不再要求设备侧回读；设备侧工具普遍支持执行体到期；人工放行或回读失败比例持续偏高 |
 | `finishing-guard` | concept | 统一「收尾中（`finishing`）」过渡态投影集合（持久化 `status` 维持 `RUNNING`）、双子类型（`teardown_disarm` / `atomic_commit`）、`FinishingGuard` 两段同步许可仲裁与有界保护、两层冻结 `atomic_group` 及 `flash_integrity` 欠账隔离不变量（与 `device-return`、`run-terminal-semantics` 协同划界） | `docs/adr/ADR-0065-graceful-abort-critical-section-and-finishing-projection.md :: ## 2. 决策` | 在数据库 `status` 枚举新增过渡状态值；出现绕过 `FinishingGuard` 同步许可仲裁的刷机临界区；`#4198` 裁决引入机器级全进程树停止证明或宿主内核重启替代证明 |
+| `network-supply` | concept | 统一网络供给模块（沿用 `resource_pool` 并列 `wifi`/`usb_net` 子模块、正交 `config.egress` 出口策略）、受管供网会话 `device_network_session`（任务三时点租约交接 + 手动 `MAINTENANCE` 租约原子互斥 + 池全局并集去重配额）、`usbnet_grant` 签发/续签/撤销屏障与宿主网桥三层隔离（与 `device-lease`、`device-return`、`host-privilege-wrapper`、`finishing-guard` 协同划界） | `docs/adr/ADR-0066-unified-network-supply-and-usb-net.md :: ## 2. 决策` | Phase 1 非 root 设备引入本地 `VpnService` 回退；Phase 2 激活 `usb_net` 的 `vpn` 出口透明代理链路；出现绕过 `stp-agent-priv` 或 `DeviceLease` 互斥的供网路径 |
 | `dle-record` | concept | 设备日志事件终态台账 | `docs/adr/ADR-0028-device-log-event-and-continuous-upload.md :: 唯一权威记录` | 改唯一记录主张 |
 | `log-signal-stream` | concept | 异常事件权威流 | `docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md :: \`log_signal\` 是异常事件权威流` | 旁路上报 |
 | `dedup-pipeline-behavior` | concept | 并列 dedup/merge 行为与分区 | `docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md :: ### D1：两条并列流水线，禁止交叉混用` | 混流水线 |
@@ -283,6 +285,7 @@
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-27 | **ADR-0066 入表（Accepted v1.0，归属域 `network-supply`）**：经 PR #4185 第四轮独立复核通过（`f6e9252e1`）并由 Owner 同日裁决接受（含 Phase 1 允许登记 `wifi+vpn` 池）；§5.1 新增「网络供给 / 资源池」补 `0066`，§5.2 补 `network-supply` 行锚定 `## 2. 决策`（与 `device-lease`、`device-return`、`host-privilege-wrapper`、`finishing-guard` 协同划界） |
 | 2026-11-27 | **ADR-0065 入表（Accepted v1.0，归属域 `finishing-guard`）**：经 PR #4178 最终收口独立复核通过（`7208809580`、`207f298f4`）并由 Owner 同日裁决接受；§5.1「状态机 / 租约 / 调度」补 `0065`，§5.2 补 `finishing-guard` 行锚定 `## 2. 决策`（与 `device-return`、`run-terminal-semantics` 协同划界；P1-3 深度停止证明拆出至 `#4198`） |
 | 2026-11-23 | ADR-0062 v2.0（Accepted，归属域 `center-storage-model`）：经六轮独立复核通过并于同日由 Owner 裁决接受，增补 UNISOC 并入 `DEDUP_FIRST`、中心挂载强门控与阶段 D 退出（按 §9.2 阶段 A–D 分阶段激活）；`center-storage-model` 行按 S15⑤ 恢复 `## 5. 决策（按流转环节 S1–S11）` 实锚 |
 | 2026-09-18 | 初稿：方案 A + Ownership only + X1/X2/X3 + 四类嵌入 + flash + S15 + 12 行 |
