@@ -37,11 +37,14 @@ from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
 from backend.services.partition_scope import run_capabilities
+from backend.services.plan_run_devices import aggregate_plan_run_finishing
 from backend.services.plan_run_read_common import (
     aware as _aware,
     iso as _iso,
     resolve_plan_name,
 )
+
+PLAN_RUN_UI_STATUS_FINISHING = "finishing"
 
 
 def _project_run_context(pr: PlanRun) -> Optional[dict]:
@@ -115,6 +118,10 @@ def _plan_run_out(
     plan_name: str | None = None,
     device_count: int | None = None,
     parameter_projection: Any | None = None,
+    *,
+    ui_status: str | None = None,
+    finishing_kind_counts: dict | None = None,
+    finishing_deadline_at: str | None = None,
 ) -> PlanRunDetailOut:
     return PlanRunDetailOut(
         id=pr.id,
@@ -147,7 +154,54 @@ def _plan_run_out(
         next_admission_at=_iso(pr.next_admission_at),
         priority=pr.priority or 0,
         parameter_projection=parameter_projection,
+        ui_status=ui_status,
+        finishing_kind_counts=finishing_kind_counts,
+        finishing_deadline_at=finishing_deadline_at,
     )
+
+
+def _split_status_filters(
+    statuses: Optional[list],
+) -> tuple[list[PlanRunStatus], bool]:
+    """拆分持久化 PlanRunStatus 与投影哨兵 ``finishing``（ADR-0065 D1.15）。"""
+    persisted: list[PlanRunStatus] = []
+    want_finishing = False
+    for item in statuses or []:
+        if isinstance(item, PlanRunStatus):
+            persisted.append(item)
+            continue
+        raw = str(getattr(item, "value", item) or "").strip()
+        if not raw:
+            continue
+        if raw.lower() == PLAN_RUN_UI_STATUS_FINISHING:
+            want_finishing = True
+            continue
+        try:
+            persisted.append(PlanRunStatus(raw))
+        except ValueError:
+            # 未知值交给上层 422；此处忽略以保持 list 装配纯函数。
+            continue
+    return persisted, want_finishing
+
+
+def _plan_run_is_finishing_projection(
+    db: Session,
+    pr: PlanRun,
+    *,
+    now: datetime,
+    jobs: list[JobInstance] | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    job_rows = jobs
+    if job_rows is None:
+        job_rows = list(
+            db.execute(
+                select(JobInstance).where(JobInstance.plan_run_id == pr.id)
+            ).scalars().all()
+        )
+    agg = aggregate_plan_run_finishing(
+        job_rows, now=now, db=db, run_context=pr.run_context,
+    )
+    return agg.get("ui_status") == PLAN_RUN_UI_STATUS_FINISHING, agg
 
 
 def _step_out(t: StepTrace) -> StepTraceOut:
@@ -229,7 +283,7 @@ def build_plan_run_list_page(
     skip: int,
     limit: int,
     plan_id: Optional[int],
-    statuses: Optional[list[PlanRunStatus]],
+    statuses: Optional[list],
     project_key: Optional[str],
     q: Optional[str],
     run_type: Optional[str] = None,
@@ -237,12 +291,19 @@ def build_plan_run_list_page(
 ) -> PlanRunListPageOut:
     needle = (q or "").strip()
     need_plan_join = bool(needle)
+    persisted_statuses, want_finishing = _split_status_filters(statuses)
+    # finishing 投影只落在持久化 RUNNING 上（D1.16 stats 仍按 RUNNING 计）。
+    filter_statuses = persisted_statuses
+    if want_finishing and not persisted_statuses:
+        filter_statuses = [PlanRunStatus.RUNNING]
+    elif want_finishing and PlanRunStatus.RUNNING not in persisted_statuses:
+        filter_statuses = list(persisted_statuses) + [PlanRunStatus.RUNNING]
 
     base = select(PlanRun).options(joinedload(PlanRun.project))
     base = _apply_plan_run_list_filters(
         base,
         plan_id=plan_id,
-        statuses=statuses,
+        statuses=filter_statuses or None,
         project_key=project_key,
         q=q,
         run_type=run_type,
@@ -251,20 +312,6 @@ def build_plan_run_list_page(
         join_plan_for_search=need_plan_join,
     )
     base = base.order_by(PlanRun.started_at.desc())
-
-    count_stmt = select(func.count()).select_from(PlanRun)
-    count_stmt = _apply_plan_run_list_filters(
-        count_stmt,
-        plan_id=plan_id,
-        statuses=statuses,
-        project_key=project_key,
-        q=q,
-        run_type=run_type,
-        started_after=started_after,
-        db=db,
-        join_plan_for_search=need_plan_join,
-    )
-    total = int(db.execute(count_stmt).scalar_one())
 
     stats_stmt = select(PlanRun.status, func.count()).group_by(PlanRun.status)
     stats_stmt = _apply_plan_run_list_filters(
@@ -283,7 +330,57 @@ def build_plan_run_list_page(
         failed=by_status.get(PlanRunStatus.FAILED.value, 0),
     )
 
-    runs = db.execute(base.offset(skip).limit(limit)).scalars().unique().all()
+    now = datetime.now(timezone.utc)
+    if want_finishing:
+        # 投影筛选需按 Job 级谓词精确求值，保证 total 与 items 同口径（D1.15）。
+        candidates = db.execute(base).scalars().unique().all()
+        matched: list[tuple[PlanRun, dict[str, Any]]] = []
+        for pr in candidates:
+            is_finishing, agg = _plan_run_is_finishing_projection(db, pr, now=now)
+            if not is_finishing:
+                continue
+            if persisted_statuses and pr.status not in {
+                s.value for s in persisted_statuses
+            }:
+                # want_finishing 与其它持久化 status 并集：非 RUNNING 的持久化值仍可命中
+                # （极少）；finishing 投影本身要求活跃收尾，通常仅 RUNNING。
+                if pr.status != PlanRunStatus.RUNNING.value:
+                    continue
+            matched.append((pr, agg))
+        total = len(matched)
+        page = matched[skip: skip + limit]
+        runs = [pr for pr, _agg in page]
+        finishing_by_id = {pr.id: agg for pr, agg in page}
+    else:
+        count_stmt = select(func.count()).select_from(PlanRun)
+        count_stmt = _apply_plan_run_list_filters(
+            count_stmt,
+            plan_id=plan_id,
+            statuses=filter_statuses or None,
+            project_key=project_key,
+            q=q,
+            run_type=run_type,
+            started_after=started_after,
+            db=db,
+            join_plan_for_search=need_plan_join,
+        )
+        total = int(db.execute(count_stmt).scalar_one())
+        runs = db.execute(base.offset(skip).limit(limit)).scalars().unique().all()
+        finishing_by_id = {}
+        if runs:
+            run_ids_for_jobs = [r.id for r in runs]
+            job_rows = db.execute(
+                select(JobInstance).where(JobInstance.plan_run_id.in_(run_ids_for_jobs))
+            ).scalars().all()
+            jobs_by_run: dict[int, list[JobInstance]] = {}
+            for job in job_rows:
+                jobs_by_run.setdefault(int(job.plan_run_id), []).append(job)
+            for pr in runs:
+                _is_f, agg = _plan_run_is_finishing_projection(
+                    db, pr, now=now, jobs=jobs_by_run.get(pr.id, []),
+                )
+                finishing_by_id[pr.id] = agg
+
     plan_ids = {r.plan_id for r in runs}
     plan_names: dict[int, str] = {}
     if plan_ids:
@@ -304,14 +401,19 @@ def build_plan_run_list_page(
             .group_by(JobInstance.plan_run_id)
         ).all()
         device_counts = {int(rid): int(cnt) for rid, cnt in count_rows}
-    items = [
-        _plan_run_out(
-            r,
-            plan_name=plan_names.get(r.plan_id),
-            device_count=device_counts.get(r.id, 0),
+    items = []
+    for r in runs:
+        agg = finishing_by_id.get(r.id) or {}
+        items.append(
+            _plan_run_out(
+                r,
+                plan_name=plan_names.get(r.plan_id),
+                device_count=device_counts.get(r.id, 0),
+                ui_status=agg.get("ui_status"),
+                finishing_kind_counts=agg.get("finishing_kind_counts"),
+                finishing_deadline_at=agg.get("finishing_deadline_at"),
+            )
         )
-        for r in runs
-    ]
     return (
         PlanRunListPageOut(
             items=items,
@@ -364,10 +466,27 @@ def build_plan_run_detail(
         plan_run_id=pr.id,
         read_at=pr.started_at,
     )
-    detail = _plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs],
-                           plan_name=resolve_plan_name(db, pr),
-                           device_count=device_count,
-                           parameter_projection=projection)
+    if include_jobs:
+        job_rows_for_finishing = jobs
+    else:
+        job_rows_for_finishing = list(
+            db.execute(
+                select(JobInstance).where(JobInstance.plan_run_id == run_id)
+            ).scalars().all()
+        )
+    _is_f, finishing_agg = _plan_run_is_finishing_projection(
+        db, pr, now=datetime.now(timezone.utc), jobs=job_rows_for_finishing,
+    )
+    detail = _plan_run_out(
+        pr,
+        jobs=[_job_out(j, []) for j in jobs],
+        plan_name=resolve_plan_name(db, pr),
+        device_count=device_count,
+        parameter_projection=projection,
+        ui_status=finishing_agg.get("ui_status"),
+        finishing_kind_counts=finishing_agg.get("finishing_kind_counts"),
+        finishing_deadline_at=finishing_agg.get("finishing_deadline_at"),
+    )
     # B8 G7 / D16：能力目录按分区模式给出可用操作（extract 只在有「现行」分区时
     # 可用）。只加在详情，列表不做逐行分区查询。
     capabilities = dict(detail.capabilities or {})

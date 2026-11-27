@@ -72,6 +72,7 @@ def build_plan_run_job_detail(
             Host.status.label("host_status"),
             Host.name.label("host_name"),
             Host.ip.label("host_ip"),
+            Host.last_heartbeat.label("host_last_heartbeat"),
             DeviceLease.job_id.label("lease_job_id"),
         )
         .select_from(JobInstance)
@@ -109,6 +110,12 @@ def build_plan_run_job_detail(
         script_index=script_index,
         db=db,
         now=ref_now,
+        run_context=pr.run_context,
+        host_last_heartbeat=(
+            aware(row.host_last_heartbeat)
+            if row.host_last_heartbeat is not None
+            else None
+        ),
     )
 
     step_trace_count = int(

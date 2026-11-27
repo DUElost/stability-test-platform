@@ -36,7 +36,6 @@ from backend.api.schemas.plan_run import (
 )
 from backend.core.database import get_async_db, get_db
 from backend.core.metrics import record_plan_run_devices_query_duration
-from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
 from backend.services.job_artifact_download import build_artifact_download_response
 from backend.services.plan_precheck import PlanRunDispatchRetryError, retry_plan_run_dispatch
@@ -114,7 +113,8 @@ def list_plan_runs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     plan_id: Optional[int] = None,
-    status: Optional[list[PlanRunStatus]] = Query(default=None, description="可重复：?status=QUEUED&status=PRECHECK"),
+    # 可重复；值可为持久化 PlanRunStatus 或投影态 finishing（#4206 U2）
+    status: Optional[list[str]] = Query(default=None),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     q: Optional[str] = Query(None, description="搜索 Run ID / Plan 名 / 触发者"),
     run_type: Optional[str] = Query(None, description="按执行类型过滤"),

@@ -37,6 +37,8 @@ from backend.services.host_maintenance import (
     release_maintenance_window,
 )
 from backend.services.plan_run_abort import abort_jobs_for_host
+from backend.services.plan_run_devices import project_job_finishing
+from backend.services.plan_run_read_common import iso as _iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -112,17 +114,103 @@ class HostAbortPendingError(HostUpgradeGateError):
 class HostAbortDrainTimeoutError(HostUpgradeGateError):
     code = "ABORT_DRAIN_TIMEOUT"
 
-    def __init__(self, lingering_jobs: list[int], abort_summary: Optional[dict]) -> None:
+    def __init__(
+        self,
+        lingering_jobs: list[int],
+        abort_summary: Optional[dict],
+        *,
+        finishing_kind: Optional[str] = None,
+        finishing_deadline_at: Optional[str] = None,
+        suggested_retry_window_seconds: Optional[int] = None,
+    ) -> None:
+        # abort_summary 携带 finishing_*，以便既有 HTTP 映射（只转发
+        # lingering_jobs + abort_summary）仍能透出 D4.16 字段。
+        enriched_summary = dict(abort_summary or {})
+        if finishing_kind is not None:
+            enriched_summary["finishing_kind"] = finishing_kind
+        if finishing_deadline_at is not None:
+            enriched_summary["finishing_deadline_at"] = finishing_deadline_at
+        if suggested_retry_window_seconds is not None:
+            enriched_summary["suggested_retry_window_seconds"] = (
+                suggested_retry_window_seconds
+            )
+        detail = {
+            "lingering_jobs": lingering_jobs,
+            "abort_summary": enriched_summary,
+            "finishing_kind": finishing_kind,
+            "finishing_deadline_at": finishing_deadline_at,
+            "suggested_retry_window_seconds": suggested_retry_window_seconds,
+        }
         super().__init__(
             f"{len(lingering_jobs)} job(s) did not reach a terminal state "
             "after abort",
-            detail={
-                "lingering_jobs": lingering_jobs,
-                "abort_summary": abort_summary,
-            },
+            detail=detail,
         )
         self.lingering_jobs = lingering_jobs
-        self.abort_summary = abort_summary
+        self.abort_summary = enriched_summary
+        self.finishing_kind = finishing_kind
+        self.finishing_deadline_at = finishing_deadline_at
+        self.suggested_retry_window_seconds = suggested_retry_window_seconds
+
+
+def _drain_timeout_finishing_hint(
+    db: Session,
+    host_id: str,
+    lingering_job_ids: list[int],
+) -> dict[str, Any]:
+    """汇总排空超时主体的 finishing_kind / 最近 deadline / 建议重试窗（D4.16）。"""
+    if not lingering_job_ids:
+        return {
+            "finishing_kind": None,
+            "finishing_deadline_at": None,
+            "suggested_retry_window_seconds": int(ABORT_POLL_TIMEOUT_SECONDS),
+        }
+    rows = (
+        db.query(JobInstance)
+        .filter(JobInstance.id.in_(lingering_job_ids))
+        .all()
+    )
+    pr_ids = {j.plan_run_id for j in rows if j.plan_run_id is not None}
+    pr_map = {
+        pr.id: pr
+        for pr in db.query(PlanRun).filter(PlanRun.id.in_(pr_ids)).all()
+    } if pr_ids else {}
+    now = datetime.now(timezone.utc)
+    kinds: list[str] = []
+    nearest = None
+    for job in rows:
+        pr = pr_map.get(job.plan_run_id)
+        proj = project_job_finishing(
+            job,
+            now=now,
+            db=db,
+            run_context=pr.run_context if pr is not None else None,
+        )
+        if proj is None:
+            continue
+        kinds.append(proj.kind)
+        if proj.deadline_at is not None:
+            nearest = (
+                proj.deadline_at
+                if nearest is None
+                else min(nearest, proj.deadline_at)
+            )
+    # 多 kind 并存时取字典序稳定代表值，并在 suggested 中给出排空预算下限。
+    kind = sorted(set(kinds))[0] if kinds else None
+    if nearest is not None:
+        retry_after = max(
+            1,
+            int((nearest - now).total_seconds()) + 1,
+        )
+    else:
+        retry_after = int(ABORT_POLL_TIMEOUT_SECONDS)
+    return {
+        "finishing_kind": kind,
+        "finishing_deadline_at": (
+            _iso_utc(nearest) if nearest is not None else None
+        ),
+        "suggested_retry_window_seconds": retry_after,
+    }
 
 
 def active_jobs_for_host(db: Session, host_id: str) -> list[JobInstance]:
@@ -309,7 +397,16 @@ def begin_host_upgrade(
                 db, host_id, timeout_seconds=drain_timeout_seconds
             )
             if not ok_drained:
-                raise HostAbortDrainTimeoutError(lingering, aborted_summary)
+                hint = _drain_timeout_finishing_hint(db, host_id, lingering)
+                raise HostAbortDrainTimeoutError(
+                    lingering,
+                    aborted_summary,
+                    finishing_kind=hint.get("finishing_kind"),
+                    finishing_deadline_at=hint.get("finishing_deadline_at"),
+                    suggested_retry_window_seconds=hint.get(
+                        "suggested_retry_window_seconds"
+                    ),
+                )
 
         expires_at = host.maintenance_until
         logger.info(

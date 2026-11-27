@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import os
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, func, select
@@ -26,9 +27,24 @@ from backend.api.schemas.plan_run import (
     PlanRunMinimapDeviceOut,
     PlanRunMinimapFacetsOut,
 )
+from backend.agent.contracts.finishing_guard import (
+    ATOMIC_LIVENESS_FRESH_SECONDS,
+    FINISHING_KIND_ATOMIC_COMMIT,
+    FINISHING_KIND_TEARDOWN_DISARM,
+    FINISHING_TRIGGER_MANUAL_ABORT,
+    FINISHING_TRIGGER_MANUAL_EXIT,
+    FINISHING_TRIGGER_NATURAL_END,
+    FINISHING_TRIGGERS,
+    GUARD_STATE_GRANTED,
+    coerce_job_finishing_guard,
+    finishing_kind_of,
+    is_clock_regressed,
+)
 from backend.core.job_timeout_config import (
+    DISARM_SCRIPT_NAMES,
     DISPATCHED_TIMEOUT_SECONDS,
     EXECUTING_DISARM,
+    HOST_HEARTBEAT_TIMEOUT_SECONDS,
     PATROL_STALL_MULTIPLIER,
     UNKNOWN_GRACE_SECONDS,
     running_heartbeat_timeout_seconds,
@@ -40,6 +56,7 @@ from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.services.device_return import job_guard_deadline
+from backend.services.plan_run_context import abort_pending_job_ids
 from backend.services.plan_run_offline_policy import (
     is_prolonged_abnormal_offline,
     resolve_run_offline_policy,
@@ -89,7 +106,196 @@ class PlanRunDevicesQueryError(Exception):
         self.detail = detail
 
 
-def job_exec_status_for_job(j: Any, now: datetime) -> str:
+@dataclass(frozen=True)
+class JobFinishingProjection:
+    """ADR-0065 D1 单 Job 收尾中只读投影（持久化 status 仍为 RUNNING）。"""
+
+    kind: str
+    trigger: str
+    deadline_at: Optional[datetime]
+
+
+def _job_abort_covers(run_context: object, job: Any) -> bool:
+    jid = getattr(job, "id", None)
+    if jid is None:
+        return False
+    return int(jid) in abort_pending_job_ids(
+        run_context,
+        [(int(jid), getattr(job, "host_id", None))],
+    )
+
+
+def _teardown_steps(pipeline_def: object) -> list:
+    if not isinstance(pipeline_def, dict):
+        return []
+    lifecycle = pipeline_def.get("lifecycle") or {}
+    if not isinstance(lifecycle, dict):
+        return []
+    teardown = lifecycle.get("teardown") or []
+    return teardown if isinstance(teardown, list) else []
+
+
+def _teardown_has_disarm_steps(pipeline_def: object) -> bool:
+    for step in _teardown_steps(pipeline_def):
+        if not isinstance(step, dict) or step.get("enabled") is False:
+            continue
+        action = step.get("action") or ""
+        if not isinstance(action, str) or not action.startswith("script:"):
+            continue
+        name = action.split(":", 1)[1].strip()
+        if name in DISARM_SCRIPT_NAMES:
+            return True
+    return False
+
+
+def _is_pure_collection_teardown(job: Any, *, abort_covers: bool) -> bool:
+    """无解除步骤的 teardown 收取结果阶段（D1.8 / C3.1 → deadline 恒 null）。"""
+    pipeline = getattr(job, "pipeline_def", None)
+    if not _teardown_steps(pipeline):
+        return False
+    if _teardown_has_disarm_steps(pipeline):
+        return False
+    manual = (getattr(job, "manual_action", None) or "")
+    if not (abort_covers or manual == "EXIT_REQUESTED"):
+        # 自然结束收取：允许测试/调用方显式标记 lifecycle_stage=teardown
+        if getattr(job, "lifecycle_stage", None) != "teardown":
+            return False
+    exec_state = getattr(job, "execution_state", None)
+    return exec_state in (
+        "EXECUTING_STEP",
+        "WAITING_EXECUTION_SLOT",
+        None,
+        EXECUTING_DISARM,
+    )
+
+
+def _resolve_finishing_trigger(
+    job: Any,
+    guard: Optional[dict[str, Any]],
+    *,
+    abort_covers: bool,
+) -> str:
+    if isinstance(guard, dict):
+        trigger = guard.get("trigger")
+        if trigger in FINISHING_TRIGGERS:
+            return str(trigger)
+    if abort_covers:
+        return FINISHING_TRIGGER_MANUAL_ABORT
+    if (getattr(job, "manual_action", None) or "") == "EXIT_REQUESTED":
+        return FINISHING_TRIGGER_MANUAL_EXIT
+    return FINISHING_TRIGGER_NATURAL_END
+
+
+def project_job_finishing(
+    job: Any,
+    *,
+    now: datetime,
+    db: Optional[Session] = None,
+    run_context: object = None,
+    compute_deadline: bool = True,
+) -> Optional[JobFinishingProjection]:
+    """权威单 Job finishing 判定（Minimap / 分页表 / Job 详情共用，ADR-0065 D1.7）。
+
+    Minimap 只需要是否 finishing（``compute_deadline=False``），避免对窄投影 stub
+    调用 ``job_guard_deadline`` / ``guard_owner_valid``。
+    """
+    if getattr(job, "status", None) != JobStatus.RUNNING.value:
+        return None
+
+    abort_covers = _job_abort_covers(run_context, job) if run_context is not None else False
+    guard = coerce_job_finishing_guard(
+        getattr(job, "finishing_guard", None),
+        getattr(job, "disarm_guard", None),
+    )
+    kind = finishing_kind_of(guard) if guard is not None else None
+    exec_state = getattr(job, "execution_state", None)
+
+    # B 类：仅在有效 grant 且已收到普通 abort 后投影 finishing（D1.7）。
+    if kind == FINISHING_KIND_ATOMIC_COMMIT:
+        if guard is None or is_clock_regressed(guard):
+            return None
+        if guard.get("guard_state") != GUARD_STATE_GRANTED or not abort_covers:
+            return None
+        deadline = None
+        if compute_deadline and db is not None:
+            deadline = job_guard_deadline(db, job, now, read_only=True)
+        return JobFinishingProjection(
+            kind=FINISHING_KIND_ATOMIC_COMMIT,
+            trigger=_resolve_finishing_trigger(job, guard, abort_covers=abort_covers),
+            deadline_at=deadline,
+        )
+
+    pure_collection = _is_pure_collection_teardown(job, abort_covers=abort_covers)
+    teardown_active = False
+    if exec_state == EXECUTING_DISARM:
+        teardown_active = True
+    elif kind == FINISHING_KIND_TEARDOWN_DISARM and guard is not None and not is_clock_regressed(guard):
+        teardown_active = True
+    elif pure_collection:
+        teardown_active = True
+
+    if not teardown_active:
+        return None
+
+    resolved_kind = FINISHING_KIND_TEARDOWN_DISARM
+    deadline: Optional[datetime] = None
+    if pure_collection:
+        deadline = None
+    elif (
+        compute_deadline
+        and db is not None
+        and guard is not None
+        and not is_clock_regressed(guard)
+    ):
+        deadline = job_guard_deadline(db, job, now, read_only=True)
+
+    return JobFinishingProjection(
+        kind=resolved_kind,
+        trigger=_resolve_finishing_trigger(
+            job, guard if isinstance(guard, dict) else None, abort_covers=abort_covers,
+        ),
+        deadline_at=deadline,
+    )
+
+
+def critical_section_protects_adb_disconnect(
+    job: Any,
+    *,
+    now: datetime,
+    host_last_heartbeat: Optional[datetime],
+) -> bool:
+    """有效 grant + 宿主心跳与 guard 存活均新鲜时，预期 ADB 断开不得降为 unknown（D1.6）。"""
+    if getattr(job, "status", None) != JobStatus.RUNNING.value:
+        return False
+    guard = coerce_job_finishing_guard(
+        getattr(job, "finishing_guard", None),
+        getattr(job, "disarm_guard", None),
+    )
+    if finishing_kind_of(guard) != FINISHING_KIND_ATOMIC_COMMIT:
+        return False
+    assert guard is not None
+    if is_clock_regressed(guard) or guard.get("guard_state") != GUARD_STATE_GRANTED:
+        return False
+    hb = aware(host_last_heartbeat)
+    if hb is None:
+        return False
+    if (now - hb).total_seconds() >= HOST_HEARTBEAT_TIMEOUT_SECONDS:
+        return False
+    liveness = guard.get("last_liveness_receipt_at")
+    if type(liveness) not in (int, float):
+        return False
+    if now.timestamp() >= float(liveness) + ATOMIC_LIVENESS_FRESH_SECONDS:
+        return False
+    return True
+
+
+def job_exec_status_for_job(
+    j: Any,
+    now: datetime,
+    *,
+    db: Optional[Session] = None,
+    run_context: object = None,
+) -> str:
     s = j.status
     if s == JobStatus.COMPLETED.value:
         return "completed"
@@ -101,6 +307,10 @@ def job_exec_status_for_job(j: Any, now: datetime) -> str:
         return "pending"
     if s == JobStatus.UNKNOWN.value:
         return "unknown"
+    if project_job_finishing(
+        j, now=now, db=db, run_context=run_context, compute_deadline=False,
+    ) is not None:
+        return "finishing"
     if (j.manual_action or "") == "EXIT_REQUESTED":
         return "backoff"
     nrt = aware(j.next_retry_at)
@@ -114,6 +324,10 @@ def ui_status_for_job(
     now: datetime,
     device: Device | None,
     host_status: str | None,
+    *,
+    db: Optional[Session] = None,
+    run_context: object = None,
+    host_last_heartbeat: Optional[datetime] = None,
 ) -> str:
     s = j.status
     if s == JobStatus.COMPLETED.value:
@@ -128,16 +342,93 @@ def ui_status_for_job(
     if s == JobStatus.UNKNOWN.value:
         return "unknown"
 
+    finishing = project_job_finishing(
+        j, now=now, db=db, run_context=run_context, compute_deadline=False,
+    )
+    if finishing is not None:
+        return "finishing"
+
     # RUNNING 分支
     disconnected = device_currently_disconnected(device, host_status)
     if disconnected:
-        return "unknown"
+        if critical_section_protects_adb_disconnect(
+            j, now=now, host_last_heartbeat=host_last_heartbeat,
+        ):
+            # 临界区保护：保持 running（未 abort）或由 finishing 分支处理；不降 unknown。
+            pass
+        else:
+            return "unknown"
     if (j.manual_action or "") == "EXIT_REQUESTED":
         return "backoff"
     nrt = aware(j.next_retry_at)
     if nrt and nrt > now:
         return "backoff"
     return "running"
+
+
+def aggregate_plan_run_finishing(
+    jobs: Sequence[Any],
+    *,
+    now: datetime,
+    db: Optional[Session] = None,
+    run_context: object = None,
+) -> dict[str, Any]:
+    """PlanRun 级 ui_status / 分组计数 / 最近 deadline（ADR-0065 D1.9–D1.12）。"""
+    terminal = {
+        JobStatus.COMPLETED.value,
+        JobStatus.FAILED.value,
+        JobStatus.ABORTED.value,
+    }
+    finishing_jobs: list[JobFinishingProjection] = []
+    other_active = 0
+    for job in jobs:
+        status = getattr(job, "status", None)
+        if status in terminal:
+            continue
+        proj = project_job_finishing(
+            job, now=now, db=db, run_context=run_context, compute_deadline=True,
+        )
+        if proj is not None:
+            finishing_jobs.append(proj)
+            continue
+        other_active += 1
+
+    kind_counts = {
+        FINISHING_KIND_TEARDOWN_DISARM: 0,
+        FINISHING_KIND_ATOMIC_COMMIT: 0,
+    }
+    nearest: Optional[datetime] = None
+    for proj in finishing_jobs:
+        if proj.kind in kind_counts:
+            kind_counts[proj.kind] += 1
+        if proj.deadline_at is not None:
+            nearest = (
+                proj.deadline_at
+                if nearest is None
+                else min(nearest, proj.deadline_at)
+            )
+
+    if finishing_jobs and other_active == 0:
+        ui_status = "finishing"
+    elif any(
+        getattr(j, "status", None) == JobStatus.RUNNING.value
+        or getattr(j, "status", None) == JobStatus.PENDING.value
+        or getattr(j, "status", None) == JobStatus.UNKNOWN.value
+        for j in jobs
+    ):
+        ui_status = "running"
+    else:
+        ui_status = None
+
+    return {
+        "ui_status": ui_status,
+        "finishing_kind_counts": kind_counts if finishing_jobs else None,
+        "finishing_deadline_at": iso(nearest) if nearest is not None else (
+            None if finishing_jobs else None
+        ),
+        "finishing_job_count": len(finishing_jobs),
+        "other_active_count": other_active,
+    }
 
 
 def current_stage_for_job(j: JobInstance) -> str:
@@ -218,7 +509,10 @@ def running_heartbeat_deadline(
     """
     if j.status != JobStatus.RUNNING.value:
         return None
-    if db is not None and getattr(j, "disarm_guard", None) is not None:
+    if db is not None and (
+        getattr(j, "disarm_guard", None) is not None
+        or getattr(j, "finishing_guard", None) is not None
+    ):
         fresh = j
         checked_at = max(now or datetime.now(timezone.utc), datetime.now(timezone.utc))
         protected_until = job_guard_deadline(db, fresh, checked_at, read_only=True)
@@ -303,11 +597,13 @@ class _LightweightTimeoutJobStub:
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
     disarm_guard: Optional[Dict[str, Any]]
+    finishing_guard: Optional[Dict[str, Any]]
+    manual_action: Optional[str]
+    pipeline_def: Dict[str, Any]
     patrol_cycle_count: int
     last_patrol_heartbeat_at: Optional[datetime]
     current_patrol_step: Optional[str]
     next_retry_at: Optional[datetime]
-    pipeline_def: Dict[str, Any]
 
 
 def _minimal_patrol_pipeline_def(
@@ -378,6 +674,9 @@ def _load_lightweight_plan_run_rows(
 ) -> Tuple[List[_LightPlanRunRow], Dict[str, int], Dict[str, int], Dict[str, int], Dict[str, str], List[int]]:
     """一次窄列联表扫描生成全集轻量投影、facets、主机显示名映射与全局 ``stuck_job_ids``。"""
     patrol_json = JobInstance.pipeline_def["lifecycle"]["patrol"]
+    run_context = db.execute(
+        select(PlanRun.run_context).where(PlanRun.id == run_id)
+    ).scalar_one_or_none()
     raw_rows = db.execute(
         select(
             JobInstance.id.label("job_id"),
@@ -396,6 +695,8 @@ def _load_lightweight_plan_run_rows(
             JobInstance.created_at.label("created_at"),
             JobInstance.updated_at.label("updated_at"),
             JobInstance.disarm_guard.label("disarm_guard"),
+            JobInstance.finishing_guard.label("finishing_guard"),
+            JobInstance.pipeline_def.label("pipeline_def"),
             func.jsonb_typeof(patrol_json).label("patrol_json_type"),
             patrol_json["interval_seconds"].label("patrol_interval_raw"),
             Device.id.label("dev_pk"),
@@ -407,6 +708,7 @@ def _load_lightweight_plan_run_rows(
             Host.status.label("host_status"),
             Host.name.label("host_name"),
             Host.ip.label("host_ip"),
+            Host.last_heartbeat.label("host_last_heartbeat"),
         )
         .select_from(JobInstance)
         .outerjoin(Device, Device.id == JobInstance.device_id)
@@ -428,6 +730,18 @@ def _load_lightweight_plan_run_rows(
     light_rows: List[_LightPlanRunRow] = []
 
     for row in raw_rows:
+        # Row proxies need ``id`` for abort coverage / finishing projection.
+        row_view = SimpleNamespace(
+            id=int(row.job_id),
+            status=row.status,
+            manual_action=row.manual_action,
+            next_retry_at=row.next_retry_at,
+            execution_state=row.execution_state,
+            disarm_guard=row.disarm_guard,
+            finishing_guard=row.finishing_guard,
+            pipeline_def=row.pipeline_def if isinstance(row.pipeline_def, dict) else {},
+            host_id=row.host_id,
+        )
         dev_stub = (
             _LightweightDeviceStub(
                 adb_state=row.adb_state,
@@ -437,7 +751,9 @@ def _load_lightweight_plan_run_rows(
             if row.dev_pk is not None
             else None
         )
-        exec_status = job_exec_status_for_job(row, now)
+        exec_status = job_exec_status_for_job(
+            row_view, now, db=db, run_context=run_context,
+        )
         link_status = derive_device_link_status(dev_stub, row.host_status)
         if include_stuck:
             timeout_stub = _LightweightTimeoutJobStub(
@@ -451,6 +767,8 @@ def _load_lightweight_plan_run_rows(
                 created_at=row.created_at,
                 updated_at=row.updated_at,
                 disarm_guard=row.disarm_guard,
+                finishing_guard=row.finishing_guard,
+                manual_action=row.manual_action,
                 patrol_cycle_count=int(row.patrol_cycle_count or 0),
                 last_patrol_heartbeat_at=row.last_patrol_heartbeat_at,
                 current_patrol_step=row.current_patrol_step,
@@ -666,11 +984,17 @@ def build_device_matrix_item(
     script_index: Dict[Any, Any],
     db: Session,
     now: datetime,
+    run_context: object = None,
+    host_last_heartbeat: Optional[datetime] = None,
 ) -> DeviceMatrixItem:
     """构造单台设备的完整 ``DeviceMatrixItem``（供分页当页与单 Job 详情复用）。"""
     serial = dev.serial if dev else None
     model = dev.model if dev else None
-    ui = ui_status_for_job(j, now, dev, host_st)
+    finishing = project_job_finishing(j, now=now, db=db, run_context=run_context)
+    ui = ui_status_for_job(
+        j, now, dev, host_st,
+        db=db, run_context=run_context, host_last_heartbeat=host_last_heartbeat,
+    )
     cur_stage = current_stage_for_job(j)
     pending_deadline = pending_claim_deadline(j)
     heartbeat_deadline = running_heartbeat_deadline(
@@ -678,10 +1002,15 @@ def build_device_matrix_item(
     )
     busy_reason, busy_lease_job_id = derive_busy_reason(dev, host_st, lease_job_id)
     link = derive_device_link_status(dev, host_st)
-    exec_status = job_exec_status_for_job(j, now)
+    exec_status = job_exec_status_for_job(j, now, db=db, run_context=run_context)
     disconnected = device_currently_disconnected(dev, host_st)
+    protects_disconnect = critical_section_protects_adb_disconnect(
+        j, now=now, host_last_heartbeat=host_last_heartbeat,
+    )
+    # 临界区预期掉 ADB 时仍允许重试入口保持可用（与 ui 不降 unknown 对齐）。
     manual_retry_allowed = (
-        j.status == JobStatus.RUNNING.value and not disconnected
+        j.status == JobStatus.RUNNING.value
+        and (not disconnected or protects_disconnect or finishing is not None)
     )
     cur_step_name, cur_step_version = resolve_step_script(
         script_index, stage="patrol", step_key=j.current_patrol_step,
@@ -720,12 +1049,20 @@ def build_device_matrix_item(
         adb_state=dev.adb_state if dev else None,
         adb_connected=dev.adb_connected if dev else None,
         disarm_results=j.disarm_results,
+        finishing_kind=finishing.kind if finishing else None,
+        finishing_trigger=finishing.trigger if finishing else None,
+        finishing_deadline_at=iso(finishing.deadline_at) if finishing else None,
         capabilities={
             "manual_retry": manual_retry_allowed,
             "manual_exit": j.status == JobStatus.RUNNING.value,
             "manual_retry_blocked_reason": (
                 "device_disconnected"
-                if j.status == JobStatus.RUNNING.value and disconnected
+                if (
+                    j.status == JobStatus.RUNNING.value
+                    and disconnected
+                    and not protects_disconnect
+                    and finishing is None
+                )
                 else None
             ),
             "open_report": j.status in {
@@ -752,11 +1089,15 @@ def _hydrate_device_matrix_items(
         return []
     script_index = snapshot_step_scripts(plan_snapshot)
     coord_heartbeat_by_host = _load_coord_heartbeats(db, run_id)
+    run_context = db.execute(
+        select(PlanRun.run_context).where(PlanRun.id == run_id)
+    ).scalar_one_or_none()
     joined = db.execute(
         select(
             JobInstance,
             Device,
             Host.status.label("host_status"),
+            Host.last_heartbeat.label("host_last_heartbeat"),
             DeviceLease.job_id.label("lease_job_id"),
         )
         .select_from(JobInstance)
@@ -776,7 +1117,7 @@ def _hydrate_device_matrix_items(
         )
     ).all()
     by_job_id: Dict[int, DeviceMatrixItem] = {}
-    for j, dev, host_st, lease_job_id in joined:
+    for j, dev, host_st, host_hb, lease_job_id in joined:
         by_job_id[int(j.id)] = build_device_matrix_item(
             j,
             dev,
@@ -786,6 +1127,8 @@ def _hydrate_device_matrix_items(
             script_index=script_index,
             db=db,
             now=now,
+            run_context=run_context,
+            host_last_heartbeat=aware(host_hb) if host_hb is not None else None,
         )
     return [by_job_id[jid] for jid in ordered_job_ids if jid in by_job_id]
 
