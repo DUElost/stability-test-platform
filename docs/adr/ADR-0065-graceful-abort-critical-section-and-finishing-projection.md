@@ -1,6 +1,6 @@
 # ADR-0065：统一「收尾中（`finishing`）」过渡态模型与不可中断临界区有界保护
 
-- 状态：Proposed v0.10（2026-11-26 v0.10：按 Owner 范围裁定收束——将 P1-3 中的全硬件进程树停止证明、权威进程清单封口屏障、宿主内核重启替代证明及回滚期未确认停组核验拆出至独立 issue `#4198` 延后裁决，保留 `flash_integrity` 欠账生命周期核心不变量；新增 D6「威胁模型、明确不做与残余风险边界」并约定数据库事务交错按 `#3939` 纳入可回放 PG 交错测试验收；同步清理 D2/D3/D4/D5 与 §1.2/§3–§7 交叉引用；v0.9：2026-11-26 七轮复核修订；v0.8：2026-11-26 六轮复核修订；v0.7：2026-11-26 五轮复核修订；v0.6：2026-11-26 四轮复核修订；v0.5：2026-11-26 三轮复核修订；v0.4：2026-11-26 二轮复核修订；v0.3：2026-11-26 首轮复核修订；v0.2：2026-11-26 吸收 Owner 裁定；v0.1：2026-11-26 初稿）
+- 状态：Proposed v0.11（2026-11-27 v0.11：按 v0.10 轻量定向收口独立复核修订——将 D2.13 拆为「跳过活跃 `atomic_commit`/`teardown_disarm` 保护」与「向当前受控步骤子进程组发送 `SIGTERM → SIGKILL`」两句以覆盖 B6 强杀并符合 ADR-0059；将 D5.2 拆为写 `/complete` 载荷与持久化 LocalDB outbox 两句并同步 D5 条号引用；明确 D6.3 持续隔离仅限于 `flash_integrity` 欠账未关闭期间并新增 D6.4 与 D4.29–31 清偿/放行出口对齐；对齐 §1.2 与 `README.md` 阶段口径以区分刷机组已实证完成后的 B6 欠账与未验证停机隔离路径；订正 §4 模型文件路径为 `backend/models/job.py`；v0.10：2026-11-26 按 Owner 范围裁定收束并拆出 `#4198`；v0.9：2026-11-26 七轮复核修订；v0.8：2026-11-26 六轮复核修订；v0.7：2026-11-26 五轮复核修订；v0.6：2026-11-26 四轮复核修订；v0.5：2026-11-26 三轮复核修订；v0.4：2026-11-26 二轮复核修订；v0.3：2026-11-26 首轮复核修订；v0.2：2026-11-26 吸收 Owner 裁定；v0.1：2026-11-26 初稿）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-26
@@ -59,8 +59,9 @@
         • 保护对象：两层冻结——plan_snapshot 静态声明全必需成员 + 预登记校验持久化 VBUS 展开 return_check 至 JobInstance.finishing_guard
         • 终态口径：纯原子交付 Job 全成员实证成功→COMPLETED；任一成员失败、超期或无证据跳过→FAILED；
                    混合 Plan（含未执行 patrol）完成本机原子闭环后跳过 patrol→ABORTED；显式 force 强杀→ABORTED
-        • 硬件完整性欠账不变量：预登记持久化 flash_integrity 待核验义务；未产生完整实证证据或非正常中断时保留义务并将 JOB 租约转为 MAINTENANCE 隔离；
-                   仅经授权设备开机回读探针清偿或 Owner/管理员人工放行（记 unverified）后方可关闭（深度进程树停止证明与宿主重启替代证明拆至 #4198）
+        • 硬件完整性欠账不变量：预登记持久化 flash_integrity 待核验义务；未产生完整实证 atomic_group_evidence 时（含刷机组阶段强杀、步骤失败、超期、失租、未验证停机 outbox 或 UNKNOWN 落 FAILED）保留义务并转 MAINTENANCE 隔离；
+                   刷机组已完整实证成功时（含后续 teardown_disarm 被强杀的混合 Job）核销 flash_integrity 并由统一归还入口按全设备未关闭欠账（含实际 B6 解除欠账）裁定租约；
+                   未关闭的 flash_integrity 仅经授权回读探针清偿或 Owner/管理员人工放行（记 unverified）后方可关闭（深度停止证明与宿主重启替代证明拆至 #4198）
         • 排队隔离：未获批进入临界区的作业（PENDING / return_check / 缓存拉取 / lock-wait）不进入本集合，立即中止为 ABORTED
 ```
 
@@ -118,13 +119,14 @@
 10. 当全 Run 级与主机级两个中止主体同时覆盖同一 Job 时，控制面与 Agent 必须在所有适用主体上取最高强度（任一适用主体为 `force=true` 即按 `force=true` 执行），不得因较早时钟主体为普通中止而降级。
 11. 控制面在筛选中止候选 Job 时必须同时纳入 `RUNNING` 与 `UNKNOWN` 状态的 Job。
 12. 控制面在向 Agent 下发或补送 SocketIO `abort` 载荷时必须在载荷中显式携带按第 10 条计算的有效 `force` 布尔字段。
-13. 当操作者传入 `force=true` 时，Agent 必须跳过 `atomic_commit` 保护并立即向当前受控刷机子进程组发送 `SIGTERM → SIGKILL`。
-14. 当 `force=true` 中断处于 `teardown_disarm` 的 Job 时，Agent 必须将已开始但被中断的解除步骤记为 `incomplete`，并将尚未开始的解除步骤保留为 `not_executed`。
-15. 当 `force=true` 中断处于 `teardown_disarm` 的 Job 时，Agent 必须以终止原因 `force_abort` 上报 Job 终态 `ABORTED`。
-16. 当 `force=true` 中断处于 `teardown_disarm` 的 Job 时，控制面不得豁免 ADR-0061 设备归还欠账判定，必须通过统一归还租约入口按 `执行协议契约（07-execution-protocol.md）§9.5` 转换或保留本设备的 `MAINTENANCE` 欠账租约。
-17. 当 `force=true` 请求获取锁时若目标 Job 已先期提交终态 `/complete`，控制面不得覆写已提交终态，必须在本次 `abort` 响应摘要中将该 Job 标记为 `already_terminal`。
-18. 当 `force=true` 先于 `/complete` 提交到 `PlanRun.run_context`、而 Agent 在收到强杀前已完成并提交合法 `/complete` 时，控制面不得回改该已提交终态，必须在审计与终态摘要中记录 `force_requested_before_complete_settled`。
-19. 前端在发起 `force=true` 请求前必须展示二次确认弹窗，向操作者明确提示强杀刷机临界区可能导致设备滞留下载态并需人工复位及隔离恢复。
+13. 当操作者传入 `force=true` 时，Agent 必须跳过当前活跃的 `atomic_commit` 或 `teardown_disarm` 保护。
+14. 跳过上述收尾保护后，Agent 必须立即向当前正在执行的受控步骤子进程组发送 `SIGTERM → SIGKILL`。
+15. 当 `force=true` 中断处于 `teardown_disarm` 的 Job 时，Agent 必须将已开始但被中断的解除步骤记为 `incomplete`，并将尚未开始的解除步骤保留为 `not_executed`。
+16. 当 `force=true` 中断处于 `teardown_disarm` 的 Job 时，Agent 必须以终止原因 `force_abort` 上报 Job 终态 `ABORTED`。
+17. 当 `force=true` 中断处于 `teardown_disarm` 的 Job 时，控制面不得豁免 ADR-0061 设备归还欠账判定，必须通过统一归还租约入口按 `执行协议契约（07-execution-protocol.md）§9.5` 转换或保留本设备的 `MAINTENANCE` 欠账租约。
+18. 当 `force=true` 请求获取锁时若目标 Job 已先期提交终态 `/complete`，控制面不得覆写已提交终态，必须在本次 `abort` 响应摘要中将该 Job 标记为 `already_terminal`。
+19. 当 `force=true` 先于 `/complete` 提交到 `PlanRun.run_context`、而 Agent 在收到强杀前已完成并提交合法 `/complete` 时，控制面不得回改该已提交终态，必须在审计与终态摘要中记录 `force_requested_before_complete_settled`。
+20. 前端在发起 `force=true` 请求前必须展示二次确认弹窗，向操作者明确提示强杀刷机临界区可能导致设备滞留下载态并需人工复位及隔离恢复。
 
 ### D3 统一 `FinishingGuard` 底座、兼容锁序两段许可仲裁与两层冻结 `atomic_group`
 
@@ -151,7 +153,7 @@
 21. Agent 必须将 `critical_section_enter_request` 与普通 `abort`、`force=true` 及失租信号置于同一进程内互斥仲裁点并按以下规则仲裁：
     - 若仲裁点已收到普通 `abort`、`force=true` 或确认失租，Agent 必须向脚本回复 `deny`；
     - 若仲裁点尚未收到中止信号，Agent 必须先携带 `request_id` 向控制面发起有界同步预登记请求；
-    - 若控制面在预登记事务内发现全局降级准入门禁已关闭（D5 第 7 条）、任一适用主体已提交有效 `abort_requested`、本 Job 的 `ACTIVE JOB` 租约已失效或到期、或当前步骤剩余预算与全组剩余预算中任一项低于 `min_critical_section_seconds`，控制面必须拒绝预登记且不得写入 `flash_integrity` 义务；
+    - 若控制面在预登记事务内发现全局降级准入门禁已关闭（D5 第 8 条）、任一适用主体已提交有效 `abort_requested`、本 Job 的 `ACTIVE JOB` 租约已失效或到期、或当前步骤剩余预算与全组剩余预算中任一项低于 `min_critical_section_seconds`，控制面必须拒绝预登记且不得写入 `flash_integrity` 义务；
     - 收到控制面签发的有效预登记许可后，Agent 必须在向脚本投递 `grant` 之前向控制面发起有界同步激活请求 `activate_permit(permit_id, request_id, fencing_token)`；
     - 在收到控制面 `activate_permit` 成功确认（含未过期 `lease_expires_at` 与 `host_heartbeat_remaining_seconds`）并完成本地租约余量、宿主心跳余量与预算复核之前，Agent 不得向脚本回复 `grant`；
     - 收到控制面拒绝预登记、拒绝激活、任一响应超时、许可已过期、或激活响应扣除本地往返耗时后 `JOB` 租约剩余有效期、宿主心跳剩余有效期或剩余预算（含 60s 存活窗余量）任一项不足安全余量时，Agent 必须向脚本回复 `deny`；
@@ -238,12 +240,13 @@
    - 对上述混合 Plan Job，Agent 必须在 `/complete` 载荷中标记 `atomic_group_completed=true` 与完整 `atomic_group_evidence` 以供控制面按 D4 第 27 条关闭 `flash_integrity` 义务；
    - 对任意 `atomic_commit`（B 类）Job，若冻结 `atomic_group` 内任一成员步骤失败或保护窗超期，Agent 必须上报 Job 终态 `FAILED`；
    - 对任意 `atomic_commit`（B 类）Job，若被 `force=true` 强杀或未获批进入临界区即被中止，Agent 必须上报 Job 终态 `ABORTED`。
-2. 无论 Job 经由正常完成（未收到 `abort`）、普通中止排空还是混合 Plan 退出结束，只要执行了冻结 `atomic_group`，Agent 都必须将 `atomic_group_completed`、`atomic_group_evidence`、`completed_during_abort_drain`、`finishing_kind` 与 `abort_mode` 写入 `/complete` 请求载荷并持久化至 Agent LocalDB outbox。
-3. 控制面必须在终态提交事务中校验并消费上述字段，并写入 Job 终态摘要。
-4. 控制面必须保持 ADR-0048 父 PlanRun 聚合口径：只要 PlanRun 存在有效 `abort_requested`（或 `aborted > 0`），全部 Job 落终态后控制面必须将父 PlanRun 聚合为 `FAILED`。
-5. 对因上述规则聚合为 `FAILED` 的父 PlanRun，控制面不得触发 `next_plan_id` 续链。
-6. 控制面必须将纯原子交付 Job 在 drain 中以 `COMPLETED` 落终态的设备独立计入成功数，便于运维区分已交付与未交付设备。
-7. 控制面与 Agent 在滚动升级与版本交错期间必须遵守以下在途能力冻结、准入门禁与降级规则：
+2. 无论 Job 经由正常完成（未收到 `abort`）、普通中止排空还是混合 Plan 退出结束，只要执行了冻结 `atomic_group`，Agent 都必须将 `atomic_group_completed`、`atomic_group_evidence`、`completed_during_abort_drain`、`finishing_kind` 与 `abort_mode` 写入 `/complete` 请求载荷。
+3. 无论 Job 经由正常完成（未收到 `abort`）、普通中止排空还是混合 Plan 退出结束，只要执行了冻结 `atomic_group`，Agent 都必须在本地将上述终态字段持久化至 Agent LocalDB outbox。
+4. 控制面必须在终态提交事务中校验并消费上述字段，并写入 Job 终态摘要。
+5. 控制面必须保持 ADR-0048 父 PlanRun 聚合口径：只要 PlanRun 存在有效 `abort_requested`（或 `aborted > 0`），全部 Job 落终态后控制面必须将父 PlanRun 聚合为 `FAILED`。
+6. 对因上述规则聚合为 `FAILED` 的父 PlanRun，控制面不得触发 `next_plan_id` 续链。
+7. 控制面必须将纯原子交付 Job 在 drain 中以 `COMPLETED` 落终态的设备独立计入成功数，便于运维区分已交付与未交付设备。
+8. 控制面与 Agent 在滚动升级与版本交错期间必须遵守以下在途能力冻结、准入门禁与降级规则：
    - **启动期能力准入**：在 Job claim 或启动时刻，控制面与 Agent 必须按冻结脚本包 `capabilities.json`、Agent 运行时能力与控制面 API/reaper 能力的交集协商并持久化该 Job 的 `negotiated_capabilities`（含 `finishing_guard_v2`、`atomic_commit`、`force_abort`）；
    - **在途能力冻结**：对已启动的在途 Job，控制面与 Agent 必须在其整个生命周期内锁定上述已协商能力集；
    - **未协商场景**：当 Job 启动时任一方未声明 `atomic_commit` 能力（脚本包无 `critical_section_guard`、旧版 Agent 或旧版控制面），控制面与 Agent 不得启用 `atomic_commit` 保护，必须退化为现行无临界区保护的 `abort` 行为且不得伪造保护窗；
@@ -264,11 +267,12 @@
    - 基于每尝试专属 Linux cgroup v2 子树的 `cgroup.events` `populated=0` 递归停止证明与 cgroup 控制面封口闭环；
    - 基于 `boot_id_source="kernel_proc"` 宿主启动周期历史、`T_arm` 后新认证会话或控制面单次 nonce 在位探针的内核重启替代证明；
    - 在统一归还、自动清偿、人工放行与回滚门禁中强制校验 `process_group_stopped IS NOT TRUE`。
-3. 在 `#4198` 裁决并落地之前，控制面必须对所有未产生完整实证 `atomic_group_evidence` 的非正常中断设备持续保持 `MAINTENANCE` 欠账租约。
-4. 在 `#4198` 裁决并落地之前，Owner 或管理员在执行 `flash_integrity` 人工放行前必须先确认目标宿主机不存在仍在运行的残留刷机进程。
-5. 实施者在 ADR-0058 批次落地本 ADR 的数据库事务串行化（预登记、激活、中止、终态提交、回滚关门与 `session_watchdog` 互斥）时，必须将已识别的交错路径写成可回放的 PostgreSQL 交错测试纳入批次验收清单（对接 `#3939`）。
-6. 复核者在后续轻量收口复核中对落在第 2 条明确不做范围的新增纵深防御建议，必须标为非阻塞并归入 `#4198`。
-7. 复核者不得以落在第 2 条明确不做范围内的纵深防御建议阻塞本 ADR 转 `Accepted`。
+3. 在 `#4198` 裁决并落地之前，控制面必须在未产生完整实证 `atomic_group_evidence` 的非正常中断设备其 `flash_integrity` 欠账条目未关闭期间，持续保持该设备的 `MAINTENANCE` 欠账租约。
+4. 当上述 `flash_integrity` 欠账条目经由 D4 第 30 条授权回读探针清偿或经由 D4 第 31 条与本节第 5 条人工放行关闭后，控制面必须按 D4 第 29 条重算全设备未关闭欠账条目以裁定 `MAINTENANCE` 欠账租约去留。
+5. 在 `#4198` 裁决并落地之前，Owner 或管理员在执行 `flash_integrity` 人工放行前必须先确认目标宿主机不存在仍在运行的残留刷机进程。
+6. 实施者在 ADR-0058 批次落地本 ADR 的数据库事务串行化（预登记、激活、中止、终态提交、回滚关门与 `session_watchdog` 互斥）时，必须将已识别的交错路径写成可回放的 PostgreSQL 交错测试纳入批次验收清单（对接 `#3939`）。
+7. 复核者在后续轻量收口复核中对落在第 2 条明确不做范围的新增纵深防御建议，必须标为非阻塞并归入 `#4198`。
+8. 复核者不得以落在第 2 条明确不做范围内的纵深防御建议阻塞本 ADR 转 `Accepted`。
 
 ---
 
@@ -301,11 +305,11 @@
   - `backend/services/device_return.py` 与 `backend/services/agent_completion.py`：新增兼容锁序预登记端点（`JobInstance → PlanRun → 准入门禁行 FOR SHARE` + 双预算准入 + 冻结 `D_atomic` 与 VBUS 展开列表 + 绑定 `request_id` 许可 + 写入 `pre_registered` 与 `flash_integrity` 义务）与行锁互斥 `activate_permit` 端点（`Host FOR SHARE → JobInstance FOR UPDATE → PlanRun FOR NO KEY UPDATE` 复核宿主心跳新鲜与未过期 `ACTIVE JOB` 租约）；按阶段核销 `flash_integrity` 后统一走同步/异步归还入口裁定全设备欠账；未关闭 `flash_integrity` 欠账持续保持 `MAINTENANCE` 隔离直至授权回读探针清偿或 Owner/管理员人工放行（记 `unverified`）；保留只读重放 `200` / B6 同源迟到确认 / `terminal_payload_conflict` 区分；
   - `backend/scheduler/device_lease_reconciler.py` 与 `backend/scheduler/recycler.py`：收敛到统一 `FinishingGuard` 判定入口，识别有界 `pre_registered` 与 `granted` 保护态，实行候选与行锁 CAS 双次复读及 `clock_regressed` 持久失效；
   - `backend/services/plan_run_devices.py`、`backend/services/plan_run_catalog.py` 与 `backend/services/host_upgrade_gate.py`：实现全量 `ui_status`（分页表与 Job 详情含子类型）与 Minimap 七字段 `job_exec_status` 投影（含刷机预期掉 ADB 不误降 `unknown` 与无截止收尾返回 `null`）、列表筛选计数与热更新拒绝提示；
-  - `backend/models/job_instance.py` 与 `plan_snapshot`：扩展 `finishing_guard` / `negotiated_capabilities` / 两层冻结 `atomic_group` 结构与单一全局降级准入门禁行。
+  - `backend/models/job.py` 与 `plan_snapshot`：扩展 `finishing_guard` / `negotiated_capabilities` / 两层冻结 `atomic_group` 结构与单一全局降级准入门禁行。
 - **前端侧**：PlanRun 列表（含 `finishing` 筛选）、详情页、设备矩阵 Minimap（消费扩展后的七字段 `job_exec_status="finishing"`）、设备分页表与 Job 详情（展示子类型明细与倒计时），以及「强制中止」二次确认弹窗。
 - **关联契约文档同步**：落地时同批更新 `docs/design/07-execution-protocol.md`、`docs/design/2026-11-24-list-pagination-and-facets-contract.md`（§5.1 `job_exec_status` 词表扩展）与 `docs/design/2026-semantic-ownership.md`。
 - **延后拆出范围**：全硬件进程树停止证明、权威进程清单封口、宿主内核重启替代证明与回滚期未确认停组核验已拆出至 `#4198`，不在本 ADR 影响范围内。
-- **兼容性**：严格向后兼容（D3 第 4 条、D5 第 7 条），不破坏现行 B6 归还链路与旧版 Agent。
+- **兼容性**：严格向后兼容（D3 第 4 条、D5 第 8 条），不破坏现行 B6 归还链路与旧版 Agent。
 
 ---
 
