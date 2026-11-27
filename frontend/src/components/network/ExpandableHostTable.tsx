@@ -1316,7 +1316,7 @@ export function ExpandableHostTable({
             <TableHeader className="sticky top-0 z-10 bg-muted/95 backdrop-blur-xs">
               <TableRow className="bg-muted/95 hover:bg-muted/95">
                 {selectable ? (
-                  <TableHead className="w-9 px-2.5 py-2">
+                  <TableHead className="w-8 px-2 py-2">
                     <input
                       ref={selectAllRef}
                       type="checkbox"
@@ -1327,7 +1327,7 @@ export function ExpandableHostTable({
                     />
                   </TableHead>
                 ) : null}
-                <TableHead className="min-w-[136px] px-2.5 py-2 font-medium">
+                <TableHead className="min-w-[104px] px-2 py-2 font-medium">
                   <button
                     type="button"
                     onClick={() => handleSort('name')}
@@ -1337,8 +1337,8 @@ export function ExpandableHostTable({
                     <SortIcon active={sortKey === 'name'} direction={sortDirection} />
                   </button>
                 </TableHead>
-                <TableHead className="min-w-[120px] px-2.5 py-2 font-medium">状态</TableHead>
-                <TableHead className="min-w-[164px] px-2.5 py-2 text-center font-medium whitespace-nowrap">
+                <TableHead className="min-w-[116px] px-2 py-2 font-medium">状态</TableHead>
+                <TableHead className="min-w-[144px] px-2 py-2 text-center font-medium whitespace-nowrap">
                   <button
                     type="button"
                     onClick={() => handleSort('devices')}
@@ -1348,7 +1348,7 @@ export function ExpandableHostTable({
                     <SortIcon active={sortKey === 'devices'} direction={sortDirection} />
                   </button>
                 </TableHead>
-                <TableHead className="w-[156px] px-2.5 py-2 text-center font-medium whitespace-nowrap 2xl:hidden">
+                <TableHead className="w-[122px] px-1.5 py-2 text-center font-medium whitespace-nowrap 2xl:hidden">
                   资源
                 </TableHead>
                 <TableHead className="hidden min-w-[104px] px-2.5 py-2 font-medium 2xl:table-cell">
@@ -1381,7 +1381,7 @@ export function ExpandableHostTable({
                     <SortIcon active={sortKey === 'disk'} direction={sortDirection} />
                   </button>
                 </TableHead>
-                <TableHead className="w-[132px] px-2.5 py-2 font-medium whitespace-nowrap">Agent</TableHead>
+                <TableHead className="w-[114px] px-2 py-2 font-medium whitespace-nowrap">Agent</TableHead>
                 <TableHead className="hidden min-w-[92px] px-2.5 py-2 text-right font-medium 2xl:table-cell">
                   <button
                     type="button"
@@ -1392,7 +1392,7 @@ export function ExpandableHostTable({
                     <SortIcon active={sortKey === 'heartbeat'} direction={sortDirection} />
                   </button>
                 </TableHead>
-                <TableHead className="w-[148px] px-2.5 py-2 text-right font-medium whitespace-nowrap">
+                <TableHead className="w-[138px] px-2 py-2 text-right font-medium whitespace-nowrap">
                   操作
                 </TableHead>
               </TableRow>
@@ -1430,7 +1430,7 @@ export function ExpandableHostTable({
                     )}
                   >
                     {selectable ? (
-                      <TableCell className="w-9 px-2.5 py-1.5">
+                      <TableCell className="w-8 px-2 py-1.5">
                         <input
                           type="checkbox"
                           checked={selectedIds?.has(host.id) ?? false}
@@ -1442,7 +1442,7 @@ export function ExpandableHostTable({
                       </TableCell>
                     ) : null}
 
-                    <TableCell className="max-w-[180px] px-2.5 py-1.5">
+                    <TableCell className="max-w-[164px] px-2 py-1.5">
                       <div className="truncate font-medium text-foreground" title={host.name ?? ''}>
                         {host.name}
                       </div>
@@ -1453,7 +1453,7 @@ export function ExpandableHostTable({
                       ) : null}
                     </TableCell>
 
-                    <TableCell className="px-2.5 py-1.5 whitespace-nowrap">
+                    <TableCell className="px-2 py-1.5 whitespace-nowrap">
                       <div className="space-y-1">
                         <div
                           className="flex flex-nowrap items-center gap-1 whitespace-nowrap"
@@ -1547,7 +1547,7 @@ export function ExpandableHostTable({
                       </div>
                     </TableCell>
 
-                    <TableCell className="px-2.5 py-1.5 text-center whitespace-nowrap">
+                    <TableCell className="px-2 py-1.5 text-center whitespace-nowrap">
                       <div className="inline-flex items-center gap-1">
                         {onNavigateToDevices ? (
                           <button
@@ -1609,9 +1609,9 @@ export function ExpandableHostTable({
                       </div>
                     </TableCell>
 
-                    <TableCell className="w-[156px] px-2.5 py-1.5 2xl:hidden">
+                    <TableCell className="w-[122px] px-1.5 py-1.5 2xl:hidden">
                       {host.resources && host.status === 'ONLINE' ? (
-                        <div className="mx-auto grid w-[140px] grid-cols-3 gap-1">
+                        <div className="mx-auto grid w-[112px] grid-cols-3 gap-0.5">
                           {[
                             ['CPU', host.resources.cpu_load],
                             ['内存', host.resources.ram_usage],
@@ -1698,11 +1698,11 @@ export function ExpandableHostTable({
                       )}
                     </TableCell>
 
-                    <TableCell className="w-[132px] px-2.5 py-1.5">
+                    <TableCell className="w-[114px] px-2 py-1.5">
                       {host.agent_installed ? (
-                        <div className="flex w-[124px] flex-col gap-0.5">
+                        <div className="flex w-[104px] flex-col gap-0.5">
                           <span
-                            className="truncate font-mono text-xs text-foreground"
+                            className="truncate font-mono text-[11px] text-foreground"
                             title={formatAgentVersionLabel(host)}
                           >
                             {formatAgentVersionLabel(host)}
@@ -1735,7 +1735,7 @@ export function ExpandableHostTable({
                       {host.last_heartbeat ? formatHeartbeatLabel(host.last_heartbeat) : '—'}
                     </TableCell>
 
-                    <TableCell className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                    <TableCell className="px-2 py-1.5 text-right whitespace-nowrap">
                       <div className="inline-flex items-center gap-1">
                         {host.retired_at ? (
                           <span className="text-xs text-muted-foreground/40">已退役</span>
@@ -1749,7 +1749,7 @@ export function ExpandableHostTable({
                               }}
                               disabled={isHotUpdating?.(host.id) || isFlashPrereqs?.(host.id)}
                               aria-label={`${host.name ?? host.id} 热更新 Agent`}
-                              className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
+                              className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
                             >
                               {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
                             </button>
@@ -1763,7 +1763,7 @@ export function ExpandableHostTable({
                                 disabled={isFlashPrereqs?.(host.id) || isHotUpdating?.(host.id)}
                                 aria-label={`${host.name ?? host.id} 补齐刷机前置`}
                                 title="补齐 dialout / udev / Qt 刷机依赖"
-                                className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
+                                className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-1.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
                               >
                                 {isFlashPrereqs?.(host.id) ? '补齐中...' : '刷机前置'}
                               </button>
@@ -1787,7 +1787,7 @@ export function ExpandableHostTable({
                                 ? 'Agent 曾安装成功，当前离线 — 可重新安装'
                                 : '尚未检测到 Agent 安装记录'
                             }
-                            className="inline-flex items-center gap-1 rounded-md bg-warning/10 px-2 py-1 text-xs font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
+                            className="inline-flex items-center gap-1 rounded-md bg-warning/10 px-1.5 py-1 text-[11px] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
                           >
                             {isInstalling?.(host.id)
                               ? '安装中...'
