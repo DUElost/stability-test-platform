@@ -228,7 +228,7 @@ def test_list_devices_lease_projection_sql_count_constant(client, db_session, au
     _add_busy_with_lease(2, "a")
     with _SqlCountProbe(engine) as probe_small:
         r1 = client.get(
-            f"/api/v1/devices?q=N13904-&projection=list&skip=0&limit=50",
+            "/api/v1/devices?q=N13904-&projection=list&skip=0&limit=50",
             headers=auth_headers,
         )
     assert r1.status_code == 200
@@ -237,7 +237,7 @@ def test_list_devices_lease_projection_sql_count_constant(client, db_session, au
     _add_busy_with_lease(10, "b")
     with _SqlCountProbe(engine) as probe_large:
         r2 = client.get(
-            f"/api/v1/devices?q=N13904-&projection=list&skip=0&limit=50",
+            "/api/v1/devices?q=N13904-&projection=list&skip=0&limit=50",
             headers=auth_headers,
         )
     assert r2.status_code == 200
