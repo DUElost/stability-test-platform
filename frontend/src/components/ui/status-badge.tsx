@@ -13,6 +13,8 @@ import {
   ShieldCheck,
   RefreshCw,
   PauseCircle,
+  Lock,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -56,6 +58,9 @@ const DEVICE: Record<string, StatusEntry> = {
 const DEVICE_UI: Record<string, StatusEntry> = {
   IDLE: { label: "空闲", variant: "success", Icon: CheckCircle2 },
   TESTING: { label: "测试中", variant: "info", Icon: Zap },
+  // #3904 / #4185：BUSY + MAINTENANCE 欠账 / 非欠账维护占用，不得与「测试中」同文案。
+  RETURN_DEBT: { label: "归还欠账", variant: "destructive", Icon: Lock },
+  MAINTENANCE: { label: "维护占用", variant: "warning", Icon: Wrench },
   OFFLINE: { label: "离线", variant: "secondary", Icon: PowerOff },
   ERROR: { label: "错误", variant: "destructive", Icon: AlertTriangle },
   RUNNING: { label: "运行中", variant: "warning", Icon: Loader2 },

@@ -13,7 +13,7 @@ from backend.core.database import SessionLocal, get_db
 from backend.core.host_identity import allocate_host_id
 from backend.models.host import Host, Device
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import LeaseStatus
+from backend.models.enums import LeaseStatus, LeaseType
 from backend.core.metrics import (
     device_update_suppressed_total,
     record_agent_artifact_upload,
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # 心跳快照降采样间隔（秒）：减少硬件字段数据库写入压力
 SNAPSHOT_INTERVAL_SECONDS = int(os.getenv("DEVICE_SNAPSHOT_INTERVAL", "30"))
 # 建议 Agent 心跳周期 / 日志速率：真源在 agent_host_heartbeat（#1520）。
-from backend.services.device_return import open_debts_for_host_sync
+from backend.services.device_return import is_debt_lease, open_debts_for_host_sync
 from backend.services.agent_host_heartbeat import (  # noqa: F401
     HEARTBEAT_INTERVAL_BASE,
     HEARTBEAT_INTERVAL_MAX,
@@ -459,19 +459,19 @@ def _process_heartbeat_with_db(
         now = datetime.now(timezone.utc)
 
         # Phase 6c: pre-compute busy device IDs from device_leases (replaces lock_run_id)
+        # #3856 / ADR-0066 前置：需要 lease_type/reason/holder 区分 JOB/SCRIPT 阻断与
+        # MAINTENANCE 欠账随物理挪位迁移；仍保持「一设备一条 ACTIVE 租约」消费语义。
         existing_device_ids = [d.id for d in existing_devices.values() if d.id]
         busy_device_ids: set[int] = set()
-        active_lease_host_by_device: dict[int, str] = {}
+        active_lease_by_device: dict[int, DeviceLease] = {}
         if existing_device_ids:
-            active_leases = db.query(
-                DeviceLease.device_id, DeviceLease.host_id,
-            ).filter(
+            active_leases = db.query(DeviceLease).filter(
                 DeviceLease.device_id.in_(existing_device_ids),
                 DeviceLease.status == LeaseStatus.ACTIVE.value,
             ).all()
-            busy_device_ids = {row.device_id for row in active_leases}
-            active_lease_host_by_device = {
-                row.device_id: row.host_id for row in active_leases
+            busy_device_ids = {lease.device_id for lease in active_leases}
+            active_lease_by_device = {
+                lease.device_id: lease for lease in active_leases
             }
 
         for dev_data in devices_data:
@@ -517,14 +517,52 @@ def _process_heartbeat_with_db(
                     device_retired_heartbeat_context(device, host_id=host.id),
                 )
 
-            lease_host = active_lease_host_by_device.get(device.id)
-            if lease_host is not None and lease_host != host.id:
-                logger.warning(
-                    "device_host_reassignment_blocked serial=%s device=%s "
-                    "reported_host=%s lease_host=%s",
-                    serial, device.id, host.id, lease_host,
+            # #3856：ACTIVE 租约跨主机心跳——JOB/SCRIPT 仍阻断改绑；归还欠账
+            # MAINTENANCE 允许 device+lease 同事务迁 host；非欠账 MAINTENANCE
+            # 只更新 device 可见性、租约 host 不动；占位 serial 的 MAINTENANCE
+            # 继续阻断，避免多主机乒乓迁移。
+            active_lease = active_lease_by_device.get(device.id)
+            if active_lease is not None and active_lease.host_id != host.id:
+                lease_host = active_lease.host_id
+                is_maintenance = (
+                    active_lease.lease_type == LeaseType.MAINTENANCE.value
                 )
-                continue
+                placeholder = is_placeholder_serial(device.serial)
+                if (
+                    is_maintenance
+                    and is_debt_lease(active_lease)
+                    and not placeholder
+                ):
+                    old_host = active_lease.host_id
+                    active_lease.host_id = host.id
+                    logger.warning(
+                        "maintenance_debt_lease_host_migrated serial=%s "
+                        "device_id=%s old_host=%s new_host=%s lease_id=%s",
+                        serial,
+                        device.id,
+                        old_host,
+                        host.id,
+                        active_lease.id,
+                    )
+                elif is_maintenance and not placeholder:
+                    # 非欠账 MAINTENANCE（人工维护 / 预留 manual_network_supply）：
+                    # 设备在新 host 可见，租约仍钉在原 host，不释放。
+                    logger.warning(
+                        "maintenance_lease_host_mismatch serial=%s device=%s "
+                        "reported_host=%s lease_host=%s lease_id=%s",
+                        serial,
+                        device.id,
+                        host.id,
+                        lease_host,
+                        active_lease.id,
+                    )
+                else:
+                    logger.warning(
+                        "device_host_reassignment_blocked serial=%s device=%s "
+                        "reported_host=%s lease_host=%s",
+                        serial, device.id, host.id, lease_host,
+                    )
+                    continue
 
             # #1356：占位 serial 设备的归属不可靠（同一 serial 被多 host
             # adb 同时识别）——漂移时告警（不阻断：归属仍按最新心跳，派发侧

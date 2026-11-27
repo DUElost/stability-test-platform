@@ -47,6 +47,8 @@ from backend.api.schemas.device import (
 )
 from backend.core.device_lifecycle import is_retire_suggested, is_stale
 from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
+from backend.models.device_lease import DeviceLease
+from backend.models.enums import LeaseStatus
 from backend.models.host import Device, Host
 from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel
@@ -899,11 +901,53 @@ def build_device_selection_preview(
     )
 
 
+def fetch_active_lease_fields(
+    db: Session,
+    device_ids: Sequence[int],
+) -> Dict[int, Tuple[Optional[str], Optional[str]]]:
+    """批量读取设备当前 ACTIVE 租约的 ``(lease_type, reason)``（单次查询，零 N+1）。
+
+    #3904 / #4185：只读投影，供 ``DeviceOut`` / ``DeviceListItemOut`` 首屏徽标分流；
+    不改 ``Device.status``，也不触达租约生命周期。
+    """
+    ids = [int(device_id) for device_id in device_ids if device_id is not None]
+    if not ids:
+        return {}
+    rows = (
+        db.query(DeviceLease.device_id, DeviceLease.lease_type, DeviceLease.reason)
+        .filter(
+            DeviceLease.device_id.in_(ids),
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
+        .all()
+    )
+    return {
+        int(row.device_id): (
+            str(row.lease_type) if row.lease_type is not None else None,
+            str(row.reason) if row.reason is not None else None,
+        )
+        for row in rows
+    }
+
+
+def _apply_active_lease_fields(
+    out: DeviceOut | DeviceListItemOut,
+    active_lease: Optional[Tuple[Optional[str], Optional[str]]],
+) -> None:
+    if active_lease is None:
+        out.active_lease_type = None
+        out.active_lease_reason = None
+        return
+    out.active_lease_type = active_lease[0]
+    out.active_lease_reason = active_lease[1]
+
+
 def serialize_device_list_item(
     device: Device,
     model_to_project: Dict[str, Tuple[int, str]],
     *,
     now: datetime,
+    active_lease: Optional[Tuple[Optional[str], Optional[str]]] = None,
 ) -> DeviceListItemOut:
     """只读构造有界设备列表 DTO（不含无界 ``extra``，附带预关联 ``host_name``）。"""
     eff_status = effective_device_status(device, device.host, now=now)
@@ -919,6 +963,7 @@ def serialize_device_list_item(
         out.host_name = (device.host.name or "").strip() or (device.host.ip or "").strip() or None
     else:
         out.host_name = None
+    _apply_active_lease_fields(out, active_lease)
     return out
 
 
@@ -927,6 +972,7 @@ def serialize_device_full_readonly(
     model_to_project: Dict[str, Tuple[int, str]],
     *,
     now: datetime,
+    active_lease: Optional[Tuple[Optional[str], Optional[str]]] = None,
 ) -> DeviceOut:
     """只读构造完整 ``DeviceOut``（供旧版列表与单机详情共用）。"""
     eff_status = effective_device_status(device, device.host, now=now)
@@ -938,4 +984,5 @@ def serialize_device_full_readonly(
     out.project_key = entry[1] if entry else None
     out.attribution_source = "mapped" if (device.model and entry is not None) else "unmapped"
     out.usb_presence = usb_presence_for(device.host, device.serial, now=now)
+    _apply_active_lease_fields(out, active_lease)
     return out

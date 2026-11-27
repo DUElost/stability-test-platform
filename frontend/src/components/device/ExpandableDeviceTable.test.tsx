@@ -41,6 +41,53 @@ const devices = [
 ];
 
 describe('ExpandableDeviceTable', () => {
+  it('#3904：BUSY 租约细类首屏徽标分流（欠账 / 维护 / 测试中）', () => {
+    render(
+      <ExpandableDeviceTable
+        devices={[
+          {
+            id: 101,
+            serial: 'DEBT-101',
+            model: 'M1',
+            status: 'return_debt' as const,
+            active_lease_type: 'MAINTENANCE',
+            active_lease_reason: '归还欠账',
+          },
+          {
+            id: 102,
+            serial: 'MAINT-102',
+            model: 'M1',
+            status: 'maintenance' as const,
+            active_lease_type: 'MAINTENANCE',
+            active_lease_reason: 'manual_network_supply',
+          },
+          {
+            id: 103,
+            serial: 'JOB-103',
+            model: 'M1',
+            status: 'testing' as const,
+            active_lease_type: 'JOB',
+          },
+          {
+            id: 104,
+            serial: 'LEGACY-104',
+            model: 'M1',
+            status: 'testing' as const,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('device-status-badge-101')).toHaveTextContent('归还欠账');
+    expect(screen.queryByTestId('device-status-badge-101')?.textContent).not.toContain('测试中');
+    expect(screen.getByTestId('device-status-badge-102')).toHaveTextContent('维护占用');
+    expect(screen.getByTestId('device-status-badge-102').getAttribute('title')).toBe(
+      'manual_network_supply',
+    );
+    expect(screen.getByTestId('device-status-badge-103')).toHaveTextContent('测试中');
+    expect(screen.getByTestId('device-status-badge-104')).toHaveTextContent('测试中');
+  });
+
   it('shows the vbus slot USB presence badge only for mapped devices (#3918)', () => {
     render(
       <ExpandableDeviceTable

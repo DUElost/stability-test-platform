@@ -820,3 +820,387 @@ class TestHeartbeatHostReassignment:
             Device.serial == sample_device.serial
         ).one()
         assert kept.host_id == sample_device.host_id
+
+
+class TestHeartbeatMaintenanceLeaseHostReassignment3856:
+    """#3856：MAINTENANCE 欠账租约随物理挪位迁移 host，JOB 仍阻断，设备不再失踪。"""
+
+    @staticmethod
+    def _make_host(db_session, *, host_id: str, ip: str):
+        from backend.models.host import Host
+        from backend.models.enums import HostStatus
+
+        host = Host(
+            id=host_id,
+            hostname=f"host-{host_id}",
+            name=f"host-{host_id}",
+            ip=ip,
+            ip_address=ip,
+            status=HostStatus.ONLINE.value,
+            last_heartbeat=datetime.now(timezone.utc),
+        )
+        db_session.add(host)
+        db_session.flush()
+        return host
+
+    @staticmethod
+    def _make_device(db_session, *, serial: str, host_id: str, status: str = "BUSY"):
+        device = Device(
+            serial=serial,
+            host_id=host_id,
+            status=status,
+            last_seen=datetime.now(timezone.utc) - timedelta(minutes=5),
+            adb_connected=True,
+            adb_state="device",
+            lease_generation=1,
+        )
+        db_session.add(device)
+        db_session.flush()
+        return device
+
+    @staticmethod
+    def _make_lease(
+        db_session,
+        *,
+        device,
+        host_id: str,
+        lease_type: str,
+        reason: str | None = None,
+        holder: str | None = None,
+        fencing_token: str | None = None,
+    ):
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseStatus
+
+        now = datetime.now(timezone.utc)
+        lease = DeviceLease(
+            device_id=device.id,
+            job_id=None,
+            host_id=host_id,
+            lease_type=lease_type,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=fencing_token or f"{device.id}:1",
+            lease_generation=1,
+            agent_instance_id=host_id,
+            reason=reason,
+            holder=holder,
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=now + timedelta(hours=1),
+        )
+        db_session.add(lease)
+        db_session.flush()
+        return lease
+
+    @staticmethod
+    def _make_open_debt(db_session, *, device_id: int, fencing_token: str):
+        from backend.models.device_return_debt import DeviceReturnDebt
+
+        debt = DeviceReturnDebt(
+            device_id=device_id,
+            family="power-cycle",
+            source_kind="stock",
+            source_job_id=None,
+            source_fencing_token=fencing_token,
+            cause="not_executed",
+            state="open",
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(debt)
+        db_session.flush()
+        return debt
+
+    @staticmethod
+    def _beat(client, host_id: str, serial: str):
+        return client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": host_id,
+                "status": "ONLINE",
+                "devices": [
+                    {
+                        "serial": serial,
+                        "adb_state": "device",
+                        "adb_connected": True,
+                    }
+                ],
+            },
+        )
+
+    def test_active_job_lease_still_blocks_host_rebind(
+        self, client, db_session, caplog,
+    ):
+        """① ACTIVE JOB 跨 host 心跳仍阻断 device/lease host 改绑。"""
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseType
+
+        host_a = self._make_host(db_session, host_id="3856-a-job", ip="198.18.56.1")
+        host_b = self._make_host(db_session, host_id="3856-b-job", ip="198.18.56.2")
+        device = self._make_device(
+            db_session, serial="3856-JOB-REAL", host_id=host_a.id,
+        )
+        lease = self._make_lease(
+            db_session,
+            device=device,
+            host_id=host_a.id,
+            lease_type=LeaseType.JOB.value,
+        )
+        db_session.commit()
+        before_token = lease.fencing_token
+        before_seen = device.last_seen
+
+        caplog.set_level(logging.WARNING, logger=HEARTBEAT_LOGGER)
+        assert self._beat(client, host_b.id, device.serial).status_code == 200
+
+        db_session.expire_all()
+        device = db_session.query(Device).filter(Device.serial == device.serial).one()
+        lease = db_session.get(DeviceLease, lease.id)
+        assert device.host_id == host_a.id
+        assert lease.host_id == host_a.id
+        assert lease.status == "ACTIVE"
+        assert lease.fencing_token == before_token
+        assert device.last_seen == before_seen
+        assert any(
+            "device_host_reassignment_blocked" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_debt_maintenance_lease_migrates_with_device(
+        self, client, db_session, caplog,
+    ):
+        """② 欠账 MAINTENANCE：device+lease 同步迁至新 host，status=BUSY，欠账可查。"""
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseType
+        from backend.services.device_return import (
+            DEBT_LEASE_HOLDER,
+            DEBT_LEASE_REASON,
+            is_debt_lease,
+            open_debts_for_host_sync,
+        )
+
+        host_a = self._make_host(db_session, host_id="3856-a-debt", ip="198.18.56.3")
+        host_b = self._make_host(db_session, host_id="3856-b-debt", ip="198.18.56.4")
+        device = self._make_device(
+            db_session, serial="3856-DEBT-REAL", host_id=host_a.id,
+        )
+        token = f"{device.id}:7"
+        lease = self._make_lease(
+            db_session,
+            device=device,
+            host_id=host_a.id,
+            lease_type=LeaseType.MAINTENANCE.value,
+            reason=DEBT_LEASE_REASON,
+            holder=DEBT_LEASE_HOLDER,
+            fencing_token=token,
+        )
+        self._make_open_debt(
+            db_session, device_id=device.id, fencing_token=token,
+        )
+        db_session.commit()
+        assert is_debt_lease(lease)
+
+        caplog.set_level(logging.WARNING, logger=HEARTBEAT_LOGGER)
+        assert self._beat(client, host_b.id, device.serial).status_code == 200
+
+        db_session.expire_all()
+        device = db_session.query(Device).filter(Device.serial == device.serial).one()
+        lease = db_session.get(DeviceLease, lease.id)
+        assert device.host_id == host_b.id
+        assert lease.host_id == host_b.id
+        assert lease.status == "ACTIVE"
+        assert lease.fencing_token == token
+        assert is_debt_lease(lease)
+        assert device.status == "BUSY"
+        assert device.adb_state == "device"
+        assert device.adb_connected is True
+        assert device.last_seen is not None
+        debts = open_debts_for_host_sync(db_session, host_b.id)
+        assert any(d["device_id"] == device.id for d in debts), debts
+        assert any(
+            "maintenance_debt_lease_host_migrated" in r.getMessage()
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+
+    def test_migrated_debt_still_blocks_dispatch(self, client, db_session):
+        """③ 挪机后派发分类仍因 device_return_debt / active_lease 拒绝。"""
+        from backend.models.enums import LeaseType
+        from backend.services.device_return import DEBT_LEASE_HOLDER, DEBT_LEASE_REASON
+        from backend.services.plan_dispatcher_sync import _classify_dispatch_devices_sync
+
+        host_a = self._make_host(db_session, host_id="3856-a-adm", ip="198.18.56.5")
+        host_b = self._make_host(db_session, host_id="3856-b-adm", ip="198.18.56.6")
+        device = self._make_device(
+            db_session, serial="3856-DEBT-ADM", host_id=host_a.id,
+        )
+        token = f"{device.id}:3"
+        self._make_lease(
+            db_session,
+            device=device,
+            host_id=host_a.id,
+            lease_type=LeaseType.MAINTENANCE.value,
+            reason=DEBT_LEASE_REASON,
+            holder=DEBT_LEASE_HOLDER,
+            fencing_token=token,
+        )
+        self._make_open_debt(
+            db_session, device_id=device.id, fencing_token=token,
+        )
+        db_session.commit()
+
+        assert self._beat(client, host_b.id, device.serial).status_code == 200
+        db_session.expire_all()
+        device = db_session.query(Device).filter(Device.serial == device.serial).one()
+        assert device.host_id == host_b.id
+
+        unavailable, _ = _classify_dispatch_devices_sync(db_session, [device.id])
+        reasons = {u["reason"] for u in unavailable if u["id"] == device.id}
+        assert reasons & {"device_return_debt", "active_lease"}, unavailable
+
+    def test_placeholder_debt_maintenance_does_not_migrate_lease(
+        self, client, db_session, caplog,
+    ):
+        """④ 占位 serial 持欠账 MAINTENANCE：不迁移 lease.host_id。"""
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseType
+        from backend.services.device_return import DEBT_LEASE_HOLDER, DEBT_LEASE_REASON
+
+        host_a = self._make_host(db_session, host_id="3856-a-ph", ip="198.18.56.7")
+        host_b = self._make_host(db_session, host_id="3856-b-ph", ip="198.18.56.8")
+        device = self._make_device(
+            db_session, serial="0123456789ABCDEF", host_id=host_a.id,
+        )
+        token = f"{device.id}:9"
+        lease = self._make_lease(
+            db_session,
+            device=device,
+            host_id=host_a.id,
+            lease_type=LeaseType.MAINTENANCE.value,
+            reason=DEBT_LEASE_REASON,
+            holder=DEBT_LEASE_HOLDER,
+            fencing_token=token,
+        )
+        self._make_open_debt(
+            db_session, device_id=device.id, fencing_token=token,
+        )
+        db_session.commit()
+        owner_host = host_a.id
+
+        caplog.set_level(logging.WARNING, logger=HEARTBEAT_LOGGER)
+        assert self._beat(client, host_b.id, device.serial).status_code == 200
+
+        db_session.expire_all()
+        device = db_session.query(Device).filter(
+            Device.serial == "0123456789ABCDEF"
+        ).one()
+        lease = db_session.get(DeviceLease, lease.id)
+        assert lease.host_id == owner_host
+        assert lease.status == "ACTIVE"
+        assert lease.fencing_token == token
+        assert device.host_id == owner_host
+        assert any(
+            "device_host_reassignment_blocked" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_non_debt_maintenance_updates_device_keeps_lease_host(
+        self, client, db_session, caplog,
+    ):
+        """⑤ 非欠账 MAINTENANCE：device 迁至 B 且 BUSY，lease 仍钉在 A。"""
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseType
+
+        host_a = self._make_host(db_session, host_id="3856-a-man", ip="198.18.56.9")
+        host_b = self._make_host(db_session, host_id="3856-b-man", ip="198.18.56.10")
+        device = self._make_device(
+            db_session, serial="3856-MANUAL-NET", host_id=host_a.id,
+        )
+        token = f"{device.id}:11"
+        lease = self._make_lease(
+            db_session,
+            device=device,
+            host_id=host_a.id,
+            lease_type=LeaseType.MAINTENANCE.value,
+            reason="manual_network_supply",
+            holder="operator",
+            fencing_token=token,
+        )
+        db_session.commit()
+
+        caplog.set_level(logging.WARNING, logger=HEARTBEAT_LOGGER)
+        assert self._beat(client, host_b.id, device.serial).status_code == 200
+
+        db_session.expire_all()
+        device = db_session.query(Device).filter(
+            Device.serial == "3856-MANUAL-NET"
+        ).one()
+        lease = db_session.get(DeviceLease, lease.id)
+        assert device.host_id == host_b.id
+        assert device.status == "BUSY"
+        assert lease.host_id == host_a.id
+        assert lease.status == "ACTIVE"
+        assert lease.fencing_token == token
+        assert any(
+            "maintenance_lease_host_mismatch" in r.getMessage()
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+
+    def test_after_override_next_heartbeat_returns_online(
+        self, client, db_session,
+    ):
+        """⑥ 欠账清偿/人工放行后下一拍心跳 → ONLINE。"""
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseStatus, LeaseType
+        from backend.services.device_return import (
+            DEBT_LEASE_HOLDER,
+            DEBT_LEASE_REASON,
+            apply_override_sync,
+        )
+
+        host_a = self._make_host(db_session, host_id="3856-a-ov", ip="198.18.56.11")
+        host_b = self._make_host(db_session, host_id="3856-b-ov", ip="198.18.56.12")
+        device = self._make_device(
+            db_session, serial="3856-DEBT-OV", host_id=host_a.id,
+        )
+        token = f"{device.id}:13"
+        lease = self._make_lease(
+            db_session,
+            device=device,
+            host_id=host_a.id,
+            lease_type=LeaseType.MAINTENANCE.value,
+            reason=DEBT_LEASE_REASON,
+            holder=DEBT_LEASE_HOLDER,
+            fencing_token=token,
+        )
+        self._make_open_debt(
+            db_session, device_id=device.id, fencing_token=token,
+        )
+        db_session.commit()
+
+        assert self._beat(client, host_b.id, device.serial).status_code == 200
+        db_session.expire_all()
+        device = db_session.query(Device).filter(
+            Device.serial == "3856-DEBT-OV"
+        ).one()
+        assert device.host_id == host_b.id
+        assert device.status == "BUSY"
+
+        result = apply_override_sync(
+            db_session,
+            device_id=device.id,
+            families=["power-cycle"],
+            reason_category="flashed",
+            evidence_ref="test:3856",
+        )
+        db_session.commit()
+        assert result["ok"] is True
+        assert result["debt_lease_released"] is True
+        lease = db_session.get(DeviceLease, lease.id)
+        assert lease.status == LeaseStatus.RELEASED.value
+
+        assert self._beat(client, host_b.id, device.serial).status_code == 200
+        db_session.expire_all()
+        device = db_session.query(Device).filter(
+            Device.serial == "3856-DEBT-OV"
+        ).one()
+        assert device.host_id == host_b.id
+        assert device.status == "ONLINE"
