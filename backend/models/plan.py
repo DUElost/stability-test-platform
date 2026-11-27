@@ -108,6 +108,12 @@ class PlanStep(Base):
     params          = Column(JSONB, nullable=True)
     retry           = Column(Integer, nullable=False, default=0)
     enabled         = Column(Boolean, nullable=False, default=True, server_default="true")
+    # ADR-0065 / B12 U1：显式 atomic_group 成员标记（同组共享非空组 id）
+    atomic_group    = Column(String(64), nullable=True)
+    # 原子交付步骤允许 skipped=true 仍计交付成功（需附版本核验证据；默认 false）
+    skip_satisfies_delivery = Column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
     created_at      = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     plan = relationship("Plan", foreign_keys=[plan_id], back_populates="steps")

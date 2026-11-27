@@ -120,8 +120,24 @@ def abort_pending_job_ids(
     return pending
 
 
+# ── ADR-0065 / B12 U1：多主体强度 / 时钟合并（全仓共享纯函数）──────────────
+# 写入 force 由 U4 完成；此处与 finishing_guard 契约同源，供 abort / reaper /
+# recovery 消费侧取 max(force) 与 min(clock)。
+
+from backend.agent.contracts.finishing_guard import (  # noqa: E402
+    effective_abort_force,
+    max_abort_intensity,
+    min_abort_clock,
+    subject_force_flags,
+)
+
+
 __all__ = [
     "write_run_context_section",
     "run_abort_pending",
     "abort_pending_job_ids",
+    "effective_abort_force",
+    "max_abort_intensity",
+    "min_abort_clock",
+    "subject_force_flags",
 ]

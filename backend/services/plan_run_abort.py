@@ -362,6 +362,9 @@ def abort_plan_run(
         select(PlanRun)
         .where(PlanRun.id == plan_run_id)
         .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE (#1473)
+        # B4：持锁后强制用库内最新行覆盖会话内锁前预读的陈旧 ORM 快照，
+        # 避免并发刚提交的首次 at / requested_job_ids 被旧对象盖掉。
+        .execution_options(populate_existing=True)
     ).scalar_one_or_none()
     if pr is None:
         raise PlanRunAbortError(f"PlanRun {plan_run_id} not found")
@@ -526,16 +529,33 @@ def abort_plan_run(
                 "acknowledged_job_ids": existing_ack,
             }
         else:
-            abort_requested_payload = {
-                "at": now.isoformat(),
-                "reason": reason,
-                "triggered_by": triggered_by,
-                "deadline_at": (
-                    now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
-                ).isoformat(),
-                "requested_job_ids": list(abort_requested_jobs),
-                "acknowledged_job_ids": [],
-            }
+            # ADR-0043 D2 / ADR-0065 D4.5 / #4206 v1.1 B4：
+            # run 级重复 abort **首次写入、后续不重置** at/deadline_at；
+            # requested_job_ids 与既有名单取并集（不因 Job 已转 UNKNOWN 而缩减）；
+            # 不得清空已有 acknowledged_job_ids。
+            existing_run = existing_abort if isinstance(existing_abort, dict) else {}
+            merged_run_requested = list(
+                dict.fromkeys(existing_requested + abort_requested_jobs)
+            )
+            if existing_run.get("at"):
+                abort_requested_payload = {
+                    **existing_run,
+                    "reason": reason,
+                    "triggered_by": triggered_by,
+                    "requested_job_ids": merged_run_requested,
+                    "acknowledged_job_ids": existing_ack,
+                }
+            else:
+                abort_requested_payload = {
+                    "at": now.isoformat(),
+                    "reason": reason,
+                    "triggered_by": triggered_by,
+                    "deadline_at": (
+                        now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
+                    ).isoformat(),
+                    "requested_job_ids": merged_run_requested,
+                    "acknowledged_job_ids": [],
+                }
         run_ctx["abort_requested"] = abort_requested_payload
         # #1928 注记（**已失效**，ADR-0043 v1.1 / #2154）：本写入**曾**重置 run 级
         # `at`/`deadline_at`，使每次 host 级 abort 都把整轮宽限延长为「本次请求 +

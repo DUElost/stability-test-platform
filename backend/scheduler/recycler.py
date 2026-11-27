@@ -166,7 +166,11 @@ def _final_disarm_grace_blocks_write(db, job, now: datetime) -> bool:
     job = fresh
     # Collection time can precede a concurrently committed stage receipt.
     now = max(now, datetime.now(timezone.utc))
-    if getattr(job, "disarm_guard", None) is not None:
+    # ADR-0065 / B12 U1：统一 FinishingGuard 入口（finishing_guard ∪ 遗留 disarm_guard）
+    if (
+        getattr(job, "finishing_guard", None) is not None
+        or getattr(job, "disarm_guard", None) is not None
+    ):
         return job_guard_deadline(db, job, now) is not None
     return _disarm_grace_blocks_recycle(
         job,
@@ -1264,6 +1268,7 @@ def recycle_once() -> None:
         # Phase evidence has its own fixed freshness and frozen deadlines.
         # Overselect guards here; the locked final policy rejects fresh ones.
         JobInstance.disarm_guard.is_not(None),
+        JobInstance.finishing_guard.is_not(None),
         # nothing ever reported → one full executor window from dispatch
         and_(
             or_(
@@ -1317,10 +1322,16 @@ def recycle_once() -> None:
                 break
             last_running_id = batch[-1].id
             coord_hb = _coordinator_heartbeats(db, batch)
-            # 候选预筛：可陈旧；最终写入必须以 _final_disarm_grace_blocks_write 复验
+            # B3：候选预筛即评估统一护盾；最终写入仍以行锁复读复核同一事实
             run_ctxs = _plan_run_contexts(db, batch)
             for job in batch:
-                if _disarm_grace_blocks_recycle(
+                if (
+                    getattr(job, "finishing_guard", None) is not None
+                    or getattr(job, "disarm_guard", None) is not None
+                ):
+                    if job_guard_deadline(db, job, now, read_only=True) is not None:
+                        continue
+                elif _disarm_grace_blocks_recycle(
                     job, run_ctxs.get(job.plan_run_id), now,
                 ):
                     continue

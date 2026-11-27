@@ -20,6 +20,9 @@ import os
 
 from backend.core.adr0026_params import DEFAULTS as _ADR0026_DEFAULTS
 from backend.agent.contracts.device_return import EXECUTING_DISARM, FAMILY_STEPS
+from backend.agent.contracts.finishing_guard import (
+    abort_request_covers_job as _abort_request_covers_job,
+)
 
 
 def _is_non_production_runtime() -> bool:
@@ -220,18 +223,12 @@ def parse_abort_at(value: object) -> datetime | None:
 
 
 def abort_request_covers_job(run_context: object, job_id: int) -> bool:
-    """run 主体是否覆盖该 job（名单缺失/空 = 历史形态，视为覆盖）。"""
-    ctx = run_context if isinstance(run_context, dict) else {}
-    abort = ctx.get("abort_requested")
-    if not isinstance(abort, dict):
-        return True
-    requested = abort.get("requested_job_ids")
-    if not isinstance(requested, list) or not requested:
-        return True
-    try:
-        return job_id in {int(x) for x in requested}
-    except (TypeError, ValueError):
-        return True
+    """run 主体是否覆盖该 job（名单缺失/空 = 历史形态，视为覆盖）。
+
+    B5 / #4206 v1.1：与 ``finishing_guard.effective_abort_force`` 共用同一覆盖
+    判据实现，避免强度 max 与时钟 min 对同一 Job 主体集合分叉。
+    """
+    return _abort_request_covers_job(run_context, job_id)
 
 
 def host_abort_clock_at(run_context: object, host_id: str | None) -> object:
@@ -311,8 +308,12 @@ def disarm_grace_defers_reap(
     progress_freshness_seconds: int | None = None,
 ) -> bool:
     """True → 本轮不回收（解除中且进度新鲜，且未超 abort_at+timeout 上限）。"""
-    # A negotiated guard never falls back to v1.0's looser progress clock.
-    if getattr(job, "disarm_guard", None) is not None:
+    # A negotiated FinishingGuard / B6 disarm_guard never falls back to v1.0's
+    # looser progress clock — callers must use job_guard_deadline instead.
+    if (
+        getattr(job, "finishing_guard", None) is not None
+        or getattr(job, "disarm_guard", None) is not None
+    ):
         return False
     if getattr(job, "execution_state", None) != EXECUTING_DISARM:
         return False
