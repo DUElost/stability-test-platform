@@ -63,11 +63,15 @@ SCRIPT_TAG_REGISTRY: dict[str, ScriptTagSpec] = {
     "mtbf_setup": ScriptTagSpec(role="specialty_init", specialties=("mtbf",)),
     "mtbf_check": ScriptTagSpec(role="patrol", specialties=("mtbf",)),
     "mtbf_finish": ScriptTagSpec(role="teardown", specialties=("mtbf",)),
-    # Power cycle
+    # Power cycle (device APK)
     "powercycle_setup": ScriptTagSpec(role="specialty_init", specialties=("power-cycle",)),
     "powercycle_check": ScriptTagSpec(role="patrol", specialties=("power-cycle",)),
     "powercycle_disarm": ScriptTagSpec(role="teardown", specialties=("power-cycle",)),
     "powercycle_finish": ScriptTagSpec(role="teardown", specialties=("power-cycle",)),
+    # Power cycle (host-driven ADB)
+    "powercycle_adb_setup": ScriptTagSpec(role="specialty_init", specialties=("power-cycle",)),
+    "powercycle_adb_patrol": ScriptTagSpec(role="patrol", specialties=("power-cycle",)),
+    "powercycle_adb_finish": ScriptTagSpec(role="teardown", specialties=("power-cycle",)),
     # GPU
     "gpu_setup": ScriptTagSpec(role="specialty_init", specialties=("gpu",)),
     "gpu_check": ScriptTagSpec(role="patrol", specialties=("gpu",)),
