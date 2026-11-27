@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "display_name": "开关机压测（宿主 ADB 驱动）",
+  "specialty_key": "power-cycle",
+  "status": "ready",
+  "description": "Host-driven ADB power cycle stress test: no APK signing or REBOOT permission required; drives adb reboot loop from Agent host with kernel boot_id verification and unlock-to-home",
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": [
+      {
+        "step_id": "check_device",
+        "action": "script:check_device",
+        "version": "1.0.2",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "sync_device_time",
+        "action": "script:sync_device_time",
+        "version": "1.0.1",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "timezone": "Asia/Shanghai"
+        }
+      },
+      {
+        "step_id": "unisoc_sysdump_config",
+        "action": "script:unisoc_sysdump_config",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "enabled": true
+        }
+      },
+      {
+        "step_id": "powercycle_adb_setup",
+        "action": "script:powercycle_adb_setup",
+        "version": "1.0.0",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {
+          "test_times": 100,
+          "wait_seconds": 30,
+          "boot_timeout_seconds": 300,
+          "unlock_to_home": true
+        }
+      }
+    ],
+    "patrol": {
+      "interval_seconds": 15,
+      "steps": [
+        {
+          "step_id": "powercycle_adb_patrol",
+          "action": "script:powercycle_adb_patrol",
+          "version": "1.0.0",
+          "timeout_seconds": 90,
+          "retry": 0,
+          "params": {}
+        }
+      ]
+    },
+    "teardown": [
+      {
+        "step_id": "powercycle_adb_finish",
+        "action": "script:powercycle_adb_finish",
+        "version": "1.0.0",
+        "timeout_seconds": 240,
+        "retry": 1,
+        "params": {
+          "wait_device_online_seconds": 180
+        }
+      }
+    ]
+  }
+}

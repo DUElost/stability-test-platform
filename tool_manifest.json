@@ -1325,6 +1325,19 @@
         }
       ]
     },
+    "log_prepare": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/log_prepare/1.0.0.tar.gz",
+          "package_sha256": "ffd1ab8afd582289201f09cc116d9b312ed7a98cfd7260dcd79d2e6454aaa2c6",
+          "python": null,
+          "retired": false,
+          "script": "log_prepare.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
     "monkey_check": {
       "kind": "script",
       "versions": [
@@ -1969,6 +1982,45 @@
           "retired": false,
           "script": "oobe_skip.py",
           "version": "1.1.3"
+        }
+      ]
+    },
+    "powercycle_adb_finish": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/powercycle_adb_finish/1.0.0.tar.gz",
+          "package_sha256": "08e31bb9990b50f3696b7ba8c926788c1955c43ea9b99e4ab0e1a9d0eadec5eb",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_adb_finish.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "powercycle_adb_patrol": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/powercycle_adb_patrol/1.0.0.tar.gz",
+          "package_sha256": "2ad9d4890138f11a96cfdbb8ffd6bc224e3e1f25cf540a654948c3a98312d072",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_adb_patrol.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "powercycle_adb_setup": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/powercycle_adb_setup/1.0.0.tar.gz",
+          "package_sha256": "748ce0cbb1d34e1ae2455fcc2242882169fa0b245eae0de1b1f5fbd1eed9ef0b",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_adb_setup.py",
+          "version": "1.0.0"
         }
       ]
     },

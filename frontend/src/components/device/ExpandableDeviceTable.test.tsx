@@ -41,6 +41,53 @@ const devices = [
 ];
 
 describe('ExpandableDeviceTable', () => {
+  it('#3904：BUSY 租约细类首屏徽标分流（欠账 / 维护 / 测试中）', () => {
+    render(
+      <ExpandableDeviceTable
+        devices={[
+          {
+            id: 101,
+            serial: 'DEBT-101',
+            model: 'M1',
+            status: 'return_debt' as const,
+            active_lease_type: 'MAINTENANCE',
+            active_lease_reason: '归还欠账',
+          },
+          {
+            id: 102,
+            serial: 'MAINT-102',
+            model: 'M1',
+            status: 'maintenance' as const,
+            active_lease_type: 'MAINTENANCE',
+            active_lease_reason: 'manual_network_supply',
+          },
+          {
+            id: 103,
+            serial: 'JOB-103',
+            model: 'M1',
+            status: 'testing' as const,
+            active_lease_type: 'JOB',
+          },
+          {
+            id: 104,
+            serial: 'LEGACY-104',
+            model: 'M1',
+            status: 'testing' as const,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('device-status-badge-101')).toHaveTextContent('归还欠账');
+    expect(screen.queryByTestId('device-status-badge-101')?.textContent).not.toContain('测试中');
+    expect(screen.getByTestId('device-status-badge-102')).toHaveTextContent('维护占用');
+    expect(screen.getByTestId('device-status-badge-102').getAttribute('title')).toBe(
+      'manual_network_supply',
+    );
+    expect(screen.getByTestId('device-status-badge-103')).toHaveTextContent('测试中');
+    expect(screen.getByTestId('device-status-badge-104')).toHaveTextContent('测试中');
+  });
+
   it('shows the vbus slot USB presence badge only for mapped devices (#3918)', () => {
     render(
       <ExpandableDeviceTable
@@ -504,4 +551,28 @@ it('表格滚动区采用弹性锁高且分页底栏固定在卡片底部（无 
   expect(paginationBar).toHaveTextContent('第 1–50 / 共 1176 台');
   expect(paginationBar.className).toContain('shrink-0');
   expect(paginationBar.parentElement).toBe(scrollBox?.parentElement);
+});
+
+it('truncates long build_display_id with responsive max-width and full title tooltip', () => {
+  const longBuild = 'X6726B-15.1.2.175(OP001PF001AZ)TMP260519162209_SU';
+  render(
+    <ExpandableDeviceTable
+      devices={[
+        {
+          id: 99,
+          serial: 'SER-BUILD-99',
+          model: 'INFINIX-X6726B',
+          status: 'idle',
+          build_display_id: longBuild,
+          host_name: '172.21.15.81',
+        },
+      ]}
+    />,
+  );
+
+  const buildCell = screen.getByText(longBuild).closest('td');
+  expect(buildCell).not.toBeNull();
+  expect(buildCell?.className).toContain('truncate');
+  expect(buildCell?.className).toContain('max-w-[136px]');
+  expect(buildCell).toHaveAttribute('title', longBuild);
 });
