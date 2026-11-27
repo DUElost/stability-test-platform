@@ -68,6 +68,7 @@ from backend.api.routes.plan_runs import router as plan_runs_router
 from backend.api.routes.plan_run_devices_v2 import router as plan_run_devices_v2_router
 from backend.api.routes.dedup import router as dedup_router
 from backend.api.routes.dedup import scan_router as dedup_scan_router
+from backend.api.routes.jira_handoff import router as jira_handoff_router
 # P0: MTBF 工具 API（runtask.xml 预览/校验，ADR-0030 / docs/operations/mtbf-api.md）
 from backend.api.routes.mtbf import router as mtbf_router
 # P1a: MTBF 套件/用例管理面（ADR-0030 D1/D6，外部 agent REST 入口）
@@ -519,6 +520,7 @@ _fastapi_app.include_router(plan_runs_router)
 _fastapi_app.include_router(plan_run_devices_v2_router)
 _fastapi_app.include_router(dedup_router)
 _fastapi_app.include_router(dedup_scan_router)
+_fastapi_app.include_router(jira_handoff_router)
 _fastapi_app.include_router(mtbf_router)
 _fastapi_app.include_router(test_suites_router)
 
