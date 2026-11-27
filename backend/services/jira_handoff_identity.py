@@ -1,17 +1,23 @@
-"""B11-U1（#4199 / #4174）阶段 1：A 段发生身份归并、覆盖率双门禁与本次/基线判定。
+"""B11-U1（#4199 v1.1 / #4174）阶段 1：A 段发生身份归并、覆盖率硬门禁与本次/基线判定。
 
 本模块只读消费已登记的 PlanRun、DLE、ScanRound 与已上送 Agent ``*_org.xls``
 及伴随 ``.mapping.json``，不写外部 15.4 共享根、不调用 ``aee_extract`` / ``-m 0``，
 不导入 FastAPI（C2 分层约束）。
 
-核心不变量（#4199 §3 B11-U1 / §4.2）：
-1. 跨 run 重复观测归并优先按 ``occurrence_key``（``backend/agent/contracts/occurrence_key.py``）；
-   ``(serial, entry)`` 仅用于无伴随映射或 ``occurrence_key`` 缺失且可由 DLE 唯一锚定的历史兼容路径。
-2. 未绑定 DLE 行与 ``*_temp`` / ``CurProcessNone`` 等解析占位行不得静默混入计数或静默丢弃，
-   全部显式记入 ``unbound_rows``。
-3. 本次/基线判定以 ``<首轮 started_at>`` 为界，2010 类坏钟占位值回退 ``DLE.detected_at``（#4078），
+核心不变量（#4199 v1.1 §3 B11-U1 / §4.2）：
+1. 覆盖率门禁为硬阻断：双向核验期望主机集与有效报表/合法空回执集合；坏表、错表头、
+   缺必需列、越根/软链输入、非期望 host、未关闭轮次均不得计入有效覆盖。
+2. ``snapshot_cutoff`` 同时冻结事件观测（``DLE.detected_at <= cutoff``）与分片选择
+   （``CURRENT`` ``created_at <= cutoff``；``DEDUP_FIRST`` 已关闭 ``FINAL`` + ``SUPPLEMENT``
+   且 ``closed_at <= cutoff`` 有效轮次分片并集）。
+3. 发生身份按分片归属（``plan_run_id`` + ``host_id`` + ``serial``）与 ``occurrence_key``
+   一致性严格核验 DLE；``compat_serial_entry`` 仅限无伴随映射的历史 ``CURRENT`` 分片
+   且唯一锚定（多候选歧义入 ``unbound_rows``；``DEDUP_FIRST`` 缺伴随不得回退）。
+4. 未绑定 DLE 行与 ``*_temp`` / ``CurProcessNone`` 等解析占位行全部显式记入 ``unbound_rows``。
+5. 每条发生的 build 严格按源 run 的 ``device_builds`` 事实归属（同串号跨 run 换 build 不错归）。
+6. 本次/基线判定以 ``<首轮 started_at>`` 为界，2010 类坏钟占位值回退 ``DLE.detected_at``（#4078），
    且抽为纯函数供未来 ``#4033`` 复用；「仅基线」问题只标注、不自动剔除。
-4. 电子表格文本单元按 B3（#3561 G1 / #3237）规则中和公式注入。
+7. 电子表格文本单元按 B3（#3561 G1 / #3237）规则中和公式注入。
 """
 
 from __future__ import annotations
@@ -20,8 +26,10 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
+import stat
 from typing import Any, Mapping, Optional, Sequence
 from zoneinfo import ZoneInfo
 
@@ -29,6 +37,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 import xlrd
 
+from backend.core.artifact_paths import (
+    ArtifactPathError,
+    coerce_local_artifact_path,
+    get_local_artifact_roots,
+)
 from backend.core.dedup_platform import scan_artifact_uri_platform
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.host import Device
@@ -85,6 +98,25 @@ ORG_COLUMNS: tuple[str, ...] = (
     "Rom_Ram",
 )
 
+# 读入 Agent 上送 *_org.xls 时必须存在的表头列（大小写不敏感、去首尾空白）。
+_REQUIRED_ORG_COLUMNS = frozenset(
+    {
+        "id",
+        "path",
+        "version",
+        "exptime",
+        "expclass",
+        "exptype",
+        "curprocess",
+        "package",
+        "detail",
+        "causedby",
+        "count",
+        "deviceid",
+    }
+)
+
+_DEDUP_FIRST_COVERED_STATES = frozenset({"RECEIVED", "EMPTY"})
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _BAD_CLOCK_FLOOR_UTC = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
@@ -168,7 +200,6 @@ def parse_exp_time_utc(raw: Any) -> Optional[datetime]:
     text = str(raw).strip()
     if not text:
         return None
-    # 兼容带毫秒的常见格式（如 2026-11-18 20:59:33.123 或 2026_1118_205933_123）
     try:
         iso = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if iso.tzinfo is None:
@@ -247,7 +278,6 @@ def extract_serial_and_entry(raw_path: str, device_id: str = "") -> tuple[str, s
             if serial and entry and not entry.endswith("_temp"):
                 return serial, entry
         parts = [p for p in normalized.split("/") if p]
-        # 兼容 .../devices/<run_id>/<serial>/<entry>/... 或 .../<serial>/<entry>/.DEC/...
         for idx, part in enumerate(parts):
             if part.endswith(".DEC") and idx >= 2:
                 entry = parts[idx - 1].strip()
@@ -255,7 +285,6 @@ def extract_serial_and_entry(raw_path: str, device_id: str = "") -> tuple[str, s
                 if serial and entry and not entry.endswith("_temp"):
                     return serial, entry
         if len(parts) >= 2 and device_id:
-            # 兜底：若路径末段本身像 db 目录名（如 2026_1107_..._db.00.JE）
             for part in reversed(parts):
                 if "db." in part and not part.endswith(".DEC") and not part.endswith(".dbg"):
                     return device_id.strip(), part.strip()
@@ -275,6 +304,116 @@ def _dle_entry_name(dle: DeviceLogEvent) -> str:
     return ""
 
 
+def _has_symlink_ancestor(path: Path) -> bool:
+    """检查 ``path`` 自身及全部既有祖先目录中是否包含符号链接。"""
+    cur = path
+    while True:
+        try:
+            if cur.is_symlink():
+                return True
+        except OSError:
+            return True
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    return False
+
+
+def _resolve_allowed_input_roots(storage_root: Optional[str]) -> tuple[Path, ...]:
+    """收集允许读取输入分片的受控中心存储/归档根列表（按配置原样保留信任锚）。"""
+    raw_roots: list[Path] = []
+    if storage_root and storage_root.strip():
+        raw_roots.append(Path(storage_root.strip()))
+    for configured in get_local_artifact_roots():
+        raw_roots.append(configured)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in raw_roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return tuple(unique)
+
+
+def _validate_controlled_input_file(
+    raw_uri: str,
+    allowed_roots: Sequence[Path],
+    *,
+    missing_code: str = "input_file_not_found",
+) -> tuple[Optional[Path], Optional[str]]:
+    """校验输入分片/映射文件落在受控存储根内、祖先及自身无 symlink 且为普通文件。"""
+    if not raw_uri or not str(raw_uri).strip():
+        return None, missing_code
+    if not allowed_roots:
+        return None, "storage_root_unconfigured"
+    raw_str = str(raw_uri).strip()
+    if "\0" in raw_str:
+        return None, "input_path_rejected"
+    try:
+        # 使用既有路径契约校验 scheme 与 '..' 穿越（先不做 symlink 解析）
+        coerced = coerce_local_artifact_path(raw_str)
+    except ArtifactPathError:
+        return None, "input_path_rejected"
+
+    # 原始词法路径（用于逐段检测 symlink，不被 resolve() 吞掉）
+    lexical = Path(raw_str[7:] if raw_str.lower().startswith("file://") else raw_str)
+    if not lexical.is_absolute() or ".." in lexical.parts:
+        return None, "input_path_rejected"
+
+    matched_root: Optional[Path] = None
+    for root in allowed_roots:
+        if not root.is_absolute() or ".." in root.parts:
+            continue
+        if _has_symlink_ancestor(root):
+            continue
+        try:
+            lexical.relative_to(root)
+        except ValueError:
+            continue
+        matched_root = root
+        break
+
+    if matched_root is None:
+        return None, "input_outside_controlled_root"
+
+    # 从受控根向下逐段拒绝 symlink
+    rel = lexical.relative_to(matched_root)
+    cursor = matched_root
+    for part in rel.parts:
+        cursor = cursor / part
+        try:
+            st = os.lstat(cursor)
+        except FileNotFoundError:
+            return None, missing_code
+        except OSError:
+            return None, "input_unreadable"
+        if stat.S_ISLNK(st.st_mode):
+            return None, "input_symlink_rejected"
+
+    try:
+        final_st = os.lstat(lexical)
+    except FileNotFoundError:
+        return None, missing_code
+    except OSError:
+        return None, "input_unreadable"
+    if stat.S_ISLNK(final_st.st_mode):
+        return None, "input_symlink_rejected"
+    if not stat.S_ISREG(final_st.st_mode):
+        return None, "input_not_regular_file"
+
+    try:
+        resolved = lexical.resolve(strict=True)
+        resolved_root = matched_root.resolve(strict=True)
+    except OSError:
+        return None, "input_unreadable"
+    if resolved != coerced or resolved != lexical or not resolved.is_relative_to(resolved_root):
+        return None, "input_symlink_rejected"
+
+    return resolved, None
+
+
 @dataclass(frozen=True)
 class ReportSourceRef:
     plan_run_id: int
@@ -282,6 +421,7 @@ class ReportSourceRef:
     storage_uri: str
     mapping_uri: Optional[str]
     empty_receipt: bool = False
+    round_id: Optional[int] = None
 
 
 @dataclass
@@ -299,7 +439,9 @@ class RunCoverageSummary:
     hosts_with_reports: list[str]
     missing_hosts: list[str]
     mapping_status: str  # "complete" | "partial" | "missing" | "empty"
+    unexpected_hosts: list[str] = field(default_factory=list)
     reports: list[ReportSourceRef] = field(default_factory=list)
+    run_blocking_issues: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -408,13 +550,15 @@ _EVIDENCE_TIER_RANK = {"evidence": 3, "devices": 2, "local": 1, "none": 0}
 def _load_device_build_and_product(
     db: Session,
     runs: Sequence[PlanRun],
-) -> tuple[dict[str, str], dict[str, str], dict[str, set[str]]]:
-    """从 ``run_context.device_builds`` 与 ``Device`` 派生串号 → build / product 映射。"""
+) -> tuple[dict[tuple[int, str], str], dict[str, str], dict[str, str], dict[str, set[str]]]:
+    """按 ``(plan_run_id, serial)`` 派生源 run 的 build 归属与串号 product/兜底 build。
+
+    严禁跨 run 用单一串号字典互相覆写（#4199 v1.1 §3⑥ / B5）。
+    """
     run_ids = [r.id for r in runs]
     if not run_ids:
-        return {}, {}, {}
+        return {}, {}, {}, {}
 
-    # 收集选中 run 涉及的全部 device_id → (serial, product, build_display_id)
     job_rows = db.execute(
         select(JobInstance.plan_run_id, Device.id, Device.serial, Device.product, Device.build_display_id)
         .join(Device, Device.id == JobInstance.device_id)
@@ -443,8 +587,7 @@ def _load_device_build_and_product(
             serial_fallback_build[s] = b
         run_serials.setdefault(int(run_id), set()).add(s)
 
-    # 优先取各 run 的 run_context.device_builds[str(device_id)]，其次 run.build_version，再次 device.build_display_id
-    serial_build: dict[str, str] = {}
+    run_serial_build: dict[tuple[int, str], str] = {}
     build_devices: dict[str, set[str]] = {}
     for run in runs:
         ctx = run.run_context if isinstance(run.run_context, dict) else {}
@@ -460,15 +603,15 @@ def _load_device_build_and_product(
             if info is None:
                 continue
             s = info[0]
-            serial_build.setdefault(s, btext)
+            run_serial_build[(run.id, s)] = btext
             build_devices.setdefault(btext, set()).add(s)
         run_bv = str(run.build_version or "").strip()
         for s in run_serials.get(run.id, set()):
-            resolved_b = serial_build.get(s) or run_bv or serial_fallback_build.get(s) or _UNKNOWN_BUILD
-            serial_build.setdefault(s, resolved_b)
+            resolved_b = run_serial_build.get((run.id, s)) or run_bv or serial_fallback_build.get(s) or _UNKNOWN_BUILD
+            run_serial_build.setdefault((run.id, s), resolved_b)
             build_devices.setdefault(resolved_b, set()).add(s)
 
-    return serial_build, serial_product, build_devices
+    return run_serial_build, serial_product, serial_fallback_build, build_devices
 
 
 def _load_run_coverage(
@@ -476,7 +619,13 @@ def _load_run_coverage(
     run: PlanRun,
     *,
     platform: str,
+    cutoff: datetime,
 ) -> RunCoverageSummary:
+    """按 ``snapshot_cutoff`` 冻结加载单轮次报表分片候选集与期望主机集。
+
+    注意：本阶段只收集冻结候选分片，实际 ``hosts_with_reports`` / ``missing_hosts`` 需在
+    后续校验每个分片路径与 ``*_org.xls`` 表头完整性后最终定账（坏表不得计为有效覆盖）。
+    """
     plan = db.get(Plan, run.plan_id)
     plan_name = str(plan.name) if plan is not None else f"Plan #{run.plan_id}"
     project = db.get(TestProject, run.project_id) if run.project_id else None
@@ -492,24 +641,36 @@ def _load_run_coverage(
 
     all_hosts = load_plan_run_scan_host_ids(db, run.id)
     expected_map = load_expected_scan_platforms(db, run.id, all_hosts)
-    expected_hosts = sorted(
+    base_expected_hosts = {
         host_id for host_id, plats in expected_map.items() if platform in plats
-    )
+    }
 
     reports: list[ReportSourceRef] = []
-    covered_hosts: set[str] = set()
+    unexpected_hosts: set[str] = set()
+    run_blocking_issues: list[str] = []
 
     if partition_mode == facts.PARTITION_MODE_DEDUP_FIRST:
         rounds = facts.list_scan_rounds_for_read(db, plan_run_id=run.id, platform=platform)
-        # 取最新一轮（优先 FINAL/SUPPLEMENT，再退化至最新 PERIODIC）与已关闭补充轮并集
-        selected_rounds = [
-            r for r in rounds if r.kind in (facts.SCAN_ROUND_KIND_FINAL, facts.SCAN_ROUND_KIND_SUPPLEMENT)
-        ]
-        if not selected_rounds and rounds:
-            selected_rounds = [rounds[-1]]
-        host_latest: dict[str, ReportSourceRef] = {}
-        round_expected_hosts: set[str] = set(expected_hosts)
-        for rnd in selected_rounds:
+        # 严格只纳入截止时间前已关闭的 FINAL + SUPPLEMENT 轮次（未关闭与 PERIODIC 轮次不得纳入）
+        eligible_rounds = []
+        for rnd in rounds:
+            if rnd.kind not in (facts.SCAN_ROUND_KIND_FINAL, facts.SCAN_ROUND_KIND_SUPPLEMENT):
+                continue
+            if rnd.status != facts.SCAN_ROUND_STATUS_CLOSED:
+                continue
+            closed_utc = ensure_utc(getattr(rnd, "closed_at", None))
+            if closed_utc is None or closed_utc > cutoff:
+                continue
+            eligible_rounds.append(rnd)
+
+        has_closed_final = any(r.kind == facts.SCAN_ROUND_KIND_FINAL for r in eligible_rounds)
+        if not has_closed_final:
+            run_blocking_issues.append(
+                f"plan_run {run.id} 在快照截止时间前无已关闭的 FINAL 轮次"
+            )
+
+        round_expected_hosts: set[str] = set(base_expected_hosts)
+        for rnd in eligible_rounds:
             for unit in (rnd.expected_set or []):
                 if not isinstance(unit, dict):
                     continue
@@ -519,44 +680,72 @@ def _load_run_coverage(
                 hid = str(unit.get("host_id") or "").strip()
                 if not hid:
                     continue
-                round_expected_hosts.add(hid)
+                if unit.get("expected", True):
+                    round_expected_hosts.add(hid)
+
+        seen_report_keys: set[tuple[str, str]] = set()
+        seen_empty_hosts: set[str] = set()
+        for rnd in eligible_rounds:
+            for unit in (rnd.expected_set or []):
+                if not isinstance(unit, dict):
+                    continue
+                unit_plat = str(unit.get("platform") or platform).lower()
+                if unit_plat != platform:
+                    continue
+                hid = str(unit.get("host_id") or "").strip()
+                if not hid:
+                    continue
+                unit_expected = bool(unit.get("expected", True))
+                unit_coverage = unit.get("coverage")
+                coverage_allowed = (
+                    unit_coverage is None
+                    or str(unit_coverage).upper() in _DEDUP_FIRST_COVERED_STATES
+                )
                 unit_reports = unit.get("reports") or []
+                if not unit_expected and hid not in round_expected_hosts:
+                    if unit_reports:
+                        unexpected_hosts.add(hid)
+                    continue
+                if not coverage_allowed:
+                    continue
                 for rep in unit_reports:
                     if not isinstance(rep, dict):
                         continue
                     if rep.get("empty_receipt"):
-                        covered_hosts.add(hid)
-                        host_latest.setdefault(
-                            hid,
-                            ReportSourceRef(
-                                plan_run_id=run.id,
-                                host_id=hid,
-                                storage_uri="",
-                                mapping_uri=None,
-                                empty_receipt=True,
-                            ),
-                        )
+                        if hid not in seen_empty_hosts:
+                            seen_empty_hosts.add(hid)
+                            reports.append(
+                                ReportSourceRef(
+                                    plan_run_id=run.id,
+                                    host_id=hid,
+                                    storage_uri="",
+                                    mapping_uri=None,
+                                    empty_receipt=True,
+                                    round_id=getattr(rnd, "id", None),
+                                )
+                            )
                         continue
                     uri = str(rep.get("storage_uri") or "").strip()
                     if not uri or not uri.endswith("_org.xls"):
                         continue
-                    covered_hosts.add(hid)
+                    dedup_rep_key = (hid, uri)
+                    if dedup_rep_key in seen_report_keys:
+                        continue
+                    seen_report_keys.add(dedup_rep_key)
                     mapping_uri = str(rep.get("mapping_uri") or "").strip() or None
-                    if mapping_uri is None:
-                        candidate = Path(uri).with_name(Path(uri).name + ".mapping.json")
-                        if candidate.is_file():
-                            mapping_uri = str(candidate)
-                    host_latest[hid] = ReportSourceRef(
-                        plan_run_id=run.id,
-                        host_id=hid,
-                        storage_uri=uri,
-                        mapping_uri=mapping_uri,
-                        empty_receipt=False,
+                    reports.append(
+                        ReportSourceRef(
+                            plan_run_id=run.id,
+                            host_id=hid,
+                            storage_uri=uri,
+                            mapping_uri=mapping_uri,
+                            empty_receipt=False,
+                            round_id=getattr(rnd, "id", None),
+                        )
                     )
         expected_hosts = sorted(round_expected_hosts)
-        reports = [host_latest[h] for h in sorted(host_latest)]
     else:
-        # CURRENT 模式：取每个预期 host 最新已登记的 *_org.xls 扫描分片
+        # CURRENT 模式：按 snapshot_cutoff 冻结，取每个期望 host 截止时刻前最新已登记的 *_org.xls
         artifacts = db.execute(
             select(PlanRunArtifact)
             .where(
@@ -567,38 +756,39 @@ def _load_run_coverage(
         ).scalars().all()
         by_host: dict[str, ReportSourceRef] = {}
         for art in artifacts:
+            art_created = ensure_utc(getattr(art, "created_at", None))
+            if art_created is not None and art_created > cutoff:
+                continue
             uri = str(art.storage_uri or "").strip()
             if not uri or not uri.endswith("_org.xls"):
                 continue
             if scan_artifact_uri_platform(uri) != platform:
                 continue
             hid = str(art.host_id or "").strip()
-            if not hid or hid in by_host:
+            if not hid:
+                run_blocking_issues.append(f"plan_run {run.id} 存在缺失 host_id 的扫描报表记录")
                 continue
-            candidate_map = Path(uri).with_name(Path(uri).name + ".mapping.json")
-            mapping_uri = str(candidate_map) if candidate_map.is_file() else None
+            if hid not in base_expected_hosts:
+                unexpected_hosts.add(hid)
+                continue
+            if hid in by_host:
+                continue
             by_host[hid] = ReportSourceRef(
                 plan_run_id=run.id,
                 host_id=hid,
                 storage_uri=uri,
-                mapping_uri=mapping_uri,
+                mapping_uri=None,
                 empty_receipt=False,
             )
-            covered_hosts.add(hid)
+        expected_hosts = sorted(base_expected_hosts)
         reports = [by_host[h] for h in sorted(by_host)]
 
-    missing_hosts = [h for h in expected_hosts if h not in covered_hosts]
-    non_empty_reports = [r for r in reports if not r.empty_receipt]
-    if not non_empty_reports:
-        mapping_status = "empty"
-    else:
-        with_map = sum(1 for r in non_empty_reports if r.mapping_uri and Path(r.mapping_uri).is_file())
-        if with_map == len(non_empty_reports):
-            mapping_status = "complete"
-        elif with_map == 0:
-            mapping_status = "missing"
-        else:
-            mapping_status = "partial"
+    if not expected_hosts:
+        run_blocking_issues.append(f"plan_run {run.id} 无期望 {platform} 主机")
+    if unexpected_hosts:
+        run_blocking_issues.append(
+            f"plan_run {run.id} 存在非期望主机报表: {', '.join(sorted(unexpected_hosts))}"
+        )
 
     return RunCoverageSummary(
         plan_run_id=run.id,
@@ -611,28 +801,33 @@ def _load_run_coverage(
         project_key=project_key,
         jira_project_key=jira_project_key,
         hosts_expected=expected_hosts,
-        hosts_with_reports=sorted(covered_hosts),
-        missing_hosts=missing_hosts,
-        mapping_status=mapping_status,
+        hosts_with_reports=[],
+        missing_hosts=list(expected_hosts),
+        mapping_status="empty",
+        unexpected_hosts=sorted(unexpected_hosts),
         reports=reports,
+        run_blocking_issues=run_blocking_issues,
     )
 
 
 def _read_org_xls_rows(report_path: Path) -> list[dict[str, str]]:
-    """读取单份 ``*_org.xls`` 的 ``aeeexp`` 工作表全部数据行，归一化键名。"""
+    """严格读取单份 ``*_org.xls`` 的 ``aeeexp`` 工作表（空表也必须校验表头与必需列）。"""
     book = xlrd.open_workbook(str(report_path), on_demand=True)
     try:
-        sheet = (
-            book.sheet_by_name("aeeexp")
-            if "aeeexp" in book.sheet_names()
-            else book.sheet_by_index(0)
-        )
-        if sheet.nrows <= 1:
-            return []
+        if "aeeexp" not in book.sheet_names():
+            raise ValueError(f"missing 'aeeexp' sheet in {report_path.name}")
+        sheet = book.sheet_by_name("aeeexp")
+        if sheet.nrows < 1:
+            raise ValueError(f"empty 'aeeexp' sheet (missing header row) in {report_path.name}")
         headers = [str(v).strip() for v in sheet.row_values(0)]
-        col_map = {h.lower(): idx for idx, h in enumerate(headers)}
-        if "path" not in col_map:
-            raise ValueError(f"missing Path column in {report_path}")
+        col_map = {h.lower(): idx for idx, h in enumerate(headers) if h}
+        missing_cols = sorted(_REQUIRED_ORG_COLUMNS - set(col_map))
+        if missing_cols:
+            raise ValueError(
+                f"missing required columns in {report_path.name}: {', '.join(missing_cols)}"
+            )
+        if sheet.nrows == 1:
+            return []
 
         def _cell(row_vals: Sequence[Any], key: str) -> str:
             idx = col_map.get(key.lower())
@@ -673,17 +868,31 @@ def _read_org_xls_rows(report_path: Path) -> list[dict[str, str]]:
 
 
 def _load_and_validate_mapping(
-    mapping_uri: Optional[str],
+    report_path: Path,
+    explicit_mapping_uri: Optional[str],
     org_rows: Sequence[Mapping[str, str]],
+    allowed_roots: Sequence[Path],
 ) -> tuple[Optional[list[dict[str, Any]]], Optional[str]]:
-    """加载并校验伴随 ``.mapping.json``（对齐 ``scan_membership.py:51-64``）。"""
-    if not mapping_uri:
-        return None, "missing_mapping"
-    path = Path(mapping_uri)
-    if not path.is_file():
-        return None, "missing_mapping"
+    """按受控存储根与无 symlink 边界加载并校验伴随 ``.mapping.json``（对齐 ``scan_membership.py:51-64``）。"""
+    candidate_uri = explicit_mapping_uri
+    probed_sibling = False
+    if not candidate_uri:
+        candidate_uri = str(report_path.with_name(report_path.name + ".mapping.json"))
+        probed_sibling = True
+
+    validated_path, path_err = _validate_controlled_input_file(
+        candidate_uri,
+        allowed_roots,
+        missing_code="missing_mapping",
+    )
+    if path_err is not None or validated_path is None:
+        if path_err == "missing_mapping":
+            return None, "missing_mapping"
+        # 若显式 mapping_uri 或同目录探针指向越根/符号链接/非普通文件，绝不允许退回历史回退分支
+        return None, "mapping_path_rejected" if not probed_sibling else f"mapping_{path_err}"
+
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(validated_path.read_text(encoding="utf-8"))
         rows = payload["rows"]
     except (OSError, ValueError, KeyError, TypeError):
         return None, "mapping_corrupted"
@@ -706,9 +915,12 @@ def collect_handoff_identity(
     plan_run_ids: Sequence[int],
     platform: str = "mtk",
     snapshot_cutoff: Optional[datetime] = None,
+    storage_root: Optional[str] = None,
 ) -> IdentityCollectionResult:
     """执行双门禁检查 + 跨 run 发生身份归并（纯只读，零外部写盘、零 ``aee_extract``）。"""
     cutoff = ensure_utc(snapshot_cutoff) or datetime.now(timezone.utc)
+    allowed_input_roots = _resolve_allowed_input_roots(storage_root)
+
     ordered_ids = list(dict.fromkeys(int(rid) for rid in plan_run_ids))
     run_rows = db.execute(
         select(PlanRun).where(PlanRun.id.in_(ordered_ids))
@@ -719,13 +931,27 @@ def collect_handoff_identity(
         raise LookupError(f"plan_run not found: {missing_run_ids}")
 
     runs_ordered = [by_id[rid] for rid in ordered_ids]
-    run_summaries = [_load_run_coverage(db, run, platform=platform) for run in runs_ordered]
+    run_summaries = [
+        _load_run_coverage(db, run, platform=platform, cutoff=cutoff)
+        for run in runs_ordered
+    ]
     start_times = [s.started_at for s in run_summaries if s.started_at is not None]
     first_run_started_at = min(start_times) if start_times else None
 
-    serial_build, serial_product, build_devices = _load_device_build_and_product(db, runs_ordered)
+    (
+        run_serial_build,
+        serial_product,
+        serial_fallback_build,
+        build_devices,
+    ) = _load_device_build_and_product(db, runs_ordered)
+    run_build_version = {
+        r.id: str(r.build_version or "").strip() for r in runs_ordered
+    }
+    run_started_map = {
+        r.id: ensure_utc(r.started_at) for r in runs_ordered
+    }
 
-    # 一次性拉取选中 run 集合的 DLE 台账，按 id / occurrence_key / (serial, entry) 建只读索引
+    # 一次性拉取选中 run 集合的 DLE 台账，按 id 与分片级 (plan_run_id, host_id, serial, entry) 建索引
     dle_rows = db.execute(
         select(DeviceLogEvent)
         .where(
@@ -735,16 +961,21 @@ def collect_handoff_identity(
         .order_by(DeviceLogEvent.detected_at.asc(), DeviceLogEvent.id.asc())
     ).scalars().all()
     dle_by_id: dict[str, DeviceLogEvent] = {}
-    dle_by_serial_entry: dict[tuple[str, str], list[DeviceLogEvent]] = {}
+    dle_by_shard_serial_entry: dict[tuple[int, str, str, str], list[DeviceLogEvent]] = {}
     for dle in dle_rows:
         dle_by_id[str(dle.id)] = dle
         entry_name = _dle_entry_name(dle)
-        if dle.serial and entry_name:
-            dle_by_serial_entry.setdefault((dle.serial.strip(), entry_name), []).append(dle)
+        dle_host = str(getattr(dle, "host_id", "") or "").strip()
+        dle_serial = str(dle.serial or "").strip()
+        if dle.plan_run_id is not None and dle_host and dle_serial and entry_name:
+            dle_by_shard_serial_entry.setdefault(
+                (int(dle.plan_run_id), dle_host, dle_serial, entry_name), []
+            ).append(dle)
 
     unbound_rows: list[UnboundRowRecord] = []
     unbound_counter: Counter[str] = Counter()
     deduped_by_key: dict[str, DedupedEvent] = {}
+    event_origin_started_at: dict[str, Optional[datetime]] = {}
     total_org_rows = 0
     keyed_rows = 0
     compat_fallback_rows = 0
@@ -752,36 +983,80 @@ def collect_handoff_identity(
     warnings: list[str] = []
     blocking_issues: list[str] = []
 
+    def _record_unbound(
+        *,
+        plan_run_id: int,
+        host_id: str,
+        report_file: str,
+        row_no: int,
+        serial: str,
+        raw_path: str,
+        reason: str,
+    ) -> None:
+        unbound_rows.append(
+            UnboundRowRecord(
+                plan_run_id=plan_run_id,
+                host_id=host_id,
+                report_file=report_file,
+                row_no=row_no,
+                serial=serial,
+                raw_path=raw_path,
+                reason=reason,
+            )
+        )
+        unbound_counter[reason] += 1
+
     for rs in run_summaries:
-        if rs.missing_hosts:
-            blocking_issues.append(
-                f"plan_run {rs.plan_run_id} 缺少 {len(rs.missing_hosts)} 台主机报表: {', '.join(rs.missing_hosts)}"
-            )
-        if rs.mapping_status in ("partial", "missing"):
-            warnings.append(
-                f"plan_run {rs.plan_run_id} 伴随映射状态={rs.mapping_status}（缺映射分片仅在 DLE 精确锚定时走兼容回退）"
-            )
+        blocking_issues.extend(rs.run_blocking_issues)
+        valid_covered_hosts: set[str] = set()
+        invalid_hosts: set[str] = set()
+        non_empty_valid_reports = 0
+        mapped_valid_reports = 0
+
         for rep in rs.reports:
             if rep.empty_receipt:
+                valid_covered_hosts.add(rep.host_id)
                 continue
-            report_path = Path(rep.storage_uri)
-            if not report_path.is_file():
+
+            validated_report, path_err = _validate_controlled_input_file(
+                rep.storage_uri,
+                allowed_input_roots,
+                missing_code="report_not_found",
+            )
+            if path_err is not None or validated_report is None:
+                invalid_hosts.add(rep.host_id)
                 blocking_issues.append(
-                    f"plan_run {rs.plan_run_id} host {rep.host_id} 报表文件不可读: {report_path.name}"
-                )
-                continue
-            try:
-                org_rows = _read_org_xls_rows(report_path)
-            except Exception as exc:
-                blocking_issues.append(
-                    f"plan_run {rs.plan_run_id} host {rep.host_id} 解析报表失败: {report_path.name} ({exc})"
+                    f"plan_run {rs.plan_run_id} host {rep.host_id} 报表路径校验失败({path_err}): {Path(rep.storage_uri).name}"
                 )
                 continue
 
-            mapping_rows, mapping_err = _load_and_validate_mapping(rep.mapping_uri, org_rows)
-            if mapping_err == "mapping_mismatch" or mapping_err == "mapping_corrupted":
+            try:
+                org_rows = _read_org_xls_rows(validated_report)
+            except (OSError, ValueError, KeyError, TypeError, IndexError, xlrd.XLRDError) as exc:
+                invalid_hosts.add(rep.host_id)
+                blocking_issues.append(
+                    f"plan_run {rs.plan_run_id} host {rep.host_id} 解析报表失败: {validated_report.name} ({exc})"
+                )
+                continue
+
+            valid_covered_hosts.add(rep.host_id)
+            non_empty_valid_reports += 1
+
+            mapping_rows, mapping_err = _load_and_validate_mapping(
+                validated_report,
+                rep.mapping_uri,
+                org_rows,
+                allowed_input_roots,
+            )
+            if mapping_rows is not None:
+                mapped_valid_reports += 1
+            elif mapping_err and mapping_err != "missing_mapping":
                 warnings.append(
                     f"plan_run {rs.plan_run_id} host {rep.host_id} 伴随映射校验失败({mapping_err})，该分片行记入未绑定清单"
+                )
+            elif mapping_err == "missing_mapping" and rs.partition_mode == facts.PARTITION_MODE_DEDUP_FIRST:
+                warnings.append(
+                    f"plan_run {rs.plan_run_id} host {rep.host_id}（DEDUP_FIRST）缺少伴随映射，不允许兼容回退，行记入未绑定清单"
                 )
 
             for idx, row in enumerate(org_rows):
@@ -794,33 +1069,27 @@ def collect_handoff_identity(
 
                 placeholder_reason = is_placeholder_org_row(row)
                 if placeholder_reason is not None:
-                    unbound_rows.append(
-                        UnboundRowRecord(
-                            plan_run_id=rs.plan_run_id,
-                            host_id=rep.host_id,
-                            report_file=report_path.name,
-                            row_no=row_no,
-                            serial=serial,
-                            raw_path=raw_path,
-                            reason=placeholder_reason,
-                        )
+                    _record_unbound(
+                        plan_run_id=rs.plan_run_id,
+                        host_id=rep.host_id,
+                        report_file=validated_report.name,
+                        row_no=row_no,
+                        serial=serial,
+                        raw_path=raw_path,
+                        reason=placeholder_reason,
                     )
-                    unbound_counter[placeholder_reason] += 1
                     continue
 
-                if mapping_err in ("mapping_mismatch", "mapping_corrupted"):
-                    unbound_rows.append(
-                        UnboundRowRecord(
-                            plan_run_id=rs.plan_run_id,
-                            host_id=rep.host_id,
-                            report_file=report_path.name,
-                            row_no=row_no,
-                            serial=serial,
-                            raw_path=raw_path,
-                            reason=mapping_err,
-                        )
+                if mapping_err is not None and mapping_err != "missing_mapping":
+                    _record_unbound(
+                        plan_run_id=rs.plan_run_id,
+                        host_id=rep.host_id,
+                        report_file=validated_report.name,
+                        row_no=row_no,
+                        serial=serial,
+                        raw_path=raw_path,
+                        reason=mapping_err,
                     )
-                    unbound_counter[mapping_err] += 1
                     continue
 
                 dedup_key: Optional[str] = None
@@ -832,93 +1101,175 @@ def collect_handoff_identity(
                 if mapping_rows is not None:
                     m_row = mapping_rows[idx]
                     mapped_flag = bool(m_row.get("mapped"))
+                    if not mapped_flag:
+                        reason = str(m_row.get("unmapped_reason") or "mapping_unmapped")
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason=reason,
+                        )
+                        continue
+
                     raw_dle_id = str(m_row.get("dle_id") or "").strip()
                     raw_occ = str(m_row.get("occurrence_key") or "").strip()
-                    if raw_dle_id and raw_dle_id in dle_by_id:
-                        matched_dle = dle_by_id[raw_dle_id]
-                        if not raw_occ and matched_dle.occurrence_key:
-                            raw_occ = str(matched_dle.occurrence_key).strip()
-                        if not serial and matched_dle.serial:
-                            serial = matched_dle.serial.strip()
-                        if not entry_name:
-                            entry_name = _dle_entry_name(matched_dle)
-                    if mapped_flag and raw_occ:
-                        dedup_key = f"occ:{raw_occ}"
-                        identity_source = "occurrence_key"
-                        occ_key = raw_occ
-                        keyed_rows += 1
-                    elif mapped_flag and matched_dle is not None and serial and entry_name:
-                        # 已绑定 DLE 但设备侧 occurrence_key 缺失（fail-open），降级为有 DLE 锚定的 (serial, entry)
-                        dedup_key = f"compat:{serial}:{entry_name}"
-                        identity_source = "compat_serial_entry"
-                        compat_fallback_rows += 1
-                    else:
-                        reason = str(m_row.get("unmapped_reason") or "mapping_unmapped")
-                        unbound_rows.append(
-                            UnboundRowRecord(
-                                plan_run_id=rs.plan_run_id,
-                                host_id=rep.host_id,
-                                report_file=report_path.name,
-                                row_no=row_no,
-                                serial=serial,
-                                raw_path=raw_path,
-                                reason=reason,
-                            )
+                    matched_dle = dle_by_id.get(raw_dle_id) if raw_dle_id else None
+                    if matched_dle is None:
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason="dle_not_found",
                         )
-                        unbound_counter[reason] += 1
                         continue
+
+                    # 严格校验分片归属（plan_run_id + host_id + serial）
+                    if matched_dle.plan_run_id != rs.plan_run_id:
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason="dle_plan_run_mismatch",
+                        )
+                        continue
+                    dle_host = str(getattr(matched_dle, "host_id", "") or "").strip()
+                    if dle_host != rep.host_id:
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason="dle_host_mismatch",
+                        )
+                        continue
+                    dle_serial = str(matched_dle.serial or "").strip()
+                    if serial and dle_serial and serial != dle_serial:
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason="dle_serial_mismatch",
+                        )
+                        continue
+                    if not serial and dle_serial:
+                        serial = dle_serial
+                    if not entry_name:
+                        entry_name = _dle_entry_name(matched_dle)
+
+                    dle_occ = str(matched_dle.occurrence_key or "").strip()
+                    if raw_occ and dle_occ and raw_occ != dle_occ:
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason="occurrence_key_conflict",
+                        )
+                        continue
+
+                    effective_occ = raw_occ or dle_occ
+                    if not effective_occ:
+                        # 有伴随映射却缺 occurrence_key：不得走历史无映射 compat 回退
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason="missing_occurrence_key",
+                        )
+                        continue
+
+                    occ_key = effective_occ
+                    dedup_key = f"occ:{occ_key}"
+                    identity_source = "occurrence_key"
                 else:
-                    # 仅历史无伴随映射分片（如 Run 1216）：必须有 DLE 台账精确锚定才允许走 (serial, entry)
+                    # 缺伴随映射分支：DEDUP_FIRST 严禁推断回退；仅历史 CURRENT 允许本分片唯一 DLE 锚定
+                    if rs.partition_mode != facts.PARTITION_MODE_CURRENT:
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason="dedup_first_missing_mapping",
+                        )
+                        continue
+
                     candidates = (
-                        dle_by_serial_entry.get((serial, entry_name), [])
+                        dle_by_shard_serial_entry.get(
+                            (rs.plan_run_id, rep.host_id, serial, entry_name), []
+                        )
                         if (serial and entry_name)
                         else []
                     )
                     if not candidates:
-                        reason = "missing_mapping_no_dle"
-                        unbound_rows.append(
-                            UnboundRowRecord(
-                                plan_run_id=rs.plan_run_id,
-                                host_id=rep.host_id,
-                                report_file=report_path.name,
-                                row_no=row_no,
-                                serial=serial,
-                                raw_path=raw_path,
-                                reason=reason,
-                            )
+                        _record_unbound(
+                            plan_run_id=rs.plan_run_id,
+                            host_id=rep.host_id,
+                            report_file=validated_report.name,
+                            row_no=row_no,
+                            serial=serial,
+                            raw_path=raw_path,
+                            reason="missing_mapping_no_dle",
                         )
-                        unbound_counter[reason] += 1
                         continue
-                    occ_keys = {
-                        str(c.occurrence_key).strip()
-                        for c in candidates
-                        if c.occurrence_key and str(c.occurrence_key).strip()
-                    }
-                    matched_dle = candidates[0]
-                    if len(occ_keys) == 1:
-                        occ_key = next(iter(occ_keys))
-                        dedup_key = f"occ:{occ_key}"
-                        identity_source = "occurrence_key"
-                        keyed_rows += 1
-                    elif len(occ_keys) > 1:
-                        reason = "missing_mapping_ambiguous_dle"
-                        unbound_rows.append(
-                            UnboundRowRecord(
-                                plan_run_id=rs.plan_run_id,
-                                host_id=rep.host_id,
-                                report_file=report_path.name,
-                                row_no=row_no,
-                                serial=serial,
-                                raw_path=raw_path,
-                                reason=reason,
-                            )
-                        )
-                        unbound_counter[reason] += 1
-                        continue
+
+                    if len(candidates) == 1:
+                        matched_dle = candidates[0]
+                        dle_occ = str(matched_dle.occurrence_key or "").strip()
+                        if dle_occ:
+                            occ_key = dle_occ
+                            dedup_key = f"occ:{occ_key}"
+                            identity_source = "occurrence_key"
+                        else:
+                            dedup_key = f"compat:{serial}:{entry_name}"
+                            identity_source = "compat_serial_entry"
                     else:
-                        dedup_key = f"compat:{serial}:{entry_name}"
-                        identity_source = "compat_serial_entry"
-                        compat_fallback_rows += 1
+                        occ_keys = {
+                            str(c.occurrence_key).strip()
+                            for c in candidates
+                            if c.occurrence_key and str(c.occurrence_key).strip()
+                        }
+                        all_have_key = all(
+                            bool(c.occurrence_key and str(c.occurrence_key).strip())
+                            for c in candidates
+                        )
+                        if all_have_key and len(occ_keys) == 1:
+                            matched_dle = candidates[0]
+                            occ_key = next(iter(occ_keys))
+                            dedup_key = f"occ:{occ_key}"
+                            identity_source = "occurrence_key"
+                        else:
+                            # 多候选且无唯一 occurrence_key（含全部无 key 多候选）→ 歧义入未绑定
+                            _record_unbound(
+                                plan_run_id=rs.plan_run_id,
+                                host_id=rep.host_id,
+                                report_file=validated_report.name,
+                                row_no=row_no,
+                                serial=serial,
+                                raw_path=raw_path,
+                                reason="missing_mapping_ambiguous_dle",
+                            )
+                            continue
 
                 # 快照截止时间过滤（基于 DLE detected_at）
                 detected_utc = ensure_utc(matched_dle.detected_at) if matched_dle is not None else None
@@ -927,25 +1278,33 @@ def collect_handoff_identity(
                     continue
 
                 if not serial or not dedup_key:
-                    reason = "missing_serial_or_identity"
-                    unbound_rows.append(
-                        UnboundRowRecord(
-                            plan_run_id=rs.plan_run_id,
-                            host_id=rep.host_id,
-                            report_file=report_path.name,
-                            row_no=row_no,
-                            serial=serial,
-                            raw_path=raw_path,
-                            reason=reason,
-                        )
+                    _record_unbound(
+                        plan_run_id=rs.plan_run_id,
+                        host_id=rep.host_id,
+                        report_file=validated_report.name,
+                        row_no=row_no,
+                        serial=serial,
+                        raw_path=raw_path,
+                        reason="missing_serial_or_identity",
                     )
-                    unbound_counter[reason] += 1
                     continue
 
-                build = serial_build.get(serial) or row.get("Version") or _UNKNOWN_BUILD
+                if identity_source == "occurrence_key":
+                    keyed_rows += 1
+                else:
+                    compat_fallback_rows += 1
+
+                # 按源 run 事实取 build（禁止跨 run 串号覆盖）
+                build = (
+                    run_serial_build.get((rs.plan_run_id, serial))
+                    or run_build_version.get(rs.plan_run_id)
+                    or row.get("Version")
+                    or serial_fallback_build.get(serial)
+                    or _UNKNOWN_BUILD
+                )
                 product = serial_product.get(serial, "")
                 if build == _UNKNOWN_BUILD:
-                    msg = f"设备 {serial} 缺失 build_version 映射，已归入 {_UNKNOWN_BUILD}"
+                    msg = f"设备 {serial}（run {rs.plan_run_id}）缺失 build_version 映射，已归入 {_UNKNOWN_BUILD}"
                     if msg not in warnings:
                         warnings.append(msg)
 
@@ -956,6 +1315,7 @@ def collect_handoff_identity(
                 )
                 ev_loc, ev_tier = _pick_evidence_location(matched_dle)
                 dle_id_str = str(matched_dle.id) if matched_dle is not None else None
+                cur_run_started = run_started_map.get(rs.plan_run_id)
 
                 existing = deduped_by_key.get(dedup_key)
                 if existing is None:
@@ -977,6 +1337,7 @@ def collect_handoff_identity(
                         evidence_tier=ev_tier,
                         fields=dict(row),
                     )
+                    event_origin_started_at[dedup_key] = cur_run_started
                 else:
                     if rs.plan_run_id not in existing.source_runs:
                         existing.source_runs.append(rs.plan_run_id)
@@ -988,16 +1349,50 @@ def collect_handoff_identity(
                         existing.evidence_tier = ev_tier
                         if dle_id_str:
                             existing.primary_dle_id = dle_id_str
-                    if detected_utc is not None and (
+                    earlier_detected = detected_utc is not None and (
                         existing.detected_at is None or detected_utc < existing.detected_at
-                    ):
+                    )
+                    if earlier_detected:
                         existing.detected_at = detected_utc
+                        existing.build = build
+                        event_origin_started_at[dedup_key] = cur_run_started
+                    elif (
+                        cur_run_started is not None
+                        and (
+                            event_origin_started_at.get(dedup_key) is None
+                            or cur_run_started < event_origin_started_at[dedup_key]
+                        )
+                        and existing.detected_at == detected_utc
+                    ):
+                        existing.build = build
+                        event_origin_started_at[dedup_key] = cur_run_started
                     if existing.baseline_class == "baseline" and baseline_cls == "current":
-                        # 保留最早观测口径；不覆写为 current
                         pass
                     elif existing.clock_fallback and not clock_fallback:
                         existing.baseline_class = baseline_cls
                         existing.clock_fallback = False
+
+        # 回填经真实文件与表头校验后的最终主机覆盖口径
+        effective_covered = (valid_covered_hosts - invalid_hosts) & set(rs.hosts_expected)
+        rs.hosts_with_reports = sorted(effective_covered)
+        rs.missing_hosts = [h for h in rs.hosts_expected if h not in effective_covered]
+        if non_empty_valid_reports == 0:
+            rs.mapping_status = "empty"
+        elif mapped_valid_reports == non_empty_valid_reports:
+            rs.mapping_status = "complete"
+        elif mapped_valid_reports == 0:
+            rs.mapping_status = "missing"
+        else:
+            rs.mapping_status = "partial"
+
+        if rs.missing_hosts:
+            blocking_issues.append(
+                f"plan_run {rs.plan_run_id} 缺少 {len(rs.missing_hosts)} 台主机有效报表: {', '.join(rs.missing_hosts)}"
+            )
+        if rs.mapping_status in ("partial", "missing"):
+            warnings.append(
+                f"plan_run {rs.plan_run_id} 伴随映射状态={rs.mapping_status}（缺映射分片仅历史 CURRENT 唯一锚定走兼容回退）"
+            )
 
     events = sorted(
         deduped_by_key.values(),

@@ -1,4 +1,4 @@
-"""B11-U1（#4199 / #4174）A 段只读提单表单生成 API 的 Pydantic v2 Schema。"""
+"""B11-U1（#4199 v1.1 / #4174）A 段只读提单表单生成 API 的 Pydantic v2 Schema。"""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ class HandoffPreflightIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     plan_run_ids: list[int] = Field(..., min_length=1, max_length=20)
-    platform: str = Field(default="mtk", description="一期仅支持 mtk；非 mtk 返回 400")
+    platform: str = Field(default="mtk", description="一期仅支持字面 'mtk'；非字面 'mtk' 返回 400")
     snapshot_cutoff: Optional[datetime] = Field(
         default=None,
-        description="冻结快照截止时间（默认当前 UTC）",
+        description="冻结快照截止时间（同时冻结 DLE 观测与分片选择；默认当前 UTC）",
     )
 
 
@@ -23,10 +23,6 @@ class HandoffBundleCreateIn(HandoffPreflightIn):
     builds: Optional[list[str]] = Field(
         default=None,
         description="可选：仅针对指定 build 列表生成，空则覆盖全部 build",
-    )
-    allow_incomplete_coverage: bool = Field(
-        default=False,
-        description="是否显式放行缺 host 覆盖（放行后仍在 manifest 标注 coverage_complete=false）",
     )
     target_folder_hint: Optional[str] = Field(
         default=None,
@@ -47,6 +43,7 @@ class HandoffRunCoverageOut(BaseModel):
     hosts_expected: list[str]
     hosts_with_reports: list[str]
     missing_hosts: list[str]
+    unexpected_hosts: list[str] = Field(default_factory=list)
     mapping_status: str
 
 
@@ -58,6 +55,16 @@ class HandoffIdentityGateOut(BaseModel):
     unbound_rows: int
     after_cutoff_skipped_rows: int
     unbound_by_reason: dict[str, int]
+
+
+class HandoffUnboundRowOut(BaseModel):
+    plan_run_id: int
+    host_id: str
+    report_file: str
+    row_no: int
+    serial: str
+    raw_path: str
+    reason: str
 
 
 class HandoffBuildPreviewOut(BaseModel):
@@ -80,6 +87,7 @@ class HandoffPreflightOut(BaseModel):
     first_run_started_at: Optional[str] = None
     runs: list[HandoffRunCoverageOut]
     identity_gate: HandoffIdentityGateOut
+    unbound_rows: list[HandoffUnboundRowOut] = Field(default_factory=list)
     builds: list[HandoffBuildPreviewOut]
     gates: HandoffGatesOut
 
@@ -164,8 +172,8 @@ class HandoffBundleOut(BaseModel):
     plan_run_ids: list[int]
     snapshot_cutoff: str
     first_run_started_at: Optional[str] = None
-    allow_incomplete_coverage: bool
     target_folder_hint: Optional[str] = None
+    scan_tool_release: Optional[dict[str, str]] = None
     gates: HandoffGatesOut
     identity_gate: HandoffIdentityGateOut
     runs: list[dict[str, Any]]

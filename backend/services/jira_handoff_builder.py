@@ -1,10 +1,16 @@
-"""B11-U1（#4199 / #4174）阶段 1：A 段只读提单表单生成引擎与冻结产物存储。
+"""B11-U1（#4199 v1.1 / #4174）阶段 1：A 段只读提单表单生成引擎与冻结产物存储。
 
 职责边界：
-- 仅运行控制面轻量 ``start_log_scan.py -dedup_org``（V2.1.1，消费 ``*_members.json``），
-  严禁调用 ``-m`` / ``-m 0`` / ``aee_extract``。
-- 仅落盘中心存储受控目录 ``_meta/handoff/<handoff_id>/``（零 15.4 外部写入、零 DB 迁移），
-  并经既有 ``record_audit`` 留痕（ADR-0015）。
+- 仅运行控制面轻量 ``start_log_scan.py -dedup_org``（校验 ``release.json >= 2.1.1``），
+  且每次调用在隔离临时目录运行轻量副本（仅只读引用原 ``venv``，绝不将 ``config/*`` 软链回
+  原发布目录，确保原发布目录零写入、零截断）；严禁调用 ``-m`` / ``-m 0`` / ``aee_extract``。
+- 对工具产物（``*_members.json`` 与配对终表 ``.xls``）执行与 ``scan_membership.py:72-109``
+  同等的强契约校验（``schema`` / ``schema_version`` / 输入 SHA256 / 逐行 ``path`` / ``branch`` /
+  分组守恒 / 终表完整性），任何不符均 fail-closed 转结构化 ``JiraHandoffError``。
+- 覆盖率门禁为硬阻断（无缺主机放行旁路）；全未绑定（0 有效事件）在预检与 422 中返回完整
+  ``unbound_rows`` 明细。
+- 仅落盘中心存储受控目录 ``_meta/handoff/<handoff_id>/``（校验受控根及其祖先无 symlink，
+  零 15.4 外部写入、零 DB 迁移），并经既有 ``record_audit`` 留痕（ADR-0015）。
 - 所有 A 段产物恒标 ``status="PENDING_EXPORT"``，预览 ``.xls`` 的 ``Path`` 列写显式
   ``PENDING_EXPORT://...`` 占位，绝不伪造未落盘的厂商共享路径。
 - 不导入 FastAPI（C2 分层约束）；路由层负责将 ``JiraHandoffError`` 翻译为 HTTP 响应。
@@ -13,10 +19,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import fcntl
 import hashlib
 import json
 import logging
@@ -24,9 +28,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 import uuid
 
 from sqlalchemy.orm import Session
@@ -40,7 +45,6 @@ from backend.services.jira_handoff_identity import (
     FORM_COLUMNS,
     HANDOFF_STATUS_PENDING_EXPORT,
     ORG_COLUMNS,
-    SUPPORTED_HANDOFF_PLATFORMS,
     DedupedEvent,
     IdentityCollectionResult,
     classify_issue_baseline,
@@ -56,8 +60,17 @@ HANDOFF_DOWNLOAD_KINDS = frozenset({"manifest", "preview_xls", "review_workbook"
 
 _HANDOFF_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{3,63}$")
 _SAFE_BUILD_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_SEMVER_PREFIX_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
+_MIN_SCAN_TOOL_VERSION = (2, 1, 1)
 _DEDUP_ORG_TIMEOUT_SECONDS = 300
 _PENDING_EXPORT_PATH_PREFIX = "PENDING_EXPORT://"
+
+_ALLOWED_MEMBER_BRANCHES = frozenset({"filtered", "singleton", "similarity"})
+_REQUIRED_FINAL_XLS_COLUMNS = frozenset(
+    {"path", "exptime", "expclass", "exptype", "curprocess", "package", "causedby"}
+)
+_TOOL_COPY_EXCLUDE_TOP = frozenset({"venv", ".venv", "__pycache__", ".git", "logs", "tmp"})
+_FILE_READ_NOFOLLOW_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
 
 
 @dataclass(frozen=True)
@@ -74,15 +87,14 @@ class JiraHandoffError(Exception):
 
 
 def validate_platform(platform: str) -> str:
-    """一期仅支持 MTK（#4199 §3 B11-U1 #8），非 mtk 返回 400 fail-closed。"""
-    normalized = (platform or "").strip().lower()
-    if normalized not in SUPPORTED_HANDOFF_PLATFORMS:
+    """一期仅支持字面 ``'mtk'``（#4199 v1.1 §3 B11-U1 ⑧），非字面 ``'mtk'`` 一律 400。"""
+    if not isinstance(platform, str) or platform != "mtk":
         raise JiraHandoffError(
             status_code=400,
             code="handoff_unsupported_platform",
-            detail=f"platform {platform!r} is not supported in B11 stage 1 (only 'mtk' is allowed)",
+            detail=f"platform {platform!r} is not supported in B11 stage 1 (only literal 'mtk' is allowed)",
         )
-    return normalized
+    return platform
 
 
 def validate_handoff_id(handoff_id: str) -> str:
@@ -100,18 +112,107 @@ def _build_slug(build: str) -> str:
     slug = _SAFE_BUILD_SLUG_RE.sub("_", (build or "").strip()).strip("._-")
     if not slug or slug in (".", ".."):
         return "unknown_build"
-    return slug[:96]
+    return slug[:80]
+
+
+def _unique_build_slug(build: str, used_slugs: set[str]) -> str:
+    """生成带确定性短哈希的唯一 build slug，防止不同 build 规范化碰撞相互覆写。"""
+    base = _build_slug(build)
+    digest = hashlib.sha256(build.encode("utf-8")).hexdigest()
+    candidate = f"{base}_{digest[:8]}"
+    if candidate in used_slugs:
+        candidate = f"{base}_{digest[:16]}"
+    used_slugs.add(candidate)
+    return candidate
+
+
+def _assert_no_symlink_in_ancestors(path: Path, *, label: str) -> None:
+    """保留原始词法路径检查自身与全部祖先，拒绝任何符号链接。"""
+    cur = path
+    while True:
+        try:
+            if cur.is_symlink():
+                raise JiraHandoffError(
+                    status_code=400,
+                    code="handoff_symlink_rejected",
+                    detail=f"{label} must not contain symlink ancestor: {cur}",
+                )
+        except OSError as exc:
+            raise JiraHandoffError(
+                status_code=500,
+                code="handoff_storage_io_error",
+                detail=f"failed to inspect {label}: {exc}",
+            ) from exc
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
 
 
 def _resolve_handoff_base_dir(storage_root: Optional[str] = None) -> Path:
-    root = (storage_root or "").strip() or resolve_shared_storage_root()
-    if not root:
+    """以配置中心根为信任锚定位 ``_meta/handoff``，拒绝根及祖先任何 symlink。"""
+    raw_root = (storage_root or "").strip() or resolve_shared_storage_root()
+    if not raw_root:
         raise JiraHandoffError(
             status_code=503,
             code="handoff_storage_unconfigured",
             detail="shared storage root (STP_AEE_NFS_ROOT) is not configured",
         )
-    return Path(root).resolve(strict=False) / "_meta" / "handoff"
+    anchor = Path(raw_root)
+    if not anchor.is_absolute() or ".." in anchor.parts:
+        raise JiraHandoffError(
+            status_code=400,
+            code="handoff_invalid_root",
+            detail="shared storage root must be a normalized absolute path",
+        )
+    _assert_no_symlink_in_ancestors(anchor, label="controlled storage root")
+    if anchor.exists() and not anchor.is_dir():
+        raise JiraHandoffError(
+            status_code=400,
+            code="handoff_invalid_root",
+            detail="controlled storage root is not a directory",
+        )
+
+    cur = anchor
+    for seg in ("_meta", "handoff"):
+        cur = cur / seg
+        try:
+            if cur.is_symlink():
+                raise JiraHandoffError(
+                    status_code=400,
+                    code="handoff_symlink_rejected",
+                    detail=f"handoff root component must not be a symlink: {cur}",
+                )
+            if cur.exists() and not cur.is_dir():
+                raise JiraHandoffError(
+                    status_code=400,
+                    code="handoff_invalid_root",
+                    detail=f"handoff root component is not a directory: {cur}",
+                )
+        except OSError as exc:
+            raise JiraHandoffError(
+                status_code=500,
+                code="handoff_storage_io_error",
+                detail=f"failed to inspect handoff directory: {exc}",
+            ) from exc
+
+    if cur.exists():
+        try:
+            resolved_anchor = anchor.resolve(strict=True)
+            resolved_base = cur.resolve(strict=True)
+        except OSError as exc:
+            raise JiraHandoffError(
+                status_code=500,
+                code="handoff_storage_io_error",
+                detail=f"failed to resolve handoff directory: {exc}",
+            ) from exc
+        if resolved_base != resolved_anchor / "_meta" / "handoff":
+            raise JiraHandoffError(
+                status_code=400,
+                code="handoff_symlink_rejected",
+                detail="handoff directory resolved away from controlled storage root",
+            )
+    return cur
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> str:
@@ -156,18 +257,86 @@ def compute_manifest_sha256(manifest_without_digest: Mapping[str, Any]) -> str:
     return hashlib.sha256(_canonical_json_bytes(clean)).hexdigest()
 
 
-@contextmanager
-def _exclusive_dedup_org_lock(tool_dir: Path) -> Iterator[None]:
-    """跨请求文件锁：防止并发 ``-dedup_org`` 调用在共享工具目录互相干扰。"""
-    lock_dir = tool_dir / "tmp"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = lock_dir / ".stp_handoff_dedup_org.lock"
-    with lock_path.open("a+", encoding="utf-8") as fh:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+def _validate_scan_tool_release(script_path: Path) -> dict[str, str]:
+    """校验发布目录的 ``release.json`` 身份（要求存在非空 version/git_commit 且版本 >= 2.1.1）。"""
+    release_path = script_path.with_name("release.json")
+    try:
+        st = os.lstat(release_path)
+    except FileNotFoundError as exc:
+        raise JiraHandoffError(
+            status_code=503,
+            code="handoff_scan_tool_release_invalid",
+            detail="published scan tool release.json is missing",
+        ) from exc
+    except OSError as exc:
+        raise JiraHandoffError(
+            status_code=503,
+            code="handoff_scan_tool_release_invalid",
+            detail=f"failed to stat scan tool release.json: {exc}",
+        ) from exc
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise JiraHandoffError(
+            status_code=503,
+            code="handoff_scan_tool_release_invalid",
+            detail="published scan tool release.json must be a regular file",
+        )
+    try:
+        release = json.loads(release_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise JiraHandoffError(
+            status_code=503,
+            code="handoff_scan_tool_release_invalid",
+            detail=f"failed to parse scan tool release.json: {exc}",
+        ) from exc
+    if not isinstance(release, dict):
+        raise JiraHandoffError(
+            status_code=503,
+            code="handoff_scan_tool_release_invalid",
+            detail="scan tool release.json must be a JSON object",
+        )
+    version = str(release.get("version") or "").strip()
+    git_commit = str(release.get("git_commit") or "").strip()
+    if not version or not git_commit:
+        raise JiraHandoffError(
+            status_code=503,
+            code="handoff_scan_tool_release_invalid",
+            detail="scan tool release.json must contain non-empty version and git_commit",
+        )
+    match = _SEMVER_PREFIX_RE.match(version)
+    if not match:
+        raise JiraHandoffError(
+            status_code=503,
+            code="handoff_scan_tool_release_invalid",
+            detail=f"scan tool release version is not parseable semver: {version!r}",
+        )
+    ver_tuple = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    if ver_tuple < _MIN_SCAN_TOOL_VERSION:
+        raise JiraHandoffError(
+            status_code=503,
+            code="handoff_scan_tool_release_invalid",
+            detail=f"scan tool version {version!r} is older than required 2.1.1",
+        )
+    return {"version": version, "git_commit": git_commit}
+
+
+def _copy_isolated_tool_tree(src_tool_dir: Path, isolated_dir: Path) -> None:
+    """将发布工具轻量运行树复制到本次隔离目录（排除 venv/logs/tmp，且禁止软链回原目录）。"""
+    isolated_dir.mkdir(parents=True, exist_ok=True)
+    for entry in src_tool_dir.iterdir():
+        if entry.name in _TOOL_COPY_EXCLUDE_TOP:
+            continue
+        target = isolated_dir / entry.name
+        if entry.is_dir():
+            shutil.copytree(
+                entry,
+                target,
+                symlinks=False,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"),
+            )
+        elif entry.is_file():
+            shutil.copy2(entry, target, follow_symlinks=True)
+    (isolated_dir / "logs").mkdir(exist_ok=True)
+    (isolated_dir / "tmp").mkdir(exist_ok=True)
 
 
 def _write_build_org_input_xls(
@@ -176,17 +345,19 @@ def _write_build_org_input_xls(
     build: str,
     events: Sequence[DedupedEvent],
     folder_hint: str,
-) -> None:
-    """为单个 build 构造规范 15 列 ``<build>_org.xls``（供 ``-dedup_org`` 消费）。"""
+) -> list[str]:
+    """为单个 build 构造规范 15 列 ``<build>_org.xls``，返回逐行写入的 Path 列表供强核验。"""
     wb = xlwt.Workbook(encoding="utf-8")
     ws = wb.add_sheet("aeeexp", cell_overwrite_ok=True)
     for col_idx, name in enumerate(ORG_COLUMNS):
         ws.write(0, col_idx, name)
+    written_paths: list[str] = []
     for row_idx, ev in enumerate(events, start=1):
-        # 路径使用唯一占位形态（不含真实内网 IP 或未落盘厂商挂载前缀）
         synthetic_path = (
             f"{_PENDING_EXPORT_PATH_PREFIX}{folder_hint}/{ev.serial}/aee_exp/{ev.entry}/"
         )
+        safe_path = str(safe_xls_cell(synthetic_path))
+        written_paths.append(safe_path)
         f = ev.fields
         values = [
             row_idx - 1,
@@ -208,20 +379,27 @@ def _write_build_org_input_xls(
         for col_idx, val in enumerate(values):
             ws.write(row_idx, col_idx, safe_xls_cell(val))
     wb.save(str(dest))
+    return written_paths
 
 
 def _read_dedup_final_xls(path: Path) -> list[dict[str, str]]:
+    """严格读取并校验 ``-dedup_org`` 产出的终表 ``.xls``（损坏/缺表头/缺必需列一律报错）。"""
     book = xlrd.open_workbook(str(path), on_demand=True)
     try:
-        sheet = (
-            book.sheet_by_name("aeeexp")
-            if "aeeexp" in book.sheet_names()
-            else book.sheet_by_index(0)
-        )
-        if sheet.nrows <= 1:
-            return []
+        if "aeeexp" not in book.sheet_names():
+            raise ValueError(f"final dedup xls missing 'aeeexp' sheet: {path.name}")
+        sheet = book.sheet_by_name("aeeexp")
+        if sheet.nrows < 1:
+            raise ValueError(f"final dedup xls has empty 'aeeexp' sheet: {path.name}")
         headers = [str(v).strip() for v in sheet.row_values(0)]
-        col_map = {h.lower(): i for i, h in enumerate(headers)}
+        col_map = {h.lower(): i for i, h in enumerate(headers) if h}
+        missing = sorted(_REQUIRED_FINAL_XLS_COLUMNS - set(col_map))
+        if missing:
+            raise ValueError(
+                f"final dedup xls missing required columns ({', '.join(missing)}): {path.name}"
+            )
+        if sheet.nrows == 1:
+            return []
 
         def _val(vals: Sequence[Any], key: str) -> str:
             idx = col_map.get(key.lower())
@@ -239,6 +417,7 @@ def _read_dedup_final_xls(path: Path) -> list[dict[str, str]]:
             vals = sheet.row_values(i)
             rows.append(
                 {
+                    "Path": _val(vals, "Path"),
                     "ExpTime": _val(vals, "ExpTime"),
                     "ExpClass": _val(vals, "ExpClass"),
                     "ExpType": _val(vals, "ExpType"),
@@ -261,8 +440,12 @@ def _invoke_dedup_org_tool(
     org_xls: Path,
     *,
     side: str = "shanghai",
-) -> tuple[list[dict[str, str]], dict[str, Any]]:
-    """只读调用 V2.1.1 ``start_log_scan.py -dedup_org`` 并强制校验 ``*_members.json``。"""
+) -> tuple[list[dict[str, str]], dict[str, Any], str, str, dict[str, str]]:
+    """在每请求只读隔离副本中运行 ``start_log_scan.py -dedup_org`` 并校验产物完整性。
+
+    返回 ``(final_rows, members_data, input_org_sha256, final_xls_sha256, release_info)``。
+    原发布工具目录（含 ``config/blacklist.txt``、``logs/``、``tmp/``）全程只读、零写入。
+    """
     python_bin = str(tool.get("python") or "").strip()
     script_path = Path(str(tool.get("script") or "").strip())
     if not python_bin or not script_path.is_file():
@@ -271,19 +454,42 @@ def _invoke_dedup_org_tool(
             code="handoff_scan_tool_unavailable",
             detail="backend dedup scan tool is not configured or script file missing",
         )
-    argv = [
-        python_bin,
-        str(script_path),
-        "-dedup_org",
-        str(org_xls),
-        "-side",
-        side,
-    ]
-    with _exclusive_dedup_org_lock(script_path.parent):
+    release_info = _validate_scan_tool_release(script_path)
+    input_org_sha256 = hashlib.sha256(org_xls.read_bytes()).hexdigest()
+
+    with tempfile.TemporaryDirectory(prefix="stp-handoff-tool-") as tool_work:
+        isolated_dir = Path(tool_work) / "tool"
+        try:
+            _copy_isolated_tool_tree(script_path.parent, isolated_dir)
+        except OSError as exc:
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_tool_isolation_failed",
+                detail=f"failed to stage isolated scan tool copy: {exc}",
+            ) from exc
+
+        isolated_script = isolated_dir / script_path.name
+        if not isolated_script.is_file():
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_tool_isolation_failed",
+                detail=f"isolated scan tool script missing: {script_path.name}",
+            )
+
+        argv = [
+            python_bin,
+            str(isolated_script),
+            "-dedup_org",
+            str(org_xls),
+            "-side",
+            side,
+        ]
+        child_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
         try:
             proc = subprocess.run(
                 argv,
-                cwd=str(script_path.parent),
+                cwd=str(isolated_dir),
+                env=child_env,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -315,9 +521,15 @@ def _invoke_dedup_org_tool(
         raise JiraHandoffError(
             status_code=502,
             code="handoff_members_json_missing",
-            detail="-dedup_org did not produce *_members.json (requires start-log-scan >= 2.1.0)",
+            detail="-dedup_org did not produce *_members.json (requires start-log-scan >= 2.1.1)",
         )
-    members_path = members_files[-1]
+    if len(members_files) != 1:
+        raise JiraHandoffError(
+            status_code=502,
+            code="handoff_members_json_invalid",
+            detail=f"expected exactly 1 *_members.json, found {len(members_files)}",
+        )
+    members_path = members_files[0]
     try:
         members_data = json.loads(members_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -326,29 +538,96 @@ def _invoke_dedup_org_tool(
             code="handoff_members_json_invalid",
             detail=f"failed to parse *_members.json: {exc}",
         ) from exc
-    if not isinstance(members_data, dict) or not isinstance(members_data.get("rows"), list):
+    if not isinstance(members_data, dict):
         raise JiraHandoffError(
             status_code=502,
             code="handoff_members_json_invalid",
-            detail="*_members.json lacks valid rows list",
+            detail="*_members.json root must be a JSON object",
         )
 
-    dedup_xls_files = sorted(org_xls.parent.glob("*_dedup_org_*.xls"))
-    final_rows = _read_dedup_final_xls(dedup_xls_files[-1]) if dedup_xls_files else []
-    return final_rows, members_data
+    expected_final_xls = members_path.with_name(
+        members_path.name.removesuffix("_members.json") + ".xls"
+    )
+    if expected_final_xls.is_symlink() or not expected_final_xls.is_file():
+        raise JiraHandoffError(
+            status_code=502,
+            code="handoff_dedup_xls_missing",
+            detail=f"paired final dedup xls missing: {expected_final_xls.name}",
+        )
+    try:
+        final_xls_sha256 = hashlib.sha256(expected_final_xls.read_bytes()).hexdigest()
+        final_rows = _read_dedup_final_xls(expected_final_xls)
+    except (OSError, ValueError, KeyError, TypeError, IndexError, xlrd.XLRDError) as exc:
+        raise JiraHandoffError(
+            status_code=502,
+            code="handoff_dedup_xls_invalid",
+            detail=f"failed to read paired final dedup xls: {exc}",
+        ) from exc
+
+    return final_rows, members_data, input_org_sha256, final_xls_sha256, release_info
+
+
+def _is_strict_int(val: Any) -> bool:
+    return type(val) is int
 
 
 def _validate_and_aggregate_groups(
     *,
     build: str,
     events: Sequence[DedupedEvent],
+    expected_org_paths: Sequence[str],
+    input_org_sha256: str,
+    final_xls_sha256: str,
     final_rows: Sequence[Mapping[str, str]],
     members_data: Mapping[str, Any],
     folder_hint: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
-    """依据 ``*_members.json`` 的分组与过滤结果，按唯一发生重算 ``Count`` / ``DeviceCount``。"""
-    rows = members_data.get("rows") or []
-    groups_raw = members_data.get("groups") or []
+    """按 ``scan_membership.py:72-109`` 同等强校验核验 ``*_members.json`` 与终表，再重算计数。"""
+    if members_data.get("schema") != "stp.scan_membership":
+        raise JiraHandoffError(
+            status_code=502,
+            code="handoff_members_json_invalid",
+            detail=f"unsupported *_members.json schema: {members_data.get('schema')!r}",
+        )
+    schema_ver = members_data.get("schema_version")
+    if not isinstance(schema_ver, (str, int, float)) or str(schema_ver).split(".")[0] != "1":
+        raise JiraHandoffError(
+            status_code=502,
+            code="handoff_members_json_invalid",
+            detail=f"unsupported *_members.json schema_version: {schema_ver!r}",
+        )
+
+    # 强制绑定输入 _org.xls SHA256（与 scan_membership.py:76 一致）
+    meta = members_data.get("meta")
+    reports_meta = meta.get("reports") if isinstance(meta, dict) else None
+    org_meta = reports_meta.get("org_xls") if isinstance(reports_meta, dict) else None
+    recorded_org_sha = org_meta.get("sha256") if isinstance(org_meta, dict) else None
+    if not isinstance(recorded_org_sha, str) or recorded_org_sha != input_org_sha256:
+        raise JiraHandoffError(
+            status_code=502,
+            code="handoff_members_sha256_mismatch",
+            detail="*_members.json meta.reports.org_xls.sha256 missing or mismatches input _org.xls",
+        )
+    # 若 sidecar 同时登记终表 SHA256，则一并强绑定
+    if isinstance(reports_meta, dict):
+        for final_key in ("final_xls", "dedup_xls", "result_xls"):
+            fmeta = reports_meta.get(final_key)
+            if isinstance(fmeta, dict) and "sha256" in fmeta:
+                if fmeta.get("sha256") != final_xls_sha256:
+                    raise JiraHandoffError(
+                        status_code=502,
+                        code="handoff_members_sha256_mismatch",
+                        detail=f"*_members.json meta.reports.{final_key}.sha256 mismatches paired final xls",
+                    )
+
+    rows = members_data.get("rows")
+    groups_raw = members_data.get("groups")
+    if not isinstance(rows, list) or not isinstance(groups_raw, list):
+        raise JiraHandoffError(
+            status_code=502,
+            code="handoff_members_json_invalid",
+            detail="*_members.json must contain list 'rows' and list 'groups'",
+        )
     if len(rows) != len(events):
         raise JiraHandoffError(
             status_code=502,
@@ -360,15 +639,47 @@ def _validate_and_aggregate_groups(
     filtered_rows: list[dict[str, Any]] = []
     filtered_by_reason: Counter[str] = Counter()
     for m in rows:
-        if not isinstance(m, dict) or "org_row" not in m:
+        if not isinstance(m, dict):
             raise JiraHandoffError(
                 status_code=502,
                 code="handoff_members_json_invalid",
-                detail="*_members.json row missing org_row",
+                detail="*_members.json row entry must be an object",
             )
-        org_row = int(m["org_row"])
+        org_row = m.get("org_row")
+        if not _is_strict_int(org_row) or org_row < 1 or org_row > len(events):
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_json_invalid",
+                detail=f"*_members.json row has invalid org_row: {org_row!r}",
+            )
+        if org_row in by_org_row:
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_json_invalid",
+                detail=f"*_members.json has duplicate org_row: {org_row}",
+            )
+        branch = m.get("branch")
+        if not isinstance(branch, str) or branch not in _ALLOWED_MEMBER_BRANCHES:
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_json_invalid",
+                detail=f"*_members.json row {org_row} has invalid branch: {branch!r}",
+            )
+        row_path = m.get("path")
+        if not isinstance(row_path, str) or row_path != expected_org_paths[org_row - 1]:
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_path_mismatch",
+                detail=f"*_members.json row {org_row} path mismatches input _org.xls",
+            )
         by_org_row[org_row] = m
-        if m.get("branch") == "filtered":
+        if branch == "filtered":
+            if m.get("group") is not None:
+                raise JiraHandoffError(
+                    status_code=502,
+                    code="handoff_members_json_invalid",
+                    detail=f"*_members.json filtered row {org_row} must not carry a group",
+                )
             ev = events[org_row - 1]
             reason = str(m.get("filter_reason") or "filtered")
             filtered_by_reason[reason] += 1
@@ -382,14 +693,22 @@ def _validate_and_aggregate_groups(
                     "exp_type": ev.fields.get("ExpType", ""),
                 }
             )
+
     if set(by_org_row) != set(range(1, len(events) + 1)):
         raise JiraHandoffError(
             status_code=502,
             code="handoff_members_json_invalid",
             detail="*_members.json org_row indices are not contiguous 1..N",
         )
+    if len(final_rows) != len(groups_raw):
+        raise JiraHandoffError(
+            status_code=502,
+            code="handoff_dedup_xls_invalid",
+            detail=f"final dedup xls row count ({len(final_rows)}) != groups count ({len(groups_raw)})",
+        )
 
     covered: set[int] = set()
+    seen_final_rows: set[int] = set()
     issues: list[dict[str, Any]] = []
     for idx, g in enumerate(groups_raw, start=1):
         if not isinstance(g, dict):
@@ -398,13 +717,41 @@ def _validate_and_aggregate_groups(
                 code="handoff_members_json_invalid",
                 detail="invalid group entry in *_members.json",
             )
-        member_nums = [int(n) for n in (g.get("member_rows") or [])]
-        rep_row = int(g.get("representative_row") or (member_nums[0] if member_nums else 0))
-        if not member_nums or rep_row not in member_nums:
+        group_id = g.get("group")
+        if group_id is None or isinstance(group_id, bool):
             raise JiraHandoffError(
                 status_code=502,
                 code="handoff_members_json_invalid",
-                detail=f"group #{idx} has invalid member_rows/representative_row",
+                detail=f"group #{idx} missing valid group id",
+            )
+        raw_members = g.get("member_rows")
+        if not isinstance(raw_members, list) or not raw_members:
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_json_invalid",
+                detail=f"group #{idx} missing non-empty member_rows list",
+            )
+        member_nums: list[int] = []
+        for raw_n in raw_members:
+            if not _is_strict_int(raw_n) or raw_n < 1 or raw_n > len(events):
+                raise JiraHandoffError(
+                    status_code=502,
+                    code="handoff_members_json_invalid",
+                    detail=f"group #{idx} contains invalid member row index: {raw_n!r}",
+                )
+            member_nums.append(raw_n)
+        if len(set(member_nums)) != len(member_nums):
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_json_invalid",
+                detail=f"group #{idx} contains duplicate member_rows",
+            )
+        rep_row = g.get("representative_row")
+        if not _is_strict_int(rep_row) or rep_row not in member_nums:
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_json_invalid",
+                detail=f"group #{idx} has invalid representative_row: {rep_row!r}",
             )
         if covered.intersection(member_nums):
             raise JiraHandoffError(
@@ -412,23 +759,44 @@ def _validate_and_aggregate_groups(
                 code="handoff_members_json_invalid",
                 detail=f"group #{idx} overlaps previous group rows",
             )
+        for n in member_nums:
+            member_rec = by_org_row[n]
+            if member_rec.get("branch") == "filtered" or member_rec.get("group") != group_id:
+                raise JiraHandoffError(
+                    status_code=502,
+                    code="handoff_members_json_invalid",
+                    detail=f"group #{idx} member row {n} inconsistent with rows[].group/branch",
+                )
         covered.update(member_nums)
+
+        raw_final_row = g.get("final_row")
+        if raw_final_row is None:
+            final_row_num = idx
+        elif _is_strict_int(raw_final_row) and 1 <= raw_final_row <= len(final_rows):
+            final_row_num = raw_final_row
+        else:
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_json_invalid",
+                detail=f"group #{idx} has invalid final_row: {raw_final_row!r}",
+            )
+        if final_row_num in seen_final_rows:
+            raise JiraHandoffError(
+                status_code=502,
+                code="handoff_members_json_invalid",
+                detail=f"group #{idx} duplicates final_row {final_row_num}",
+            )
+        seen_final_rows.add(final_row_num)
+        final_fields = final_rows[final_row_num - 1]
 
         member_events = [events[n - 1] for n in member_nums]
         baseline_class = classify_issue_baseline([ev.baseline_class for ev in member_events])
-        # 代表选择：混合问题优先取「本次」最早事件，否则取最早事件（对齐 SKILL.md 第 13 步）
         if baseline_class == "mixed":
             current_members = [ev for ev in member_events if ev.baseline_class == "current"]
             rep_event = current_members[0] if current_members else events[rep_row - 1]
         else:
             rep_event = events[rep_row - 1]
 
-        final_row_idx = int(g.get("final_row") or idx) - 1
-        final_fields = (
-            final_rows[final_row_idx]
-            if 0 <= final_row_idx < len(final_rows)
-            else rep_event.fields
-        )
         device_ids = sorted({ev.serial for ev in member_events if ev.serial})
         source_runs = sorted({rid for ev in member_events for rid in ev.source_runs})
         preview_path = (
@@ -691,14 +1059,27 @@ def _render_review_workbook_xls(
     return _atomic_write_bytes(dest, data)
 
 
+def _identity_gate_dict(col: IdentityCollectionResult) -> dict[str, Any]:
+    return {
+        "total_org_rows": col.total_org_rows,
+        "unique_events": len(col.events),
+        "keyed_rows": col.keyed_rows,
+        "compat_fallback_rows": col.compat_fallback_rows,
+        "unbound_rows": len(col.unbound_rows),
+        "after_cutoff_skipped_rows": col.after_cutoff_skipped_rows,
+        "unbound_by_reason": dict(col.unbound_by_reason),
+    }
+
+
 def run_handoff_preflight(
     db: Session,
     *,
     plan_run_ids: Sequence[int],
     platform: str = "mtk",
     snapshot_cutoff: Optional[datetime] = None,
+    storage_root: Optional[str] = None,
 ) -> dict[str, Any]:
-    """A 段只读双门禁预检：零写盘、零外部子进程调用。"""
+    """A 段只读双门禁预检：零写盘、零外部子进程调用，并暴露完整 ``unbound_rows`` 明细。"""
     norm_platform = validate_platform(platform)
     if not plan_run_ids:
         raise JiraHandoffError(400, "handoff_empty_runs", "plan_run_ids must not be empty")
@@ -708,6 +1089,7 @@ def run_handoff_preflight(
             plan_run_ids=plan_run_ids,
             platform=norm_platform,
             snapshot_cutoff=snapshot_cutoff,
+            storage_root=storage_root,
         )
     except LookupError as exc:
         raise JiraHandoffError(404, "handoff_plan_run_not_found", str(exc)) from exc
@@ -731,19 +1113,13 @@ def run_handoff_preflight(
                 "hosts_expected": list(r.hosts_expected),
                 "hosts_with_reports": list(r.hosts_with_reports),
                 "missing_hosts": list(r.missing_hosts),
+                "unexpected_hosts": list(r.unexpected_hosts),
                 "mapping_status": r.mapping_status,
             }
             for r in col.runs
         ],
-        "identity_gate": {
-            "total_org_rows": col.total_org_rows,
-            "unique_events": len(col.events),
-            "keyed_rows": col.keyed_rows,
-            "compat_fallback_rows": col.compat_fallback_rows,
-            "unbound_rows": len(col.unbound_rows),
-            "after_cutoff_skipped_rows": col.after_cutoff_skipped_rows,
-            "unbound_by_reason": dict(col.unbound_by_reason),
-        },
+        "identity_gate": _identity_gate_dict(col),
+        "unbound_rows": [u.to_dict() for u in col.unbound_rows],
         "builds": sorted(col.builds_meta.values(), key=lambda x: x["build"]),
         "gates": {
             "coverage_complete": col.coverage_complete,
@@ -761,7 +1137,6 @@ def create_handoff_bundle(
     platform: str = "mtk",
     snapshot_cutoff: Optional[datetime] = None,
     builds: Optional[Sequence[str]] = None,
-    allow_incomplete_coverage: bool = False,
     target_folder_hint: Optional[str] = None,
     storage_root: Optional[str] = None,
     scan_tool: Optional[Mapping[str, str]] = None,
@@ -774,27 +1149,37 @@ def create_handoff_bundle(
     if not plan_run_ids:
         raise JiraHandoffError(400, "handoff_empty_runs", "plan_run_ids must not be empty")
 
+    # 在读写任何产物前先校验受控存储根及祖先无 symlink
+    base_dir = _resolve_handoff_base_dir(storage_root)
+
     try:
         col = collect_handoff_identity(
             db,
             plan_run_ids=plan_run_ids,
             platform=norm_platform,
             snapshot_cutoff=snapshot_cutoff,
+            storage_root=storage_root,
         )
     except LookupError as exc:
         raise JiraHandoffError(404, "handoff_plan_run_not_found", str(exc)) from exc
 
-    if not col.coverage_complete and not allow_incomplete_coverage:
+    # 覆盖率硬门禁：无绕过放行开关（#4199 v1.1 §3② / §4.2①）
+    if not col.coverage_complete:
         raise JiraHandoffError(
             status_code=409,
             code="handoff_coverage_incomplete",
-            detail="scan coverage gate failed; resolve missing host reports or explicitly allow incomplete coverage",
+            detail="scan coverage gate failed; all expected hosts must have valid reports or empty receipts",
             payload={
                 "blocking_issues": list(col.blocking_issues),
                 "missing_hosts_by_run": {
                     str(r.plan_run_id): list(r.missing_hosts)
                     for r in col.runs
                     if r.missing_hosts
+                },
+                "unexpected_hosts_by_run": {
+                    str(r.plan_run_id): list(r.unexpected_hosts)
+                    for r in col.runs
+                    if r.unexpected_hosts
                 },
             },
         )
@@ -811,6 +1196,10 @@ def create_handoff_bundle(
             status_code=422,
             code="handoff_no_input",
             detail="no bound unique events available for the requested plan_run_ids/builds",
+            payload={
+                "identity_gate": _identity_gate_dict(col),
+                "unbound_rows": [u.to_dict() for u in col.unbound_rows],
+            },
         )
 
     tool = dict(scan_tool) if scan_tool is not None else (resolve_scan_tool() or {})
@@ -821,38 +1210,56 @@ def create_handoff_bundle(
             detail="STP_BACKEND_DEDUP_SCAN_PYTHON / STP_BACKEND_DEDUP_SCAN_SCRIPT not configured",
         )
 
-    base_dir = _resolve_handoff_base_dir(storage_root)
     now_utc = datetime.now(timezone.utc)
     ts_compact = now_utc.strftime("%Y%m%d_%H%M%S")
     handoff_id = f"hf_{ts_compact}_{uuid.uuid4().hex[:8]}"
     bundle_dir = base_dir / handoff_id
-    bundle_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        bundle_dir.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        raise JiraHandoffError(
+            status_code=500,
+            code="handoff_storage_io_error",
+            detail=f"failed to create handoff bundle dir: {exc}",
+        ) from exc
 
     side_env = os.getenv("STP_DEDUP_SCAN_TAG", "shanghai")
     side = "factory" if "factory" in side_env.lower() else "shanghai"
     clean_folder_hint = _build_slug(target_folder_hint or "") if target_folder_hint else ""
 
     build_entries: list[dict[str, Any]] = []
+    used_slugs: set[str] = set()
+    tool_release_info: Optional[dict[str, str]] = None
     manifest_written = False
     try:
         for build_name in sorted(events_by_build):
             build_events = events_by_build[build_name]
-            slug = _build_slug(build_name)
+            slug = _unique_build_slug(build_name, used_slugs)
             folder_label = clean_folder_hint or slug
-            with tempfile.TemporaryDirectory(prefix=f"stp-handoff-{slug}-") as tmpdir:
+            with tempfile.TemporaryDirectory(prefix=f"stp-handoff-{slug[:32]}-") as tmpdir:
                 tmp_root = Path(tmpdir)
                 org_input = tmp_root / f"{slug}_org.xls"
-                _write_build_org_input_xls(
+                written_paths = _write_build_org_input_xls(
                     org_input,
                     build=build_name,
                     events=build_events,
                     folder_hint=folder_label,
                 )
-                final_rows, members_data = _invoke_dedup_org_tool(tool, org_input, side=side)
+                (
+                    final_rows,
+                    members_data,
+                    input_org_sha256,
+                    final_xls_sha256,
+                    release_info,
+                ) = _invoke_dedup_org_tool(tool, org_input, side=side)
+                tool_release_info = release_info
 
             issues, filtered_rows, filtered_by_reason = _validate_and_aggregate_groups(
                 build=build_name,
                 events=build_events,
+                expected_org_paths=written_paths,
+                input_org_sha256=input_org_sha256,
+                final_xls_sha256=final_xls_sha256,
                 final_rows=final_rows,
                 members_data=members_data,
                 folder_hint=folder_label,
@@ -860,8 +1267,8 @@ def create_handoff_bundle(
 
             build_dir = bundle_dir / "builds" / slug
             build_dir.mkdir(parents=True, exist_ok=True)
-            preview_filename = f"preview_Result_None_None_MonkeyAEE_SH_{ts_compact}.xls"
-            review_filename = "review_workbook.xls"
+            preview_filename = f"preview_Result_None_None_MonkeyAEE_SH_{slug}_{ts_compact}.xls"
+            review_filename = f"review_workbook_{slug}.xls"
             preview_rel = f"builds/{slug}/{preview_filename}"
             review_rel = f"builds/{slug}/{review_filename}"
 
@@ -931,23 +1338,15 @@ def create_handoff_bundle(
             "first_run_started_at": (
                 col.first_run_started_at.isoformat() if col.first_run_started_at else None
             ),
-            "allow_incomplete_coverage": bool(allow_incomplete_coverage),
             "target_folder_hint": clean_folder_hint or None,
+            "scan_tool_release": tool_release_info,
             "gates": {
                 "coverage_complete": col.coverage_complete,
                 "identity_degraded": col.identity_degraded,
                 "blocking_issues": list(col.blocking_issues),
                 "warnings": list(col.warnings),
             },
-            "identity_gate": {
-                "total_org_rows": col.total_org_rows,
-                "unique_events": len(col.events),
-                "keyed_rows": col.keyed_rows,
-                "compat_fallback_rows": col.compat_fallback_rows,
-                "unbound_rows": len(col.unbound_rows),
-                "after_cutoff_skipped_rows": col.after_cutoff_skipped_rows,
-                "unbound_by_reason": dict(col.unbound_by_reason),
-            },
+            "identity_gate": _identity_gate_dict(col),
             "runs": [
                 {
                     "plan_run_id": r.plan_run_id,
@@ -959,6 +1358,7 @@ def create_handoff_bundle(
                     "hosts_expected": list(r.hosts_expected),
                     "hosts_with_reports": list(r.hosts_with_reports),
                     "missing_hosts": list(r.missing_hosts),
+                    "unexpected_hosts": list(r.unexpected_hosts),
                     "mapping_status": r.mapping_status,
                 }
                 for r in col.runs
@@ -988,7 +1388,6 @@ def create_handoff_bundle(
             "builds": [b["build"] for b in build_entries],
             "issue_count_total": sum(b["issue_count"] for b in build_entries),
             "coverage_complete": col.coverage_complete,
-            "allow_incomplete_coverage": bool(allow_incomplete_coverage),
             "manifest_sha256": manifest_sha256,
         },
         user_id=user_id,
@@ -1000,18 +1399,81 @@ def create_handoff_bundle(
     return manifest_body
 
 
+def _read_regular_file_text_nofollow(path: Path, *, not_found_code: str, not_found_msg: str) -> str:
+    """用 ``O_NOFOLLOW`` 打开并核验普通文件后读取 UTF-8 文本，统一捕获权限与文件类型异常。"""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError as exc:
+        raise JiraHandoffError(404, not_found_code, not_found_msg) from exc
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_storage_io_error", f"cannot stat file: {exc}") from exc
+    if stat.S_ISLNK(st.st_mode):
+        raise JiraHandoffError(400, "handoff_symlink_rejected", "handoff file path must not follow symlinks")
+    if not stat.S_ISREG(st.st_mode):
+        raise JiraHandoffError(400, "handoff_not_regular_file", "handoff file path must be a regular file")
+    try:
+        fd = os.open(str(path), _FILE_READ_NOFOLLOW_FLAGS)
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_storage_io_error", f"cannot open file: {exc}") from exc
+    try:
+        fst = os.fstat(fd)
+        if not stat.S_ISREG(fst.st_mode):
+            raise JiraHandoffError(400, "handoff_not_regular_file", "handoff file path must be a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            fd = -1
+            return fh.read()
+    except JiraHandoffError:
+        raise
+    except (OSError, UnicodeDecodeError) as exc:
+        raise JiraHandoffError(500, "handoff_manifest_corrupted", f"failed to read file: {exc}") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def _find_bundle_dir_untainted(base_dir: Path, clean_id: str) -> Path:
     """从受控根目录直接枚举定位 bundle 目录，切断用户输入直接拼接路径的污点链。"""
-    if not base_dir.is_dir():
+    if not base_dir.exists():
         raise JiraHandoffError(404, "handoff_bundle_not_found", f"handoff bundle not found: {clean_id}")
-    resolved_base = base_dir.resolve(strict=True)
-    for child in resolved_base.iterdir():
+    if base_dir.is_symlink() or not base_dir.is_dir():
+        raise JiraHandoffError(400, "handoff_symlink_rejected", "handoff root must be a plain directory")
+    try:
+        entries = list(base_dir.iterdir())
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_storage_io_error", f"failed to list handoff dir: {exc}") from exc
+    for child in entries:
         if child.name != clean_id:
             continue
-        if child.is_symlink() or not child.is_dir():
+        try:
+            st = os.lstat(child)
+        except OSError as exc:
+            raise JiraHandoffError(500, "handoff_storage_io_error", f"failed to stat bundle dir: {exc}") from exc
+        if stat.S_ISLNK(st.st_mode):
             raise JiraHandoffError(400, "handoff_symlink_rejected", "handoff bundle dir must not be a symlink")
+        if not stat.S_ISDIR(st.st_mode):
+            raise JiraHandoffError(400, "handoff_invalid_root", "handoff bundle entry is not a directory")
         return child
     raise JiraHandoffError(404, "handoff_bundle_not_found", f"handoff bundle not found: {clean_id}")
+
+
+def _validate_manifest_shape(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise JiraHandoffError(500, "handoff_manifest_corrupted", "manifest root must be a JSON object")
+    if data.get("schema") != HANDOFF_MANIFEST_SCHEMA:
+        raise JiraHandoffError(500, "handoff_manifest_corrupted", "invalid handoff manifest schema")
+    required_dict_keys = ("gates", "identity_gate")
+    required_list_keys = ("plan_run_ids", "runs", "unbound_rows", "builds")
+    required_str_keys = ("schema_version", "handoff_id", "status", "platform", "created_at", "manifest_sha256")
+    for k in required_dict_keys:
+        if not isinstance(data.get(k), dict):
+            raise JiraHandoffError(500, "handoff_manifest_corrupted", f"manifest field {k!r} must be an object")
+    for k in required_list_keys:
+        if not isinstance(data.get(k), list):
+            raise JiraHandoffError(500, "handoff_manifest_corrupted", f"manifest field {k!r} must be a list")
+    for k in required_str_keys:
+        if not isinstance(data.get(k), str) or not data.get(k):
+            raise JiraHandoffError(500, "handoff_manifest_corrupted", f"manifest field {k!r} must be a non-empty string")
+    return data
 
 
 def _load_manifest_strict(handoff_id: str, storage_root: Optional[str] = None) -> tuple[Path, dict[str, Any]]:
@@ -1019,20 +1481,22 @@ def _load_manifest_strict(handoff_id: str, storage_root: Optional[str] = None) -
     base_dir = _resolve_handoff_base_dir(storage_root)
     bundle_dir = _find_bundle_dir_untainted(base_dir, clean_id)
     manifest_path = bundle_dir / "manifest.json"
-    if not manifest_path.exists():
-        raise JiraHandoffError(404, "handoff_bundle_not_found", f"handoff bundle not found: {clean_id}")
-    if manifest_path.is_symlink() or not manifest_path.is_file():
-        raise JiraHandoffError(400, "handoff_symlink_rejected", "handoff manifest path must not follow symlinks")
-    resolved = manifest_path.resolve(strict=True)
+    raw_text = _read_regular_file_text_nofollow(
+        manifest_path,
+        not_found_code="handoff_bundle_not_found",
+        not_found_msg=f"handoff bundle not found: {clean_id}",
+    )
+    try:
+        resolved = manifest_path.resolve(strict=True)
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_storage_io_error", f"cannot resolve manifest: {exc}") from exc
     if resolved != manifest_path:
         raise JiraHandoffError(400, "handoff_symlink_rejected", "handoff manifest path must not follow symlinks")
     try:
-        data = json.loads(resolved.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise JiraHandoffError(500, "handoff_manifest_corrupted", f"failed to read manifest: {exc}") from exc
-    if not isinstance(data, dict) or data.get("schema") != HANDOFF_MANIFEST_SCHEMA:
-        raise JiraHandoffError(500, "handoff_manifest_corrupted", "invalid handoff manifest schema")
-    return bundle_dir, data
+        data = json.loads(raw_text)
+    except ValueError as exc:
+        raise JiraHandoffError(500, "handoff_manifest_corrupted", f"failed to parse manifest: {exc}") from exc
+    return bundle_dir, _validate_manifest_shape(data)
 
 
 def get_handoff_bundle(
@@ -1051,22 +1515,32 @@ def list_handoff_bundles(
 ) -> list[dict[str, Any]]:
     bounded = max(1, min(int(limit), 100))
     base_dir = _resolve_handoff_base_dir(storage_root)
-    if not base_dir.is_dir():
+    if not base_dir.exists():
         return []
+    try:
+        entries = list(base_dir.iterdir())
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_storage_io_error", f"failed to list handoff bundles: {exc}") from exc
     summaries: list[dict[str, Any]] = []
-    for child in base_dir.iterdir():
-        if child.is_symlink() or not child.is_dir():
+    for child in entries:
+        try:
+            st = os.lstat(child)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
             continue
         if not _HANDOFF_ID_RE.match(child.name):
             continue
         manifest_path = child / "manifest.json"
-        if manifest_path.is_symlink() or not manifest_path.is_file():
-            continue
         try:
-            data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(data, dict) or data.get("schema") != HANDOFF_MANIFEST_SCHEMA:
+            raw_text = _read_regular_file_text_nofollow(
+                manifest_path,
+                not_found_code="handoff_bundle_not_found",
+                not_found_msg="manifest missing",
+            )
+            data = _validate_manifest_shape(json.loads(raw_text))
+        except (JiraHandoffError, ValueError):
+            logger.warning("skipping unreadable or corrupted handoff manifest: %s", child.name)
             continue
         builds = data.get("builds") or []
         summaries.append(
@@ -1094,7 +1568,7 @@ def resolve_handoff_download_file(
     build: Optional[str] = None,
     storage_root: Optional[str] = None,
 ) -> tuple[Path, str, str]:
-    """按白名单定位 A 段可下载产物，拒绝越根与符号链接（对齐 ``delivery_download.py``）。"""
+    """按白名单定位 A 段可下载产物，拒绝越根、祖先/叶子符号链接及非普通文件。"""
     _kind_map = {
         "manifest": "manifest",
         "preview_xls": "preview_xls",
@@ -1108,7 +1582,10 @@ def resolve_handoff_download_file(
             f"unsupported artifact_kind: {artifact_kind!r}",
         )
     bundle_dir, manifest = _load_manifest_strict(handoff_id, storage_root=storage_root)
-    resolved_bundle = bundle_dir.resolve(strict=True)
+    try:
+        resolved_bundle = bundle_dir.resolve(strict=True)
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_storage_io_error", f"cannot resolve bundle dir: {exc}") from exc
 
     if kind == "manifest":
         target = bundle_dir / "manifest.json"
@@ -1141,13 +1618,50 @@ def resolve_handoff_download_file(
     rel = Path(rel_path)
     if rel.is_absolute() or ".." in rel.parts or not rel.parts:
         raise JiraHandoffError(400, "handoff_path_escape_rejected", "invalid artifact relative path")
+
+    # 逐段拒绝 bundle 内中间目录或叶子符号链接
+    cursor = bundle_dir
+    for part in rel.parts:
+        cursor = cursor / part
+        try:
+            part_st = os.lstat(cursor)
+        except FileNotFoundError as exc:
+            raise JiraHandoffError(404, "handoff_artifact_not_found", f"artifact file missing: {rel_path}") from exc
+        except OSError as exc:
+            raise JiraHandoffError(500, "handoff_storage_io_error", f"cannot stat artifact path: {exc}") from exc
+        if stat.S_ISLNK(part_st.st_mode):
+            raise JiraHandoffError(400, "handoff_symlink_rejected", "artifact path must not follow symlinks")
+
     expected = resolved_bundle.joinpath(*rel.parts)
     candidate = bundle_dir.joinpath(*rel.parts)
-    if not candidate.exists() or candidate.is_symlink():
-        raise JiraHandoffError(404, "handoff_artifact_not_found", f"artifact file missing: {rel_path}")
-    resolved = candidate.resolve(strict=True)
+    try:
+        leaf_st = os.lstat(candidate)
+    except FileNotFoundError as exc:
+        raise JiraHandoffError(404, "handoff_artifact_not_found", f"artifact file missing: {rel_path}") from exc
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_storage_io_error", f"cannot stat artifact: {exc}") from exc
+    if stat.S_ISLNK(leaf_st.st_mode):
+        raise JiraHandoffError(400, "handoff_symlink_rejected", "artifact path must not follow symlinks")
+    if not stat.S_ISREG(leaf_st.st_mode):
+        raise JiraHandoffError(400, "handoff_not_regular_file", "artifact path must be a regular file")
+
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_storage_io_error", f"cannot resolve artifact: {exc}") from exc
     if resolved != expected or not resolved.is_relative_to(resolved_bundle):
         raise JiraHandoffError(400, "handoff_path_escape_rejected", "artifact path escaped bundle directory")
+
+    # 打开验证普通文件可读（捕获权限拒绝，避免 500 裸异常）
+    try:
+        fd = os.open(str(resolved), _FILE_READ_NOFOLLOW_FLAGS)
+    except OSError as exc:
+        raise JiraHandoffError(500, "handoff_artifact_unreadable", f"artifact file is unreadable: {exc}") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise JiraHandoffError(400, "handoff_not_regular_file", "artifact path must be a regular file")
+    finally:
+        os.close(fd)
 
     filename = str(art.get("filename") or resolved.name)
     return resolved, filename, "application/vnd.ms-excel"

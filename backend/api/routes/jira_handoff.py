@@ -80,7 +80,6 @@ def generate_handoff_bundle(
             platform=body.platform,
             snapshot_cutoff=body.snapshot_cutoff,
             builds=body.builds,
-            allow_incomplete_coverage=body.allow_incomplete_coverage,
             target_folder_hint=body.target_folder_hint,
             user_id=getattr(user, "id", None),
             username=getattr(user, "username", None),
