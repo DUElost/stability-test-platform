@@ -118,6 +118,7 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "install_agent_cancel",
     "install_agent_request",
     "jira_handoff_bundle_created",  # B11-U1 #4199 / #4174 A 段提单表单冻结交付包生成；business 90d
+    "jira_handoff_bundle_exported",  # B11-U3 #4199 / #4174 B 段受控导出 15.4 终稿；business 90d
     "jira_run_cancel",
     "job_batch_terminalized",
     "job_running_timeout",
