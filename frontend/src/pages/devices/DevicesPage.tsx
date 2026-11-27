@@ -39,12 +39,38 @@ import { escapeSpreadsheetClipboardCell, neutralizeSpreadsheetCellText } from '@
 
 const PAGE_SIZE_OPTIONS = [50, 100, 200] as const;
 
+/** 与 backend.services.device_return.DEBT_LEASE_REASON 对齐（#3904）。 */
+const DEBT_LEASE_REASON = '归还欠账';
+
 const deviceStatusMap: Record<string, DeviceStatus> = {
   ONLINE: 'idle',
   BUSY: 'testing',
   OFFLINE: 'offline',
   ERROR: 'error',
 };
+
+/** #3904：BUSY 设备按 ACTIVE 租约细分为测试中 / 归还欠账 / 维护占用。 */
+function hasReturnDebtMarker(device: DeviceListItem | Device): boolean {
+  if (device.active_lease_reason === DEBT_LEASE_REASON) return true;
+  const returnState = device.return_state;
+  if (!returnState || typeof returnState !== 'object') return false;
+  return Object.values(returnState).some(
+    (entry) => entry != null && typeof entry === 'object' && entry.state === 'debt',
+  );
+}
+
+function mapBusyDeviceUiStatus(device: DeviceListItem | Device): DeviceStatus {
+  if (device.active_lease_type === 'MAINTENANCE') {
+    return hasReturnDebtMarker(device) ? 'return_debt' : 'maintenance';
+  }
+  // JOB / SCRIPT，或旧响应缺 active_lease_type：向后兼容维持「测试中」
+  return 'testing';
+}
+
+function mapDeviceUiStatus(device: DeviceListItem | Device): DeviceStatus {
+  if (device.status === 'BUSY') return mapBusyDeviceUiStatus(device);
+  return deviceStatusMap[device.status] || 'offline';
+}
 
 /** 契约 §3.2 规则 3：将 URL 中的前端状态值归一为后端 API 查询值。 */
 function mapUrlStatusToApiStatus(statusFilter: string): string | undefined {
@@ -75,7 +101,7 @@ function toDeviceTableData(device: DeviceListItem | Device): DeviceTableData {
     serial: device.serial,
     model: device.model || '未知设备',
     product: device.product ?? null,
-    status: deviceStatusMap[device.status] || 'offline',
+    status: mapDeviceUiStatus(device),
     adb_state: device.adb_state,
     battery_level: device.battery_level ?? undefined,
     temperature: device.temperature ?? device.battery_temp ?? undefined,
@@ -95,6 +121,8 @@ function toDeviceTableData(device: DeviceListItem | Device): DeviceTableData {
     retire_suggested: device.retire_suggested ?? false,
     return_state: device.return_state ?? null,
     usb_presence: device.usb_presence ?? null,
+    active_lease_type: device.active_lease_type ?? null,
+    active_lease_reason: device.active_lease_reason ?? null,
   };
 }
 
@@ -404,9 +432,10 @@ export default function DevicesPage() {
   const statusSummary = useMemo(() => {
     if (isCrossPageMode) {
       const sc = crossPagePreview.status_counts;
+      // 跨页预览仅有 BUSY 聚合，未拆分租约细类——用「占用」避免误导为全是测试中（#3904）。
       return [
         sc.ONLINE ? `空闲 ${sc.ONLINE}` : null,
-        sc.BUSY ? `测试中 ${sc.BUSY}` : null,
+        sc.BUSY ? `占用 ${sc.BUSY}` : null,
         sc.OFFLINE ? `离线 ${sc.OFFLINE}` : null,
         sc.ERROR ? `错误 ${sc.ERROR}` : null,
       ].filter(Boolean).join(' · ');
@@ -414,12 +443,16 @@ export default function DevicesPage() {
     const counts = {
       idle: selectedPageDevices.filter((device) => device.status === 'idle').length,
       testing: selectedPageDevices.filter((device) => device.status === 'testing').length,
+      return_debt: selectedPageDevices.filter((device) => device.status === 'return_debt').length,
+      maintenance: selectedPageDevices.filter((device) => device.status === 'maintenance').length,
       offline: selectedPageDevices.filter((device) => device.status === 'offline').length,
       error: selectedPageDevices.filter((device) => device.status === 'error').length,
     };
     return [
       counts.idle ? `空闲 ${counts.idle}` : null,
       counts.testing ? `测试中 ${counts.testing}` : null,
+      counts.return_debt ? `归还欠账 ${counts.return_debt}` : null,
+      counts.maintenance ? `维护占用 ${counts.maintenance}` : null,
       counts.offline ? `离线 ${counts.offline}` : null,
       counts.error ? `错误 ${counts.error}` : null,
     ].filter(Boolean).join(' · ');
