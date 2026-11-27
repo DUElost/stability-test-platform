@@ -258,6 +258,9 @@ class DeviceOut(ORMBaseModel):
     # ADR-0063 D7 / #3918：vbus 槽位 USB 在位（现算派生，不落库）。只有主机上报了槽位映射、
     # 且本设备在映射里时才有值：{slot, vid_pid, state, reported_at, host_online}。
     usb_presence: Optional[Dict[str, Any]] = None
+    # #3904 / #4185：当前 ACTIVE 租约只读投影（不改 Device.status；列表/详情批量填充，零 N+1）。
+    active_lease_type: Optional[str] = None
+    active_lease_reason: Optional[str] = None
 
     @model_validator(mode='after')
     def _mark_serial_suspect(self):
@@ -408,6 +411,9 @@ class DeviceListItemOut(ORMBaseModel):
     retire_suggested: bool = False
     return_state: Optional[Dict[str, Any]] = None
     usb_presence: Optional[Dict[str, Any]] = None
+    # #3904 / #4185：当前 ACTIVE 租约只读投影（与 DeviceOut 同源；列表批量填充）。
+    active_lease_type: Optional[str] = None
+    active_lease_reason: Optional[str] = None
 
     @model_validator(mode="after")
     def _mark_serial_suspect(self):
@@ -433,6 +439,7 @@ class DeviceListItemOut(ORMBaseModel):
             "build_display_id",
             "retired_by",
             "retire_reason",
+            "active_lease_reason",
         ):
             val = getattr(self, attr, None)
             if isinstance(val, str):

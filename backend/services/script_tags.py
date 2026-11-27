@@ -42,6 +42,7 @@ SCRIPT_TAG_REGISTRY: dict[str, ScriptTagSpec] = {
     "sync_device_time": ScriptTagSpec(role="common_init"),
     "ensure_root": ScriptTagSpec(role="common_init"),
     "unisoc_sysdump_config": ScriptTagSpec(role="common_init", platforms=("unisoc",)),
+    "log_prepare": ScriptTagSpec(role="common_init"),
     "aee_prepare": ScriptTagSpec(role="common_init", platforms=("mtk",)),
     "clean_env": ScriptTagSpec(role="common_init"),
     "clear_recents": ScriptTagSpec(role="common_init"),

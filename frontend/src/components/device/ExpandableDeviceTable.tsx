@@ -52,7 +52,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { DeviceDetailDrawer } from './DeviceDetailDrawer';
 import type { ReturnStateEntry } from './deviceReturn';
 
-export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
+export type DeviceStatus = 'idle' | 'testing' | 'return_debt' | 'maintenance' | 'offline' | 'error';
 
 function temperatureTextClass(temperature: number): string {
   if (temperature > 45) return 'text-destructive';
@@ -115,6 +115,10 @@ export interface DeviceTableData {
   return_state?: Record<string, ReturnStateEntry> | null;
   /** ADR-0063 D7 / #3918：vbus 槽位 USB 在位（null = 主机无槽位映射或未上报）。 */
   usb_presence?: DeviceUsbPresence | null;
+  /** #3904 / #4185：当前 ACTIVE 租约类型（列表徽标分流）。 */
+  active_lease_type?: string | null;
+  /** #3904 / #4185：当前 ACTIVE 租约原因（维护占用 tooltip / 副文案）。 */
+  active_lease_reason?: string | null;
 }
 
 const USB_PRESENCE_LABEL: Record<DeviceUsbPresence['state'], { text: string; className: string; hint: string }> = {
@@ -200,8 +204,10 @@ type SortDir = 'asc' | 'desc';
 const STATUS_SORT_RANK: Record<DeviceStatus, number> = {
   error: 0,
   offline: 1,
-  testing: 2,
-  idle: 3,
+  return_debt: 2,
+  maintenance: 3,
+  testing: 4,
+  idle: 5,
 };
 
 function matchesStatusFilter(status: DeviceStatus, filter: string): boolean {
@@ -1289,7 +1295,16 @@ export function ExpandableDeviceTable({
                     </TableCell>
                     <TableCell className="px-2 py-1.5">
                       <div className="flex flex-wrap items-center gap-1">
-                        <StatusBadge kind="device-ui" status={device.status} size="sm" />
+                        <span
+                          title={
+                            device.status === 'maintenance' && device.active_lease_reason
+                              ? device.active_lease_reason
+                              : undefined
+                          }
+                          data-testid={`device-status-badge-${device.id}`}
+                        >
+                          <StatusBadge kind="device-ui" status={device.status} size="sm" />
+                        </span>
                         {/* ADR-0057 D4 第 4 面（#2962 B）：退役是人工确认的终态，
                             与 status 正交（心跳不改写 status），必须独立可见。 */}
                         {device.retired_at && (

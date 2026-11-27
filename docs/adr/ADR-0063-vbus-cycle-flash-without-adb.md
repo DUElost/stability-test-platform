@@ -13,6 +13,7 @@
   [ADR-0051](./ADR-0051-release-unit-and-content-addressing.md)（脚本按新版本发布）；
   [ADR-0058](./ADR-0058-planned-batch-execution.md)（本需求命中 D7「协调激活 + 安全」强判据，按批次交付）；
   [ADR-0061](./ADR-0061-device-return-contract.md)（失败后的设备归还与欠账）；
+  [ADR-0066](./ADR-0066-unified-network-supply-and-usb-net.md)（v1.0 D4 第 5 条对本稿 D3 第 11 条增补 `usb_net` 人工放行未验证态设备的首次切电前本机复核，不动 D4、D7 第 3 条纯观测边界及正常在线 ADB 路径）；
   [刷机路由设计](../design/2026-08-honor-flash-firmware-routing.md)
 
 ## 1. 背景与证据（2026-11-07，main `3e605a1`）
