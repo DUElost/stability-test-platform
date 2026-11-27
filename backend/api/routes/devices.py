@@ -44,6 +44,7 @@ from backend.services.device_inventory_query import (
     build_device_facets,
     build_device_selection_preview,
     enforce_bulk_write_limit,
+    fetch_active_lease_fields,
     query_filtered_devices_page,
     serialize_device_full_readonly,
     serialize_device_list_item,
@@ -86,9 +87,15 @@ def _serialize_device_readonly(
     model_to_project: dict,
     *,
     now: datetime,
+    active_lease=None,
 ) -> DeviceOut:
     """只读构造 DeviceOut：以请求内统一时间基准派生有效状态、陈旧度与在位信息，不改写 ORM。"""
-    return serialize_device_full_readonly(device, model_to_project, now=now)
+    return serialize_device_full_readonly(
+        device,
+        model_to_project,
+        now=now,
+        active_lease=active_lease,
+    )
 
 
 router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
@@ -500,10 +507,28 @@ def list_devices(
     except DeviceQueryError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
     model_to_project = _model_to_project_map(db)
+    # #3904：ACTIVE 租约 type/reason 单次批量投影，供首屏徽标分流（零 N+1）。
+    lease_map = fetch_active_lease_fields(db, [d.id for d in devices])
     if norm_projection == "list":
-        items = [serialize_device_list_item(d, model_to_project, now=now) for d in devices]
+        items = [
+            serialize_device_list_item(
+                d,
+                model_to_project,
+                now=now,
+                active_lease=lease_map.get(d.id),
+            )
+            for d in devices
+        ]
     else:
-        items = [_serialize_device_readonly(d, model_to_project, now=now) for d in devices]
+        items = [
+            _serialize_device_readonly(
+                d,
+                model_to_project,
+                now=now,
+                active_lease=lease_map.get(d.id),
+            )
+            for d in devices
+        ]
     # 兼容旧接口：未显式传分页参数时返回数组
     if not want_paginated:
         return items
@@ -597,7 +622,13 @@ def get_device(
     )
     if not device:
         raise HTTPException(status_code=404, detail="device not found")
-    return _serialize_device_readonly(device, _model_to_project_map(db), now=now)
+    lease_map = fetch_active_lease_fields(db, [device.id])
+    return _serialize_device_readonly(
+        device,
+        _model_to_project_map(db),
+        now=now,
+        active_lease=lease_map.get(device.id),
+    )
 
 
 @router.get("/{device_id}/return-debts", response_model=ApiResponse[List[DeviceReturnDebtOut]])
