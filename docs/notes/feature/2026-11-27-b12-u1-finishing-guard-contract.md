@@ -32,7 +32,7 @@ Class: feature
 ## Verification
 
 - `./scripts/project_python.sh scripts/run_pytest.py backend/agent/tests/test_finishing_guard_u1_4206.py -q`
-- `./scripts/project_python.sh scripts/run_pytest.py backend/tests/services/test_finishing_guard_job_deadline_u1_4206.py backend/tests/api/test_plan_run_abort_api.py -q -k "c1_ or finishing_guard or run_level_abort_clock or host_abort_clock"`
+- `./scripts/project_python.sh scripts/run_pytest.py backend/tests/services/test_finishing_job_deadline_u1_4206.py backend/tests/api/test_plan_run_abort_api.py -q -k "c1_ or finishing_guard or run_level_abort_clock or host_abort_clock"`
 - 空库 `alembic upgrade head` → `downgrade -1` → `upgrade head` +
   `python -m backend.scripts.check_schema_sync`
 - `./scripts/project_python.sh tools/dev/run_gates.py check:quick`
