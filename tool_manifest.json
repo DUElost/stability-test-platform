@@ -2513,6 +2513,45 @@
         }
       ]
     },
+    "sleep_adb_finish": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/sleep_adb_finish/1.0.0.tar.gz",
+          "package_sha256": "9fedae8a5ccbf42b8336d7de09bbf7adee8d447ae426f3d0a85a5d7a1b339517",
+          "python": null,
+          "retired": false,
+          "script": "sleep_adb_finish.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "sleep_adb_patrol": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/sleep_adb_patrol/1.0.0.tar.gz",
+          "package_sha256": "e4bd90fe745f84bb0f8f06ed456150bfa0fc51e795234b31cd72d6eea863892b",
+          "python": null,
+          "retired": false,
+          "script": "sleep_adb_patrol.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    "sleep_adb_setup": {
+      "kind": "script",
+      "versions": [
+        {
+          "artifact": "packages/sleep_adb_setup/1.0.0.tar.gz",
+          "package_sha256": "8c8f3d9ea952d8fbb9a6b706a413cb10e60e14090b0e2664168f0fe60eef7cf8",
+          "python": null,
+          "retired": false,
+          "script": "sleep_adb_setup.py",
+          "version": "1.0.0"
+        }
+      ]
+    },
     "sleep_check": {
       "kind": "script",
       "versions": [
