@@ -34,6 +34,7 @@ from backend.core.settings.scheduler import (
 # 只依赖 core 层（audit/database/metrics/settings/models），无回边到 scheduler
 # 域——保持函数级反而会推高 inner-imports 棘轮（#738 基线只许下调）。
 from backend.scheduler.audit_log_cleanup import audit_log_cleanup_job
+from backend.scheduler.network_session_reaper import network_session_reaper_job
 from backend.scheduler.script_presence_sweep import script_presence_sweep_job
 from backend.scheduler.host_health_probe_sweep import host_health_probe_sweep_once
 
@@ -64,6 +65,7 @@ SINGLETON_SCHEDULE_IDS: frozenset[str] = frozenset({
     "revoked_token_cleanup",
     "auto_archive_sweep",
     "audit_log_cleanup",
+    "network_session_reaper",
     "script_presence_sweep",
     "host_health_probe_sweep",
 })
@@ -259,6 +261,13 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         "schedule_registered id=precheck_reaper interval=%ds",
         _sched().precheck_reaper_interval_seconds,
     )
+
+    await _add(
+        _instrumented("network_session_reaper", network_session_reaper_job, singleton=True),
+        IntervalTrigger(seconds=30),
+        id="network_session_reaper",
+    )
+    logger.info("schedule_registered id=network_session_reaper interval=30s")
 
     from backend.scheduler.plan_chain_reconciler import reconcile_plan_chains
 

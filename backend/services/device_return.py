@@ -85,6 +85,17 @@ from backend.models.enums import LeaseStatus, LeaseType
 from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
 from backend.services.disarm_derive import derive_disarm_results_from_traces
+from backend.services.network_return import (
+    close_usbnet_session_on_late_confirmed_async,
+    close_usbnet_session_on_late_confirmed_sync,
+    close_usbnet_sessions_on_discharge_sync,
+    close_usbnet_sessions_on_override_sync,
+    enrich_open_debts_with_usbnet_sessions_sync,
+    job_usbnet_footprint_decision_async,
+    job_usbnet_footprint_decision_sync,
+    settle_job_network_session_async,
+    settle_job_network_session_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +254,13 @@ def _footprint_families_for_job_sync(db: Session, job: JobInstance) -> set[str]:
     traces = list(
         db.execute(select(StepTrace).where(StepTrace.job_id == job.id)).scalars().all()
     )
-    return _footprint_families_from_traces(getattr(job, "pipeline_def", None), traces)
+    families = _footprint_families_from_traces(getattr(job, "pipeline_def", None), traces)
+    force_usbnet, allow_usbnet = job_usbnet_footprint_decision_sync(db, job)
+    if force_usbnet:
+        families.add("usb_net")
+    elif not allow_usbnet:
+        families.discard("usb_net")
+    return families
 
 
 async def _footprint_families_for_job_async(
@@ -254,7 +271,13 @@ async def _footprint_families_for_job_async(
             await db.execute(select(StepTrace).where(StepTrace.job_id == job.id))
         ).scalars().all()
     )
-    return _footprint_families_from_traces(getattr(job, "pipeline_def", None), traces)
+    families = _footprint_families_from_traces(getattr(job, "pipeline_def", None), traces)
+    force_usbnet, allow_usbnet = await job_usbnet_footprint_decision_async(db, job)
+    if force_usbnet:
+        families.add("usb_net")
+    elif not allow_usbnet:
+        families.discard("usb_net")
+    return families
 
 
 def _supplement_incomplete_for_footprints(
@@ -434,15 +457,23 @@ def _apply_job_disarm_to_debt_sync(
     *,
     fencing_token: str | None,
     now: datetime,
-) -> int:
-    """Write/close debt rows from this job's disarm_results. Returns open count after."""
+) -> tuple[int, dict[str, dict[str, Any]]]:
+    """Write/close debt rows from this job's disarm_results. Returns (open_count, results)."""
     results = _normalize_disarm_results(getattr(job, "disarm_results", None))
     footprints = _footprint_families_for_job_sync(db, job)
+    _, allow_usbnet = job_usbnet_footprint_decision_sync(db, job)
+    if not allow_usbnet:
+        results.pop("usb_net", None)
     results = _supplement_incomplete_for_footprints(results, footprints)
     for family, entry in results.items():
         result = str(entry.get("result") or "")
         onboarded = _family_onboarded(family)
-        family_state = map_disarm_result_to_family_state(result, onboarded=onboarded)
+        if family == "usb_net" and result != DISARM_RESULT_CONFIRMED:
+            # ADR-0066 D4.4: usb_net requires dual-side confirmation; any unconfirmed
+            # outcome establishes debt so session & lease stay consistent.
+            family_state = FAMILY_RETURN_DEBT
+        else:
+            family_state = map_disarm_result_to_family_state(result, onboarded=onboarded)
         _set_family_return_state(
             device,
             family,
@@ -465,7 +496,7 @@ def _apply_job_disarm_to_debt_sync(
             )
     open_rows = _open_debts_sync(db, device.id)
     _recompute_return_state_from_open_debts(device, open_rows, now=now)
-    return len(open_rows)
+    return len(open_rows), results
 
 
 def _bump_generation_sync(db: Session, device: Device) -> int:
@@ -585,17 +616,29 @@ def handle_job_lease_release_sync(
     fencing = lease.fencing_token if lease is not None else None
 
     open_count = 0
+    job_disarm_results: dict[str, dict[str, Any]] = {}
     if job is not None:
         # Nested savepoint so a unique-index race does not poison the outer txn.
         try:
             with db.begin_nested():
-                open_count = _apply_job_disarm_to_debt_sync(
+                open_count, job_disarm_results = _apply_job_disarm_to_debt_sync(
                     db, device, job, fencing_token=fencing, now=now
                 )
         except IntegrityError:
             open_count = len(_open_debts_sync(db, device_id))
+            job_disarm_results = _normalize_disarm_results(getattr(job, "disarm_results", None))
     else:
         open_count = len(_open_debts_sync(db, device_id))
+
+    # ADR-0066 D4.4 / B13 U2: settle job device_network_session in the same txn
+    # before deciding lease release vs debt-lease conversion.
+    settle_job_network_session_sync(
+        db,
+        device_id=device_id,
+        job_id=job_id,
+        results=job_disarm_results,
+        now=now,
+    )
 
     # Also count pre-existing open debts (other jobs / stock).
     open_count = len(_open_debts_sync(db, device_id))
@@ -730,14 +773,20 @@ async def _apply_job_disarm_to_debt_async(
     *,
     fencing_token: str | None,
     now: datetime,
-) -> None:
+) -> dict[str, dict[str, Any]]:
     results = _normalize_disarm_results(getattr(job, "disarm_results", None))
     footprints = await _footprint_families_for_job_async(db, job)
+    _, allow_usbnet = await job_usbnet_footprint_decision_async(db, job)
+    if not allow_usbnet:
+        results.pop("usb_net", None)
     results = _supplement_incomplete_for_footprints(results, footprints)
     for family, entry in results.items():
         result = str(entry.get("result") or "")
         onboarded = _family_onboarded(family)
-        family_state = map_disarm_result_to_family_state(result, onboarded=onboarded)
+        if family == "usb_net" and result != DISARM_RESULT_CONFIRMED:
+            family_state = FAMILY_RETURN_DEBT
+        else:
+            family_state = map_disarm_result_to_family_state(result, onboarded=onboarded)
         _set_family_return_state(
             device,
             family,
@@ -760,6 +809,7 @@ async def _apply_job_disarm_to_debt_async(
             )
     open_rows = await _open_debts_async(db, device.id)
     _recompute_return_state_from_open_debts(device, open_rows, now=now)
+    return results
 
 
 async def _bump_generation_async(db: AsyncSession, device: Device) -> int:
@@ -871,14 +921,23 @@ async def handle_job_lease_release(
     lease = await _active_lease_async(db, device_id)
     fencing = lease.fencing_token if lease is not None else None
 
+    job_disarm_results: dict[str, dict[str, Any]] = {}
     if job is not None:
         try:
             async with db.begin_nested():
-                await _apply_job_disarm_to_debt_async(
+                job_disarm_results = await _apply_job_disarm_to_debt_async(
                     db, device, job, fencing_token=fencing, now=now
                 )
         except IntegrityError:
-            pass
+            job_disarm_results = _normalize_disarm_results(getattr(job, "disarm_results", None))
+
+    await settle_job_network_session_async(
+        db,
+        device_id=device_id,
+        job_id=job_id,
+        results=job_disarm_results,
+        now=now,
+    )
 
     open_count = len(await _open_debts_async(db, device_id))
 
@@ -1038,6 +1097,10 @@ def apply_discharge_sync(
                 closed_reason=DEBT_CLOSE_DISCHARGED,
                 now=now,
             )
+            if family == "usb_net":
+                close_usbnet_sessions_on_discharge_sync(
+                    db, device_id=device_id, now=now,
+                )
             discharged_families.append(family)
 
     if rejected_families and not accepted_count:
@@ -1093,7 +1156,13 @@ def apply_override_sync(
         closed_reason=DEBT_CLOSE_OVERRIDDEN,
         now=now,
     )
-    released = _maybe_release_debt_lease_sync(db, device, now=now)
+    manual_lease_released = False
+    if "usb_net" in target:
+        override_net = close_usbnet_sessions_on_override_sync(
+            db, device=device, now=now,
+        )
+        manual_lease_released = bool(override_net["manual_lease_released"])
+    released = _maybe_release_debt_lease_sync(db, device, now=now) or manual_lease_released
     open_rows = _open_debts_sync(db, device_id)
     _recompute_return_state_from_open_debts(device, open_rows, now=now)
     return {
@@ -1144,6 +1213,14 @@ def apply_late_confirmed_sync(
                 extra={"job_id": job_id, "late_confirmed": True},
             )
     if closed:
+        if "usb_net" in touched:
+            close_usbnet_session_on_late_confirmed_sync(
+                db,
+                device_id=device_id,
+                job_id=job_id,
+                fencing_token=fencing_token,
+                now=now,
+            )
         db.flush()
     released = _maybe_release_debt_lease_sync(db, device, now=now)
     open_rows = _open_debts_sync(db, device_id)
@@ -1196,6 +1273,14 @@ async def apply_late_confirmed(
                 extra={"job_id": job_id, "late_confirmed": True},
             )
     if closed:
+        if "usb_net" in touched:
+            await close_usbnet_session_on_late_confirmed_async(
+                db,
+                device_id=device_id,
+                job_id=job_id,
+                fencing_token=fencing_token,
+                now=now,
+            )
         await db.flush()
     # Release debt lease if no open rows remain.
     open_rows = await _open_debts_async(db, device_id)
@@ -1248,7 +1333,41 @@ async def try_apply_late_confirmed(
         and row.source_fencing_token == fencing_token
     ]
     if not matching:
-        return None
+        # ADR-0066 D4.5 / B13 U2: idempotent replay of an already-applied late
+        # confirmed payload must succeed read-only without touching newer sessions.
+        closed_matching = list(
+            (
+                await db.execute(
+                    select(DeviceReturnDebt.family).where(
+                        DeviceReturnDebt.device_id == device_id,
+                        DeviceReturnDebt.family.in_(confirmed),
+                        DeviceReturnDebt.source_kind == _SOURCE_KIND_JOB,
+                        DeviceReturnDebt.source_job_id == job_id,
+                        DeviceReturnDebt.source_fencing_token == fencing_token,
+                        DeviceReturnDebt.state == DEBT_STATE_CLOSED,
+                        DeviceReturnDebt.closed_reason == DEBT_CLOSE_DISCHARGED,
+                    )
+                )
+            ).scalars().all()
+        )
+        if not closed_matching or not set(confirmed).issubset(set(closed_matching)):
+            return None
+        device = await db.get(Device, device_id)
+        job = await db.get(JobInstance, job_id)
+        if device is None or job is None:
+            return None
+        for family in confirmed:
+            policy = evaluate_probe_entry(device, family, results[family], token_valid=True, job=job)
+            decision = probe_entry_response(family, results[family], policy, entry_point="late")
+            if decision["ignore"] or not policy["trusted"] or policy["result"] != DISARM_RESULT_CONFIRMED:
+                return None
+        return {
+            "ok": True,
+            "closed_count": 0,
+            "debt_lease_released": False,
+            "open_debt_count": len(open_rows),
+            "idempotent": True,
+        }
     device = await _lock_device_async(db, device_id)
     job = await db.get(JobInstance, job_id)
     if device is None or job is None:
@@ -1361,7 +1480,7 @@ def open_debts_for_host_sync(db: Session, host_id: str) -> list[dict[str, Any]]:
         )
         if debt.family not in bucket["families"]:
             bucket["families"].append(debt.family)
-    return list(by_device.values())
+    return enrich_open_debts_with_usbnet_sessions_sync(db, list(by_device.values()))
 
 
 # ── init (D1.7 / D5.11) ───────────────────────────────────────────────────

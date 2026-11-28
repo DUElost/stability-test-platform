@@ -125,7 +125,9 @@ BUSINESS_ACTIONS_ALLOWLIST: frozenset[str] = frozenset({
     "job_terminalization_failed",
     "job_terminalized",
     "manual_network_supply_enable",  # B13-U1 #4212 管理员手动开启受管调试供网；business 90d
+    "manual_network_supply_release_requested",  # B13-U2 #4212 管理员触发手动供网强制释放；business 90d
     "manual_network_supply_renew",  # B13-U1 #4212 管理员续期手动调试供网；business 90d
+    "network_session_audit_override",  # B13-U2 #4212 管理员专用审计放行网络供给会话；business 90d
     "patrol_manual_exit",
     "patrol_manual_retry",
     "patrol_stall_detected",
