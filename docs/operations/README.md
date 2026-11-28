@@ -181,6 +181,7 @@ python -m backend.scripts.migration.preflight_execution_protocol
 | [`incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md`](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md) | 192.0.2.87 xHCI 主控死亡致 USB/ADB 全空 7 天：根因、unbind/rebind 恢复、与 #160 区分 |
 | [`incident-2026-07-31-script-sha-drift-dispatch-outage.md`](./incident-2026-07-31-script-sha-drift-dispatch-outage.md) | 脚本版本 sha 漂移致全平台派发中断：根因、`force_rebaseline` 逃生阀、ADR-0020 CI 门禁 |
 | [`incident-2026-11-09-host-15-93-pcie-bus-drift-nic-offline.md`](./incident-2026-11-09-host-15-93-pcie-bus-drift-nic-offline.md) | 172.21.x.93 PCIe 根端口显隐导致网卡重命名为 enp3s0/enp2s0、PHY 关断灭灯断网：根因分析、MAC 固化与双重容错 SOP |
+| [`incident-2026-11-28-p535aa-v108-bootanim-deadlock-and-recovery.md`](./incident-2026-11-28-p535aa-v108-bootanim-deadlock-and-recovery.md) | P535AA `261117V108` 批量卡开机动画死锁（`PFDFAA-1667`）：快速定位 SOP、三代固件字节码实证与批量恢复经验 |
 | [`zte-v537a-powercycle-apk-debugging.md`](./zte-v537a-powercycle-apk-debugging.md) | 中兴 V537A 项目专项排障与批量自愈手册（开关机自启、NFC Empty tag 焦点抢占排障及自愈 SOP） |
 
 ---
