@@ -1,17 +1,19 @@
 # ADR-0029: 项目分类域（TestProject 登记簿 + facet 分类）
 
-- 状态：**Accepted**（v2.5：派生归属重设计。2026-08-19 决策者拍板；历经 v1 评审 → v2 决策转向 → v2.1 → v2.2 → 定性纠正 → v2.4 产品面纠正，见修订记录）
+- 状态：**Accepted**（v2.6：非 APK 持续日志参数由 [ADR-0067](./ADR-0067-project-log-profile-and-param-layering.md) 收敛启用，通用 `variables` 与 D5 仍挂起；v2.5 派生归属重设计已落地，见修订记录）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-08-18
 - 决策者：平台研发组
 - 标签：项目域, 多项目并存, jira 映射, 脚本路由
+- 归属域：semantic-ownership project-taxonomy
 - 背景分析：[`PROJECT_TAXONOMY_REVIEW_2026-08-18.md`](../reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md)
 
 ## 修订记录
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-11-28 | v2.6（D4 非 APK 持续日志收敛启用） | 承接 `#4182` Phase 3 与 [ADR-0067](./ADR-0067-project-log-profile-and-param-layering.md)（Accepted v1.0）：「项目级非 APK 参数需求」复议条件触发，非 APK 持续日志参数以强校验白名单列 `TestProject.log_profile` + 单调版本号 `log_profile_version` 收敛启用（唯一五层合并序、仅显式绑定且全部有效目标设备归属一致时生效、`stp-l1-v2` 指纹与 `plan_snapshot` 顶层冻结）；ADR-0029 D4 通用自由字典 `variables` / `${project.x}` 与 D5 派发硬拒门禁仍保持挂起 |
 | 2026-08-18 | v1 | 初版：D1 步骤参数覆盖 + D4 三层参数 + D5 派发门禁 + D7 存储命名空间 + D8 全局项目上下文；D1–D9 经评审全部采纳 |
 | 2026-08-18 | **v2（决策转向）** | 决策者提出「脚本端按设备指纹自行路由到执行器能否弱化项目属性」，核实后确认：开关机专项的 `backend=auto`（`/mnt/automation-toolkit/android-tools/stability_PowerCycle-Test/test-config.properties`：Z2582 无 REBOOT 时自动用 MSSV）即**单入口 + 设备能力路由**的既有先例 → **APK 差异由脚本路由吸收，R3 的「结构性阻塞」解除**。项目模型回归**登记簿**定位（知识层：客户 / 项目关系 / 形态 / jira 映射——adb 指纹读不出的部分，见背景分析 §4.1）；执行差异归脚本（路由 + step_trace 记录路由决策 + 未匹配 fail-fast）。**D1 / D4 / D5 / D7 / D8 / D9 挂起**，D6 保留 `specialty`、挂起 `applicable`；D2 新增 `jira_project_key` |
 | 2026-08-18 | v2.1（审查确认 F1–F6） | ①**LEGACY vs NULL 二义**（F1）：定稿 LEGACY 为真实项目行，NULL 降级为**迁移期瞬态**——M-c 完成标准 = 回填后 `device.project_id` 无 NULL（509 台入 5 项目 + 6 台入 LEGACY），D2 删「公共池」表述；②**参数名统一**（F2）：URL / API / 日志 / 审计全链路 `project_key`，数字 id 只留 DB 外键（可追溯性论证只有 key 成立）；③**D2 facet 理由重写**（F3）：原理由 1、2（「中兴/ODM 均同时存在 MTK 与展锐」「产品线下多项目」）被 §5 证伪，替换为已核实论据——MLD/ELA 同客户、同平台、同形态但 APK 不同必须分两项目，树在第一层分不开；④**variables 值类型**（F4）：挂起注记补真实 APK 数组值与「按原类型代入」语义；⑤**applicable 示例**（F5）改真实组合 `{"platform":["MTK"],"customer":["荣耀"]}`；⑥**key 双列**（F6）：`storage_key` 挂起期间不建，复议 D7 时由 `project_key` 派生（字符集 `[a-z0-9-]`），`project_key` 一经对外使用即不可变 |
@@ -153,9 +155,12 @@ Z258 一个项目。替换为已核实事实）：
 
 ### D4：三层参数解析
 
-> **状态：挂起（2026-08-18）**。`${project.x}` 的主要动机（用例 APK 按项目注入）已被
-> 脚本内设备指纹路由替代；`variables` 列不建。触发复议：路由表维护成本失控或出现
-> 项目级非 APK 参数需求。**F4 注**：示例中 `MLD_cases_v3.apk` 为起草占位符，§5 已核实
+> **状态：挂起（2026-08-18；v2.6 局部收敛启用）**。`${project.x}` 的主要动机（用例 APK 按项目注入）已被
+> 脚本内设备指纹路由替代；通用自由字典 `variables` 列不建。触发复议：路由表维护成本失控或出现
+> 项目级非 APK 参数需求。**v2.6 注（2026-11-28）**：非 APK 持续日志参数已触发上述复议条件，由
+> [ADR-0067](./ADR-0067-project-log-profile-and-param-layering.md)（Accepted v1.0）以结构化白名单列
+> `TestProject.log_profile` + `log_profile_version` 收敛启用；通用自由字典 `variables` 与 `${project.x}`
+> 占位符替换仍保持挂起。**F4 注**：示例中 `MLD_cases_v3.apk` 为起草占位符，§5 已核实
 > 真实值为**两个 APK**（`ReliabilityUiautomatorTest.apk` + `ReliabilityUiautomatorTestTest.apk`）——
 > 复议时 `${project.x}` 须按原类型代入（值支持标量与数组，不做字符串拼接）。
 
