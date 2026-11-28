@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { PlanRun, PlanRunStatus } from '@/utils/api/types';
 import {
+  FINISHING_BADGE_COLORS,
   PLAN_RUN_HERO_BADGE,
   PLAN_RUN_HERO_SURFACE,
   type PlanRunHeroStatus,
@@ -27,7 +28,7 @@ import { ELEVATION, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDateTimeShort, formatDurationSeconds } from '@/utils/format';
 import { ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
-import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
+import { getPlanRunDisplayStatus, PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
 
 // 状态 → 容器背景/边框（与 StatusBadge plan-run 语义对齐）
 const HERO_CLS: Record<PlanRunStatus, string> = PLAN_RUN_HERO_SURFACE;
@@ -231,10 +232,13 @@ export default function PlanRunHero({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, now, tick]);
 
-  const pill = run ? PLAN_RUN_PILL[run.status] : null;
+  const displayStatus = run ? getPlanRunDisplayStatus(run) : null;
+  const pill = displayStatus ? PLAN_RUN_PILL[displayStatus] : null;
   const heroCls = run ? HERO_CLS[run.status as PlanRunHeroStatus] : cn(SURFACE.elevated, 'border-border');
-  const badgeCls = run ? BADGE_CLS[run.status as PlanRunHeroStatus] : '';
-  const isRunning = run?.status === 'RUNNING';
+  const badgeCls = displayStatus === 'finishing'
+    ? cn('border-info/40', FINISHING_BADGE_COLORS)
+    : displayStatus ? BADGE_CLS[displayStatus] : '';
+  const isRunning = displayStatus === 'RUNNING';
   const isQueuedPhase = run?.status === 'QUEUED' || run?.status === 'PRECHECK';
 
   // ADR-0026: queue wait is measured from enqueued_at (never started_at —

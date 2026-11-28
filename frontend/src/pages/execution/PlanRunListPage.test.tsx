@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import PlanRunListPage from './PlanRunListPage';
+import { formatDateTimeFull } from '@/utils/format';
 
 const listPageMock = vi.fn();
 
@@ -101,6 +102,29 @@ describe('PlanRunListPage', () => {
   beforeEach(() => {
     listPageMock.mockReset();
     listPageMock.mockResolvedValue(pageOf());
+  });
+
+  it('shows Run summaries without Job-only wording or countdowns', async () => {
+    const deadline = '2026-11-28T06:01:30Z';
+    const counts = { teardown_disarm: 1, atomic_commit: 2 };
+    const projectedRuns = [
+      { ...sampleRuns[0], ui_status: 'finishing', finishing_kind_counts: counts, finishing_deadline_at: deadline },
+      { ...sampleRuns[0], id: 104, ui_status: 'running', finishing_kind_counts: counts, finishing_deadline_at: null },
+    ];
+    listPageMock.mockResolvedValue(pageOf(projectedRuns));
+    renderPage();
+
+    const finishing = await screen.findByTestId('plan-run-row-101-finishing');
+    expect(finishing.querySelector('[data-kind="plan-run"]')).toHaveTextContent('收尾中');
+    expect(finishing).toHaveTextContent('剩余设备：解除配置 ×1 · 刷机临界区保护 ×2');
+    expect(finishing).toHaveTextContent(`最近截止 ${formatDateTimeFull(deadline)}`);
+    const mixed = screen.getByTestId('plan-run-row-104-status');
+    expect(mixed.querySelector('[data-kind="plan-run"]')).toHaveTextContent('运行中');
+    expect(mixed).toHaveTextContent('部分设备收尾中：解除配置 ×1 · 刷机临界区保护 ×2');
+    expect(mixed).not.toHaveTextContent('最近截止');
+    for (const cell of [finishing, mixed]) {
+      expect(cell).not.toHaveTextContent(/解除配置中|刷机临界区保护中|\d+s|已到期/);
+    }
   });
 
   it('renders table rows instead of card stack', async () => {

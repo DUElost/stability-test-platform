@@ -67,12 +67,18 @@ export interface ListPlanRunDevicesParams {
   limit?: number;
 }
 
+/**
+ * 列表 status 筛选：持久化 PlanRunStatus，或投影态 `finishing`
+ * （ADR-0065 / #4206 U2 catalog；U3 前端消费）。
+ */
+export type PlanRunListStatusFilter = PlanRunStatus | 'finishing';
+
 export interface ListPlanRunsParams {
   skip?: number;
   limit?: number;
   planId?: number;
-  /** 单值或多值（排队中 = QUEUED+PRECHECK） */
-  status?: PlanRunStatus | PlanRunStatus[];
+  /** 单值或多值（排队中 = QUEUED+PRECHECK；收尾中 = finishing） */
+  status?: PlanRunListStatusFilter | PlanRunListStatusFilter[];
   projectKey?: string;
   /** Run ID / Plan 名 / 触发者 */
   q?: string;
@@ -115,7 +121,7 @@ export const planRuns = {
     skip = 0,
     limit = 50,
     planId?: number,
-    status?: PlanRunStatus | PlanRunStatus[],
+    status?: PlanRunListStatusFilter | PlanRunListStatusFilter[],
     projectKey?: string,
     q?: string,
   ) => {

@@ -21,7 +21,8 @@ import {
 } from '@/components/ui/table';
 import { ClickableRow } from '@/components/ui/clickable-row';
 import { PaginationBar } from '@/components/ui/pagination-bar';
-import { api, toApiError, type PlanRun, type PlanRunStatus } from '@/utils/api';
+import { api, toApiError, type PlanRun } from '@/utils/api';
+import type { PlanRunListStatusFilter } from '@/utils/api/planRuns';
 import { planRunKeys } from '@/utils/api/queryKeys';
 import { Clock } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -35,14 +36,26 @@ import { cn } from '@/lib/utils';
 import { formatDateTimeFull, formatDurationSeconds, parseIsoToDate } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
+import {
+  getPlanRunDisplayStatus,
+  getRunFinishingSummary,
+} from '@/components/plan-run/planRunStatus';
 
-/** 列表状态筛选：全部 + 常用终态/运行态；排队合并 QUEUED+PRECHECK */
-type StatusFilter = 'all' | 'RUNNING' | 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED' | 'queued';
+/** 列表状态筛选：全部 + 常用终态/运行态；排队合并 QUEUED+PRECHECK；收尾中为投影态 */
+type StatusFilter =
+  | 'all'
+  | 'RUNNING'
+  | 'finishing'
+  | 'SUCCESS'
+  | 'PARTIAL_SUCCESS'
+  | 'FAILED'
+  | 'queued';
 type TimeRangeFilter = 'all' | 'today' | '7d' | '30d';
 
 const STATUS_TABS: { key: StatusFilter; label: string }[] = [
   { key: 'all', label: '全部' },
   { key: 'RUNNING', label: '运行中' },
+  { key: 'finishing', label: '收尾中' },
   { key: 'SUCCESS', label: '成功' },
   { key: 'PARTIAL_SUCCESS', label: '部分成功' },
   { key: 'FAILED', label: '失败' },
@@ -60,7 +73,7 @@ function computeStartedAfter(range: TimeRangeFilter): string | undefined {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
-function statusToApi(filter: StatusFilter): PlanRunStatus | PlanRunStatus[] | undefined {
+function statusToApi(filter: StatusFilter): PlanRunListStatusFilter | PlanRunListStatusFilter[] | undefined {
   if (filter === 'all') return undefined;
   if (filter === 'queued') return ['QUEUED', 'PRECHECK'];
   return filter;
@@ -86,6 +99,29 @@ function formatPassRate(run: PlanRun): string {
 function formatFailedDevices(run: PlanRun): string {
   const failed = run.result_summary?.failed;
   return typeof failed === 'number' && failed > 0 ? String(failed) : '—';
+}
+
+function RunStatusCell({ run }: { run: PlanRun }) {
+  const status = getPlanRunDisplayStatus(run);
+  const summary = getRunFinishingSummary(run);
+  return (
+    <TableCell
+      className="px-3 py-2.5"
+      data-testid={`plan-run-row-${run.id}-${status === 'finishing' ? 'finishing' : 'status'}`}
+    >
+      <div className="flex flex-col items-start gap-0.5">
+        <StatusBadge kind="plan-run" status={status} size="sm" spin={status === 'RUNNING'} />
+        {summary.counts && (
+          <span className={cn('text-[10px]', TEXT.caption)} data-testid={`plan-run-row-${run.id}-finishing-kinds`}>
+            {summary.counts}
+          </span>
+        )}
+        {summary.deadline && (
+          <span className={cn('whitespace-nowrap text-[10px]', TEXT.caption)}>{summary.deadline}</span>
+        )}
+      </div>
+    </TableCell>
+  );
 }
 
 export default function PlanRunListPage() {
@@ -374,9 +410,7 @@ export default function PlanRunListPage() {
                         <TableCell className={cn('px-3 py-2.5 font-mono text-xs', TEXT.subtitle)}>
                           #{run.id}
                         </TableCell>
-                        <TableCell className="px-3 py-2.5">
-                          <StatusBadge kind="plan-run" status={run.status} size="sm" />
-                        </TableCell>
+                        <RunStatusCell run={run} />
                         <TableCell className="max-w-[260px] px-3 py-2.5">
                           <span className="flex min-w-0 items-center gap-1.5">
                             <span className={cn('truncate text-sm', TEXT.heading)}>

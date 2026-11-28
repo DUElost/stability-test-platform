@@ -33,6 +33,12 @@ import {
   UNASSIGNED_HOST_BUCKET,
 } from './deviceUiStatus';
 import { DEVICE_LINK_STATUS } from './deviceLinkStatus';
+import {
+  finishingKindLabel,
+  finishingTriggerLabel,
+  formatFinishingDeadlineCountdown,
+} from './planRunStatus';
+import { useFinishingClock } from './useFinishingClock';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAllHosts } from '@/utils/api';
 import { hostKeys } from '@/utils/api/queryKeys';
@@ -182,6 +188,16 @@ function execTooltip(d: DeviceMatrixItem, now: number): string | undefined {
   if (exec === 'running' && d.last_heartbeat_at) {
     return `最近 patrol 心跳：${fmtRelative(d.last_heartbeat_at, now)}`;
   }
+  if (exec === 'finishing') {
+    const kindLabel = finishingKindLabel(d.finishing_kind);
+    const trigger = finishingTriggerLabel(d.finishing_trigger);
+    const countdown = formatFinishingDeadlineCountdown(d.finishing_deadline_at, now);
+    const parts = ['收尾中'];
+    if (kindLabel) parts.push(kindLabel);
+    if (trigger) parts.push(`收尾触发：${trigger}`);
+    if (countdown != null) parts.push(`收尾截止 ${countdown}`);
+    return parts.join(' — ');
+  }
   return undefined;
 }
 
@@ -222,8 +238,11 @@ function DeviceGrid({
           // 仅对「非预期长时间离线」专项（休眠/Monkey 等，非 Aging DDR/开关机）的超时离线设备
           // 由后端 offline_failed_job_ids 投影标红提示 fail。
           const exec = d.job_exec_status ?? d.ui_status ?? 'unknown';
+          const hasOfflineFlag = offlineFailedIds?.has(d.job_id) ?? false;
+          const finishingWithOfflineFlag = exec === 'finishing' && hasOfflineFlag;
           const isOfflineFailed =
-            Boolean(offlineFailedIds?.has(d.job_id)) &&
+            hasOfflineFlag &&
+            exec !== 'finishing' &&
             exec !== 'failed' &&
             exec !== 'completed' &&
             exec !== 'aborted';
@@ -231,7 +250,8 @@ function DeviceGrid({
           const statusLabel = isOfflineFailed ? '长时间离线失败' : DEVICE_UI_STATUS[exec].label;
           const link = d.device_link_status;
           const linkSuffix =
-            link && link !== 'online' ? ` · ${DEVICE_LINK_STATUS[link].label}` : '';
+            link && link !== 'online' ? ` · ${DEVICE_LINK_STATUS[link].label}`
+              : finishingWithOfflineFlag ? ' · 连接异常' : '';
           const signalCount = d.log_signal_count ?? 0;
           const signalSuffix = signalCount > 0 ? ` · 异常 ${signalCount}` : '';
           const isSelected = selectedJobId != null && selectedJobId === d.job_id;
@@ -244,7 +264,7 @@ function DeviceGrid({
               type="button"
               data-testid={`minimap-cell-${d.job_id}`}
               data-selected={isSelected ? 'true' : undefined}
-              data-offline-failed={isOfflineFailed ? 'true' : undefined}
+              data-offline-failed={isOfflineFailed || finishingWithOfflineFlag ? 'true' : undefined}
               onClick={() => onSelectJobId?.(d.job_id)}
               aria-label={label}
               aria-pressed={isSelected}
@@ -252,6 +272,7 @@ function DeviceGrid({
               className={cn(
                 'relative aspect-square rounded-sm border border-transparent transition-transform hover:z-10 hover:scale-[1.12] hover:ring-2 hover:ring-primary/45',
                 visualStyle.cellCls,
+                finishingWithOfflineFlag && 'border-destructive',
                 isSelected && 'z-10 scale-[1.08] ring-2 ring-primary ring-offset-1 ring-offset-card',
               )}
             />
@@ -280,6 +301,12 @@ function DeviceTable({
   // 不再在此报告（eslint 判定为 unused directive），故摘掉指令本身——留着它反而
   // 会让 `eslint --max-warnings 0` 变红。
   const now = Date.now();
+  const finishingDeadlines = useMemo(() => devices.flatMap((device) =>
+    (device.job_exec_status ?? device.ui_status) === 'finishing' && device.finishing_deadline_at
+      ? [device.finishing_deadline_at]
+      : [],
+  ), [devices]);
+  const finishingNow = useFinishingClock(finishingDeadlines);
   const rowRefs = useRef<Map<number, HTMLTableRowElement | null>>(new Map());
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -370,8 +397,20 @@ function DeviceTable({
                 : d.current_failure_streak >= 1
                 ? 'text-warning'
                 : 'text-muted-foreground/70';
+            const execStatus = d.job_exec_status ?? d.ui_status;
+            const kindText = finishingKindLabel(d.finishing_kind);
+            const triggerText = finishingTriggerLabel(d.finishing_trigger);
+            const deadlineText = formatFinishingDeadlineCountdown(
+              d.finishing_deadline_at,
+              finishingNow,
+            );
+            const tooltip = statusTooltip(d, execStatus === 'finishing' ? finishingNow : now);
             const waitLabel =
-              d.ui_status === 'unknown' && d.grace_remaining_seconds != null
+              execStatus === 'finishing'
+                ? [kindText, triggerText, deadlineText != null ? `截止 ${deadlineText}` : null]
+                    .filter(Boolean)
+                    .join(' · ') || '收尾中'
+                : d.ui_status === 'unknown' && d.grace_remaining_seconds != null
                 ? `grace ${fmtCountdown(d.grace_remaining_seconds)}`
                 : d.ui_status === 'pending' && d.pending_claim_remaining_seconds != null
                 ? `认领 ${fmtCountdown(d.pending_claim_remaining_seconds)}`
@@ -399,7 +438,7 @@ function DeviceTable({
                   {hostLabelFor(d.host_id)}
                 </TableCell>
                 <TableCell className="px-2 py-2">
-                  <span title={statusTooltip(d, now)}>
+                  <span title={tooltip}>
                     <StatusBadge
                       kind="device-link"
                       status={d.device_link_status ?? 'unknown'}
@@ -408,7 +447,7 @@ function DeviceTable({
                   </span>
                 </TableCell>
                 <TableCell className="px-2 py-2">
-                  <span title={statusTooltip(d, now)}>
+                  <span title={tooltip}>
                     <StatusBadge
                       kind="device-ui"
                       status={d.job_exec_status ?? d.ui_status}
@@ -687,7 +726,6 @@ export default function DeviceOverview({
           onSearchQueryChange={onSearchQueryChange}
           hostLabelFor={(hostId) => hostLabelFor(hostId)}
         />
-
         {/* Body */}
         {activeError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">

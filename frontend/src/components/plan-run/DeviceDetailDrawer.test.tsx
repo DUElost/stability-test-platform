@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { DeviceMatrixItem } from '@/utils/api/types';
@@ -572,5 +572,70 @@ describe('DeviceDetailDrawer — 解除结果（ADR-0061 D1.2 / U6）', () => {
     fireEvent.click(screen.getByTestId('device-drawer-signals-toggle'));
     expect(await screen.findByText('/data/aee_exp/db.01.NE')).toBeInTheDocument();
     expect(api.planRuns.getJobWatcherSignals).toHaveBeenCalledWith(1, 3011, { skip: 0, limit: 50 });
+  });
+});
+
+describe('DeviceDetailDrawer — finishing 投影 (#4206 U3)', () => {
+  it('ticks an open drawer through expiry without a new response', () => {
+    vi.useFakeTimers();
+    try {
+      render_(
+        <DeviceDetailDrawer
+          device={makeDevice({
+            ui_status: 'finishing',
+            job_exec_status: 'finishing',
+            finishing_kind: 'atomic_commit',
+            finishing_deadline_at: new Date(Date.now() + 2500).toISOString(),
+          })}
+          {...handlers}
+        />,
+      );
+      expect(screen.getByText('3s')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(screen.getByText('2s')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(1500); });
+      expect(screen.getByText('已到期')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('展示收尾中徽章与子类型，并渲染截止倒计时', () => {
+    const deadline = new Date(Date.now() + 120_000).toISOString();
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          ui_status: 'finishing',
+          job_exec_status: 'finishing',
+          finishing_kind: 'teardown_disarm',
+          finishing_trigger: 'manual_abort',
+          finishing_deadline_at: deadline,
+        })}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByText('收尾中')).toBeInTheDocument();
+    expect(screen.getByTestId('device-drawer-finishing-kind')).toHaveTextContent('解除配置中');
+    expect(screen.getByText('收尾触发')).toBeInTheDocument();
+    expect(screen.getByText('手动中止')).toBeInTheDocument();
+    expect(screen.getByText('收尾截止')).toBeInTheDocument();
+  });
+
+  it('finishing_deadline_at=null 时不渲染假倒计时（纯采集 teardown）', () => {
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          ui_status: 'finishing',
+          job_exec_status: 'finishing',
+          finishing_kind: 'teardown_disarm',
+          finishing_trigger: 'natural_end',
+          finishing_deadline_at: null,
+        })}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByText('收尾中')).toBeInTheDocument();
+    expect(screen.getByTestId('device-drawer-finishing-kind')).toHaveTextContent('解除配置中');
+    expect(screen.queryByText('收尾截止')).toBeNull();
   });
 });
