@@ -40,7 +40,7 @@ from backend.services.plan_dispatcher_sync import (
 from backend.services.ai_assistant.dispatch import execute_dispatch_plan_run
 
 FIXED = datetime(2026, 10, 10, 8, 0, 0, tzinfo=timezone.utc)
-PREFIX = "stp-l1-v1:"
+PREFIX = "stp-l1-v2:"
 
 
 def _plan(**overrides) -> Plan:
@@ -114,6 +114,7 @@ class TestCanonicalFingerprint:
         assert len(first) == len(PREFIX) + 64
         assert fingerprint_format_ok(first)
         assert not fingerprint_format_ok("")
+        assert not fingerprint_format_ok("stp-l1-v1:" + "a" * 64)
         assert not fingerprint_format_ok(PREFIX + "AB" * 32)
         assert not fingerprint_format_ok(PREFIX + "a" * 63)
 

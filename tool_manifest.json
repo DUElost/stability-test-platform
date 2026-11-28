@@ -1335,6 +1335,14 @@
           "retired": false,
           "script": "log_prepare.py",
           "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/log_prepare/1.1.0.tar.gz",
+          "package_sha256": "ffd1ab8afd582289201f09cc116d9b312ed7a98cfd7260dcd79d2e6454aaa2c6",
+          "python": null,
+          "retired": false,
+          "script": "log_prepare.py",
+          "version": "1.1.0"
         }
       ]
     },
