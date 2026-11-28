@@ -25,6 +25,8 @@ _ADB_FLASH_DEFAULT = {"step_id": "flash", "action": "script:flash_firmware", "ve
                       "params": {}, "timeout_seconds": 5}
 _PREFLIGHT = {"step_id": "precheck", "action": "script:flash_preflight", "version": "1.0.8",
               "params": {}, "timeout_seconds": 5}
+_OOBE = {"step_id": "oobe", "action": "script:oobe_skip", "version": "1.1.2",
+         "params": {"wait_for_device_seconds": 600}, "timeout_seconds": 5}
 _CHECK = {"step_id": "check", "action": "script:check_device", "version": "1.0.0",
           "params": {}, "timeout_seconds": 5}
 
@@ -370,4 +372,70 @@ def test_lease_lost_between_preflight_and_adb_flash_blocks_flash_and_teardown_42
     assert flashed == []
     assert engine._init_steps_started == 0
     assert teardown == []
+    assert result.metadata["termination_reason"] == "abort"
+
+
+@pytest.mark.parametrize("init,expected_prefix", [
+    ([_ADB_FLASH, _OOBE, _CHECK], 2),
+    ([_FLASH, _OOBE, _CHECK], 2),
+    ([_PREFLIGHT, _ADB_FLASH, _OOBE, _CHECK], 3),
+    ([_PREFLIGHT, _ADB_FLASH_DEFAULT, _OOBE, _CHECK], 3),
+    ([_PREFLIGHT, _FLASH, _OOBE, _CHECK], 3),
+    ([_OOBE, _CHECK], 0),
+    ([_PREFLIGHT, _OOBE, _CHECK], 0),
+    ([_PREFLIGHT, {**_ADB_FLASH, "enabled": False}, _OOBE, _CHECK], 0),
+])
+def test_deferred_flash_prefix_includes_trailing_oobe_skip_4222(init, expected_prefix):
+    assert deferred_flash_init_prefix_len(init) == expected_prefix
+
+
+def test_preflight_flash_oobe_runs_before_return_check_4222():
+    # PlanRun #1770 实证：刷后未先跳过 OOBE 会触发 shutdown,provisioning_shutdown_req 自动关机。
+    result, calls, teardown = _run([_PREFLIGHT, _ADB_FLASH, _OOBE, _CHECK])
+    assert calls == ["precheck", "flash", "oobe", "return_check", "check"]
+    assert result.success, result.error_message
+    assert teardown
+    assert is_vbus_flash_init([_PREFLIGHT, _ADB_FLASH, _OOBE, _CHECK]) is False
+    assert is_deferred_flash_step(_OOBE) is True
+
+
+def test_oobe_alone_does_not_defer_return_check_4222():
+    result, calls, _ = _run([_OOBE, _CHECK])
+    assert calls == ["return_check", "oobe", "check"]
+    assert result.success, result.error_message
+
+
+def test_oobe_failure_after_flash_skips_return_check_and_runs_teardown_4222():
+    result, calls, teardown = _run([_PREFLIGHT, _ADB_FLASH, _OOBE, _CHECK], failing_step="oobe")
+    assert calls == ["precheck", "flash", "oobe"]
+    assert result.metadata["termination_reason"] == "init_failure"
+    assert teardown, "flash step already started, so teardown must run"
+
+
+def test_lease_lost_between_flash_and_oobe_blocks_oobe_and_runs_teardown_4222():
+    lost = {"v": False}
+    ran = []
+    engine, teardown = _real_step_engine(StepResult(success=True), is_aborted=lambda: lost["v"])
+
+    def resolve(action, step):
+        def run(ctx):
+            ran.append(step["step_id"])
+            if step["step_id"] == "flash":
+                lost["v"] = True
+            return StepResult(success=True)
+        return run
+
+    engine._resolve_action = resolve
+    pipeline_def = {
+        "lifecycle": {
+            "timeout_seconds": 1,
+            "init": [_PREFLIGHT, _ADB_FLASH, _OOBE, _CHECK],
+            "teardown": _TEARDOWN,
+        }
+    }
+    with patch("backend.agent.pipeline_engine.time.sleep", return_value=None):
+        result = engine._execute_lifecycle(pipeline_def)
+    assert ran == ["precheck", "flash"]
+    assert engine._init_steps_started >= 1
+    assert teardown, "flash already executed on device, so teardown runs on abort"
     assert result.metadata["termination_reason"] == "abort"
