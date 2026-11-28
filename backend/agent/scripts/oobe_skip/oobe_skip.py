@@ -1,5 +1,18 @@
 """Skip Android OOBE (out-of-box experience) on ONE target device via ADB.
 
+v1.1.4：通用向导包探测 + 清场硬校验（P532AA 实证）。
+  - 种子名单扩到 Tinno SetupWizard / Pixel SUW；并按机探测已安装
+    setup|oobe|wizard 包与占用 HOME 的非桌面包，避免机型专属硬编码。
+  - 写入 setup_wizard_has_run=1；禁用优先 pm disable，失败再
+    pm disable-user（系统 priv-app 上 disable-user 常不够）。
+  - dumpsys window 改为设备侧 grep mCurrentFocus，修复 _adb_shell 只留
+    末 300 字导致焦点诊断恒空、误报已离开 OOBE。
+  - 标志位之外新增 wizard_cleared 校验：目标向导仍 enabled 或 HOME 仍
+    解析到向导包 → 失败（覆盖「flags=1 但仍停 WelcomeActivity」）。
+
+v1.1.3（#4083）：adb root 直调、setup_skipped、Tinno FactoryOOBE、
+多屏 focus 过滤与二次清场。
+
 v1.1.2（#1591）：验证失败重试（verify_retries 默认 2）——刷机后系统忙碌，
 settings put 可能未即时落盘；重设 flags + 等待 + 重验证以收敛。
 
@@ -27,8 +40,13 @@ STP_STEP_PARAMS schema:
     locales                 : str  (optional, default en-US; system_locales)
     verify_setup_complete   : bool (optional, default true; 写完后回读两个
                           标志位核验，不一致判失败)
+    verify_wizard_cleared   : bool (optional, default true; 向导包已禁用且
+                          HOME 不再解析到向导包)
+    discover_setupwizard    : bool (optional, default true; 按机探测向导包)
     setupwizard_package     : str  (optional, default
                           com.google.android.setupwizard)
+    extra_setupwizard_packages : list|str (optional; 追加种子向导包)
+    disable_setupwizard     : bool (optional, default true)
 
 v1.1.0 相对 v1.0.0（真机实证配方，2026-08-26 .66 双机）：
   - **就绪判定加等 sys.boot_completed=1**：get-state==device 在 DA 混合态
@@ -44,13 +62,31 @@ v1.1.0 相对 v1.0.0（真机实证配方，2026-08-26 .66 双机）：
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 
 _PROGRESS_PREFIX = "PROGRESS "
 _DEFAULT_SUW_PACKAGE = "com.google.android.setupwizard"
-_DEFAULT_EXTRA_SUW_PACKAGES = ("com.tinno.factoryoobe",)
+_DEFAULT_EXTRA_SUW_PACKAGES = (
+    "com.tinno.factoryoobe",
+    "com.tinno.setupwizard",
+    "com.google.android.pixel.setupwizard",
+)
+_EXCLUDE_PACKAGES = frozenset({
+    "com.android.managedprovisioning",
+})
+_LAUNCHER_PACKAGES = frozenset({
+    "com.android.launcher3",
+    "com.android.launcher",
+    "com.google.android.apps.nexuslauncher",
+    "com.microsoft.launcher",
+})
+_WIZARD_NAME_RE = re.compile(
+    r"(setupwizard|setup_wizard|factoryoobe|(?:^|\.)oobe(?:\.|$))",
+    re.IGNORECASE,
+)
 
 
 def _progress_stamp(seq: int, **fields) -> str:
@@ -114,7 +150,7 @@ def _adb_device_state(serial: str, adb_path: str) -> str:
 
 
 def _adb_cmd(serial: str, adb_path: str, adb_args: "list[str]",
-             timeout: int = 15) -> "tuple[int, str]":
+             timeout: int = 15, *, keep_chars: int = 300) -> "tuple[int, str]":
     try:
         proc = subprocess_run(
             [adb_path, "-s", serial] + adb_args,
@@ -123,12 +159,17 @@ def _adb_cmd(serial: str, adb_path: str, adb_args: "list[str]",
     except Exception as exc:
         return -1, f"{type(exc).__name__}: {exc}"
     tail = ((proc.stdout or "") + (proc.stderr or "")).strip()
-    return proc.returncode, tail[-300:]
+    if keep_chars and keep_chars > 0 and len(tail) > keep_chars:
+        return proc.returncode, tail[-keep_chars:]
+    return proc.returncode, tail
 
 
 def _adb_shell(serial: str, adb_path: str, shell_args: "list[str]",
-               timeout: int = 15) -> "tuple[int, str]":
-    return _adb_cmd(serial, adb_path, ["shell"] + shell_args, timeout=timeout)
+               timeout: int = 15, *, keep_chars: int = 300) -> "tuple[int, str]":
+    return _adb_cmd(
+        serial, adb_path, ["shell"] + shell_args,
+        timeout=timeout, keep_chars=keep_chars,
+    )
 
 
 def _wait_adbd_ready(serial: str, adb_path: str, deadline_seconds: float = 15.0) -> bool:
@@ -157,6 +198,13 @@ def _extract_current_focus(focus_tail: str) -> str:
     )
 
 
+def _looks_like_wizard(package: str) -> bool:
+    pkg = (package or "").strip()
+    if not pkg or pkg in _EXCLUDE_PACKAGES or pkg in _LAUNCHER_PACKAGES:
+        return False
+    return bool(_WIZARD_NAME_RE.search(pkg))
+
+
 def _parse_suw_packages(primary: str, extra_raw) -> "list[str]":
     """合并主向导包与额外向导包（去重保序）。"""
     pkgs: list[str] = [primary]
@@ -170,6 +218,184 @@ def _parse_suw_packages(primary: str, extra_raw) -> "list[str]":
         if pkg not in pkgs:
             pkgs.append(pkg)
     return pkgs
+
+
+def _package_installed(serial: str, adb_path: str, package: str) -> bool:
+    rc, tail = _adb_shell(serial, adb_path, ["pm", "path", package], timeout=10)
+    return rc == 0 and "package:" in tail
+
+
+def _adb_shell_pipeline(
+    serial: str, adb_path: str, pipeline: str, *, timeout: int = 20,
+    keep_chars: int = 2000,
+) -> "tuple[int, str]":
+    """整段管道作为单一 shell 参数（避免 `shell sh -c` 在部分镜像上空输出）。"""
+    return _adb_cmd(
+        serial, adb_path, ["shell", pipeline],
+        timeout=timeout, keep_chars=keep_chars,
+    )
+
+
+def _list_installed_wizardish(serial: str, adb_path: str) -> "list[str]":
+    # keep_chars=0：完整 pm list，宿主侧过滤（比 sh -c 管道更稳）。
+    rc, tail = _adb_shell(
+        serial, adb_path, ["pm", "list", "packages"],
+        timeout=20, keep_chars=0,
+    )
+    if rc != 0:
+        return []
+    found: list[str] = []
+    for line in tail.splitlines():
+        line = line.strip()
+        if not line.startswith("package:"):
+            continue
+        pkg = line.split(":", 1)[1].strip()
+        if _looks_like_wizard(pkg) and pkg not in found:
+            found.append(pkg)
+    return found
+
+
+def _home_activity_packages(serial: str, adb_path: str) -> "list[str]":
+    """解析 HOME intent 候选包（占用默认桌面的向导也在此列）。"""
+    rc, tail = _adb_shell(
+        serial, adb_path,
+        ["cmd", "package", "query-activities",
+         "-a", "android.intent.action.MAIN",
+         "-c", "android.intent.category.HOME"],
+        timeout=20, keep_chars=0,
+    )
+    if rc != 0 or not tail.strip():
+        # 旧镜像无 query-activities 时退回 resolve-activity
+        rc2, tail2 = _adb_shell(
+            serial, adb_path,
+            ["cmd", "package", "resolve-activity", "--brief",
+             "-a", "android.intent.action.MAIN",
+             "-c", "android.intent.category.HOME"],
+            timeout=15, keep_chars=1000,
+        )
+        if rc2 != 0:
+            return []
+        tail = tail2
+    pkgs: list[str] = []
+    for m in re.finditer(r"packageName=([A-Za-z0-9_.]+)", tail):
+        pkg = m.group(1)
+        if pkg not in pkgs:
+            pkgs.append(pkg)
+    for raw in re.findall(
+            r"(?:^|\s)([A-Za-z0-9_.]+)/[A-Za-z0-9_.]+",
+            tail, flags=re.MULTILINE):
+        if raw not in pkgs:
+            pkgs.append(raw)
+    return pkgs
+
+
+def _resolve_home_package(serial: str, adb_path: str) -> str:
+    rc, tail = _adb_shell(
+        serial, adb_path,
+        ["cmd", "package", "resolve-activity", "--brief",
+         "-a", "android.intent.action.MAIN",
+         "-c", "android.intent.category.HOME"],
+        timeout=15, keep_chars=1000,
+    )
+    if rc != 0:
+        return ""
+    for line in reversed([ln.strip() for ln in tail.splitlines() if ln.strip()]):
+        if "/" in line and not line.startswith("priority=") and " " not in line:
+            return line.split("/", 1)[0]
+    return ""
+
+
+def _read_current_focus(serial: str, adb_path: str) -> str:
+    """设备侧 grep，避免 dumpsys 全文被默认末 300 字截断。"""
+    rc, tail = _adb_shell_pipeline(
+        serial, adb_path,
+        "dumpsys window 2>/dev/null | grep mCurrentFocus || true",
+        timeout=20, keep_chars=2000,
+    )
+    if rc != 0:
+        return ""
+    return _extract_current_focus(tail)
+
+
+def _discover_wizard_packages(
+    serial: str,
+    adb_path: str,
+    seed_packages: "list[str]",
+    discover: bool,
+) -> "list[str]":
+    """种子名单 ∪ 机上向导名包 ∪ 占用 HOME 的非桌面包；只保留已安装。"""
+    ordered: list[str] = []
+
+    def _add(pkg: str) -> None:
+        pkg = (pkg or "").strip()
+        if not pkg or pkg in _EXCLUDE_PACKAGES or pkg in ordered:
+            return
+        if pkg in _LAUNCHER_PACKAGES:
+            return
+        ordered.append(pkg)
+
+    for pkg in seed_packages:
+        _add(pkg)
+
+    if discover:
+        for pkg in _list_installed_wizardish(serial, adb_path):
+            _add(pkg)
+        for pkg in _home_activity_packages(serial, adb_path):
+            if _looks_like_wizard(pkg) or pkg in seed_packages:
+                _add(pkg)
+        focus_line = _read_current_focus(serial, adb_path)
+        for pkg in seed_packages:
+            if pkg and pkg.lower() in focus_line.lower():
+                _add(pkg)
+        for m in re.finditer(r"\b([a-zA-Z0-9_.]+)/[a-zA-Z0-9_.]+\b", focus_line):
+            cand = m.group(1)
+            if _looks_like_wizard(cand):
+                _add(cand)
+
+    installed: list[str] = []
+    for pkg in ordered:
+        if _package_installed(serial, adb_path, pkg):
+            installed.append(pkg)
+    return installed
+
+
+def _package_disabled(serial: str, adb_path: str, package: str) -> bool:
+    # -d 列表通常很短；整表回读避免 sh -c 管道在部分镜像上空输出。
+    rc, tail = _adb_shell(
+        serial, adb_path, ["pm", "list", "packages", "-d"],
+        timeout=15, keep_chars=0,
+    )
+    if rc == 0 and f"package:{package}" in (tail or ""):
+        return True
+    # list -d 偶发漏报 priv-app：只取 User 0: 行（勿用宽 grep enabled=，
+    # 会被 fallback_enabled=true 淹没并把真正的 User 0 行截掉）。
+    rc2, tail2 = _adb_shell_pipeline(
+        serial, adb_path,
+        f"dumpsys package {package} 2>/dev/null | grep 'User 0:' || true",
+        timeout=20, keep_chars=2000,
+    )
+    if rc2 != 0:
+        return False
+    # enabled=2 DISABLED, 3 DISABLED_USER, 4 DISABLED_UNTIL_USED
+    matches = re.findall(r"User 0:.*?enabled=(\d+)", tail2)
+    if not matches:
+        return False
+    try:
+        return int(matches[0]) in (2, 3, 4)
+    except ValueError:
+        return False
+
+
+def _disable_package(
+    serial: str, adb_path: str, package: str,
+) -> "tuple[int, str, str]":
+    """优先 pm disable（跨重启更稳），失败再 disable-user。"""
+    rc, tail = _adb_shell(serial, adb_path, ["pm", "disable", package])
+    if rc == 0:
+        return rc, tail, "pm-disable"
+    rc2, tail2 = _adb_shell(
+        serial, adb_path, ["pm", "disable-user", "--user", "0", package])
+    return rc2, tail2, "pm-disable-user"
 
 
 def _clear_suw_and_home(
@@ -188,10 +414,11 @@ def _clear_suw_and_home(
         if idx == 0:
             _emit_progress(seq, stage="force-stop-setupwizard", ok=rc == 0)
         if disable_suw:
-            d_rc, d_tail = _adb_shell(
-                serial, adb_path, ["pm", "disable-user", "--user", "0", pkg])
+            d_rc, d_tail, method = _disable_package(serial, adb_path, pkg)
             d_name = "disable-setupwizard" if idx == 0 else f"disable-extra:{pkg}"
-            metrics["commands"].append({"name": d_name, "rc": d_rc, "tail": d_tail})
+            metrics["commands"].append({
+                "name": d_name, "rc": d_rc, "tail": d_tail, "method": method,
+            })
 
     for name, keycode in (("keyevent-wakeup", "224"),
                           ("keyevent-unlock", "82"),
@@ -237,6 +464,28 @@ def _wait_device_ready(
         time.sleep(5)
 
 
+def _verify_wizard_cleared(
+    serial: str, adb_path: str, suw_packages: "list[str]",
+) -> dict:
+    still_enabled = [
+        pkg for pkg in suw_packages
+        if not _package_disabled(serial, adb_path, pkg)
+    ]
+    home_pkg = _resolve_home_package(serial, adb_path)
+    home_is_wizard = bool(
+        home_pkg and (
+            home_pkg in suw_packages or _looks_like_wizard(home_pkg)
+        )
+    )
+    ok = not still_enabled and not home_is_wizard
+    return {
+        "ok": ok,
+        "still_enabled": still_enabled,
+        "home_package": home_pkg,
+        "home_is_wizard": home_is_wizard,
+    }
+
+
 def main() -> None:
     args = _step_params()
     serial = os.environ.get("STP_DEVICE_SERIAL", "")
@@ -260,10 +509,13 @@ def main() -> None:
         wait_seconds = 120
     locales = str(_param_or_env(args, "locales", "", "en-US")).strip()
     verify = _as_bool(args.get("verify_setup_complete"), default=True)
+    verify_wizard = _as_bool(args.get("verify_wizard_cleared"), default=True)
+    discover = _as_bool(args.get("discover_setupwizard"), default=True)
     suw_package = str(
         _param_or_env(args, "setupwizard_package", "", _DEFAULT_SUW_PACKAGE)
     ).strip() or _DEFAULT_SUW_PACKAGE
-    suw_packages = _parse_suw_packages(suw_package, args.get("extra_setupwizard_packages"))
+    seed_packages = _parse_suw_packages(
+        suw_package, args.get("extra_setupwizard_packages"))
     disable_suw = _as_bool(args.get("disable_setupwizard"), default=True)
 
     # ── 等设备回到 adb 且 boot_completed（刷完重启需要时间）───────────
@@ -291,7 +543,13 @@ def main() -> None:
         if not _wait_adbd_ready(serial, adb_path):
             metrics["root_wait_timeout"] = True
 
-    # ── 命令序列：provisioning 标志与 OOBE.sh 一致 + setup_skipped ────
+    suw_packages = _discover_wizard_packages(
+        serial, adb_path, seed_packages, discover=discover)
+    metrics["wizard_packages"] = suw_packages
+    metrics["wizard_seeds"] = seed_packages
+    _emit_progress(seq, stage="discover-wizards", packages=suw_packages)
+
+    # ── 命令序列：provisioning 标志 + setup_wizard_has_run + locales ─
     shell_commands: "list[tuple[str, list[str]]]" = [
         ("setup-complete", ["settings", "put", "secure",
                             "user_setup_complete", "1"]),
@@ -299,6 +557,8 @@ def main() -> None:
                                 "device_provisioned", "1"]),
         ("setup-skipped", ["settings", "put", "secure",
                            "setup_skipped", "1"]),
+        ("setup-wizard-has-run", ["settings", "put", "global",
+                                  "setup_wizard_has_run", "1"]),
         ("system-locales", ["settings", "put", "system",
                             "system_locales", locales]),
     ]
@@ -307,10 +567,10 @@ def main() -> None:
         metrics["commands"].append({"name": name, "rc": rc, "tail": tail})
         _emit_progress(seq, stage=name.replace("_", "-"), ok=rc == 0)
 
-    # ── 清场：停掉/禁用向导（含 Tinno OOBE）并键序回桌面 ─────────────
+    # ── 清场：停掉/禁用探测到的向导并键序回桌面 ───────────────────────
     _clear_suw_and_home(serial, adb_path, suw_packages, disable_suw, metrics, seq)
 
-    # ── 回读核验（权威判据：两个 provisioning 标志位）─────────────────
+    # ── 回读核验（标志位 + 向导清场）──────────────────────────────────
     verify_report: dict = {"enabled": verify}
     oobe_done = True
     if verify:
@@ -356,24 +616,41 @@ def main() -> None:
                 if oobe_done:
                     break
 
-    # ── UI 焦点诊断（多屏过滤 mCurrentFocus=null；若仍停在向导则补清一次）──
-    focus_rc, focus_tail = _adb_shell(
-        serial, adb_path, ["dumpsys", "window"], timeout=20)
-    focus_line = _extract_current_focus(focus_tail)
+    wizard_report = {"enabled": verify_wizard}
+    if verify_wizard and oobe_done:
+        wizard_report.update(
+            _verify_wizard_cleared(serial, adb_path, suw_packages))
+        if not wizard_report["ok"]:
+            # 再清一次后重检，覆盖 disable 竞态
+            time.sleep(2)
+            _clear_suw_and_home(
+                serial, adb_path, suw_packages, disable_suw, metrics, seq)
+            time.sleep(2)
+            wizard_report.update(
+                _verify_wizard_cleared(serial, adb_path, suw_packages))
+        oobe_done = oobe_done and bool(wizard_report.get("ok"))
+        _emit_progress(seq, stage="verify-wizard", ok=wizard_report.get("ok"))
+
+    # ── UI 焦点诊断（设备侧 grep；若仍停在向导则补清一次）────────────
+    focus_line = _read_current_focus(serial, adb_path)
     ui_on_su = any(pkg.lower() in focus_line.lower() for pkg in suw_packages)
     if ui_on_su:
         time.sleep(3)
         _clear_suw_and_home(serial, adb_path, suw_packages, disable_suw, metrics, seq)
-        _, focus_tail = _adb_shell(serial, adb_path, ["dumpsys", "window"], timeout=20)
-        focus_line = _extract_current_focus(focus_tail)
+        focus_line = _read_current_focus(serial, adb_path)
         ui_on_su = any(pkg.lower() in focus_line.lower() for pkg in suw_packages)
+        if verify_wizard and oobe_done:
+            wizard_report.update(
+                _verify_wizard_cleared(serial, adb_path, suw_packages))
+            oobe_done = oobe_done and bool(wizard_report.get("ok"))
     metrics["ui_focus"] = {
-        "line": focus_line.split("mCurrentFocus=")[-1][:160],
+        "line": focus_line.split("mCurrentFocus=")[-1][:160] if focus_line else "",
         "on_setupwizard": ui_on_su,
     }
     _emit_progress(seq, stage="ui-focus", on_setupwizard=ui_on_su)
 
     metrics["verify"] = verify_report
+    metrics["wizard_cleared"] = wizard_report
     metrics["duration_seconds"] = round(time.time() - started_at, 2)
     _emit_progress(seq, stage="done", ok=oobe_done)
 
@@ -381,12 +658,18 @@ def main() -> None:
         failed = [k for k, v in verify_report.items()
                   if isinstance(v, dict) and v.get("ok") is False]
         values = [verify_report[k].get("value") for k in failed]
+        wizard_hint = ""
+        if verify_wizard and not wizard_report.get("ok", True):
+            wizard_hint = (
+                f"; wizard_cleared={wizard_report.get('still_enabled')} "
+                f"home={wizard_report.get('home_package')}"
+            )
         hint = (
             " (UI still on setupwizard; flags may have been reset by a "
             "later re-flash — re-run this step)" if ui_on_su else "")
         _output(False, error_message=(
             f"OOBE skip verification failed: {failed} (values: {values})"
-            + hint),
+            + wizard_hint + hint),
                 metrics=metrics)
         return
 
