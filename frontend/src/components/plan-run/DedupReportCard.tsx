@@ -3,7 +3,8 @@
  */
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Scan, Merge, FileDown, Loader2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Scan, Merge, FileDown, Loader2, FileSpreadsheet } from 'lucide-react';
 import { api } from '@/utils/api';
 import { dedupKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
@@ -320,6 +321,7 @@ export default function DedupReportCard({
 }: Props) {
   const qc = useQueryClient();
   const toast = useToast();
+  const navigate = useNavigate();
   /** #2185：手动扫描此前固定 `is_final=false`——操作者想让本轮"收口"时没有入口。 */
   const [isFinalScan, setIsFinalScan] = useState(false);
 
@@ -446,6 +448,18 @@ export default function DedupReportCard({
           >
             {extractMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileDown className="h-3 w-3" />}
             提取
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              navigate(`/issue-tracker?tab=handoff&planRunIds=${encodeURIComponent(String(runId))}`)
+            }
+            className={TOOL_BTN}
+            data-testid="dedup-handoff-btn"
+            title="跳转问题追踪「提单表单生成」工作台，预填本 PlanRun"
+          >
+            <FileSpreadsheet className="h-3 w-3" />
+            生成提单表单
           </button>
         </div>
       </div>

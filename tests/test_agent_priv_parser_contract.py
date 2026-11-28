@@ -118,6 +118,78 @@ def test_xhci_rebind_accepts_no_args_and_rejects_extra_args(wrapper):
         assert exc.value.code == 2, bad
 
 
+def test_usbnet_subcommands_wire_narrow_args_with_allow_abbrev_false(wrapper, capsys):
+    """ADR-0037 D10.1/D10.7：六个 usbnet-* 子命令禁用前缀缩写、拒绝任意网桥/CIDR/规则参数并声明能力。"""
+    parser = wrapper._build_parser()
+    subparsers = _subparser_map(parser)
+    usbnet_cmds = (
+        "usbnet-ensure-bridge",
+        "usbnet-attach",
+        "usbnet-detach",
+        "usbnet-revoke",
+        "usbnet-teardown",
+        "usbnet-status",
+    )
+    for cmd in usbnet_cmds:
+        assert cmd in wrapper._SUBCOMMAND_CONTRACT
+        assert cmd in subparsers
+        assert subparsers[cmd].allow_abbrev is False
+
+    # 合法代表性 argv
+    ns = parser.parse_args(["usbnet-ensure-bridge", "--egress", "direct"])
+    assert (ns.command, ns.egress) == ("usbnet-ensure-bridge", "direct")
+
+    ns = parser.parse_args([
+        "usbnet-attach", "--grant", "a.b", "--iface", "usb0", "--expect-devpath", "1-1.2",
+    ])
+    assert (ns.command, ns.grant, ns.iface, ns.expect_devpath) == (
+        "usbnet-attach", "a.b", "usb0", "1-1.2",
+    )
+
+    ns = parser.parse_args(["usbnet-detach", "--session-id", "s1", "--generation", "2"])
+    assert (ns.command, ns.session_id, ns.generation, ns.expect_iface, ns.expect_devpath) == (
+        "usbnet-detach", "s1", 2, None, None,
+    )
+
+    ns = parser.parse_args(["usbnet-revoke", "--session-id", "s1", "--generation", "2", "--serial", "MTK01"])
+    assert (ns.command, ns.session_id, ns.generation, ns.serial) == ("usbnet-revoke", "s1", 2, "MTK01")
+
+    ns = parser.parse_args(["usbnet-teardown", "--egress", "direct", "--force"])
+    assert (ns.command, ns.egress, ns.force) == ("usbnet-teardown", "direct", True)
+
+    ns = parser.parse_args(["usbnet-status"])
+    assert ns.command == "usbnet-status"
+
+    # 前缀缩写与非法扩展参数一律 exit 2
+    for bad in (
+        ["usbnet-ensure-bridge", "--egr", "direct"],
+        ["usbnet-ensure-bridge", "--egress", "direct", "--bridge", "br-evil"],
+        ["usbnet-ensure-bridge", "--egress", "direct", "--cidr", "10.0.0.0/24"],
+        ["usbnet-ensure-bridge", "--egress", "direct", "--dns", "8.8.8.8"],
+        ["usbnet-ensure-bridge", "--egress", "direct", "--uplink", "eth0"],
+        ["usbnet-ensure-bridge", "--egress", "direct", "--iptables", "-A INPUT -j ACCEPT"],
+        ["usbnet-attach", "--gra", "a.b", "--iface", "usb0", "--expect-devpath", "1-1.2"],
+        ["usbnet-attach", "--grant", "a.b", "--iface", "usb0"],
+        ["usbnet-detach", "--session", "s1", "--generation", "1"],
+        ["usbnet-detach", "--session-id", "s1", "--generation", "abc"],
+        ["usbnet-revoke", "--session-id", "s1", "--generation", "1"],
+        ["usbnet-teardown", "--egress", "other"],
+        ["usbnet-teardown", "--egress", "direct", "--for"],
+        ["usbnet-status", "--egress", "direct"],
+    ):
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(bad)
+        assert exc.value.code == 2, bad
+
+    # capabilities 声明全部六个子命令以及 usbnet / usbnet/grant-v1
+    assert wrapper.cmd_capabilities(None, None) == 0
+    caps = set(capsys.readouterr().out.splitlines())
+    for cmd in usbnet_cmds:
+        assert cmd in caps
+    assert "usbnet" in caps
+    assert "usbnet/grant-v1" in caps
+
+
 def test_full_contract_passes_on_current_wiring(wrapper):
     assert wrapper._validate_parser_contract(wrapper._build_parser()) == []
 
