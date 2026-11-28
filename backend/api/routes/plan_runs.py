@@ -36,7 +36,6 @@ from backend.api.schemas.plan_run import (
 )
 from backend.core.database import get_async_db, get_db
 from backend.core.metrics import record_plan_run_devices_query_duration
-from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
 from backend.services.job_artifact_download import build_artifact_download_response
 from backend.services.plan_precheck import PlanRunDispatchRetryError, retry_plan_run_dispatch
@@ -47,6 +46,7 @@ from backend.services.plan_parameter_projection import (
     load_job_parameter_projection,
 )
 from backend.services.plan_run_catalog import (
+    PlanRunListQueryError,
     build_plan_run_detail,
     build_plan_run_jobs,
     build_plan_run_list_page,
@@ -114,7 +114,8 @@ def list_plan_runs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     plan_id: Optional[int] = None,
-    status: Optional[list[PlanRunStatus]] = Query(default=None, description="可重复：?status=QUEUED&status=PRECHECK"),
+    # 可重复；值可为持久化 PlanRunStatus 或投影态 finishing（#4206 U2）
+    status: Optional[list[str]] = Query(default=None),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     q: Optional[str] = Query(None, description="搜索 Run ID / Plan 名 / 触发者"),
     run_type: Optional[str] = Query(None, description="按执行类型过滤"),
@@ -123,11 +124,14 @@ def list_plan_runs(
     _current_user: User = Depends(get_current_active_user),
 ):
     """薄壳：``plan_run_catalog.build_plan_run_list_page``。"""
-    return ok(build_plan_run_list_page(
-        db,
-        skip=skip, limit=limit, plan_id=plan_id, statuses=status,
-        project_key=project_key, q=q, run_type=run_type, started_after=started_after,
-    ))
+    try:
+        page = build_plan_run_list_page(
+            db, skip=skip, limit=limit, plan_id=plan_id, statuses=status,
+            project_key=project_key, q=q, run_type=run_type, started_after=started_after,
+        )
+    except PlanRunListQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return ok(page)
 
 
 @router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunDetailOut])
@@ -137,11 +141,7 @@ def get_plan_run(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """薄壳：``plan_run_catalog.build_plan_run_detail``。
-
-    #2623：`include_jobs=false` 时不查也不序列化内嵌 jobs（实测占响应 98.9%）；
-    默认 True 保持既有契约不变（仓外调用方不受影响）。
-    """
+    """薄壳：``plan_run_catalog.build_plan_run_detail``（#2623：`include_jobs=false` 可省略内嵌 jobs）。"""
     return ok(build_plan_run_detail(db, run_id, include_jobs=include_jobs))
 
 

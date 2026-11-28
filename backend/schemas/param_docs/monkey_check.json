@@ -37,6 +37,15 @@
       "cautions": "本键不控制重启路径，也不控制上述两个复验模式——改它不会让复验跟着改。nohup 的 shell rc 恒 0，只有 ps 复查才能证明真的起来了。",
       "sensitive": false,
       "version_range": {"min_inclusive": "2.0.3"}
+    },
+    {
+      "path": ["max_offline_seconds"],
+      "label": "非预期 ADB 离线发 fail 阈值",
+      "meaning": "设备连续 ADB 不可达达到该秒数后，本步以 patrol_fail 结束；默认 1800（30 分钟）。设为 0 关闭该判定。也可被环境变量 STP_MONKEY_MAX_OFFLINE_SECONDS 覆盖。",
+      "unit": "秒",
+      "cautions": "仅对 sleep/monkey 等纳入离线 fail 策略的专项生效；aging-ddr / power-cycle 等豁免专项不受本键影响。",
+      "sensitive": false,
+      "version_range": {"min_inclusive": "2.0.4"}
     }
   ]
 }
