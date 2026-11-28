@@ -11,6 +11,28 @@ from .pipeline_engine import PipelineEngine
 logger = logging.getLogger(__name__)
 
 
+def _merge_teardown_resume(
+    local_cp: Optional[dict],
+    backend_cp: Optional[dict],
+) -> Optional[dict]:
+    """Combine agent-local and control-plane teardown resume hints (#4222)."""
+    if local_cp is None and backend_cp is None:
+        return None
+    base = dict(backend_cp or {})
+    if isinstance(local_cp, dict):
+        families = set(base.get("footprint_families") or ())
+        families.update(local_cp.get("footprint_families") or ())
+        disarm_results = dict(base.get("disarm_results") or {})
+        for family, entry in (local_cp.get("disarm_results") or {}).items():
+            if isinstance(entry, dict):
+                disarm_results[family] = dict(entry)
+        base.update(local_cp)
+        base["footprint_families"] = sorted(families)
+        base["disarm_results"] = disarm_results
+    base["phase"] = "teardown"
+    return base
+
+
 def execute_pipeline_run(
     pipeline_def: Dict[str, Any],
     run_id: int,
@@ -35,6 +57,7 @@ def execute_pipeline_run(
     plan_run_host_id: Optional[int] = None,
     barrier_total: Optional[int] = None,
     step_trace_uploader: Optional[Any] = None,  # #483: 终态前排空 trace 队列
+    teardown_resume: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -73,15 +96,37 @@ def execute_pipeline_run(
         step_trace_uploader=step_trace_uploader,
     )
 
-    if patrol_cycle_checkpoint_store is not None:
-        row = patrol_cycle_checkpoint_store.get_for_recovery(str(run_id))
-        if row is not None:
-            engine.set_patrol_cycle_resume(row.checkpoint)
+    local_row = (
+        patrol_cycle_checkpoint_store.get_for_recovery(str(run_id))
+        if patrol_cycle_checkpoint_store is not None
+        else None
+    )
+    local_cp = (
+        local_row.checkpoint
+        if local_row is not None and isinstance(getattr(local_row, "checkpoint", None), dict)
+        else None
+    )
+    if teardown_resume is not None or (
+        local_cp is not None and local_cp.get("phase") == "teardown"
+    ):
+        merged_teardown = _merge_teardown_resume(
+            local_cp if (local_cp is not None and local_cp.get("phase") == "teardown") else None,
+            teardown_resume,
+        )
+        if merged_teardown is not None:
+            engine.set_teardown_resume(merged_teardown)
             logger.info(
-                "patrol_checkpoint_resume job_id=%s cycle=%s",
+                "teardown_checkpoint_resume job_id=%s reason=%s",
                 run_id,
-                row.checkpoint.get("cycle"),
+                merged_teardown.get("termination_reason"),
             )
+    elif local_row is not None:
+        engine.set_patrol_cycle_resume(local_row.checkpoint)
+        logger.info(
+            "patrol_checkpoint_resume job_id=%s cycle=%s",
+            run_id,
+            local_row.checkpoint.get("cycle"),
+        )
 
     if on_engine_started is not None:
         on_engine_started(engine)

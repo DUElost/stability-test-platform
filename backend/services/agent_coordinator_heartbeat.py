@@ -140,17 +140,31 @@ async def record_agent_coordinator_heartbeat(
             ).with_for_update().execution_options(populate_existing=True))).scalars().first()
             if job is None:
                 continue
-            guard = await db.run_sync(lambda sync_db, job=job, j=j: accept_job_disarm_evidence(
-                sync_db, job, j.disarm_evidence, host_id=payload.host_id,
-                agent_instance_id=payload.agent_instance_id, now=now, via_coordinator=True,
-            ))
-            if guard is None:
+            # If the agent has already moved past a disarm step into a subsequent
+            # waiting/non-disarm step (e.g. powercycle_finish WAITING_EXECUTION_SLOT)
+            # while replaying stale execute evidence, do not hijack execution_state
+            # back to EXECUTING_DISARM or skip waiting heartbeat renewal (#4222).
+            existing_guard = job.disarm_guard if isinstance(job.disarm_guard, dict) else None
+            ev_seq = j.disarm_evidence.get("seq")
+            stale_replayed_execute = (
+                j.execution_state in ("WAITING_EXECUTION_SLOT", "EXECUTING_STEP")
+                and j.disarm_evidence.get("phase") == "execute"
+                and existing_guard is not None
+                and isinstance(ev_seq, int)
+                and ev_seq <= int(existing_guard.get("seq", -1))
+            )
+            if not stale_replayed_execute:
+                guard = await db.run_sync(lambda sync_db, job=job, j=j: accept_job_disarm_evidence(
+                    sync_db, job, j.disarm_evidence, host_id=payload.host_id,
+                    agent_instance_id=payload.agent_instance_id, now=now, via_coordinator=True,
+                ))
+                if guard is None:
+                    continue
+                disarm_guards[j.job_id] = guard
+                job.execution_state = "WAITING_EXECUTION_SLOT" if guard.get("phase") == "queue" else "EXECUTING_DISARM"
+                # queue evidence is never a business progress marker.
+                await db.flush()
                 continue
-            disarm_guards[j.job_id] = guard
-            job.execution_state = "WAITING_EXECUTION_SLOT" if guard.get("phase") == "queue" else "EXECUTING_DISARM"
-            # queue evidence is never a business progress marker.
-            await db.flush()
-            continue
         reported = j.execution_state
         state_val = reported if reported in _VALID_EXECUTION_STATES else None
         # ADR-0026 §3 clock discipline (#288):
