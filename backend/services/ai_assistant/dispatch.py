@@ -16,6 +16,22 @@ from backend.services.plan_dispatcher_sync import (
     initial_dispatch_state,
     prepare_plan_run,
 )
+from backend.services.plan_wifi import (
+    require_network_pool_matches_plan,
+    resolve_requested_network_pool_id,
+)
+
+
+def _parse_optional_pool_id(raw_value: Any, field_name: str) -> int | None:
+    if raw_value in (None, ""):
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        raise ToolValidationError(f"{field_name} must be an integer") from None
+    if parsed < 1:
+        raise ToolValidationError(f"{field_name} must be positive")
+    return parsed
 
 
 def normalize_dispatch_params(args: dict | None) -> dict[str, Any]:
@@ -36,22 +52,27 @@ def normalize_dispatch_params(args: dict | None) -> dict[str, Any]:
     note = raw.get("note")
     if note is not None:
         note = str(note).strip()[:500] or None
-    wifi_pool_id = raw.get("wifi_pool_id")
-    if wifi_pool_id in (None, ""):
-        wifi_pool_id = None
-    else:
-        try:
-            wifi_pool_id = int(wifi_pool_id)
-        except (TypeError, ValueError):
-            raise ToolValidationError("wifi_pool_id must be an integer") from None
-        if wifi_pool_id < 1:
-            raise ToolValidationError("wifi_pool_id must be positive")
-    return {
+    wifi_pool_id = _parse_optional_pool_id(raw.get("wifi_pool_id"), "wifi_pool_id")
+    network_pool_id = _parse_optional_pool_id(
+        raw.get("network_pool_id"), "network_pool_id",
+    )
+    if (
+        network_pool_id is not None
+        and wifi_pool_id is not None
+        and network_pool_id != wifi_pool_id
+    ):
+        raise ToolValidationError(
+            f"network_pool_id ({network_pool_id}) conflicts with wifi_pool_id ({wifi_pool_id})"
+        )
+    result: dict[str, Any] = {
         "plan_id": plan_id,
         "device_ids": device_ids,
         "note": note,
         "wifi_pool_id": wifi_pool_id,
     }
+    if network_pool_id is not None:
+        result["network_pool_id"] = network_pool_id
+    return result
 
 
 def describe_dispatch_preview(db: Session, params: dict) -> str:
@@ -80,7 +101,9 @@ def describe_dispatch_preview(db: Session, params: dict) -> str:
             )
     if params.get("note"):
         lines.append(f"备注：{params['note']}")
-    if params.get("wifi_pool_id"):
+    if params.get("network_pool_id"):
+        lines.append(f"网络供给池 id={params['network_pool_id']}")
+    elif params.get("wifi_pool_id"):
         lines.append(f"WiFi 资源池 id={params['wifi_pool_id']}")
     return "\n".join(lines)
 
@@ -91,27 +114,29 @@ def execute_dispatch_plan_run(
     *,
     triggered_by: str,
 ) -> tuple[int, str]:
-    from backend.services.plan_wifi import (
-        require_active_wifi_pool,
-        require_wifi_pool_matches_plan,
-    )
-
     plan_id = params["plan_id"]
     device_ids = params["device_ids"]
     run_context: dict = {"dispatch_state": initial_dispatch_state()}
     if params.get("note"):
         run_context["note"] = params["note"]
-    wifi_pool_id = params.get("wifi_pool_id")
-    if wifi_pool_id is not None:
-        try:
-            require_active_wifi_pool(db, wifi_pool_id)
-            require_wifi_pool_matches_plan(db, plan_id, wifi_pool_id)
-        except ServiceError as exc:
-            detail = exc.detail
-            if isinstance(detail, dict):
-                detail = detail.get("message") or str(detail)
-            raise RuntimeError(str(detail)) from exc
-        run_context["wifi_pool_id"] = wifi_pool_id
+    try:
+        pool_id, alias_name = resolve_requested_network_pool_id(
+            params.get("network_pool_id"), params.get("wifi_pool_id"),
+        )
+        pool = require_network_pool_matches_plan(
+            db, plan_id, pool_id, alias_name=alias_name,
+        )
+    except ServiceError as exc:
+        detail = exc.detail
+        if isinstance(detail, dict):
+            detail = detail.get("message") or str(detail)
+        raise RuntimeError(str(detail)) from exc
+    if pool_id is not None:
+        run_context["network_pool_id"] = pool_id
+        if params.get("wifi_pool_id") is not None or (
+            pool is not None and pool.resource_type == "wifi"
+        ):
+            run_context["wifi_pool_id"] = pool_id
 
     try:
         pr = prepare_plan_run(
@@ -153,6 +178,7 @@ def run_dispatch_plan_run(
             "device_ids": params["device_ids"],
             "note": params.get("note"),
             "wifi_pool_id": params.get("wifi_pool_id"),
+            **({"network_pool_id": params["network_pool_id"]} if params.get("network_pool_id") is not None else {}),
         },
         user_id=requester_user_id,
         username=triggered_by,

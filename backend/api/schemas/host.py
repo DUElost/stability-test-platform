@@ -282,6 +282,9 @@ class HeartbeatIn(BaseModel):
     # #4044：当前 Agent 构建显式声明的能力。缺键/空列表都是权威的「无能力」，
     # 控制面每拍覆盖旧值——旧 Agent 回退不能沿用上一实例的能力证明。
     capabilities: Optional[List[str]] = None
+    # ADR-0066 D2.7 / D6.3 / B13 U1：宿主 USB 反向供网硬上限与冷却时间屏障
+    usbnet_max_devices: Optional[int] = None
+    usbnet_min_allowed_iat_by_egress: Optional[Dict[str, int]] = None
 
     @field_validator('host_id', mode='before')
     @classmethod

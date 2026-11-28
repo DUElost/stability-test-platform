@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.device_serial import is_placeholder_serial
 from backend.core.database import SessionLocal, get_db
@@ -36,6 +37,7 @@ from backend.services.device_retirement import (
 )
 from backend.services.host_health_probe import HEALTH_PROBE_EXTRA_KEY
 from backend.services.host_maintenance import in_maintenance_window
+from backend.services.network_supply import update_host_egress_barriers_sync
 
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
 logger = logging.getLogger(__name__)
@@ -344,10 +346,28 @@ def _process_heartbeat_with_db(
         )
 
     # ADR-0019 Phase 3a: store agent identity on host
+    prev_boot_id = host.boot_id or ""
+    boot_changed = bool(payload.boot_id and prev_boot_id and payload.boot_id != prev_boot_id)
     if payload.boot_id:
         host.boot_id = payload.boot_id
     if payload.agent_instance_id:
         host.last_agent_instance_id = payload.agent_instance_id
+
+    # ADR-0066 D2.7 / D6.3 / B13 U1：显式列承接 usbnet_max_devices 与冷却屏障
+    if payload.usbnet_max_devices is not None:
+        try:
+            cap_val = int(payload.usbnet_max_devices)
+            if 1 <= cap_val <= 32:
+                host.usbnet_max_devices = cap_val
+        except (TypeError, ValueError):
+            pass
+    reported_barriers = payload.usbnet_min_allowed_iat_by_egress
+    if reported_barriers is None and isinstance(payload.extra, dict):
+        maybe_barriers = payload.extra.get("usbnet_min_allowed_iat_by_egress")
+        if isinstance(maybe_barriers, dict):
+            reported_barriers = maybe_barriers
+    if reported_barriers is not None:
+        update_host_egress_barriers_sync(host, reported_barriers, replace=boot_changed)
 
     # Merge extra data without losing system stats
     host_extra = {}
@@ -606,6 +626,14 @@ def _process_heartbeat_with_db(
             # Update ADB connection state
             device.adb_state = dev_data.get("adb_state", "unknown")
             device.adb_connected = bool(dev_data.get("adb_connected", False))
+            reported_usb_devpath = dev_data.get("usb_devpath")
+            if isinstance(reported_usb_devpath, str) and reported_usb_devpath.strip():
+                dev_extra = dict(device.extra) if isinstance(device.extra, dict) else {}
+                clean_devpath = reported_usb_devpath.strip()
+                if dev_extra.get("usb_devpath") != clean_devpath:
+                    dev_extra["usb_devpath"] = clean_devpath
+                    device.extra = dev_extra
+                    flag_modified(device, "extra")
 
             # ADR-0019 Phase 1: count online healthy devices
             # ADR-0057 D4 第 5 面（#2962 B）：退役设备不算容量——它不再参与派发，

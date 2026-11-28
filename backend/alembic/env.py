@@ -54,6 +54,7 @@ def get_metadata():
     import backend.models.enums                # noqa: F401
     import backend.models.host                 # noqa: F401
     import backend.models.job                  # noqa: F401
+    import backend.models.network_session      # noqa: F401 — ADR-0066 / B13 U1
     import backend.models.notification         # noqa: F401
     import backend.models.plan                 # noqa: F401 — ADR-0020
     import backend.models.plan_migration_audit # noqa: F401 — ADR-0020 迁移审计

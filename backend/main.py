@@ -56,6 +56,8 @@ from backend.api.routes.script_presence import router as script_presence_router
 from backend.api.routes.agent_api import router as agent_api_router
 from backend.api.routes.agent_evidence import router as agent_evidence_router
 from backend.api.routes.agent_device_return import router as agent_device_return_router
+from backend.api.routes.agent_network_supply import router as agent_network_supply_router
+from backend.api.routes.network_supply import router as network_supply_router
 from backend.api.routes.transfer_permits import router as transfer_permits_router
 from backend.api.routes.resource_pools import router as resource_pools_router
 from backend.services.transfer_permit import (
@@ -512,6 +514,8 @@ _fastapi_app.include_router(script_presence_router)
 _fastapi_app.include_router(agent_api_router)
 _fastapi_app.include_router(agent_evidence_router)
 _fastapi_app.include_router(agent_device_return_router)
+_fastapi_app.include_router(agent_network_supply_router)
+_fastapi_app.include_router(network_supply_router)
 _fastapi_app.include_router(transfer_permits_router)
 _fastapi_app.include_router(resource_pools_router)
 # ADR-0020: Plan-based orchestration

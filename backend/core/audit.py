@@ -18,6 +18,7 @@ AUDIT_RESOURCE_TYPES: frozenset[str] = frozenset({
     "audit_log",
     "compat_rerun",
     "device",
+    "device_network_session",
     "host",
     "jira_handoff",
     "jira_run",

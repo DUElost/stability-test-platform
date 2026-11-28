@@ -123,6 +123,7 @@ from backend.core.database import async_engine, engine as app_engine, get_db
 from backend.core.database import Base
 from backend.models import audit as _audit  # noqa: F401
 from backend.models import device_lease as _device_lease  # noqa: F401
+from backend.models import network_session as _network_session  # noqa: F401
 from backend.models import notification as _notification  # noqa: F401
 from backend.models import resource_pool as _resource_pool  # noqa: F401
 from backend.models import schedule as _schedule  # noqa: F401

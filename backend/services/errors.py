@@ -16,8 +16,9 @@ class ServiceError(Exception):
 
     status: int = 400
 
-    def __init__(self, detail=None):
+    def __init__(self, detail=None, *, headers: dict[str, str] | None = None):
         self.detail = detail
+        self.headers = dict(headers) if headers else None
         super().__init__(detail)
 
 
@@ -49,6 +50,18 @@ class Conflict(ServiceError):
     """与当前持久状态冲突（原 409：fencing 失效、幂等竞争、状态机表外迁移等）。"""
 
     status = 409
+
+
+class Gone(ServiceError):
+    """目标会话或资源已终止/过期不可续期（原 410）。"""
+
+    status = 410
+
+
+class ServiceUnavailable(ServiceError):
+    """服务或宿主处于暂时不可用/冷却窗，可按 Retry-After 重试（原 503）。"""
+
+    status = 503
 
 
 class BatchTooLarge(ServiceError):
