@@ -28,6 +28,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
                     （#3892 / ADR-0063 D2 / ADR-0037 D8：调用方不能指定 Hub 或端口）
     xhci-rebind      无目标参数枚举 /sys/bus/pci/drivers/xhci_hcd 下已绑定 BDF 并执行
                     unbind→等待→bind 与重绑校验（#2972 / ADR-0037 D9）
+    usbnet-*         USB 反向供网受限通道（ensure-bridge / attach / detach / revoke /
+                    teardown / status；#4212 / ADR-0037 D10 / ADR-0066 D6）
 
 不变量：
 - 所有写路径固定或经前缀校验，永不接受任意目标路径；
@@ -37,19 +39,24 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
   sudoers，避免注入。
 
 Python 3.6+（主机系统 python3，不使用第三方依赖）。exit code：0 成功、
-1 selftest 失败、2 拒绝（STP_AGENT_PRIV_ERROR）、3 read-kernel-log 读取失败
-（journalctl 非零退出 / 超时 / 输出截断；stderr 带 ``STP_READ_KERNEL_LOG_*`` 标记）、
-usb-power 执行失败（uhubctl 非零退出 / 超时；stderr 带 ``STP_USB_POWER_*`` 标记）
-或 xhci-rebind 执行失败（无有效 BDF / 写入失败 / 部分成功 / 超时 / probe 失败；
-stderr 带 ``STP_XHCI_REBIND_*`` 标记）。
+1 selftest 失败、2 拒绝（STP_AGENT_PRIV_ERROR / STP_USBNET_DISABLED）、
+3 read-kernel-log 读取失败（journalctl 非零退出 / 超时 / 输出截断；stderr 带
+``STP_READ_KERNEL_LOG_*`` 标记）、usb-power 执行失败（uhubctl 非零退出 / 超时；
+stderr 带 ``STP_USB_POWER_*`` 标记）、xhci-rebind 执行失败（无有效 BDF / 写入失败 /
+部分成功 / 超时 / probe 失败；stderr 带 ``STP_XHCI_REBIND_*`` 标记）或 usbnet-*
+运行态失败（撤销命中 / 挂桥回滚 / 活跃绑定阻断 / 关闭不完整；stderr 带
+``STP_USBNET_*`` 标记）。
 """
 
 import argparse
 import base64
 from contextlib import contextmanager, redirect_stderr
 import errno
+import fcntl
 import grp
+import hashlib
 import io
+import ipaddress
 import json
 import os
 import pwd
@@ -117,6 +124,102 @@ XHCI_MARKER_WRITE_FAILED = "STP_XHCI_REBIND_WRITE_FAILED"
 XHCI_MARKER_PARTIAL = "STP_XHCI_REBIND_PARTIAL"
 XHCI_MARKER_TIMEOUT = "STP_XHCI_REBIND_TIMEOUT"
 XHCI_MARKER_PROBE_FAILED = "STP_XHCI_REBIND_PROBE_FAILED"
+
+# ── usbnet-* 窄面（#4212 / ADR-0037 D10 / ADR-0066 D6）───────────────────────
+# USB 反向供网受限通道：
+# - 授权锚点固定在 root:root 非 g/o 可写的 /etc/stp-usbnet.conf（默认 usbnet_enabled=false）；
+# - 状态与撤销台账固定在 /run/stp-agent-priv/usbnet-bindings.json（0700 目录 / 0600 文件 /
+#   flock 排他锁 / 同目录原子写），单调代次水位仅按 device_serial 索引（不按 usb_devpath）；
+# - 控制面签发的短期 usbnet_grant 经纯 Python RFC 8032 Ed25519 验签（零三方依赖）；
+# - 外部命令固定绝对路径、固定 argv、清空环境、<= 30s 超时、不经 shell。
+USBNET_CONF_PATH = "/etc/stp-usbnet.conf"
+USBNET_RUN_DIR = "/run/stp-agent-priv"
+USBNET_LEDGER_FILENAME = "usbnet-bindings.json"
+USBNET_LOCK_FILENAME = "usbnet-bindings.lock"
+USBNET_TRUSTED_UID = 0
+USBNET_TRUSTED_GID = 0
+USBNET_MAX_CONF_BYTES = 64 * 1024
+USBNET_MAX_LEDGER_BYTES = 2 * 1024 * 1024
+USBNET_MIN_MAX_DEVICES = 1
+USBNET_MAX_MAX_DEVICES = 32
+USBNET_DEFAULT_MAX_DEVICES = 8
+USBNET_GRANT_MIN_TTL_SECONDS = 300
+USBNET_GRANT_MAX_TTL_SECONDS = 1800
+USBNET_GRANT_FUTURE_SKEW_SECONDS = 30
+USBNET_REVOKED_GC_AGE_SECONDS = 3600
+USBNET_TEARDOWN_COOLDOWN_SECONDS = 30
+USBNET_CMD_TIMEOUT_SECONDS = 30
+USBNET_CMD_ENV = {"LC_ALL": "C", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
+
+IP_BIN = "/usr/sbin/ip"
+BRIDGE_BIN = "/usr/sbin/bridge"
+IPTABLES_BIN = "/usr/sbin/iptables"
+DNSMASQ_BIN = "/usr/sbin/dnsmasq"
+NMCLI_BIN = "/usr/bin/nmcli"
+
+NET_SYSFS_BASE = "/sys/class/net"
+USB_DRIVERS_SYSFS_BASE = "/sys/bus/usb/drivers"
+USBNET_PROC_NET_ROUTE = "/proc/net/route"
+USBNET_PROC_ROOT = "/proc"
+USBNET_IP_FORWARD_PATH = "/proc/sys/net/ipv4/ip_forward"
+
+USBNET_ALLOWED_DRIVERS = frozenset(("rndis_host", "cdc_ncm"))
+USBNET_ALLOWED_EGRESS_CHOICES = ("direct", "vpn")
+USBNET_EGRESS_BRIDGE_NAME = {"direct": "br-stpusb-dir", "vpn": "br-stpusb-vpn"}
+USBNET_EGRESS_CHAIN_SUFFIX = {"direct": "DIRECT", "vpn": "VPN"}
+USBNET_GRANT_KEYS = frozenset((
+    "session_id",
+    "generation",
+    "host_id",
+    "device_serial",
+    "usb_devpath",
+    "egress",
+    "iat",
+    "exp",
+))
+USBNET_CONF_KEYS = frozenset((
+    "usbnet_enabled",
+    "host_id",
+    "control_plane_verify_pubkey",
+    "allowed_usb_ports",
+    "allowed_egresses",
+    "egress_profiles",
+    "usbnet_max_devices",
+))
+USBNET_PROFILE_KEYS = frozenset((
+    "bridge",
+    "subnet_cidr",
+    "upstream_dns",
+    "uplink_iface",
+    "local_dns_forward",
+    "vpn_gateway_ips",
+))
+USBNET_BLOCKED_DEST_CIDRS = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "224.0.0.0/4",
+)
+
+_USBNET_BRIDGE_RE = re.compile(r"^br-stpusb-(dir|vpn)\Z")
+_USBNET_IFACE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,14}\Z")
+_USBNET_INTF_RE = re.compile(r"^([0-9]+-[0-9]+(?:\.[0-9]+)*):[0-9]+\.[0-9]+\Z")
+_USBNET_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}\Z")
+_USBNET_SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}\Z")
+_USBNET_MAC_RE = re.compile(r"^[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\Z")
+_USBNET_USB_BUS_PART_RE = re.compile(r"^usb[0-9]+\Z")
+_USBNET_B64URL_SEG_RE = re.compile(r"^[A-Za-z0-9_-]+\Z")
+_USBNET_VENDOR_RE = re.compile(r"^[0-9a-fA-F]{4}\Z")
+
+USBNET_MARKER_DISABLED = "STP_USBNET_DISABLED"
+USBNET_MARKER_GRANT_REVOKED = "STP_USBNET_GRANT_REVOKED"
+USBNET_MARKER_ATTACH_ROLLBACK = "STP_USBNET_ATTACH_ROLLBACK"
+USBNET_MARKER_BINDING_MISMATCH = "STP_USBNET_BINDING_MISMATCH"
+USBNET_MARKER_ACTIVE_BINDINGS = "STP_USBNET_ACTIVE_BINDINGS"
+USBNET_MARKER_TEARDOWN_INCOMPLETE = "STP_USBNET_TEARDOWN_INCOMPLETE"
 
 # ── flash 链窄面（ADR-0037 D5 / #2133；#2284 最小权限；#2353 判据改成员资格）──
 # udev 规则：固定路径 + **两个固定形态之一**（与 flash_preflight 最新版本的
@@ -1614,6 +1717,1828 @@ def cmd_xhci_rebind(args, conf):
 
 
 # ---------------------------------------------------------------------------
+# usbnet-* 受限通道（#4212 / ADR-0037 D10 / ADR-0066 D6）
+# ---------------------------------------------------------------------------
+
+
+class UsbnetDisabledError(Exception):
+    """主机 /etc/stp-usbnet.conf 中 usbnet_enabled != true（exit 2 + STP_USBNET_DISABLED）。"""
+
+
+class _UsbnetCmdError(RuntimeError):
+    """usbnet 外部系统命令执行失败或超时。"""
+
+
+# ── 纯 Python RFC 8032 Ed25519 验签（零三方依赖，仅用 stdlib hashlib.sha512）──
+
+_ED25519_P = (1 << 255) - 19
+_ED25519_L = (1 << 252) + 27742317777372353535851937790883648493
+_ED25519_D = (-121665 * pow(121666, _ED25519_P - 2, _ED25519_P)) % _ED25519_P
+_ED25519_I = pow(2, (_ED25519_P - 1) // 4, _ED25519_P)
+_ED25519_SPKI_PREFIX = b"\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00"
+
+
+def _ed25519_recover_x(y, sign):
+    if y >= _ED25519_P:
+        return None
+    y2 = (y * y) % _ED25519_P
+    u = (y2 - 1) % _ED25519_P
+    v = (_ED25519_D * y2 + 1) % _ED25519_P
+    v3 = (v * v * v) % _ED25519_P
+    v7 = (v3 * v3 * v) % _ED25519_P
+    x = (u * v3 * pow((u * v7) % _ED25519_P, (_ED25519_P - 5) // 8, _ED25519_P)) % _ED25519_P
+    vx2 = (v * x * x) % _ED25519_P
+    if vx2 == u:
+        pass
+    elif vx2 == (-u) % _ED25519_P:
+        x = (x * _ED25519_I) % _ED25519_P
+    else:
+        return None
+    if x == 0 and sign:
+        return None
+    if (x & 1) != sign:
+        x = _ED25519_P - x
+    return x
+
+
+def _ed25519_point_decode(encoded):
+    if not isinstance(encoded, (bytes, bytearray)) or len(encoded) != 32:
+        return None
+    val = int.from_bytes(encoded, "little")
+    y = val & ((1 << 255) - 1)
+    sign = (val >> 255) & 1
+    x = _ed25519_recover_x(y, sign)
+    if x is None:
+        return None
+    return (x, y, 1, (x * y) % _ED25519_P)
+
+
+def _ed25519_point_add(p1, p2):
+    x1, y1, z1, t1 = p1
+    x2, y2, z2, t2 = p2
+    a = ((y1 - x1) * (y2 - x2)) % _ED25519_P
+    b = ((y1 + x1) * (y2 + x2)) % _ED25519_P
+    c = (t1 * 2 * _ED25519_D * t2) % _ED25519_P
+    d = (z1 * 2 * z2) % _ED25519_P
+    e = (b - a) % _ED25519_P
+    f = (d - c) % _ED25519_P
+    g = (d + c) % _ED25519_P
+    h = (b + a) % _ED25519_P
+    return (
+        (e * f) % _ED25519_P,
+        (g * h) % _ED25519_P,
+        (f * g) % _ED25519_P,
+        (e * h) % _ED25519_P,
+    )
+
+
+def _ed25519_scalar_mult(point, scalar):
+    acc = (0, 1, 1, 0)
+    cur = point
+    k = scalar
+    while k > 0:
+        if k & 1:
+            acc = _ed25519_point_add(acc, cur)
+        cur = _ed25519_point_add(cur, cur)
+        k >>= 1
+    return acc
+
+
+def _ed25519_point_equal(p1, p2):
+    return (
+        (p1[0] * p2[2] - p2[0] * p1[2]) % _ED25519_P == 0
+        and (p1[1] * p2[2] - p2[1] * p1[2]) % _ED25519_P == 0
+    )
+
+
+_ED25519_BY = (4 * pow(5, _ED25519_P - 2, _ED25519_P)) % _ED25519_P
+_ED25519_BX = _ed25519_recover_x(_ED25519_BY, 0)
+_ED25519_BASE = (_ED25519_BX, _ED25519_BY, 1, (_ED25519_BX * _ED25519_BY) % _ED25519_P)
+
+
+def ed25519_verify(pubkey_bytes, message, signature):
+    """RFC 8032 Ed25519 验签（纯 Python stdlib 实现）。"""
+    if not isinstance(pubkey_bytes, (bytes, bytearray)) or len(pubkey_bytes) != 32:
+        return False
+    if not isinstance(signature, (bytes, bytearray)) or len(signature) != 64:
+        return False
+    if not isinstance(message, (bytes, bytearray)):
+        return False
+    a_point = _ed25519_point_decode(pubkey_bytes)
+    if a_point is None:
+        return False
+    r_bytes = bytes(signature[:32])
+    r_point = _ed25519_point_decode(r_bytes)
+    if r_point is None:
+        return False
+    s_scalar = int.from_bytes(signature[32:], "little")
+    if s_scalar >= _ED25519_L:
+        return False
+    h_digest = hashlib.sha512(r_bytes + bytes(pubkey_bytes) + bytes(message)).digest()
+    h_scalar = int.from_bytes(h_digest, "little") % _ED25519_L
+    lhs = _ed25519_scalar_mult(_ED25519_BASE, s_scalar)
+    rhs = _ed25519_point_add(r_point, _ed25519_scalar_mult(a_point, h_scalar))
+    return _ed25519_point_equal(lhs, rhs)
+
+
+def _b64url_decode_nopad(segment, label):
+    if not isinstance(segment, str) or not segment or not _USBNET_B64URL_SEG_RE.match(segment):
+        _fail("%s is not valid base64url" % label)
+    pad = "=" * ((4 - len(segment) % 4) % 4)
+    try:
+        return base64.urlsafe_b64decode(segment + pad)
+    except Exception as exc:
+        _fail("%s base64url decode failed: %s" % (label, exc))
+
+
+def parse_ed25519_pubkey(raw):
+    """解析控制面 Ed25519 公钥（支持 SPKI PEM 与 32 字节 raw base64url/base64）。"""
+    if not isinstance(raw, str) or not raw.strip():
+        _fail("control_plane_verify_pubkey must be a non-empty string")
+    text = raw.strip()
+    key_bytes = None
+    if text.startswith("-----BEGIN PUBLIC KEY-----"):
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if len(lines) < 3 or lines[0] != "-----BEGIN PUBLIC KEY-----" or lines[-1] != "-----END PUBLIC KEY-----":
+            _fail("control_plane_verify_pubkey has malformed PEM envelope")
+        try:
+            der = base64.b64decode("".join(lines[1:-1]), validate=True)
+        except Exception as exc:
+            _fail("control_plane_verify_pubkey PEM base64 invalid: %s" % exc)
+        if len(der) != 44 or not der.startswith(_ED25519_SPKI_PREFIX):
+            _fail("control_plane_verify_pubkey PEM is not a valid Ed25519 SPKI key")
+        key_bytes = der[12:]
+    else:
+        body = text[len("ed25519:"):] if text.startswith("ed25519:") else text
+        pad = "=" * ((4 - len(body) % 4) % 4)
+        for decoder in (base64.urlsafe_b64decode, base64.b64decode):
+            try:
+                cand = decoder(body + pad)
+            except Exception:
+                continue
+            if len(cand) == 32:
+                key_bytes = cand
+                break
+        if key_bytes is None:
+            _fail("control_plane_verify_pubkey must be Ed25519 SPKI PEM or 32-byte base64url/base64")
+    if _ed25519_point_decode(key_bytes) is None:
+        _fail("control_plane_verify_pubkey is not a valid Ed25519 curve point")
+    return key_bytes
+
+
+# ── /etc/stp-usbnet.conf 校验与加载（ADR-0037 D10.2）────────────────────────
+
+
+def _validate_ipv4_unicast(value, label):
+    if not isinstance(value, str) or not value.strip():
+        _fail("%s must be a non-empty IPv4 string" % label)
+    try:
+        addr = ipaddress.IPv4Address(value.strip())
+    except ValueError as exc:
+        _fail("%s is not a valid IPv4 address: %s" % (label, exc))
+    if addr.is_unspecified or addr.is_loopback or addr.is_multicast or addr.is_link_local:
+        _fail("%s must be a routable IPv4 unicast address, got %s" % (label, addr))
+    return str(addr)
+
+
+def _validate_usbnet_profile(egress, profile):
+    if not isinstance(profile, dict):
+        _fail("egress_profiles[%s] must be an object" % egress)
+    unknown = set(profile) - USBNET_PROFILE_KEYS
+    if unknown:
+        _fail("egress_profiles[%s] has unknown keys: %s" % (egress, ",".join(sorted(unknown))))
+    bridge = profile.get("bridge")
+    if not isinstance(bridge, str) or not _USBNET_BRIDGE_RE.match(bridge):
+        _fail("egress_profiles[%s].bridge must match ^br-stpusb-(dir|vpn)$" % egress)
+    expected_bridge = USBNET_EGRESS_BRIDGE_NAME.get(egress)
+    if bridge != expected_bridge:
+        _fail("egress_profiles[%s].bridge must be %s, got %r" % (egress, expected_bridge, bridge))
+    cidr_raw = profile.get("subnet_cidr")
+    if not isinstance(cidr_raw, str):
+        _fail("egress_profiles[%s].subnet_cidr must be a string" % egress)
+    try:
+        net = ipaddress.IPv4Network(cidr_raw, strict=True)
+    except ValueError as exc:
+        _fail("egress_profiles[%s].subnet_cidr invalid: %s" % (egress, exc))
+    if not net.is_private or net.is_loopback or net.is_link_local or net.is_multicast:
+        _fail("egress_profiles[%s].subnet_cidr must be a private IPv4 subnet" % egress)
+    if net.prefixlen > 29 or net.prefixlen < 16:
+        _fail("egress_profiles[%s].subnet_cidr prefixlen must be in 16..29" % egress)
+    dns_list = profile.get("upstream_dns")
+    if not isinstance(dns_list, list) or not (1 <= len(dns_list) <= 8):
+        _fail("egress_profiles[%s].upstream_dns must be a list of 1..8 IPv4 addresses" % egress)
+    validated_dns = []
+    for idx, dns_item in enumerate(dns_list):
+        ip_str = _validate_ipv4_unicast(dns_item, "egress_profiles[%s].upstream_dns[%d]" % (egress, idx))
+        if ip_str not in validated_dns:
+            validated_dns.append(ip_str)
+    uplink = profile.get("uplink_iface")
+    if uplink is not None:
+        if (
+            not isinstance(uplink, str)
+            or not _USBNET_IFACE_RE.match(uplink)
+            or uplink in ("lo", "docker0")
+            or uplink.startswith("br-")
+        ):
+            _fail("egress_profiles[%s].uplink_iface invalid: %r" % (egress, uplink))
+    local_dns_forward = profile.get("local_dns_forward", False)
+    if type(local_dns_forward) is not bool:
+        _fail("egress_profiles[%s].local_dns_forward must be a boolean" % egress)
+    vpn_gateways_raw = profile.get("vpn_gateway_ips", [])
+    if not isinstance(vpn_gateways_raw, list) or len(vpn_gateways_raw) > 8:
+        _fail("egress_profiles[%s].vpn_gateway_ips must be a list of <= 8 IPv4 addresses" % egress)
+    vpn_gateways = [
+        _validate_ipv4_unicast(item, "egress_profiles[%s].vpn_gateway_ips[%d]" % (egress, idx))
+        for idx, item in enumerate(vpn_gateways_raw)
+    ]
+    return {
+        "bridge": bridge,
+        "subnet_cidr": str(net),
+        "network": net,
+        "gateway_ip": str(net.network_address + 1),
+        "dhcp_start": str(net.network_address + 2),
+        "dhcp_end": str(net.broadcast_address - 1),
+        "netmask": str(net.netmask),
+        "upstream_dns": validated_dns,
+        "uplink_iface": uplink,
+        "local_dns_forward": local_dns_forward,
+        "vpn_gateway_ips": vpn_gateways,
+    }
+
+
+def parse_usbnet_conf(body):
+    """解析并严格校验 /etc/stp-usbnet.conf（纯函数，ADR-0037 D10.2）。
+
+    usbnet_enabled != true 时抛出 UsbnetDisabledError（exit 2 + STP_USBNET_DISABLED）；
+    JSON 非法或 schema 校验失败时抛出 PrivError（exit 2 + STP_AGENT_PRIV_ERROR）。
+    """
+    try:
+        doc = json.loads(body)
+    except ValueError as exc:
+        _fail("usbnet config is not valid JSON: %s" % exc)
+    if not isinstance(doc, dict):
+        _fail("usbnet config must be a JSON object")
+    unknown = set(doc) - USBNET_CONF_KEYS
+    if unknown:
+        _fail("usbnet config has unknown keys: %s" % ",".join(sorted(unknown)))
+
+    enabled = doc.get("usbnet_enabled", False)
+    if type(enabled) is not bool:
+        _fail("usbnet_enabled must be a boolean")
+
+    max_devices = doc.get("usbnet_max_devices", USBNET_DEFAULT_MAX_DEVICES)
+    if type(max_devices) is not int or not (USBNET_MIN_MAX_DEVICES <= max_devices <= USBNET_MAX_MAX_DEVICES):
+        _fail(
+            "usbnet_max_devices must be an integer within %d..%d"
+            % (USBNET_MIN_MAX_DEVICES, USBNET_MAX_MAX_DEVICES)
+        )
+
+    # 先校验基本字段形态，避免损坏配置被误报为「正常禁用态」。
+    if "allowed_usb_ports" in doc and not isinstance(doc["allowed_usb_ports"], list):
+        _fail("allowed_usb_ports must be a list")
+    if "allowed_egresses" in doc and not isinstance(doc["allowed_egresses"], list):
+        _fail("allowed_egresses must be a list")
+    if "egress_profiles" in doc and not isinstance(doc["egress_profiles"], dict):
+        _fail("egress_profiles must be an object")
+
+    if not enabled:
+        raise UsbnetDisabledError("usbnet_enabled is false")
+
+    host_id = doc.get("host_id")
+    if not isinstance(host_id, str) or not _USBNET_ID_RE.match(host_id):
+        _fail("host_id must match [A-Za-z0-9._:-]{1,128}")
+
+    pubkey_bytes = parse_ed25519_pubkey(doc.get("control_plane_verify_pubkey"))
+
+    ports_raw = doc.get("allowed_usb_ports")
+    if not isinstance(ports_raw, list) or not ports_raw:
+        _fail("allowed_usb_ports must be a non-empty list when usbnet_enabled is true")
+    allowed_ports = []
+    seen_ports = set()
+    for port in ports_raw:
+        if not isinstance(port, str) or not _USB_PORT_RE.match(port):
+            _fail("allowed_usb_ports contains invalid USB port: %r" % (port,))
+        if port in seen_ports:
+            _fail("allowed_usb_ports contains duplicate port: %s" % port)
+        seen_ports.add(port)
+        allowed_ports.append(port)
+
+    egresses_raw = doc.get("allowed_egresses")
+    if not isinstance(egresses_raw, list) or not egresses_raw:
+        _fail("allowed_egresses must be a non-empty list when usbnet_enabled is true")
+    allowed_egresses = []
+    seen_egresses = set()
+    for egress in egresses_raw:
+        if not isinstance(egress, str) or egress not in USBNET_ALLOWED_EGRESS_CHOICES:
+            _fail("allowed_egresses contains unsupported egress: %r" % (egress,))
+        if egress in seen_egresses:
+            _fail("allowed_egresses contains duplicate egress: %s" % egress)
+        seen_egresses.add(egress)
+        allowed_egresses.append(egress)
+
+    profiles_raw = doc.get("egress_profiles")
+    if not isinstance(profiles_raw, dict):
+        _fail("egress_profiles must be an object")
+    profiles = {}
+    for egress, profile_doc in profiles_raw.items():
+        if egress not in USBNET_ALLOWED_EGRESS_CHOICES:
+            _fail("egress_profiles contains unsupported egress key: %r" % (egress,))
+        profiles[egress] = _validate_usbnet_profile(egress, profile_doc)
+    for egress in allowed_egresses:
+        if egress not in profiles:
+            _fail("egress_profiles missing definition for allowed egress %r" % (egress,))
+
+    return {
+        "usbnet_enabled": True,
+        "host_id": host_id,
+        "control_plane_verify_pubkey_bytes": pubkey_bytes,
+        "allowed_usb_ports": allowed_ports,
+        "allowed_egresses": allowed_egresses,
+        "egress_profiles": profiles,
+        "usbnet_max_devices": max_devices,
+    }
+
+
+def _load_usbnet_conf():
+    """读取并校验 root:root 属主的 /etc/stp-usbnet.conf（D10.2）。"""
+    parent_dir = os.path.dirname(USBNET_CONF_PATH) or "/"
+    try:
+        parent_meta = os.lstat(parent_dir)
+    except OSError as exc:
+        _fail("cannot stat usbnet config parent dir %s: %s" % (parent_dir, exc))
+    if not stat.S_ISDIR(parent_meta.st_mode):
+        _fail("usbnet config parent dir must be a real directory: %s" % parent_dir)
+    if parent_meta.st_uid != USBNET_TRUSTED_UID or parent_meta.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        _fail(
+            "usbnet config parent dir must be owned by uid %d and not group/other writable: %s"
+            % (USBNET_TRUSTED_UID, parent_dir)
+        )
+    try:
+        fd = os.open(USBNET_CONF_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        _fail("cannot open usbnet config %s: %s" % (USBNET_CONF_PATH, exc))
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        meta = os.fstat(handle.fileno())
+        if not stat.S_ISREG(meta.st_mode):
+            _fail("usbnet config must be a regular file: %s" % USBNET_CONF_PATH)
+        if meta.st_uid != USBNET_TRUSTED_UID or meta.st_gid != USBNET_TRUSTED_GID:
+            _fail(
+                "usbnet config must be owned by %d:%d: %s"
+                % (USBNET_TRUSTED_UID, USBNET_TRUSTED_GID, USBNET_CONF_PATH)
+            )
+        if meta.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            _fail("usbnet config must not be group/other writable: %s" % USBNET_CONF_PATH)
+        if meta.st_size > USBNET_MAX_CONF_BYTES:
+            _fail("usbnet config exceeds %d bytes" % USBNET_MAX_CONF_BYTES)
+        body = handle.read(USBNET_MAX_CONF_BYTES + 1)
+    if len(body.encode("utf-8")) > USBNET_MAX_CONF_BYTES:
+        _fail("usbnet config exceeds %d bytes" % USBNET_MAX_CONF_BYTES)
+    return parse_usbnet_conf(body)
+
+
+# ── /run/stp-agent-priv/usbnet-bindings.json 原子台账（ADR-0037 D10.3）──────
+
+
+def _usbnet_binding_key(session_id, generation):
+    return "%s#%d" % (session_id, generation)
+
+
+def _empty_usbnet_ledger():
+    return {
+        "schema": 1,
+        "active_bindings": {},
+        "revocation_state": {
+            "revoked_sessions": [],
+            "min_allowed_generation_by_serial": {},
+            "min_allowed_iat_by_egress": {},
+        },
+    }
+
+
+def _validate_usbnet_ledger(doc):
+    if not isinstance(doc, dict) or doc.get("schema") != 1:
+        _fail("usbnet ledger must be an object with schema=1")
+    active = doc.get("active_bindings")
+    rev = doc.get("revocation_state")
+    if not isinstance(active, dict) or not isinstance(rev, dict):
+        _fail("usbnet ledger missing active_bindings or revocation_state")
+    seen_ports = set()
+    seen_ifaces = set()
+    norm_active = {}
+    for key, entry in active.items():
+        if not isinstance(key, str) or not isinstance(entry, dict):
+            _fail("usbnet ledger active_bindings entry malformed")
+        sid = entry.get("session_id")
+        gen = entry.get("generation")
+        state = entry.get("state")
+        egress = entry.get("egress")
+        serial = entry.get("device_serial")
+        iface = entry.get("iface")
+        ifindex = entry.get("ifindex")
+        devpath = entry.get("usb_devpath")
+        mac = entry.get("mac")
+        attached_at = entry.get("attached_at")
+        if (
+            not isinstance(sid, str) or not _USBNET_ID_RE.match(sid)
+            or type(gen) is not int or gen < 1
+            or key != _usbnet_binding_key(sid, gen)
+            or state not in ("attaching", "attached")
+            or egress not in USBNET_ALLOWED_EGRESS_CHOICES
+            or not isinstance(serial, str) or not _USBNET_SERIAL_RE.match(serial)
+            or not isinstance(iface, str) or not _USBNET_IFACE_RE.match(iface)
+            or type(ifindex) is not int or ifindex < 1
+            or not isinstance(devpath, str) or not _USB_PORT_RE.match(devpath)
+            or not isinstance(mac, str) or not _USBNET_MAC_RE.match(mac)
+            or type(attached_at) is not int or attached_at < 0
+        ):
+            _fail("usbnet ledger active_bindings[%s] has invalid fields" % key)
+        if devpath in seen_ports:
+            _fail("usbnet ledger duplicate usb_devpath %s in active_bindings" % devpath)
+        if iface in seen_ifaces:
+            _fail("usbnet ledger duplicate iface %s in active_bindings" % iface)
+        seen_ports.add(devpath)
+        seen_ifaces.add(iface)
+        norm_active[key] = {
+            "session_id": sid,
+            "generation": gen,
+            "state": state,
+            "egress": egress,
+            "device_serial": serial,
+            "iface": iface,
+            "ifindex": ifindex,
+            "usb_devpath": devpath,
+            "mac": mac.lower(),
+            "attached_at": attached_at,
+        }
+
+    revoked_raw = rev.get("revoked_sessions")
+    min_gen_raw = rev.get("min_allowed_generation_by_serial")
+    min_iat_raw = rev.get("min_allowed_iat_by_egress")
+    if (
+        not isinstance(revoked_raw, list)
+        or not isinstance(min_gen_raw, dict)
+        or not isinstance(min_iat_raw, dict)
+    ):
+        _fail("usbnet ledger revocation_state malformed")
+    norm_revoked = []
+    for item in revoked_raw:
+        if not isinstance(item, dict):
+            _fail("usbnet ledger revoked_sessions entry malformed")
+        sid = item.get("session_id")
+        gen = item.get("generation")
+        serial = item.get("device_serial", "")
+        revoked_at = item.get("revoked_at")
+        if (
+            not isinstance(sid, str) or not _USBNET_ID_RE.match(sid)
+            or type(gen) is not int or gen < 1
+            or not isinstance(serial, str)
+            or (serial != "" and not _USBNET_SERIAL_RE.match(serial))
+            or type(revoked_at) is not int or revoked_at < 0
+        ):
+            _fail("usbnet ledger revoked_sessions entry has invalid fields")
+        norm_revoked.append({
+            "session_id": sid,
+            "generation": gen,
+            "device_serial": serial,
+            "revoked_at": revoked_at,
+        })
+    norm_min_gen = {}
+    for serial, val in min_gen_raw.items():
+        if not isinstance(serial, str) or not _USBNET_SERIAL_RE.match(serial) or type(val) is not int or val < 0:
+            _fail("usbnet ledger min_allowed_generation_by_serial invalid entry")
+        norm_min_gen[serial] = val
+    norm_min_iat = {}
+    for egress, val in min_iat_raw.items():
+        if egress not in USBNET_ALLOWED_EGRESS_CHOICES or type(val) is not int or val < 0:
+            _fail("usbnet ledger min_allowed_iat_by_egress invalid entry")
+        norm_min_iat[egress] = val
+    return {
+        "schema": 1,
+        "active_bindings": norm_active,
+        "revocation_state": {
+            "revoked_sessions": norm_revoked,
+            "min_allowed_generation_by_serial": norm_min_gen,
+            "min_allowed_iat_by_egress": norm_min_iat,
+        },
+    }
+
+
+def _gc_revoked_sessions(ledger, now):
+    """D10.3 有界裁剪：仅当 gen < min_gen[serial] 或 now - revoked_at > 3600 才移除。"""
+    rev = ledger["revocation_state"]
+    min_gen = rev["min_allowed_generation_by_serial"]
+    kept = []
+    seen = set()
+    for item in rev["revoked_sessions"]:
+        pair = (item["session_id"], item["generation"])
+        if pair in seen:
+            continue
+        serial = item.get("device_serial", "")
+        floor_gen = min_gen.get(serial, 0) if serial else 0
+        if item["generation"] < floor_gen:
+            continue
+        if (now - item["revoked_at"]) > USBNET_REVOKED_GC_AGE_SECONDS:
+            continue
+        seen.add(pair)
+        kept.append(item)
+    rev["revoked_sessions"] = kept
+
+
+def _record_revocation(ledger, session_id, generation, device_serial, now, advance_watermark=True):
+    rev = ledger["revocation_state"]
+    updated = False
+    for item in rev["revoked_sessions"]:
+        if item["session_id"] == session_id and item["generation"] == generation:
+            if device_serial and not item.get("device_serial"):
+                item["device_serial"] = device_serial
+            item["revoked_at"] = max(item["revoked_at"], now)
+            updated = True
+            break
+    if not updated:
+        rev["revoked_sessions"].append({
+            "session_id": session_id,
+            "generation": generation,
+            "device_serial": device_serial or "",
+            "revoked_at": now,
+        })
+    if advance_watermark and device_serial:
+        cur = rev["min_allowed_generation_by_serial"].get(device_serial, 0)
+        if generation > cur:
+            rev["min_allowed_generation_by_serial"][device_serial] = generation
+
+
+def _open_usbnet_run_dir(create=False):
+    """以 O_NOFOLLOW 校验并打开 /run/stp-agent-priv（root:root, 0700, 非 symlink）。"""
+    run_dir = USBNET_RUN_DIR
+    if not create and not os.path.lexists(run_dir):
+        return None
+    parent_dir = os.path.dirname(run_dir) or "/"
+    name = os.path.basename(run_dir)
+    if not name:
+        _fail("invalid USBNET_RUN_DIR: %s" % run_dir)
+    try:
+        parent_fd = _open_directory(parent_dir)
+    except OSError as exc:
+        _fail("cannot open usbnet run parent dir %s: %s" % (parent_dir, exc))
+    try:
+        pmeta = os.fstat(parent_fd)
+        if pmeta.st_uid != USBNET_TRUSTED_UID or pmeta.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            _fail("usbnet run parent dir must be trusted and not group/other writable: %s" % parent_dir)
+        created = False
+        if create:
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent_fd)
+                created = True
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                _fail("cannot create usbnet run dir %s: %s" % (run_dir, exc))
+        try:
+            dir_fd = os.open(
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+        except OSError as exc:
+            _fail("cannot open usbnet run dir %s (must be real 0700 dir): %s" % (run_dir, exc))
+    finally:
+        os.close(parent_fd)
+
+    try:
+        if created:
+            os.fchmod(dir_fd, 0o700)
+            if os.geteuid() == 0:
+                os.fchown(dir_fd, USBNET_TRUSTED_UID, USBNET_TRUSTED_GID)
+        meta = os.fstat(dir_fd)
+        if not stat.S_ISDIR(meta.st_mode):
+            _fail("usbnet run dir is not a directory: %s" % run_dir)
+        if meta.st_uid != USBNET_TRUSTED_UID or meta.st_gid != USBNET_TRUSTED_GID:
+            _fail("usbnet run dir must be owned by %d:%d" % (USBNET_TRUSTED_UID, USBNET_TRUSTED_GID))
+        if (meta.st_mode & 0o777) != 0o700:
+            _fail("usbnet run dir must have mode 0700, got %o" % (meta.st_mode & 0o777))
+        return dir_fd
+    except Exception:
+        os.close(dir_fd)
+        raise
+
+
+def _read_usbnet_ledger_at(dir_fd):
+    """在 dir_fd 下以 O_NOFOLLOW 读取并校验 usbnet-bindings.json（0600, root:root）。"""
+    try:
+        fd = os.open(
+            USBNET_LEDGER_FILENAME,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=dir_fd,
+        )
+    except FileNotFoundError:
+        return _empty_usbnet_ledger()
+    except OSError as exc:
+        _fail("cannot open usbnet ledger: %s" % exc)
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        meta = os.fstat(handle.fileno())
+        if not stat.S_ISREG(meta.st_mode):
+            _fail("usbnet ledger must be a regular file")
+        if meta.st_uid != USBNET_TRUSTED_UID or meta.st_gid != USBNET_TRUSTED_GID:
+            _fail("usbnet ledger must be owned by %d:%d" % (USBNET_TRUSTED_UID, USBNET_TRUSTED_GID))
+        if (meta.st_mode & 0o777) != 0o600:
+            _fail("usbnet ledger must have mode 0600, got %o" % (meta.st_mode & 0o777))
+        if meta.st_size > USBNET_MAX_LEDGER_BYTES:
+            _fail("usbnet ledger exceeds size limit")
+        body = handle.read(USBNET_MAX_LEDGER_BYTES + 1)
+    if len(body.encode("utf-8")) > USBNET_MAX_LEDGER_BYTES:
+        _fail("usbnet ledger exceeds size limit")
+    try:
+        doc = json.loads(body)
+    except ValueError as exc:
+        _fail("usbnet ledger is corrupted JSON: %s" % exc)
+    return _validate_usbnet_ledger(doc)
+
+
+def _write_usbnet_ledger_at(dir_fd, ledger):
+    """在持有 flock 下以同目录临时文件 + fsync + os.replace 原子落盘台账（0600）。"""
+    validated = _validate_usbnet_ledger(ledger)
+    body = json.dumps(validated, sort_keys=True, indent=2) + "\n"
+    temporary = ".usbnet-bindings-" + uuid.uuid4().hex
+    fd = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+        dir_fd=dir_fd,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fchmod(handle.fileno(), 0o600)
+            if os.geteuid() == 0:
+                os.fchown(handle.fileno(), USBNET_TRUSTED_UID, USBNET_TRUSTED_GID)
+            os.fsync(handle.fileno())
+        os.replace(temporary, USBNET_LEDGER_FILENAME, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+    except Exception:
+        try:
+            os.unlink(temporary, dir_fd=dir_fd)
+        except OSError:
+            pass
+        raise
+
+
+@contextmanager
+def _locked_usbnet_ledger():
+    """获取 /run/stp-agent-priv 目录句柄与 flock 排他锁，返回 (dir_fd, ledger)。"""
+    dir_fd = _open_usbnet_run_dir(create=True)
+    lock_fd = None
+    try:
+        try:
+            lock_fd = os.open(
+                USBNET_LOCK_FILENAME,
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=dir_fd,
+            )
+        except OSError as exc:
+            _fail("cannot open usbnet ledger lock file: %s" % exc)
+        lmeta = os.fstat(lock_fd)
+        if not stat.S_ISREG(lmeta.st_mode):
+            _fail("usbnet ledger lock must be a regular file")
+        if lmeta.st_uid != USBNET_TRUSTED_UID or lmeta.st_gid != USBNET_TRUSTED_GID:
+            _fail("usbnet ledger lock owner mismatch")
+        if lmeta.st_mode & 0o077:
+            os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        ledger = _read_usbnet_ledger_at(dir_fd)
+        yield dir_fd, ledger
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_fd)
+        os.close(dir_fd)
+
+
+# ── usbnet_grant 令牌解析与验签（ADR-0037 D10.4）────────────────────────────
+
+
+def verify_usbnet_grant(token, conf, expect_devpath, now=None):
+    """校验控制面签发的 Ed25519 usbnet_grant（格式：<b64url_json>.<b64url_sig>）。"""
+    if not isinstance(token, str) or token.count(".") != 1 or len(token) > 8192:
+        _fail("grant token format invalid")
+    payload_seg, sig_seg = token.split(".", 1)
+    sig_bytes = _b64url_decode_nopad(sig_seg, "grant signature")
+    if len(sig_bytes) != 64:
+        _fail("grant Ed25519 signature must be 64 bytes")
+    if not ed25519_verify(
+        conf["control_plane_verify_pubkey_bytes"],
+        payload_seg.encode("ascii"),
+        sig_bytes,
+    ):
+        _fail("grant Ed25519 signature verification failed")
+
+    payload_bytes = _b64url_decode_nopad(payload_seg, "grant payload")
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        _fail("grant payload is not valid JSON: %s" % exc)
+    if not isinstance(payload, dict) or set(payload) != USBNET_GRANT_KEYS:
+        _fail("grant payload keys invalid")
+
+    sid = payload["session_id"]
+    gen = payload["generation"]
+    host_id = payload["host_id"]
+    serial = payload["device_serial"]
+    devpath = payload["usb_devpath"]
+    egress = payload["egress"]
+    iat = payload["iat"]
+    exp = payload["exp"]
+
+    if not isinstance(sid, str) or not _USBNET_ID_RE.match(sid):
+        _fail("grant session_id invalid")
+    if type(gen) is not int or gen < 1:
+        _fail("grant generation must be an integer >= 1")
+    if not isinstance(host_id, str) or host_id != conf["host_id"]:
+        _fail("grant host_id mismatch")
+    if not isinstance(serial, str) or not _USBNET_SERIAL_RE.match(serial):
+        _fail("grant device_serial invalid")
+    if not isinstance(devpath, str) or not _USB_PORT_RE.match(devpath):
+        _fail("grant usb_devpath invalid")
+    if egress not in conf["allowed_egresses"]:
+        _fail("grant egress %r not in allowed_egresses" % (egress,))
+    if type(iat) is not int or type(exp) is not int or iat <= 0 or exp <= 0:
+        _fail("grant iat/exp must be positive integers")
+
+    ttl = exp - iat
+    if not (USBNET_GRANT_MIN_TTL_SECONDS <= ttl <= USBNET_GRANT_MAX_TTL_SECONDS):
+        _fail(
+            "grant lifetime (exp - iat = %d) must be within %d..%d seconds"
+            % (ttl, USBNET_GRANT_MIN_TTL_SECONDS, USBNET_GRANT_MAX_TTL_SECONDS)
+        )
+    now_ts = int(time.time()) if now is None else int(now)
+    if iat > now_ts + USBNET_GRANT_FUTURE_SKEW_SECONDS:
+        _fail("grant iat is too far in the future (iat=%d now=%d)" % (iat, now_ts))
+    if now_ts >= exp:
+        _fail("grant has expired (exp=%d now=%d)" % (exp, now_ts))
+    if devpath != expect_devpath:
+        _fail("grant usb_devpath %s does not match --expect-devpath %s" % (devpath, expect_devpath))
+    if devpath not in conf["allowed_usb_ports"]:
+        _fail("grant usb_devpath %s is not in allowed_usb_ports" % devpath)
+    return payload
+
+
+def _check_grant_revocation_barriers(ledger, grant):
+    """持锁检查三项撤销屏障（缺席键默认 0），命中返回原因字符串，未命中返回 None。"""
+    rev = ledger["revocation_state"]
+    sid = grant["session_id"]
+    gen = grant["generation"]
+    serial = grant["device_serial"]
+    egress = grant["egress"]
+    iat = grant["iat"]
+    for item in rev["revoked_sessions"]:
+        if item["session_id"] == sid and item["generation"] == gen:
+            return "revoked_session(%s#%d)" % (sid, gen)
+    min_gen = rev["min_allowed_generation_by_serial"].get(serial, 0)
+    if gen < min_gen:
+        return "generation_below_watermark(serial=%s gen=%d min=%d)" % (serial, gen, min_gen)
+    min_iat = rev["min_allowed_iat_by_egress"].get(egress, 0)
+    if iat <= min_iat:
+        return "iat_below_egress_barrier(egress=%s iat=%d min=%d)" % (egress, iat, min_iat)
+    return None
+
+
+# ── 可执行 sysfs 网卡身份校验（ADR-0037 D10.4 / D10.5）────────────────────
+
+
+def _host_default_route_ifaces():
+    """读 /proc/net/route 获取宿主机默认路由上联网卡集合（拒绝被误挂桥）。"""
+    ifaces = set()
+    try:
+        with open(USBNET_PROC_NET_ROUTE, "r", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return ifaces
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        iface, dest, _gw, flags_hex = parts[0], parts[1], parts[2], parts[3]
+        if dest == "00000000":
+            try:
+                flags = int(flags_hex, 16)
+            except ValueError:
+                flags = 0
+            if flags & 0x1:  # RTF_UP
+                ifaces.add(iface)
+    return ifaces
+
+
+def validate_usbnet_iface_name(iface):
+    """D10.4 接口名静态校验（不含宿主保留/默认路由上联网卡）。"""
+    if not isinstance(iface, str) or not _USBNET_IFACE_RE.match(iface):
+        _fail("--iface must match ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,14}$, got %r" % (iface,))
+    if iface in ("lo", "docker0") or iface.startswith("br-"):
+        _fail("--iface %r is a forbidden system/bridge interface" % (iface,))
+    if iface in _host_default_route_ifaces():
+        _fail("--iface %r is a host default-route uplink interface" % (iface,))
+    return iface
+
+
+def _read_net_master(net_real):
+    """读取网卡当前挂入的网桥名（未挂桥返回 None）。"""
+    master_path = os.path.join(net_real, "master")
+    try:
+        meta = os.lstat(master_path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        _fail("cannot lstat master for %s: %s" % (net_real, exc))
+    if not stat.S_ISLNK(meta.st_mode):
+        _fail("unexpected non-symlink master entry under %s" % net_real)
+    return os.path.basename(os.path.realpath(master_path))
+
+
+def _read_brport_isolated(net_real):
+    """经已校验 <net_real> 以 O_NOFOLLOW + S_ISREG 回读 brport/isolated。"""
+    net_fd = _open_directory(net_real)
+    try:
+        brport_fd = os.open(
+            "brport",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=net_fd,
+        )
+        try:
+            return _read_sysfs_attr(brport_fd, "isolated", 16).strip()
+        finally:
+            os.close(brport_fd)
+    finally:
+        os.close(net_fd)
+
+
+def _read_net_ifindex(net_real):
+    net_fd = _open_directory(net_real)
+    try:
+        text = _read_sysfs_attr(net_fd, "ifindex", 32).strip()
+    finally:
+        os.close(net_fd)
+    if not text.isdigit() or int(text) < 1:
+        _fail("invalid sysfs ifindex: %r" % (text,))
+    return int(text)
+
+
+def _inspect_usbnet_iface(iface, require_driver=True):
+    """D10.4 可执行 sysfs 身份核验：仅对三处内核符号链接 realpath，叶子属性全 O_NOFOLLOW 读取。"""
+    validate_usbnet_iface_name(iface)
+    devices_root = os.path.realpath(_SYSFS_DEVICES_ROOT).rstrip("/")
+    devices_prefix = devices_root + "/"
+    virtual_root = os.path.join(devices_root, "virtual")
+
+    # ① /sys/class/net/<iface> -> /sys/devices/.../net/<iface>（排除 /sys/devices/virtual/）
+    net_link = os.path.join(NET_SYSFS_BASE, iface)
+    if not os.path.lexists(net_link):
+        _fail("network interface not found in sysfs: %s" % iface)
+    net_real = os.path.realpath(net_link)
+    if not net_real.startswith(devices_prefix) or is_within(net_real, virtual_root):
+        _fail("interface %s does not resolve to a non-virtual /sys/devices path (got %s)" % (iface, net_real))
+    if os.path.basename(net_real) != iface or os.path.basename(os.path.dirname(net_real)) != "net":
+        _fail("interface %s sysfs path must end with /net/%s (got %s)" % (iface, iface, net_real))
+    if os.path.lexists(os.path.join(net_real, "bridge")):
+        _fail("interface %s is a bridge interface and cannot be attached" % iface)
+
+    # ② <net_real>/device -> /sys/devices/.../usbN/.../<bus>-<port>/<bus>-<port>:<cfg>.<intf>
+    dev_link = os.path.join(net_real, "device")
+    if not os.path.lexists(dev_link):
+        _fail("interface %s has no sysfs device link" % iface)
+    usb_intf_real = os.path.realpath(dev_link)
+    if not usb_intf_real.startswith(devices_prefix) or is_within(usb_intf_real, virtual_root):
+        _fail("interface %s device does not resolve under /sys/devices (got %s)" % (iface, usb_intf_real))
+    intf_match = _USBNET_INTF_RE.match(os.path.basename(usb_intf_real))
+    if not intf_match:
+        _fail("interface %s device is not a USB interface directory (got %s)" % (iface, usb_intf_real))
+    intf_port = intf_match.group(1)
+    usb_dev_real = os.path.dirname(usb_intf_real)
+    usb_devpath = os.path.basename(usb_dev_real)
+    if not _USB_PORT_RE.match(usb_devpath) or usb_devpath != intf_port:
+        _fail("interface %s USB parent dir %s mismatches interface port %s" % (iface, usb_devpath, intf_port))
+    if not is_kernel_usb_device_path(usb_dev_real, usb_devpath):
+        _fail("interface %s USB device path invalid: %s" % (iface, usb_dev_real))
+    rel_parts = usb_dev_real[len(devices_prefix):].split("/")
+    if not any(_USBNET_USB_BUS_PART_RE.match(part) for part in rel_parts):
+        _fail("interface %s is not under a USB bus path: %s" % (iface, usb_dev_real))
+
+    # ③ <usb_intf_real>/driver -> /sys/bus/usb/drivers/{rndis_host,cdc_ncm}
+    driver_name = None
+    driver_link = os.path.join(usb_intf_real, "driver")
+    if require_driver or os.path.lexists(driver_link):
+        if not os.path.lexists(driver_link):
+            _fail("interface %s USB interface has no bound driver" % iface)
+        driver_real = os.path.realpath(driver_link)
+        drivers_root = os.path.realpath(USB_DRIVERS_SYSFS_BASE).rstrip("/")
+        driver_name = os.path.basename(driver_real)
+        if os.path.dirname(driver_real) != drivers_root or driver_name not in USBNET_ALLOWED_DRIVERS:
+            _fail(
+                "interface %s driver must be in %s under %s (got %s)"
+                % (iface, sorted(USBNET_ALLOWED_DRIVERS), drivers_root, driver_real)
+            )
+
+    # 打开真实目录并经 O_NOFOLLOW + S_ISREG 读取叶子属性
+    net_fd = _open_directory(net_real)
+    try:
+        ifindex_text = _read_sysfs_attr(net_fd, "ifindex", 32).strip()
+        mac_text = _read_sysfs_attr(net_fd, "address", 64).strip().lower()
+    finally:
+        os.close(net_fd)
+    if not ifindex_text.isdigit() or int(ifindex_text) < 1:
+        _fail("interface %s has invalid ifindex %r" % (iface, ifindex_text))
+    if not _USBNET_MAC_RE.match(mac_text):
+        _fail("interface %s has invalid MAC address %r" % (iface, mac_text))
+
+    usb_dev_fd = _open_directory(usb_dev_real)
+    try:
+        serial_text = _read_sysfs_attr(usb_dev_fd, "serial", 128).strip()
+        vendor_text = _read_sysfs_attr(usb_dev_fd, "idVendor", 32).strip().lower()
+    finally:
+        os.close(usb_dev_fd)
+    if not _USBNET_SERIAL_RE.match(serial_text):
+        _fail("interface %s USB device has invalid serial %r" % (iface, serial_text))
+    if not _USBNET_VENDOR_RE.match(vendor_text):
+        _fail("interface %s USB device has invalid idVendor %r" % (iface, vendor_text))
+
+    return {
+        "iface": iface,
+        "net_real": net_real,
+        "usb_intf_real": usb_intf_real,
+        "usb_dev_real": usb_dev_real,
+        "usb_devpath": usb_devpath,
+        "driver": driver_name,
+        "ifindex": int(ifindex_text),
+        "mac": mac_text,
+        "serial": serial_text,
+        "idVendor": vendor_text,
+        "master": _read_net_master(net_real),
+    }
+
+
+# ── 外部命令收口与三层默认拒绝隔离（ADR-0037 D10.6）────────────────────────
+
+
+def _require_trusted_usbnet_binary(path):
+    """校验外部工具为绝对路径、可信属主且非 group/other 可写（允许 Debian alternatives 链接）。"""
+    if not isinstance(path, str) or not path.startswith("/"):
+        _fail("external binary must be an absolute path: %r" % (path,))
+    try:
+        meta = os.stat(path)
+    except OSError as exc:
+        _fail("required binary missing: %s (%s)" % (path, exc))
+    if not stat.S_ISREG(meta.st_mode):
+        _fail("binary must resolve to a regular file: %s" % path)
+    if meta.st_uid != USBNET_TRUSTED_UID:
+        _fail("binary must be owned by uid %d: %s" % (USBNET_TRUSTED_UID, path))
+    if meta.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        _fail("binary must not be group/other writable: %s" % path)
+
+
+def _run_usbnet_cmd(argv, timeout=None, check=True):
+    """执行固定绝对路径 + 固定 argv + 清空环境 + <= 30s 超时 + 不经 shell 的系统命令。"""
+    _require_trusted_usbnet_binary(argv[0])
+    limit = USBNET_CMD_TIMEOUT_SECONDS if timeout is None else min(timeout, USBNET_CMD_TIMEOUT_SECONDS)
+    try:
+        proc = subprocess.run(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=dict(USBNET_CMD_ENV),
+            close_fds=True,
+            timeout=limit,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if check:
+            raise _UsbnetCmdError("timeout(%ds): %s" % (limit, " ".join(argv))) from exc
+        return 124, "", "timeout"
+    except OSError as exc:
+        if check:
+            raise _UsbnetCmdError("exec failed %s: %s" % (argv[0], exc)) from exc
+        return 127, "", str(exc)
+    out = proc.stdout.decode("utf-8", "replace")
+    err = proc.stderr.decode("utf-8", "replace")
+    if check and proc.returncode != 0:
+        raise _UsbnetCmdError(
+            "rc=%d cmd=%s err=%s" % (proc.returncode, " ".join(argv), err.strip()[:240])
+        )
+    return proc.returncode, out, err
+
+
+def _usbnet_chain_names(egress):
+    suffix = USBNET_EGRESS_CHAIN_SUFFIX[egress]
+    return (
+        "STP_USBNET_IN_%s" % suffix,
+        "STP_USBNET_FWD_%s" % suffix,
+        "STP_USBNET_NAT_%s" % suffix,
+    )
+
+
+def _usbnet_dnsmasq_paths(egress):
+    return (
+        os.path.join(USBNET_RUN_DIR, "dnsmasq-%s.pid" % egress),
+        os.path.join(USBNET_RUN_DIR, "dnsmasq-%s.leases" % egress),
+    )
+
+
+def _usbnet_dnsmasq_status(dir_fd, egress, bridge):
+    """只读检查该出口 dnsmasq 是否存活且命令行匹配受控网桥（防 PID 复用误判）。"""
+    pid_name = "dnsmasq-%s.pid" % egress
+    pid_path, lease_path = _usbnet_dnsmasq_paths(egress)
+    info = {
+        "running": False,
+        "pid": None,
+        "pid_file": pid_path,
+        "lease_file": lease_path,
+    }
+    if dir_fd is None:
+        return info
+    try:
+        fd = os.open(pid_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return info
+    except OSError:
+        return info
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return info
+            raw_pid = handle.read(32).strip()
+    except OSError:
+        return info
+    if not raw_pid.isdigit():
+        return info
+    pid = int(raw_pid)
+    if pid <= 1:
+        return info
+    cmdline_path = os.path.join(USBNET_PROC_ROOT, str(pid), "cmdline")
+    try:
+        with open(cmdline_path, "rb") as handle:
+            parts = [p.decode("utf-8", "replace") for p in handle.read(4096).split(b"\x00") if p]
+    except OSError:
+        return info
+    if not parts:
+        return info
+    exe_base = os.path.basename(parts[0])
+    if exe_base != "dnsmasq":
+        return info
+    if ("--interface=%s" % bridge) not in parts:
+        return info
+    info["running"] = True
+    info["pid"] = pid
+    return info
+
+
+def _iptables_chain_exists(table, chain):
+    rc, _, _ = _run_usbnet_cmd([IPTABLES_BIN, "-w", "-t", table, "-L", chain, "-n"], check=False)
+    return rc == 0
+
+
+def _iptables_ensure_chain(table, chain):
+    if not _iptables_chain_exists(table, chain):
+        _run_usbnet_cmd([IPTABLES_BIN, "-w", "-t", table, "-N", chain])
+    _run_usbnet_cmd([IPTABLES_BIN, "-w", "-t", table, "-F", chain])
+
+
+def _iptables_ensure_jump(table, parent_chain, rule_args, target_chain):
+    check_argv = [IPTABLES_BIN, "-w", "-t", table, "-C", parent_chain] + list(rule_args) + ["-j", target_chain]
+    rc, _, _ = _run_usbnet_cmd(check_argv, check=False)
+    if rc != 0:
+        insert_argv = [IPTABLES_BIN, "-w", "-t", table, "-I", parent_chain, "1"] + list(rule_args) + [
+            "-j", target_chain,
+        ]
+        _run_usbnet_cmd(insert_argv)
+
+
+def _iptables_delete_jumps(table, parent_chain, rule_args, target_chain):
+    check_argv = [IPTABLES_BIN, "-w", "-t", table, "-C", parent_chain] + list(rule_args) + ["-j", target_chain]
+    del_argv = [IPTABLES_BIN, "-w", "-t", table, "-D", parent_chain] + list(rule_args) + ["-j", target_chain]
+    for _ in range(16):
+        rc, _, _ = _run_usbnet_cmd(check_argv, check=False)
+        if rc != 0:
+            break
+        _run_usbnet_cmd(del_argv, check=False)
+
+
+def _install_usbnet_firewall(egress, profile):
+    """按 D10.6 在专属规则链安装 INPUT/FORWARD(DOCKER-USER)/NAT 三层默认拒绝隔离。"""
+    bridge = profile["bridge"]
+    subnet_cidr = profile["subnet_cidr"]
+    gateway_ip = profile["gateway_ip"]
+    upstream_dns = profile["upstream_dns"]
+    uplink_iface = profile["uplink_iface"]
+    local_dns_forward = profile["local_dns_forward"]
+    vpn_gateways = profile["vpn_gateway_ips"]
+    in_chain, fwd_chain, nat_chain = _usbnet_chain_names(egress)
+
+    # ① INPUT 专属链：对源自受控网桥流量默认 DROP，仅放行 DHCP / ICMP echo-request / 可选本地 DNS
+    _iptables_ensure_chain("filter", in_chain)
+    _run_usbnet_cmd([
+        IPTABLES_BIN, "-w", "-t", "filter", "-A", in_chain,
+        "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT",
+    ])
+    _run_usbnet_cmd([
+        IPTABLES_BIN, "-w", "-t", "filter", "-A", in_chain,
+        "-p", "udp", "--sport", "68", "--dport", "67", "-j", "ACCEPT",
+    ])
+    _run_usbnet_cmd([
+        IPTABLES_BIN, "-w", "-t", "filter", "-A", in_chain,
+        "-p", "udp", "--sport", "67", "--dport", "68", "-j", "ACCEPT",
+    ])
+    _run_usbnet_cmd([
+        IPTABLES_BIN, "-w", "-t", "filter", "-A", in_chain,
+        "-p", "icmp", "--icmp-type", "echo-request", "-j", "ACCEPT",
+    ])
+    if local_dns_forward:
+        for proto in ("udp", "tcp"):
+            _run_usbnet_cmd([
+                IPTABLES_BIN, "-w", "-t", "filter", "-A", in_chain,
+                "-d", "%s/32" % gateway_ip, "-p", proto, "--dport", "53", "-j", "ACCEPT",
+            ])
+    _run_usbnet_cmd([IPTABLES_BIN, "-w", "-t", "filter", "-A", in_chain, "-j", "DROP"])
+    _iptables_ensure_jump("filter", "INPUT", ["-i", bridge], in_chain)
+
+    # ② FORWARD / DOCKER-USER 专属链：白名单放行上游 DNS 与授权出口网关，阻断 RFC1918/管理段/Docker 桥
+    _iptables_ensure_chain("filter", fwd_chain)
+    _run_usbnet_cmd([
+        IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain,
+        "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT",
+    ])
+    _run_usbnet_cmd([
+        IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain,
+        "-i", bridge, "-o", bridge, "-j", "DROP",
+    ])
+    for dns_ip in upstream_dns:
+        for proto in ("udp", "tcp"):
+            _run_usbnet_cmd([
+                IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain,
+                "-i", bridge, "-d", "%s/32" % dns_ip, "-p", proto, "--dport", "53", "-j", "ACCEPT",
+            ])
+    for gw_ip in vpn_gateways:
+        _run_usbnet_cmd([
+            IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain,
+            "-i", bridge, "-d", "%s/32" % gw_ip, "-j", "ACCEPT",
+        ])
+    for blocked_cidr in USBNET_BLOCKED_DEST_CIDRS:
+        _run_usbnet_cmd([
+            IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain,
+            "-i", bridge, "-d", blocked_cidr, "-j", "DROP",
+        ])
+    _run_usbnet_cmd([
+        IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain,
+        "-i", bridge, "-o", "docker0", "-j", "DROP",
+    ])
+    if uplink_iface:
+        _run_usbnet_cmd([
+            IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain,
+            "-i", bridge, "-o", uplink_iface, "-j", "ACCEPT",
+        ])
+    else:
+        _run_usbnet_cmd([
+            IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain,
+            "-i", bridge, "-j", "ACCEPT",
+        ])
+    _run_usbnet_cmd([IPTABLES_BIN, "-w", "-t", "filter", "-A", fwd_chain, "-j", "DROP"])
+    _iptables_ensure_jump("filter", "FORWARD", ["-o", bridge], fwd_chain)
+    _iptables_ensure_jump("filter", "FORWARD", ["-i", bridge], fwd_chain)
+    if _iptables_chain_exists("filter", "DOCKER-USER"):
+        _iptables_ensure_jump("filter", "DOCKER-USER", ["-o", bridge], fwd_chain)
+        _iptables_ensure_jump("filter", "DOCKER-USER", ["-i", bridge], fwd_chain)
+
+    # ③ NAT 专属链：仅对受控子网出网做 MASQUERADE
+    _iptables_ensure_chain("nat", nat_chain)
+    if uplink_iface:
+        _run_usbnet_cmd([
+            IPTABLES_BIN, "-w", "-t", "nat", "-A", nat_chain,
+            "-s", subnet_cidr, "-o", uplink_iface, "-j", "MASQUERADE",
+        ])
+    else:
+        _run_usbnet_cmd([
+            IPTABLES_BIN, "-w", "-t", "nat", "-A", nat_chain,
+            "-s", subnet_cidr, "!", "-o", bridge, "-j", "MASQUERADE",
+        ])
+    _iptables_ensure_jump("nat", "POSTROUTING", ["-s", subnet_cidr, "!", "-o", bridge], nat_chain)
+
+
+def _remove_usbnet_firewall(egress, profile):
+    """摘除并删除该出口全部专属规则链，绝不触碰宿主机其他规则。"""
+    bridge = profile["bridge"]
+    subnet_cidr = profile["subnet_cidr"]
+    in_chain, fwd_chain, nat_chain = _usbnet_chain_names(egress)
+
+    _iptables_delete_jumps("filter", "INPUT", ["-i", bridge], in_chain)
+    _iptables_delete_jumps("filter", "FORWARD", ["-i", bridge], fwd_chain)
+    _iptables_delete_jumps("filter", "FORWARD", ["-o", bridge], fwd_chain)
+    if _iptables_chain_exists("filter", "DOCKER-USER"):
+        _iptables_delete_jumps("filter", "DOCKER-USER", ["-i", bridge], fwd_chain)
+        _iptables_delete_jumps("filter", "DOCKER-USER", ["-o", bridge], fwd_chain)
+    _iptables_delete_jumps("nat", "POSTROUTING", ["-s", subnet_cidr, "!", "-o", bridge], nat_chain)
+
+    for table, chain in (("filter", in_chain), ("filter", fwd_chain), ("nat", nat_chain)):
+        if _iptables_chain_exists(table, chain):
+            _run_usbnet_cmd([IPTABLES_BIN, "-w", "-t", table, "-F", chain], check=False)
+            _run_usbnet_cmd([IPTABLES_BIN, "-w", "-t", table, "-X", chain], check=False)
+
+
+def _build_dnsmasq_argv(egress, profile):
+    """D10.6：强制 --port=0 --bind-interfaces --interface=<bridge>，PID/租约落在 /run/stp-agent-priv/。"""
+    pid_path, lease_path = _usbnet_dnsmasq_paths(egress)
+    return [
+        DNSMASQ_BIN,
+        "--port=0",
+        "--bind-interfaces",
+        "--interface=%s" % profile["bridge"],
+        "--except-interface=lo",
+        "--listen-address=%s" % profile["gateway_ip"],
+        "--dhcp-range=%s,%s,%s,12h" % (profile["dhcp_start"], profile["dhcp_end"], profile["netmask"]),
+        "--dhcp-option=option:router,%s" % profile["gateway_ip"],
+        "--dhcp-option=option:dns-server,%s" % ",".join(profile["upstream_dns"]),
+        "--dhcp-leasefile=%s" % lease_path,
+        "--pid-file=%s" % pid_path,
+        "--conf-file=/dev/null",
+        "--no-hosts",
+        "--no-resolv",
+    ]
+
+
+def _enable_ipv4_forwarding():
+    try:
+        fd = os.open(USBNET_IP_FORWARD_PATH, os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise _UsbnetCmdError("cannot open %s: %s" % (USBNET_IP_FORWARD_PATH, exc)) from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise _UsbnetCmdError("%s is not a regular file" % USBNET_IP_FORWARD_PATH)
+        os.write(fd, b"1\n")
+    finally:
+        os.close(fd)
+
+
+def _detach_single_binding_locked(ledger, binding, conf, now):
+    """按 D10.5 完备三分支安全收敛单条台账绑定；返回 (branch_result, error_detail_or_None)。"""
+    sid = binding["session_id"]
+    gen = binding["generation"]
+    serial = binding["device_serial"]
+    bound_iface = binding["iface"]
+    egress = binding["egress"]
+    expected_bridge = conf["egress_profiles"][egress]["bridge"]
+    key = _usbnet_binding_key(sid, gen)
+
+    try:
+        live = _inspect_usbnet_iface(bound_iface, require_driver=False)
+    except (PrivError, OSError):
+        live = None
+
+    # 分支 ①：接口消失、身份不符（接口名被新设备/新会话复用）或意外挂在非本受控他桥上
+    if (
+        live is None
+        or live["ifindex"] != binding["ifindex"]
+        or live["usb_devpath"] != binding["usb_devpath"]
+        or live["mac"] != binding["mac"]
+        or (live["master"] is not None and live["master"] != expected_bridge)
+    ):
+        ledger["active_bindings"].pop(key, None)
+        _record_revocation(ledger, sid, gen, serial, now, advance_watermark=True)
+        return "already_gone_or_reused", None
+
+    # 分支 ②：身份匹配但未挂入任何网桥（含「预写 attaching 后、挂桥前中断」）
+    if live["master"] is None:
+        try:
+            _run_usbnet_cmd([IP_BIN, "link", "set", "dev", bound_iface, "down"])
+        except _UsbnetCmdError as exc:
+            return "error", str(exc)
+        ledger["active_bindings"].pop(key, None)
+        _record_revocation(ledger, sid, gen, serial, now, advance_watermark=True)
+        return "detached_unbridged", None
+
+    # 分支 ③：身份与本受控网桥成员关系完全匹配
+    try:
+        _run_usbnet_cmd([IP_BIN, "link", "set", "dev", bound_iface, "down"])
+        _run_usbnet_cmd([IP_BIN, "link", "set", "dev", bound_iface, "nomaster"])
+    except _UsbnetCmdError as exc:
+        return "error", str(exc)
+    ledger["active_bindings"].pop(key, None)
+    _record_revocation(ledger, sid, gen, serial, now, advance_watermark=True)
+    return "detached", None
+
+
+# ── 六个 usbnet-* 子命令处理函数 ────────────────────────────────────────────
+
+
+def cmd_usbnet_status(args, conf):
+    """只读查询 usbnet 授权、单机上限、网桥、活跃绑定、撤销水位摘要与 dnsmasq 健康态（D10.2）。"""
+    _require_root()
+    try:
+        uconf = _load_usbnet_conf()
+    except UsbnetDisabledError as exc:
+        print("%s: %s" % (USBNET_MARKER_DISABLED, exc), file=sys.stderr)
+        return 2
+
+    # 只读自检：必须具备受信任的外部工具（不修改任何系统状态）
+    for binary in (IP_BIN, BRIDGE_BIN, IPTABLES_BIN, DNSMASQ_BIN):
+        _require_trusted_usbnet_binary(binary)
+
+    dir_fd = _open_usbnet_run_dir(create=False)
+    try:
+        ledger = _read_usbnet_ledger_at(dir_fd) if dir_fd is not None else _empty_usbnet_ledger()
+        managed_bridges = {}
+        dnsmasq_map = {}
+        for egress in uconf["allowed_egresses"]:
+            profile = uconf["egress_profiles"][egress]
+            bridge = profile["bridge"]
+            bridge_sysfs = os.path.join(NET_SYSFS_BASE, bridge)
+            managed_bridges[egress] = {
+                "bridge": bridge,
+                "subnet_cidr": profile["subnet_cidr"],
+                "exists": os.path.lexists(bridge_sysfs),
+            }
+            dnsmasq_map[egress] = _usbnet_dnsmasq_status(dir_fd, egress, bridge)
+    finally:
+        if dir_fd is not None:
+            os.close(dir_fd)
+
+    rev = ledger["revocation_state"]
+    min_iat = {egress: rev["min_allowed_iat_by_egress"].get(egress, 0) for egress in uconf["allowed_egresses"]}
+    for egress, val in rev["min_allowed_iat_by_egress"].items():
+        if egress not in min_iat:
+            min_iat[egress] = val
+
+    payload = {
+        "usbnet_enabled": True,
+        "host_id": uconf["host_id"],
+        "usbnet_max_devices": uconf["usbnet_max_devices"],
+        "allowed_egresses": uconf["allowed_egresses"],
+        "allowed_usb_ports": uconf["allowed_usb_ports"],
+        "managed_bridges": managed_bridges,
+        "active_bindings": [
+            ledger["active_bindings"][k] for k in sorted(ledger["active_bindings"])
+        ],
+        "revocation_state": {
+            "min_allowed_iat_by_egress": min_iat,
+            "min_allowed_generation_by_serial": dict(rev["min_allowed_generation_by_serial"]),
+            "revoked_sessions_count": len(rev["revoked_sessions"]),
+        },
+        "dnsmasq": dnsmasq_map,
+    }
+    print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+def cmd_usbnet_ensure_bridge(args, conf):
+    """幂等创建受控网桥、安装三层隔离专属规则链并启动 DHCP-only dnsmasq（D10.6）。"""
+    _require_root()
+    try:
+        uconf = _load_usbnet_conf()
+    except UsbnetDisabledError as exc:
+        print("%s: %s" % (USBNET_MARKER_DISABLED, exc), file=sys.stderr)
+        return 2
+
+    egress = args.egress
+    if egress not in uconf["allowed_egresses"]:
+        _fail("egress %r is not enabled in allowed_egresses" % (egress,))
+    profile = uconf["egress_profiles"][egress]
+    bridge = profile["bridge"]
+
+    with _locked_usbnet_ledger() as (dir_fd, _ledger):
+        try:
+            rc, _, _ = _run_usbnet_cmd([IP_BIN, "link", "show", "dev", bridge], check=False)
+            if rc != 0:
+                _run_usbnet_cmd([IP_BIN, "link", "add", "name", bridge, "type", "bridge"])
+            _run_usbnet_cmd([
+                IP_BIN, "addr", "replace",
+                "%s/%d" % (profile["gateway_ip"], profile["network"].prefixlen),
+                "dev", bridge,
+            ])
+            _run_usbnet_cmd([IP_BIN, "link", "set", "dev", bridge, "up"])
+            _enable_ipv4_forwarding()
+            _install_usbnet_firewall(egress, profile)
+
+            dm_status = _usbnet_dnsmasq_status(dir_fd, egress, bridge)
+            if not dm_status["running"]:
+                _run_usbnet_cmd(_build_dnsmasq_argv(egress, profile))
+        except _UsbnetCmdError as exc:
+            print("STP_USBNET_ENSURE_BRIDGE_FAILED egress=%s detail=%s" % (egress, exc), file=sys.stderr)
+            return 3
+
+    print(json.dumps({
+        "result": "ok",
+        "egress": egress,
+        "bridge": bridge,
+        "subnet_cidr": profile["subnet_cidr"],
+        "gateway_ip": profile["gateway_ip"],
+    }, sort_keys=True))
+    return 0
+
+
+def cmd_usbnet_attach(args, conf):
+    """验签 usbnet_grant + 三项撤销屏障 + sysfs 身份核验 + 隔离前置两阶段提交挂桥（D10.4）。"""
+    _require_root()
+    try:
+        uconf = _load_usbnet_conf()
+    except UsbnetDisabledError as exc:
+        print("%s: %s" % (USBNET_MARKER_DISABLED, exc), file=sys.stderr)
+        return 2
+
+    expect_devpath = validate_usb_port(args.expect_devpath)
+    iface = validate_usbnet_iface_name(args.iface)
+    now = int(time.time())
+    grant = verify_usbnet_grant(args.grant, uconf, expect_devpath, now=now)
+
+    sid = grant["session_id"]
+    gen = grant["generation"]
+    serial = grant["device_serial"]
+    egress = grant["egress"]
+    bridge = uconf["egress_profiles"][egress]["bridge"]
+    key = _usbnet_binding_key(sid, gen)
+
+    with _locked_usbnet_ledger() as (dir_fd, ledger):
+        _gc_revoked_sessions(ledger, now)
+        revoked_reason = _check_grant_revocation_barriers(ledger, grant)
+        if revoked_reason is not None:
+            print(
+                "%s session_id=%s generation=%d reason=%s"
+                % (USBNET_MARKER_GRANT_REVOKED, sid, gen, revoked_reason),
+                file=sys.stderr,
+            )
+            return 3
+
+        live = _inspect_usbnet_iface(iface, require_driver=True)
+        if live["usb_devpath"] not in uconf["allowed_usb_ports"]:
+            _fail("sysfs usb_devpath %s is not in allowed_usb_ports" % live["usb_devpath"])
+        if live["usb_devpath"] != expect_devpath or live["usb_devpath"] != grant["usb_devpath"]:
+            _fail(
+                "sysfs usb_devpath %s mismatches expect/grant %s"
+                % (live["usb_devpath"], expect_devpath)
+            )
+        if live["serial"] != serial:
+            _fail("sysfs USB serial %r mismatches grant device_serial %r" % (live["serial"], serial))
+
+        active = ledger["active_bindings"]
+        existing = active.get(key)
+        if existing is not None:
+            if (
+                existing["usb_devpath"] != live["usb_devpath"]
+                or existing["device_serial"] != serial
+                or existing["egress"] != egress
+            ):
+                _fail("binding identity conflict for %s" % key)
+        other_bindings = {k: v for k, v in active.items() if k != key}
+        if len(other_bindings) >= uconf["usbnet_max_devices"]:
+            _fail("usbnet_max_devices limit reached (%d)" % uconf["usbnet_max_devices"])
+        for other in other_bindings.values():
+            if other["usb_devpath"] == live["usb_devpath"]:
+                _fail("usb_devpath %s is already bound by %s" % (live["usb_devpath"], other["session_id"]))
+            if other["iface"] == iface:
+                _fail("iface %s is already bound by %s" % (iface, other["session_id"]))
+
+        # ① 预写 state="attaching" 原子落盘
+        active[key] = {
+            "session_id": sid,
+            "generation": gen,
+            "state": "attaching",
+            "egress": egress,
+            "device_serial": serial,
+            "iface": iface,
+            "ifindex": live["ifindex"],
+            "usb_devpath": live["usb_devpath"],
+            "mac": live["mac"],
+            "attached_at": now,
+        }
+        _write_usbnet_ledger_at(dir_fd, ledger)
+
+        # ② down -> ③ master -> ④ isolated on + 回读 "1" -> ⑤ 复核 ifindex & isolated == "1" -> up
+        try:
+            _run_usbnet_cmd([IP_BIN, "link", "set", "dev", iface, "down"])
+            _run_usbnet_cmd([IP_BIN, "link", "set", "dev", iface, "master", bridge])
+            _run_usbnet_cmd([BRIDGE_BIN, "link", "set", "dev", iface, "isolated", "on"])
+            try:
+                iso_val = _read_brport_isolated(live["net_real"])
+            except (PrivError, OSError) as exc:
+                raise _UsbnetCmdError("brport/isolated readback failed: %s" % exc) from exc
+            if iso_val != "1":
+                raise _UsbnetCmdError("brport/isolated readback expected '1', got %r" % (iso_val,))
+
+            # ⑤ UP 前复核 ifindex 未变且 brport/isolated 仍为 "1"
+            try:
+                cur_ifindex = _read_net_ifindex(live["net_real"])
+                iso_val_recheck = _read_brport_isolated(live["net_real"])
+            except (PrivError, OSError) as exc:
+                raise _UsbnetCmdError("pre-UP sysfs recheck failed: %s" % exc) from exc
+            if cur_ifindex != live["ifindex"] or iso_val_recheck != "1":
+                raise _UsbnetCmdError(
+                    "pre-UP recheck mismatch ifindex=%s(want %s) isolated=%r"
+                    % (cur_ifindex, live["ifindex"], iso_val_recheck)
+                )
+
+            _run_usbnet_cmd([IP_BIN, "link", "set", "dev", iface, "up"])
+        except _UsbnetCmdError as exc:
+            # 任一步失败：先强制 down 维持不转发，再尽力 nomaster
+            _run_usbnet_cmd([IP_BIN, "link", "set", "dev", iface, "down"], check=False)
+            nomaster_rc, _, _ = _run_usbnet_cmd(
+                [IP_BIN, "link", "set", "dev", iface, "nomaster"], check=False,
+            )
+            unbridged = nomaster_rc == 0
+            if not unbridged:
+                try:
+                    unbridged = _read_net_master(live["net_real"]) is None
+                except (PrivError, OSError):
+                    unbridged = False
+            if unbridged:
+                active.pop(key, None)
+                _write_usbnet_ledger_at(dir_fd, ledger)
+                rollback_state = "complete"
+            else:
+                rollback_state = "incomplete_port_down"
+            print(
+                "%s rollback=%s session_id=%s generation=%d reason=%s"
+                % (USBNET_MARKER_ATTACH_ROLLBACK, rollback_state, sid, gen, exc),
+                file=sys.stderr,
+            )
+            return 3
+
+        # 原子更新为 attached 并单调推进按 device_serial 索引的最小代次水位
+        active[key]["state"] = "attached"
+        active[key]["attached_at"] = int(time.time())
+        min_gen_map = ledger["revocation_state"]["min_allowed_generation_by_serial"]
+        if gen > min_gen_map.get(serial, 0):
+            min_gen_map[serial] = gen
+        _write_usbnet_ledger_at(dir_fd, ledger)
+
+    print(json.dumps({
+        "result": "attached",
+        "session_id": sid,
+        "generation": gen,
+        "egress": egress,
+        "bridge": bridge,
+        "iface": iface,
+        "ifindex": live["ifindex"],
+        "usb_devpath": live["usb_devpath"],
+        "device_serial": serial,
+    }, sort_keys=True))
+    return 0
+
+
+def cmd_usbnet_detach(args, conf):
+    """基于台账安全摘桥与半态收敛（独立于短期 usbnet_grant 有效期，D10.5）。"""
+    _require_root()
+    try:
+        uconf = _load_usbnet_conf()
+    except UsbnetDisabledError as exc:
+        print("%s: %s" % (USBNET_MARKER_DISABLED, exc), file=sys.stderr)
+        return 2
+
+    sid = args.session_id
+    gen = args.generation
+    if not isinstance(sid, str) or not _USBNET_ID_RE.match(sid):
+        _fail("--session-id invalid")
+    if type(gen) is not int or gen < 1:
+        _fail("--generation must be an integer >= 1")
+    expect_iface = args.expect_iface
+    if expect_iface is not None and not _USBNET_IFACE_RE.match(expect_iface):
+        _fail("--expect-iface invalid: %r" % (expect_iface,))
+    expect_devpath = validate_usb_port(args.expect_devpath) if args.expect_devpath is not None else None
+
+    key = _usbnet_binding_key(sid, gen)
+    now = int(time.time())
+
+    with _locked_usbnet_ledger() as (dir_fd, ledger):
+        _gc_revoked_sessions(ledger, now)
+        binding = ledger["active_bindings"].get(key)
+        if binding is None:
+            _record_revocation(ledger, sid, gen, "", now, advance_watermark=False)
+            _write_usbnet_ledger_at(dir_fd, ledger)
+            print(json.dumps({
+                "result": "already_gone_or_reused",
+                "reason": "not_in_ledger",
+                "session_id": sid,
+                "generation": gen,
+            }, sort_keys=True))
+            return 0
+
+        if expect_iface is not None and expect_iface != binding["iface"]:
+            _fail(
+                "%s expect_iface=%s bound_iface=%s"
+                % (USBNET_MARKER_BINDING_MISMATCH, expect_iface, binding["iface"])
+            )
+        if expect_devpath is not None and expect_devpath != binding["usb_devpath"]:
+            _fail(
+                "%s expect_devpath=%s bound_devpath=%s"
+                % (USBNET_MARKER_BINDING_MISMATCH, expect_devpath, binding["usb_devpath"])
+            )
+
+        result, err = _detach_single_binding_locked(ledger, binding, uconf, now)
+        if err is not None:
+            print(
+                "STP_USBNET_DETACH_FAILED session_id=%s generation=%d reason=%s" % (sid, gen, err),
+                file=sys.stderr,
+            )
+            return 3
+        _write_usbnet_ledger_at(dir_fd, ledger)
+
+    print(json.dumps({
+        "result": result,
+        "session_id": sid,
+        "generation": gen,
+        "iface": binding["iface"],
+        "usb_devpath": binding["usb_devpath"],
+    }, sort_keys=True))
+    return 0
+
+
+def cmd_usbnet_revoke(args, conf):
+    """记录撤销并单调推进 device_serial 代次水位，不删除 active_bindings（D10.5）。"""
+    _require_root()
+    try:
+        _load_usbnet_conf()
+    except UsbnetDisabledError as exc:
+        print("%s: %s" % (USBNET_MARKER_DISABLED, exc), file=sys.stderr)
+        return 2
+
+    sid = args.session_id
+    gen = args.generation
+    serial = args.serial
+    if not isinstance(sid, str) or not _USBNET_ID_RE.match(sid):
+        _fail("--session-id invalid")
+    if type(gen) is not int or gen < 1:
+        _fail("--generation must be an integer >= 1")
+    if not isinstance(serial, str) or not _USBNET_SERIAL_RE.match(serial):
+        _fail("--serial invalid")
+
+    now = int(time.time())
+    with _locked_usbnet_ledger() as (dir_fd, ledger):
+        _gc_revoked_sessions(ledger, now)
+        _record_revocation(ledger, sid, gen, serial, now, advance_watermark=True)
+        _write_usbnet_ledger_at(dir_fd, ledger)
+
+    print(json.dumps({
+        "result": "revoked",
+        "session_id": sid,
+        "generation": gen,
+        "serial": serial,
+    }, sort_keys=True))
+    return 0
+
+
+def _stop_usbnet_dnsmasq(dir_fd, egress, bridge):
+    """停止该出口 dnsmasq 并清理 /run/stp-agent-priv/ 下 PID 与租约文件。"""
+    errors = []
+    status = _usbnet_dnsmasq_status(dir_fd, egress, bridge)
+    if status["running"] and status["pid"] is not None:
+        pid = status["pid"]
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            errors.append("dnsmasq_sigterm:%s" % exc)
+        # 有界等待退出
+        for _ in range(30):
+            if not _usbnet_dnsmasq_status(dir_fd, egress, bridge)["running"]:
+                break
+            time.sleep(0.1)
+        if _usbnet_dnsmasq_status(dir_fd, egress, bridge)["running"]:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                errors.append("dnsmasq_sigkill:%s" % exc)
+            for _ in range(20):
+                if not _usbnet_dnsmasq_status(dir_fd, egress, bridge)["running"]:
+                    break
+                time.sleep(0.1)
+
+    for fname in ("dnsmasq-%s.pid" % egress, "dnsmasq-%s.leases" % egress):
+        try:
+            os.unlink(fname, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            errors.append("unlink_%s:%s" % (fname, exc))
+    return errors
+
+
+def cmd_usbnet_teardown(args, conf):
+    """零残留关闭受控网桥：无条件先推进 min_allowed_iat_by_egress 落盘，再清理与零残留复核（D10.5）。"""
+    _require_root()
+    try:
+        uconf = _load_usbnet_conf()
+    except UsbnetDisabledError as exc:
+        print("%s: %s" % (USBNET_MARKER_DISABLED, exc), file=sys.stderr)
+        return 2
+
+    egress = args.egress
+    if egress not in uconf["allowed_egresses"]:
+        _fail("egress %r is not enabled in allowed_egresses" % (egress,))
+    profile = uconf["egress_profiles"][egress]
+    bridge = profile["bridge"]
+    force = bool(args.force)
+
+    with _locked_usbnet_ledger() as (dir_fd, ledger):
+        now = int(time.time())
+        _gc_revoked_sessions(ledger, now)
+        egress_bindings = [
+            (k, dict(v))
+            for k, v in sorted(ledger["active_bindings"].items())
+            if v["egress"] == egress
+        ]
+        if egress_bindings and not force:
+            print(
+                "%s egress=%s count=%d" % (USBNET_MARKER_ACTIVE_BINDINGS, egress, len(egress_bindings)),
+                file=sys.stderr,
+            )
+            return 3
+
+        # ① 无条件先持久化撤销屏障（即使 active_bindings 为空也推进 min_allowed_iat_by_egress）
+        min_iat_map = ledger["revocation_state"]["min_allowed_iat_by_egress"]
+        new_iat_barrier = max(min_iat_map.get(egress, 0), now + USBNET_TEARDOWN_COOLDOWN_SECONDS)
+        min_iat_map[egress] = new_iat_barrier
+        for _key, binding in egress_bindings:
+            _record_revocation(
+                ledger,
+                binding["session_id"],
+                binding["generation"],
+                binding["device_serial"],
+                now,
+                advance_watermark=True,
+            )
+        _write_usbnet_ledger_at(dir_fd, ledger)
+
+        errors = []
+        # ② 逐条按三分支安全摘桥并移除 active_bindings
+        for _key, binding in egress_bindings:
+            _res, err = _detach_single_binding_locked(ledger, binding, uconf, now)
+            if err is not None:
+                errors.append("detach_%s#%d:%s" % (binding["session_id"], binding["generation"], err))
+        _write_usbnet_ledger_at(dir_fd, ledger)
+
+        # ③ 停止 dnsmasq 并清理 /run/stp-agent-priv/ 下 PID/租约文件
+        errors.extend(_stop_usbnet_dnsmasq(dir_fd, egress, bridge))
+
+        # ④ 摘除并删除专属规则链
+        try:
+            _remove_usbnet_firewall(egress, profile)
+        except _UsbnetCmdError as exc:
+            errors.append("firewall:%s" % exc)
+
+        # ⑤ 删除受控网桥
+        if os.path.lexists(os.path.join(NET_SYSFS_BASE, bridge)):
+            rc_down, _, err_down = _run_usbnet_cmd([IP_BIN, "link", "set", "dev", bridge, "down"], check=False)
+            if rc_down != 0:
+                errors.append("bridge_down:%s" % err_down.strip()[:120])
+            rc_del, _, err_del = _run_usbnet_cmd(
+                [IP_BIN, "link", "delete", "dev", bridge, "type", "bridge"], check=False,
+            )
+            if rc_del != 0:
+                errors.append("bridge_delete:%s" % err_del.strip()[:120])
+
+        # ⑥ 零残留复核
+        if os.path.lexists(os.path.join(NET_SYSFS_BASE, bridge)):
+            errors.append("residue_bridge_exists:%s" % bridge)
+        if _usbnet_dnsmasq_status(dir_fd, egress, bridge)["running"]:
+            errors.append("residue_dnsmasq_running")
+        for fname in ("dnsmasq-%s.pid" % egress, "dnsmasq-%s.leases" % egress):
+            try:
+                os.lstat(fname, dir_fd=dir_fd)
+                errors.append("residue_file:%s" % fname)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                errors.append("residue_stat_%s:%s" % (fname, exc))
+        in_chain, fwd_chain, nat_chain = _usbnet_chain_names(egress)
+        for table, chain in (("filter", in_chain), ("filter", fwd_chain), ("nat", nat_chain)):
+            if _iptables_chain_exists(table, chain):
+                errors.append("residue_chain:%s/%s" % (table, chain))
+        remaining_bindings = [
+            k for k, v in ledger["active_bindings"].items() if v["egress"] == egress
+        ]
+        if remaining_bindings:
+            errors.append("residue_active_bindings:%d" % len(remaining_bindings))
+
+        if errors:
+            print(
+                "%s egress=%s errors=%s"
+                % (USBNET_MARKER_TEARDOWN_INCOMPLETE, egress, json.dumps(errors, separators=(",", ":"))),
+                file=sys.stderr,
+            )
+            return 3
+
+    print(json.dumps({
+        "result": "teardown_ok",
+        "egress": egress,
+        "bridge": bridge,
+        "min_allowed_iat": new_iat_barrier,
+    }, sort_keys=True))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1652,6 +3577,26 @@ _SUBCOMMAND_CONTRACT = {
                   "--action", "cycle", "--delay", "12"],
     # #2972：xHCI 主控自动恢复（D9）。无目标参数子命令。
     "xhci-rebind": [],
+    # #4212：USB 反向供网受限通道（D10）。六个窄子命令。
+    "usbnet-ensure-bridge": ["--egress", "direct"],
+    "usbnet-attach": [
+        "--grant", "eyJ0ZXN0IjoxfQ." + "A" * 86,
+        "--iface", "usb0",
+        "--expect-devpath", "1-1.2",
+    ],
+    "usbnet-detach": [
+        "--session-id", "sess-1",
+        "--generation", "1",
+        "--expect-iface", "usb0",
+        "--expect-devpath", "1-1.2",
+    ],
+    "usbnet-revoke": [
+        "--session-id", "sess-1",
+        "--generation", "1",
+        "--serial", "MTK0001",
+    ],
+    "usbnet-teardown": ["--egress", "direct", "--force"],
+    "usbnet-status": [],
 }
 
 # #3356：参数级能力标记（capabilities 在子命令行之外逐行输出）。旧 wrapper 只报
@@ -1659,7 +3604,13 @@ _SUBCOMMAND_CONTRACT = {
 # fail-closed（子命令级判据对「同名的 sync-env 缺新 flag」没有判别力）。
 # #3892：`usb-power/expect-slot` 标记 usb-power 实现了 `--expect-slot` 比对；
 # flash_firmware 1.4.0 在取锁前要求此标记（ADR-0063 D3 第 9 条）。
-_EXTRA_CAPABILITIES = ("sync-env/retired-keys", "usb-power/expect-slot")
+# #4212：`usbnet` 与 `usbnet/grant-v1` 标记 D10 六个窄子命令与 Ed25519 grant 验签契约。
+_EXTRA_CAPABILITIES = (
+    "sync-env/retired-keys",
+    "usb-power/expect-slot",
+    "usbnet",
+    "usbnet/grant-v1",
+)
 
 
 def _registered_subcommands(parser) -> list:
@@ -1806,6 +3757,56 @@ def _build_parser():
         help="unbind and rebind bound xhci_hcd PCI controllers without target args (ADR-0037 D9)",
         allow_abbrev=False,
     )
+
+    # ADR-0037 D10 / ADR-0066 D6（#4212）：USB 反向供网受限窄面（全部 allow_abbrev=False）。
+    p = sub.add_parser(
+        "usbnet-ensure-bridge",
+        help="ensure managed USB-net bridge, isolation chains, and DHCP-only dnsmasq (ADR-0037 D10)",
+        allow_abbrev=False,
+    )
+    p.add_argument("--egress", required=True, choices=list(USBNET_ALLOWED_EGRESS_CHOICES))
+
+    p = sub.add_parser(
+        "usbnet-attach",
+        help="verify signed usbnet_grant and attach USB gadget iface with L2 isolation (ADR-0037 D10)",
+        allow_abbrev=False,
+    )
+    p.add_argument("--grant", required=True)
+    p.add_argument("--iface", required=True)
+    p.add_argument("--expect-devpath", required=True, dest="expect_devpath")
+
+    p = sub.add_parser(
+        "usbnet-detach",
+        help="safely detach a tracked USB-net session binding without requiring grant TTL (ADR-0037 D10)",
+        allow_abbrev=False,
+    )
+    p.add_argument("--session-id", required=True, dest="session_id")
+    p.add_argument("--generation", required=True, type=int)
+    p.add_argument("--expect-iface", default=None, dest="expect_iface")
+    p.add_argument("--expect-devpath", default=None, dest="expect_devpath")
+
+    p = sub.add_parser(
+        "usbnet-revoke",
+        help="revoke a USB-net session and advance per-serial generation watermark (ADR-0037 D10)",
+        allow_abbrev=False,
+    )
+    p.add_argument("--session-id", required=True, dest="session_id")
+    p.add_argument("--generation", required=True, type=int)
+    p.add_argument("--serial", required=True)
+
+    p = sub.add_parser(
+        "usbnet-teardown",
+        help="tear down managed USB-net bridge, dnsmasq, and isolation chains with zero residue (ADR-0037 D10)",
+        allow_abbrev=False,
+    )
+    p.add_argument("--egress", required=True, choices=list(USBNET_ALLOWED_EGRESS_CHOICES))
+    p.add_argument("--force", action="store_true", default=False)
+
+    sub.add_parser(
+        "usbnet-status",
+        help="read-only USB-net authorization, bindings, revocation summary, and dnsmasq health (ADR-0037 D10)",
+        allow_abbrev=False,
+    )
     return parser
 
 
@@ -1844,9 +3845,18 @@ def main(argv=None):
         "read-kernel-log": cmd_read_kernel_log,
         "usb-power": cmd_usb_power,
         "xhci-rebind": cmd_xhci_rebind,
+        "usbnet-ensure-bridge": cmd_usbnet_ensure_bridge,
+        "usbnet-attach": cmd_usbnet_attach,
+        "usbnet-detach": cmd_usbnet_detach,
+        "usbnet-revoke": cmd_usbnet_revoke,
+        "usbnet-teardown": cmd_usbnet_teardown,
+        "usbnet-status": cmd_usbnet_status,
     }
     try:
         return handlers[args.command](args, conf)
+    except UsbnetDisabledError as exc:
+        print("%s: %s" % (USBNET_MARKER_DISABLED, exc), file=sys.stderr)
+        return 2
     except PrivError as exc:
         print("STP_AGENT_PRIV_ERROR: %s" % exc, file=sys.stderr)
         return 2

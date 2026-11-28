@@ -948,3 +948,90 @@
           packages_rc={{ agent_flash_prereq_pkgs.rc | default('skipped') }}
           packages_out={{ agent_flash_prereq_pkgs.stdout_lines | default([]) | join(' | ') }}
       when: agent_ensure_flash_prereqs | default(false) | bool
+
+    # ── USB 反向供网授权配置与 NetworkManager 防接管（#4212 / ADR-0037 D10，opt-in）──
+    # 默认关闭（agent_configure_usbnet=false）；下发的 /etc/stp-usbnet.conf 默认亦为
+    # usbnet_enabled=false（root:root, 0640 非 group/other 可写），仅对经 Owner 裁决的
+    # 试点主机显式开启。严禁在本段新增或修改任何 sudoers 规则（ADR-0037 D6/D10.7）。
+    - name: Deploy root-owned /etc/stp-usbnet.conf template — default disabled (#4212)
+      become: true
+      tags: ["usbnet"]
+      ansible.builtin.copy:
+        dest: /etc/stp-usbnet.conf
+        owner: root
+        group: root
+        mode: "0640"
+        content: >-
+          {{
+            {
+              'usbnet_enabled': (agent_usbnet_enabled | default(false) | bool),
+              'host_id': agent_upgrade_host_id,
+              'control_plane_verify_pubkey': (agent_usbnet_verify_pubkey | default('')),
+              'allowed_usb_ports': (agent_usbnet_allowed_usb_ports | default([])),
+              'allowed_egresses': (agent_usbnet_allowed_egresses | default(['direct'])),
+              'usbnet_max_devices': (agent_usbnet_max_devices | default(8) | int),
+              'egress_profiles': (
+                agent_usbnet_egress_profiles | default({
+                  'direct': {
+                    'bridge': 'br-stpusb-dir',
+                    'subnet_cidr': '10.200.0.0/22',
+                    'upstream_dns': ['223.5.5.5', '114.114.114.114'],
+                    'uplink_iface': none,
+                    'local_dns_forward': false,
+                    'vpn_gateway_ips': [],
+                  },
+                })
+              ),
+            } | to_nice_json
+          }}
+      when: agent_configure_usbnet | default(false) | bool
+
+    - name: Check if NetworkManager conf.d directory exists (#4212)
+      become: true
+      tags: ["usbnet"]
+      ansible.builtin.stat:
+        path: /etc/NetworkManager/conf.d
+      register: agent_usbnet_nm_conf_dir
+      when: agent_configure_usbnet | default(false) | bool
+
+    - name: Prevent NetworkManager from auto-managing STP USB-net bridges and RNDIS/CDC-NCM ifaces (#4212)
+      become: true
+      tags: ["usbnet"]
+      ansible.builtin.copy:
+        dest: /etc/NetworkManager/conf.d/99-stp-usbnet-unmanaged.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by STP Ansible (#4212 / ADR-0037 D10.6)
+          # Prevent NetworkManager from bringing up USB-net interfaces before L2 isolation is ready
+          [keyfile]
+          unmanaged-devices=interface-name:br-stpusb-*;driver:rndis_host;driver:cdc_ncm
+      register: agent_usbnet_nm_dropin
+      when:
+        - agent_configure_usbnet | default(false) | bool
+        - agent_usbnet_nm_conf_dir.stat.isdir | default(false)
+
+    - name: Reload NetworkManager after usbnet unmanaged drop-in change (#4212)
+      become: true
+      tags: ["usbnet"]
+      ansible.builtin.command: systemctl reload NetworkManager
+      changed_when: false
+      failed_when: false
+      when:
+        - agent_configure_usbnet | default(false) | bool
+        - agent_usbnet_nm_dropin.changed | default(false)
+
+    - name: Ensure dnsmasq-base is installed when usbnet is enabled (#4212)
+      become: true
+      tags: ["usbnet"]
+      ansible.builtin.apt:
+        name: dnsmasq-base
+        state: present
+        install_recommends: false
+        update_cache: true
+        cache_valid_time: 86400
+      failed_when: false
+      when:
+        - agent_configure_usbnet | default(false) | bool
+        - agent_usbnet_enabled | default(false) | bool
