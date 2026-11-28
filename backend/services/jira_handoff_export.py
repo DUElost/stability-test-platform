@@ -33,6 +33,7 @@ from backend.agent.contracts.evidence_layout import (
     EvidenceLayoutError,
     copytree_no_symlinks,
     resolve_valid_aee_extract_exp_main,
+    safe_rmtree_no_follow,
 )
 from backend.core.settings.jira_handoff_export import (
     get_jira_handoff_export_settings,
@@ -558,28 +559,29 @@ def ensure_dec_for_entry(
         if existing is not None:
             return existing
         _track_extract_enter()
+        work = Path(tempfile.mkdtemp(prefix="stp-handoff-dec-"))
         try:
-            with tempfile.TemporaryDirectory(prefix="stp-handoff-dec-") as tmp:
-                work = Path(tmp)
-                exp_main = _run_aee_extract_isolated(dbg, tool=tool, work_dir=work)
-                dec_src = exp_main.parent
-                dest_dec = entry_dir / dec_src.name
-                if dest_dec.exists():
-                    raise JiraHandoffError(
-                        status_code=409,
-                        code="handoff_export_overwrite_rejected",
-                        detail=f".DEC destination already exists unexpectedly: {dest_dec}",
-                    )
-                shutil.copytree(dec_src, dest_dec, symlinks=False)
-                final = dest_dec / "__exp_main.txt"
-                if not final.is_file() or final.is_symlink():
-                    raise JiraHandoffError(
-                        status_code=502,
-                        code="handoff_dec_extract_failed",
-                        detail="copied .DEC is missing readable __exp_main.txt",
-                    )
-                return final
+            exp_main = _run_aee_extract_isolated(dbg, tool=tool, work_dir=work)
+            dec_src = exp_main.parent
+            dest_dec = entry_dir / dec_src.name
+            if dest_dec.exists():
+                raise JiraHandoffError(
+                    status_code=409,
+                    code="handoff_export_overwrite_rejected",
+                    detail=f".DEC destination already exists unexpectedly: {dest_dec}",
+                )
+            shutil.copytree(dec_src, dest_dec, symlinks=False)
+            final = dest_dec / "__exp_main.txt"
+            if not final.is_file() or final.is_symlink():
+                raise JiraHandoffError(
+                    status_code=502,
+                    code="handoff_dec_extract_failed",
+                    detail="copied .DEC is missing readable __exp_main.txt",
+                )
+            return final
         finally:
+            # 不得让 chmod 000 半成品的清理 PermissionError 覆盖 502（#4199 v1.3 B11-U6）。
+            safe_rmtree_no_follow(work)
             _track_extract_exit()
 
 

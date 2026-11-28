@@ -17,6 +17,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -34,6 +35,7 @@ try:
         resolve_path_under_aee_local,
     )
     from .contracts.evidence_layout import (
+        EXP_MAIN_NAME,
         EvidenceLayoutError,
         assert_no_symlinks,
         copytree_no_symlinks,
@@ -42,6 +44,7 @@ try:
         list_dec_exp_mains,
         parse_evidence_rel_path,
         resolve_valid_aee_extract_exp_main,
+        safe_rmtree_no_follow,
     )
     from .tool_cache import resolve_packaged_scan_tool
 except ImportError:  # pragma: no cover - 兼容脚本式导入
@@ -51,6 +54,7 @@ except ImportError:  # pragma: no cover - 兼容脚本式导入
         resolve_path_under_aee_local,
     )
     from agent.contracts.evidence_layout import (
+        EXP_MAIN_NAME,
         EvidenceLayoutError,
         assert_no_symlinks,
         copytree_no_symlinks,
@@ -59,6 +63,7 @@ except ImportError:  # pragma: no cover - 兼容脚本式导入
         list_dec_exp_mains,
         parse_evidence_rel_path,
         resolve_valid_aee_extract_exp_main,
+        safe_rmtree_no_follow,
     )
     from agent.tool_cache import resolve_packaged_scan_tool
 
@@ -295,51 +300,60 @@ class EvidenceUploader:
         return None
 
     @staticmethod
-    def _purge_new_dec_dirs(work_dir: Path, before_names: set[str]) -> None:
-        """删除本次解包新产生的 ``*.DEC``，避免半成品被误当合法产物发布。"""
-        for path in list(work_dir.glob("*.DEC")):
-            if path.name in before_names:
-                continue
-            try:
-                if path.is_symlink() or path.is_file():
-                    path.unlink(missing_ok=True)
-                elif path.is_dir():
-                    shutil.rmtree(path, ignore_errors=True)
-            except OSError:
-                continue
-
-    @staticmethod
     def _unpack_dbg_in_place(dbg: Path, tool: Path) -> Path:
-        """在 dbg 所在目录调用 aee_extract，产出 ``{dbg.name}.DEC/__exp_main.txt``。
+        """在独立临时目录调用 aee_extract，核验通过后仅复制目标 ``*.DEC`` 进 ``dbg.parent``。
 
         ``returncode == 0`` 仍须过四重产出核验；``returncode != 0`` 时先记 WARNING，
         再按产出实证判据判定（#4199 v1.2 B11-U5，兼容 MTK 原厂 ``rc=255`` 满产出）。
+        单次调用隔离解包，使同级多余 / 嵌套 / 超时半成品无法进入待发布 ``temp``，
+        且同目录先前合法 ``*.DEC`` 不会被误认为本次产物（#4199 v1.3 B11-U6）。
         """
-        work_dir = dbg.parent
-        before_names = {path.name for path in work_dir.glob("*.DEC")}
-        cmd = [str(tool), str(dbg)]
-        result = subprocess.run(
-            cmd,
-            cwd=str(work_dir),
-            capture_output=True,
-            timeout=_AEE_EXTRACT_TIMEOUT_SECONDS,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = (result.stderr or b"").decode("utf-8", "ignore")[:500]
-            stdout = (result.stdout or b"").decode("utf-8", "ignore")[:500]
-            logger.warning(
-                "aee_extract_nonzero_rc dbg=%s rc=%s stderr=%r stdout=%r",
-                dbg.name,
-                result.returncode,
-                stderr,
-                stdout,
-            )
+        work = Path(tempfile.mkdtemp(prefix="stp-evidence-aee-"))
         try:
-            return resolve_valid_aee_extract_exp_main(work_dir, dbg_name=dbg.name)
-        except EvidenceLayoutError:
-            EvidenceUploader._purge_new_dec_dirs(work_dir, before_names)
-            raise
+            work_dbg = work / dbg.name
+            shutil.copyfile(dbg, work_dbg)
+            cmd = [str(tool), str(work_dbg)]
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(work),
+                    capture_output=True,
+                    timeout=_AEE_EXTRACT_TIMEOUT_SECONDS,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                # 半成品仅存在于隔离 work；finally 清理后不污染 dbg.parent。
+                raise
+            if result.returncode != 0:
+                stderr = (result.stderr or b"").decode("utf-8", "ignore")[:500]
+                stdout = (result.stdout or b"").decode("utf-8", "ignore")[:500]
+                logger.warning(
+                    "aee_extract_nonzero_rc dbg=%s rc=%s stderr=%r stdout=%r",
+                    dbg.name,
+                    result.returncode,
+                    stderr,
+                    stdout,
+                )
+            exp_main = resolve_valid_aee_extract_exp_main(work, dbg_name=dbg.name)
+            dest_dec = dbg.parent / exp_main.parent.name
+            if dest_dec.exists() or dest_dec.is_symlink():
+                raise EvidenceLayoutError(
+                    f"aee_extract .DEC destination already exists: {dest_dec}"
+                )
+            try:
+                shutil.copytree(exp_main.parent, dest_dec, symlinks=False)
+            except OSError:
+                safe_rmtree_no_follow(dest_dec)
+                raise
+            final = dest_dec / EXP_MAIN_NAME
+            if final.is_symlink() or not final.is_file():
+                safe_rmtree_no_follow(dest_dec)
+                raise EvidenceLayoutError(
+                    f"copied .DEC missing plain {EXP_MAIN_NAME}: {final}"
+                )
+            return final
+        finally:
+            safe_rmtree_no_follow(work)
 
     def _materialize_dec_in_temp(self, temp: Path) -> None:
         """方案 A：仅在隔离 temp 内并入 / 生成 ``*.DEC/__exp_main.txt``，不触碰 src。"""
@@ -400,8 +414,7 @@ class EvidenceUploader:
             os.rename(temp, dest)
             return published
         finally:
-            if temp.exists():
-                shutil.rmtree(temp, ignore_errors=True)
+            safe_rmtree_no_follow(temp)
 
     def _upload(self, task: dict) -> None:
         publication_id = int(task["publication_id"])
@@ -481,8 +494,7 @@ class EvidenceUploader:
                 raise EvidenceLayoutError("source mutated during evidence copy")
             return published
         finally:
-            if scratch.exists():
-                shutil.rmtree(scratch, ignore_errors=True)
+            safe_rmtree_no_follow(scratch)
 
     def _recover_exhausted(self, task: dict, attempts: int) -> None:
         """预算耗尽后的恢复：只核验同一发布身份的既有目标，绝不复制或覆盖。

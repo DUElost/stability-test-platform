@@ -28,6 +28,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
@@ -90,6 +91,66 @@ def list_dbg_files(root: Path | str) -> list[Path]:
     return found
 
 
+def safe_rmtree_no_follow(root: Path | str) -> None:
+    """删除目录树：不跟随 symlink；必要时仅对真实目录/文件恢复权限以便删除。
+
+    用于清理 ``chmod 000`` 半成品临时目录（#4199 v1.3 B11-U6）。对 symlink 只
+    ``unlink`` 链接本身，绝不 ``chmod`` / 删除其外部目标。自实现深度优先删除，
+    避免 ``shutil.rmtree`` 的 ``onexc`` 重试在 Python 3.12+ 对 ``os.open`` 签名不兼容。
+    """
+    base = str(root)
+    if not os.path.lexists(base):
+        return
+
+    def _chmod_real(path: str) -> None:
+        try:
+            st = os.lstat(path)
+        except OSError:
+            return
+        if stat.S_ISLNK(st.st_mode):
+            return
+        try:
+            os.chmod(path, 0o700 if stat.S_ISDIR(st.st_mode) else 0o600)
+        except OSError:
+            return
+
+    def _rm(path: str) -> None:
+        try:
+            st = os.lstat(path)
+        except OSError:
+            return
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return
+        _chmod_real(path)
+        entries: list[str] = []
+        try:
+            with os.scandir(path) as it:
+                entries = [entry.path for entry in it]
+        except OSError:
+            _chmod_real(path)
+            try:
+                with os.scandir(path) as it:
+                    entries = [entry.path for entry in it]
+            except OSError:
+                return
+        for child in entries:
+            _rm(child)
+        try:
+            os.rmdir(path)
+        except OSError:
+            _chmod_real(path)
+            try:
+                os.rmdir(path)
+            except OSError:
+                return
+
+    _rm(base)
+
+
 def resolve_valid_aee_extract_exp_main(
     work_dir: Path | str,
     *,
@@ -100,7 +161,25 @@ def resolve_valid_aee_extract_exp_main(
     供控制面补解与 Agent 代表解包共用（#4199 v1.2 B11-U5 / ADR-0054）。
     优先 ``{dbg_name}.DEC``；否则要求 ``work_dir`` 下恰有唯一普通 ``*.DEC`` 目录。
     任一核验失败抛 ``EvidenceLayoutError``（fail-closed）。
+    目录发现 / ``assert_no_symlinks`` / 路径探测 / 文件读取中的任何 ``OSError``
+    （含不可进入的 ``chmod 000`` 目录）统一收口为 ``EvidenceLayoutError``
+    （#4199 v1.3 B11-U6）。
     """
+    try:
+        return _resolve_valid_aee_extract_exp_main_inner(work_dir, dbg_name=dbg_name)
+    except EvidenceLayoutError:
+        raise
+    except OSError as exc:
+        raise EvidenceLayoutError(
+            f"aee_extract output inaccessible for {dbg_name!r}: {exc}"
+        ) from exc
+
+
+def _resolve_valid_aee_extract_exp_main_inner(
+    work_dir: Path | str,
+    *,
+    dbg_name: str,
+) -> Path:
     base = Path(work_dir)
     if not dbg_name or base.is_symlink() or not base.is_dir():
         raise EvidenceLayoutError(
