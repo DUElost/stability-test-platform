@@ -16,6 +16,7 @@ export { logs } from './logs';
 export { pipeline } from './pipeline';
 export { scripts } from './tools';
 export { resourcePools } from './resourcePools';
+export { networkSupply } from './networkSupply';
 export { results, stats } from './analytics';
 export { users, notifications, schedules, audit } from './management';
 export { plans, fetchAllPlans, fetchAllPlanPages } from './plans';
@@ -46,6 +47,9 @@ export type {
   PipelineStep, PipelinePhase, PipelinePatrol, PipelineDef,
   JobStatus, StepTrace, JobArtifactEntry,
   ResourcePool, ResourcePoolLoad, ResourcePoolCreatePayload,
+  NetworkResourceType, NetworkEgressType, NetworkSessionStatus, NetworkSessionSource,
+  NetworkSession, ManualNetworkEnablePayload, NetworkSessionAuditOverridePayload,
+  NetworkSessionAuditOverrideResult,
   Plan, PlanStep, PlanStepCreate, PlanCreate, PlanUpdate,
   PlanRunStatus, PlanRunType, PlanRun, PlanRunCreate, PlanRunPreview,
   PlanRunListPage, PlanRunListStats,
@@ -75,6 +79,7 @@ import { logs } from './logs';
 import { pipeline } from './pipeline';
 import { scripts } from './tools';
 import { resourcePools } from './resourcePools';
+import { networkSupply } from './networkSupply';
 import { results, stats } from './analytics';
 import { users, notifications, schedules, audit } from './management';
 import { plans } from './plans';
@@ -107,6 +112,7 @@ export const api = {
   audit,
   scripts,
   resourcePools,
+  networkSupply,
   plans,
   planRuns,
   runs,

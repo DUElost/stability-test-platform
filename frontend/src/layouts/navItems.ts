@@ -66,9 +66,9 @@ export const navGroups: NavGroup[] = [
     label: '更多功能',
     defaultCollapsed: true,
     items: [
-      // #2360（裁决 A）：页面全部接口 admin-only，入口对非 admin 隐藏——
-      // 与 /storage 同形态（可见但必 403 是最差组合）。
-      { path: '/wifi', label: 'WiFi 资源池', icon: Wifi, adminOnly: true },
+      // #2360 / ADR-0066 D7：页面全部接口 admin-only，入口对非 admin 隐藏——
+      // /wifi 升级为 /network-supply，路由保留旧路径重定向。
+      { path: '/network-supply', label: '网络供给', icon: Wifi, adminOnly: true },
       { path: '/schedules', label: '定时调度', icon: CalendarClock },
     ],
   },
