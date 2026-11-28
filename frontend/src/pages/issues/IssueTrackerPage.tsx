@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -17,6 +17,7 @@ import { api } from '@/utils/api';
 import { RefreshCw } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
+import HandoffWorkbench from '@/components/issues/HandoffWorkbench';
 import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
 import JiraRunHistory from '@/components/issues/JiraRunHistory';
 import { InlineEmpty } from '@/components/ui/empty-state';
@@ -25,7 +26,38 @@ import { LAYOUT, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
 
-type TabKey = 'form' | 'drafts' | 'history';
+/** B11-U2：首 Tab 为 handoff；既有 form/drafts/history 保持向后兼容。 */
+type TabKey = 'handoff' | 'form' | 'drafts' | 'history';
+
+const TAB_KEYS: ReadonlySet<TabKey> = new Set(['handoff', 'form', 'drafts', 'history']);
+
+/** 解析逗号分隔正整数列表（深链 `planRunIds`）。 */
+function parsePlanRunIdsParam(raw: string | null): number[] {
+  if (!raw) return [];
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const n = Number(trimmed);
+    if (!Number.isInteger(n) || n <= 0 || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+function resolveInitialTab(searchParams: URLSearchParams): TabKey {
+  const rawTab = searchParams.get('tab');
+  if (rawTab && TAB_KEYS.has(rawTab as TabKey)) {
+    return rawTab as TabKey;
+  }
+  // 无 tab 时：若仅有复数 planRunIds 深链，落到 handoff；否则保持既有默认「批量提单」。
+  if (parsePlanRunIdsParam(searchParams.get('planRunIds')).length > 0) {
+    return 'handoff';
+  }
+  return 'form';
+}
 
 export default function IssueTrackerPage() {
   const navigate = useNavigate();
@@ -35,8 +67,12 @@ export default function IssueTrackerPage() {
     rawPlanRunId && Number.isInteger(Number(rawPlanRunId)) && Number(rawPlanRunId) > 0
       ? Number(rawPlanRunId)
       : undefined;
+  const initialHandoffPlanRunIds = useMemo(
+    () => parsePlanRunIdsParam(searchParams.get('planRunIds')),
+    [searchParams],
+  );
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [tab, setTab] = useState<TabKey>('form');
+  const [tab, setTab] = useState<TabKey>(() => resolveInitialTab(searchParams));
 
   // #1532：草稿端点按 **JobInstance id** 一次取全（`/runs/jira-drafts`，含
   // PlanRun 归属）。原先「取 50 条 PlanRun → 逐 Run listJobs → 逐 Job 取草稿」
@@ -54,6 +90,7 @@ export default function IssueTrackerPage() {
   };
 
   const tabs: { key: TabKey; label: string; testId: string }[] = [
+    { key: 'handoff', label: '提单表单生成', testId: 'issue-tracker-tab-handoff' },
     { key: 'form', label: '批量提单', testId: 'issue-tracker-tab-form' },
     { key: 'drafts', label: '草稿列表', testId: 'issue-tracker-tab-drafts' },
     { key: 'history', label: '历史记录', testId: 'issue-tracker-tab-history' },
@@ -63,7 +100,7 @@ export default function IssueTrackerPage() {
     <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title="问题追踪"
-        subtitle="上传去重报告进行批量 Jira 提单，或查看任务自动生成的草稿"
+        subtitle="生成 Monkey AEE 提单表单、上传去重报告批量提单，或查看任务自动生成的草稿"
       />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -89,6 +126,12 @@ export default function IssueTrackerPage() {
           </Button>
         )}
       </div>
+
+      {tab === 'handoff' && (
+        <div className="rounded-lg border border-border p-4" data-testid="issue-tracker-handoff-panel">
+          <HandoffWorkbench initialPlanRunIds={initialHandoffPlanRunIds} />
+        </div>
+      )}
 
       {tab === 'form' && (
         <div className="rounded-lg border border-border p-4">

@@ -47,9 +47,47 @@ _SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 _EVENT_SUBDIRS = frozenset({"aee_exp", "vendor_aee_exp"})
 
+#: 稳态代表证据中解析产物叶子名（#4199 B11-U4 / #4174 §5.3）。
+EXP_MAIN_NAME = "__exp_main.txt"
+
 
 class EvidenceLayoutError(ValueError):
     """证据区路径或目录名不符合 D9 契约。"""
+
+
+def is_dec_dir_name(name: str) -> bool:
+    """事件树内解析产物目录名（``*.DEC`` / ``*.dbg.DEC``）。"""
+    return bool(name) and name.endswith(".DEC")
+
+
+def list_dec_exp_mains(root: Path | str) -> list[Path]:
+    """返回 ``root`` 下全部 ``*.DEC/__exp_main.txt``（忽略 symlink）。"""
+    base = Path(root)
+    found: list[Path] = []
+    if not base.is_dir() or base.is_symlink():
+        return found
+    for path in sorted(base.rglob(EXP_MAIN_NAME)):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if is_dec_dir_name(path.parent.name):
+            found.append(path)
+    return found
+
+
+def list_dbg_files(root: Path | str) -> list[Path]:
+    """返回 ``root`` 下不在 ``*.DEC`` 内的普通 ``*.dbg`` 文件。"""
+    base = Path(root)
+    found: list[Path] = []
+    if not base.is_dir() or base.is_symlink():
+        return found
+    for path in sorted(base.rglob("*.dbg")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        rel_parts = path.relative_to(base).parts
+        if any(is_dec_dir_name(part) for part in rel_parts[:-1]):
+            continue
+        found.append(path)
+    return found
 
 
 def _require_component(value: str, field: str) -> str:

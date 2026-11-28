@@ -795,6 +795,187 @@ export interface JiraRunRecord {
   created_at: string;
 }
 
+// ─── B11-U2 / #4199：`/api/v1/jira/handoff`（对齐 backend/api/schemas/jira_handoff.py）──
+
+/** A 段交付态：待导出（Path 尚未校验可达）vs 未来 B 段终稿。前端不得自算。 */
+export type HandoffBundleStatus = 'PENDING_EXPORT' | 'EXPORTED' | string;
+
+/** 白名单产物种类（`GET .../files/{artifact_kind}`）。 */
+export type HandoffArtifactKind = 'manifest' | 'preview_xls' | 'review_workbook';
+
+/** `POST /jira/handoff/preflight` 请求体。 */
+export interface HandoffPreflightIn {
+  plan_run_ids: number[];
+  /** 一期仅字面 `mtk`；非字面由后端 400。 */
+  platform?: string;
+  /** ISO-8601；缺省由后端取当前 UTC。 */
+  snapshot_cutoff?: string | null;
+}
+
+/** `POST /jira/handoff/bundles` 请求体。 */
+export interface HandoffBundleCreateIn extends HandoffPreflightIn {
+  builds?: string[] | null;
+  /** 仅作预览 Path 占位提示，A 段不写 15.4。 */
+  target_folder_hint?: string | null;
+}
+
+export interface HandoffRunCoverageOut {
+  plan_run_id: number;
+  plan_name: string;
+  status: string;
+  partition_mode: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  project_key?: string | null;
+  jira_project_key?: string | null;
+  hosts_expected: string[];
+  hosts_with_reports: string[];
+  missing_hosts: string[];
+  unexpected_hosts: string[];
+  mapping_status: string;
+}
+
+export interface HandoffIdentityGateOut {
+  total_org_rows: number;
+  unique_events: number;
+  keyed_rows: number;
+  compat_fallback_rows: number;
+  unbound_rows: number;
+  after_cutoff_skipped_rows: number;
+  unbound_by_reason: Record<string, number>;
+}
+
+export interface HandoffUnboundRowOut {
+  plan_run_id: number;
+  host_id: string;
+  report_file: string;
+  row_no: number;
+  serial: string;
+  raw_path: string;
+  reason: string;
+}
+
+export interface HandoffBuildPreviewOut {
+  build: string;
+  product: string;
+  device_count: number;
+  unique_event_count: number;
+}
+
+export interface HandoffGatesOut {
+  coverage_complete: boolean;
+  identity_degraded: boolean;
+  blocking_issues: string[];
+  warnings: string[];
+}
+
+/** `POST /jira/handoff/preflight` 响应。 */
+export interface HandoffPreflightOut {
+  platform: string;
+  snapshot_cutoff: string;
+  first_run_started_at?: string | null;
+  runs: HandoffRunCoverageOut[];
+  identity_gate: HandoffIdentityGateOut;
+  unbound_rows: HandoffUnboundRowOut[];
+  builds: HandoffBuildPreviewOut[];
+  gates: HandoffGatesOut;
+}
+
+export interface HandoffArtifactMetaOut {
+  rel_path: string;
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+}
+
+export interface HandoffBaselineDistOut {
+  current_only: number;
+  mixed: number;
+  baseline_only: number;
+}
+
+export interface HandoffRepresentativeOut {
+  dedup_key: string;
+  identity_source: string;
+  occurrence_key?: string | null;
+  dle_id?: string | null;
+  serial: string;
+  entry: string;
+  evidence_location: string;
+  evidence_tier: string;
+}
+
+export interface HandoffIssueOut {
+  issue_index: number;
+  build: string;
+  count: number;
+  device_count: number;
+  device_ids: string[];
+  source_runs: number[];
+  baseline_class: string;
+  clock_fallback_count: number;
+  preview_path: string;
+  representative: HandoffRepresentativeOut;
+  member_dedup_keys: string[];
+  form_fields: Record<string, string>;
+}
+
+export interface HandoffBuildBundleOut {
+  build: string;
+  build_slug: string;
+  product: string;
+  device_count: number;
+  unique_events: number;
+  issue_count: number;
+  grouped_events: number;
+  filtered_events: number;
+  filtered_by_reason: Record<string, number>;
+  baseline_distribution: HandoffBaselineDistOut;
+  artifacts: Record<string, HandoffArtifactMetaOut>;
+  issues: HandoffIssueOut[];
+  filtered_rows: Record<string, unknown>[];
+  events: Record<string, unknown>[];
+}
+
+/** `GET /jira/handoff/bundles` 列表项。 */
+export interface HandoffBundleSummaryOut {
+  handoff_id: string;
+  status: HandoffBundleStatus;
+  platform: string;
+  created_at: string;
+  created_by: string;
+  plan_run_ids: number[];
+  build_count: number;
+  issue_count_total: number;
+  coverage_complete: boolean;
+  manifest_sha256: string;
+}
+
+/**
+ * `POST/GET /jira/handoff/bundles[/{id}]` 详情。
+ * 线格式字段名 `schema`（后端 Pydantic alias）；计数与路径一律以后端为准，前端严禁自算。
+ */
+export interface HandoffBundleOut {
+  schema: string;
+  schema_version: string;
+  handoff_id: string;
+  status: HandoffBundleStatus;
+  platform: string;
+  created_at: string;
+  created_by: string;
+  plan_run_ids: number[];
+  snapshot_cutoff: string;
+  first_run_started_at?: string | null;
+  target_folder_hint?: string | null;
+  scan_tool_release?: Record<string, string> | null;
+  gates: HandoffGatesOut;
+  identity_gate: HandoffIdentityGateOut;
+  runs: Record<string, unknown>[];
+  unbound_rows: Record<string, unknown>[];
+  builds: HandoffBuildBundleOut[];
+  manifest_sha256: string;
+}
+
 export interface PipelineTemplatePlanDefaults {
   barrier_timeout_seconds?: number | null;
   barrier_max_wait_seconds?: number | null;

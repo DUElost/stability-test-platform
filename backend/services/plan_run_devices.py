@@ -39,6 +39,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun, PlanRunHost
+from backend.models.project import Specialty
 from backend.services.device_return import job_guard_deadline
 from backend.services.plan_run_offline_policy import (
     is_prolonged_abnormal_offline,
@@ -514,9 +515,10 @@ def build_plan_run_devices_minimap(
         _load_lightweight_plan_run_rows(db, run_id, now=ref_now)
     )
     run_meta = db.execute(
-        select(PlanRun.plan_snapshot, Plan.specialty_key)
+        select(PlanRun.plan_snapshot, Specialty.key.label("specialty_key"))
         .select_from(PlanRun)
         .outerjoin(Plan, Plan.id == PlanRun.plan_id)
+        .outerjoin(Specialty, Specialty.id == Plan.specialty_id)
         .where(PlanRun.id == run_id)
     ).first()
     offline_expected, offline_threshold = resolve_run_offline_policy(

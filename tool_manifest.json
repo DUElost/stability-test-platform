@@ -2016,6 +2016,14 @@
           "retired": false,
           "script": "powercycle_adb_patrol.py",
           "version": "1.0.0"
+        },
+        {
+          "artifact": "packages/powercycle_adb_patrol/1.0.1.tar.gz",
+          "package_sha256": "eece1384a362251e4807948dcb4f5551053888079d58a628c7583542d6735fa3",
+          "python": null,
+          "retired": false,
+          "script": "powercycle_adb_patrol.py",
+          "version": "1.0.1"
         }
       ]
     },

@@ -24,6 +24,7 @@ export { runs } from './runs';
 export { suites } from './suites';
 export { settings } from './settings';
 export { aiAssistant } from './aiAssistant';
+export { jiraHandoff } from './jiraHandoff';
 
 export type {
   Host, Device, Task, RunStep, TaskRun,
@@ -60,6 +61,9 @@ export type {
   AiAssistantAction, AiActionLogEntry,
   ScriptPresenceState, ScriptPresenceCounts, ScriptPresenceItem,
   HostScriptPresence, ScriptPresenceSummary, ScriptPresenceRefreshResult,
+  HandoffPreflightIn, HandoffPreflightOut, HandoffBundleCreateIn,
+  HandoffBundleOut, HandoffBundleSummaryOut, HandoffBuildBundleOut,
+  HandoffGatesOut, HandoffUnboundRowOut, HandoffArtifactKind, HandoffBundleStatus,
 } from './types';
 
 import { auth } from './auth';
@@ -79,6 +83,7 @@ import { runs } from './runs';
 import { suites } from './suites';
 import { settings } from './settings';
 import { aiAssistant } from './aiAssistant';
+import { jiraHandoff } from './jiraHandoff';
 
 export const api = {
   auth,
@@ -108,4 +113,5 @@ export const api = {
   suites,
   settings,
   aiAssistant,
+  jiraHandoff,
 };

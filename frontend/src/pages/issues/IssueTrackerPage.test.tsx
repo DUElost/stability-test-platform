@@ -29,11 +29,22 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('@/components/issues/JiraSubmitPanel', () => ({
-  default: () => <div data-testid="jira-submit-panel-stub" />,
+  default: ({ initialPlanRunId }: { initialPlanRunId?: number }) => (
+    <div data-testid="jira-submit-panel-stub" data-plan-run-id={initialPlanRunId ?? ''} />
+  ),
 }));
 
 vi.mock('@/components/issues/JiraRunHistory', () => ({
   default: () => <div data-testid="jira-run-history-stub" />,
+}));
+
+vi.mock('@/components/issues/HandoffWorkbench', () => ({
+  default: ({ initialPlanRunIds }: { initialPlanRunIds?: number[] }) => (
+    <div
+      data-testid="handoff-workbench-stub"
+      data-plan-run-ids={(initialPlanRunIds ?? []).join(',')}
+    />
+  ),
 }));
 
 import IssueTrackerPage from './IssueTrackerPage';
@@ -60,10 +71,10 @@ function makeDraftItem(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function renderPage() {
+function renderPage(initialEntry = '/issue-tracker') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider client={queryClient}>
         <IssueTrackerPage />
       </QueryClientProvider>
@@ -85,6 +96,28 @@ describe('IssueTrackerPage', () => {
     renderPage();
     expect(screen.getByTestId('jira-submit-panel-stub')).toBeInTheDocument();
     expect(screen.queryByTestId('jira-run-history-stub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('handoff-workbench-stub')).not.toBeInTheDocument();
+    expect(screen.getByTestId('issue-tracker-tab-handoff')).toBeInTheDocument();
+  });
+
+  it('B11-U2: ?planRunId=1594 向后兼容既有批量提单跳入', () => {
+    renderPage('/issue-tracker?planRunId=1594');
+    expect(screen.getByTestId('jira-submit-panel-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('jira-submit-panel-stub')).toHaveAttribute(
+      'data-plan-run-id',
+      '1594',
+    );
+    expect(screen.queryByTestId('handoff-workbench-stub')).not.toBeInTheDocument();
+  });
+
+  it('B11-U2: ?tab=handoff&planRunIds=1594,1595 切至首 Tab 并预填', () => {
+    renderPage('/issue-tracker?tab=handoff&planRunIds=1594,1595');
+    expect(screen.getByTestId('handoff-workbench-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('handoff-workbench-stub')).toHaveAttribute(
+      'data-plan-run-ids',
+      '1594,1595',
+    );
+    expect(screen.queryByTestId('jira-submit-panel-stub')).not.toBeInTheDocument();
   });
 
   it('#1532: 草稿查询按页签懒加载，挂载时不打请求', () => {
