@@ -34,12 +34,11 @@ Class: feature
 
 ## Verification
 
-- `scripts/run_pytest.py backend/agent/tests/test_b11_u4_evidence_dec.py backend/agent/tests/test_b8_g6_evidence_uploader.py -q` → **28 passed**
-- `scripts/run_pytest.py backend/agent/tests/ -q` → **3731 passed, 2 skipped**；
-  `test_flash_preflight_v102.py::test_dialout_absent_and_no_rule_fails` 失败（本机进程
-  无 `dialout` 组、与本 diff 无关，单测复现同失败）
+- 第 1 轮复核「需修改」返修：`test_b8_g6_r5_agent_receipt_recovery.py` 与
+  `test_b8_g6_evidence_uploader.py` 对齐——允许 `.stp-evidence-recover-*` scratch，
+  仍禁止写入正式 destination（规划者授权伴随修改该 API 探针）。
+- `scripts/run_pytest.py backend/tests/api/test_b8_g6_r5_agent_receipt_recovery.py backend/agent/tests/test_b11_u4_evidence_dec.py backend/agent/tests/test_b8_g6_evidence_uploader.py -q` → **30 passed**
 - `scripts/run_gates.py check:quick` → **[OK] check:quick (16 gates)**
-- `tools/dev/check-internal-ip-leak.py --check` → **通过**（4415 个文件）
 
 ## Revisit
 
