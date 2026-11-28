@@ -1,5 +1,9 @@
 {
   "schema_version": 1,
+  "log_prepare_v110_schema_bounds": {
+    "mobilelog_size_mb": { "minimum": 256, "maximum": 20480 },
+    "ylog_size_mb": { "minimum": 64, "maximum": 10240 }
+  },
   "cases": [
     {
       "id": "priority",
@@ -8,6 +12,7 @@
         "mode": {"type": "string", "default": "schema"}
       },
       "default_params": {"timeout": 2, "retries": 3},
+      "project_preset": null,
       "step_params": {"timeout": 4},
       "expected": {"timeout": 4, "mode": "schema", "retries": 3}
     },
@@ -20,6 +25,7 @@
         "missing": {"type": "string", "default": "keep"}
       },
       "default_params": {"flag": false, "count": 0, "note": ""},
+      "project_preset": null,
       "step_params": {"flag": false, "count": 0, "note": null},
       "expected": {"flag": false, "count": 0, "note": null, "missing": "keep"}
     },
@@ -27,6 +33,7 @@
       "id": "free-key",
       "param_schema": {},
       "default_params": null,
+      "project_preset": null,
       "step_params": {"custom": "free"},
       "expected": {"custom": "free"}
     },
@@ -34,6 +41,7 @@
       "id": "missing-schema",
       "param_schema": null,
       "default_params": {"a": 1},
+      "project_preset": null,
       "step_params": {"b": 2},
       "expected": {"a": 1, "b": 2}
     },
@@ -41,6 +49,7 @@
       "id": "nested-whole-replace",
       "param_schema": {},
       "default_params": {"wifi": {"ssid": "a", "password": "SENTINEL_PASSWORD"}},
+      "project_preset": null,
       "step_params": {"wifi": {"ssid": "b"}},
       "expected": {"wifi": {"ssid": "b"}}
     },
@@ -48,8 +57,147 @@
       "id": "deep-copy",
       "param_schema": {},
       "default_params": {"wifi": {"password": "SENTINEL_PASSWORD"}},
+      "project_preset": null,
       "step_params": null,
       "expected": {"wifi": {"password": "SENTINEL_PASSWORD"}}
+    },
+    {
+      "id": "project-preset-applied",
+      "param_schema": {
+        "mobilelog_size_mb": {"type": "integer", "default": 4096, "minimum": 256, "maximum": 20480},
+        "mtk_auto_start": {"type": "boolean", "default": true},
+        "aee_mode": {"type": "string", "nullable": true},
+        "ylog_size_mb": {"type": "integer", "default": 4096, "minimum": 64, "maximum": 10240},
+        "ylog_rotate": {"type": "boolean", "default": true},
+        "ylog_required_streams": {"type": "array", "default": ["android", "kernel"]}
+      },
+      "default_params": {
+        "mobilelog_size_mb": 4096,
+        "mtk_auto_start": true,
+        "ylog_size_mb": 4096,
+        "ylog_rotate": true,
+        "ylog_required_streams": ["android", "kernel"]
+      },
+      "project_preset": {
+        "mobilelog_size_mb": 2048,
+        "aee_mode": "3",
+        "ylog_required_streams": ["android", "kernel", "uboot"]
+      },
+      "step_params": {},
+      "expected": {
+        "mobilelog_size_mb": 2048,
+        "mtk_auto_start": true,
+        "aee_mode": "3",
+        "ylog_size_mb": 4096,
+        "ylog_rotate": true,
+        "ylog_required_streams": ["android", "kernel", "uboot"]
+      }
+    },
+    {
+      "id": "project-preset-gpu-override",
+      "param_schema": {
+        "mobilelog_size_mb": {"type": "integer", "default": 4096, "minimum": 256, "maximum": 20480},
+        "ylog_size_mb": {"type": "integer", "default": 4096, "minimum": 64, "maximum": 10240},
+        "aee_mode": {"type": "string", "nullable": true}
+      },
+      "default_params": {
+        "mobilelog_size_mb": 4096,
+        "ylog_size_mb": 4096
+      },
+      "project_preset": {
+        "mobilelog_size_mb": 2048,
+        "ylog_size_mb": 2048,
+        "aee_mode": "3"
+      },
+      "step_params": {
+        "mobilelog_size_mb": 10240,
+        "ylog_size_mb": 10240
+      },
+      "expected": {
+        "mobilelog_size_mb": 10240,
+        "ylog_size_mb": 10240,
+        "aee_mode": "3"
+      }
+    },
+    {
+      "id": "project-preset-explicit-null-cancel",
+      "param_schema": {
+        "mobilelog_size_mb": {"type": "integer", "default": 4096, "minimum": 256, "maximum": 20480},
+        "aee_mode": {"type": "string", "nullable": true},
+        "mtk_sublog_cmd": {"type": "string", "nullable": true}
+      },
+      "default_params": {
+        "mobilelog_size_mb": 4096
+      },
+      "project_preset": {
+        "aee_mode": "3",
+        "mtk_sublog_cmd": "set_sublog_4_5_0"
+      },
+      "step_params": {
+        "aee_mode": null
+      },
+      "expected": {
+        "mobilelog_size_mb": 4096,
+        "aee_mode": null,
+        "mtk_sublog_cmd": "set_sublog_4_5_0"
+      }
+    },
+    {
+      "id": "project-preset-null-keys-skipped",
+      "param_schema": {
+        "mobilelog_size_mb": {"type": "integer", "default": 4096, "minimum": 256, "maximum": 20480},
+        "ylog_size_mb": {"type": "integer", "default": 4096, "minimum": 64, "maximum": 10240}
+      },
+      "default_params": {
+        "mobilelog_size_mb": 4096,
+        "ylog_size_mb": 4096
+      },
+      "project_preset": {
+        "mobilelog_size_mb": null,
+        "ylog_size_mb": 8192
+      },
+      "step_params": null,
+      "expected": {
+        "mobilelog_size_mb": 4096,
+        "ylog_size_mb": 8192
+      }
+    },
+    {
+      "id": "project-preset-legacy-explicit-4096-preserved",
+      "param_schema": {
+        "mobilelog_size_mb": {"type": "integer", "default": 4096, "minimum": 256, "maximum": 20480}
+      },
+      "default_params": {
+        "mobilelog_size_mb": 4096
+      },
+      "project_preset": {
+        "mobilelog_size_mb": 2048,
+        "aee_mode": "3"
+      },
+      "step_params": {
+        "mobilelog_size_mb": 4096
+      },
+      "expected": {
+        "mobilelog_size_mb": 4096,
+        "aee_mode": "3"
+      }
+    },
+    {
+      "id": "project-preset-skipped-fallback",
+      "param_schema": {
+        "mobilelog_size_mb": {"type": "integer", "default": 4096, "minimum": 256, "maximum": 20480},
+        "ylog_size_mb": {"type": "integer", "default": 4096, "minimum": 64, "maximum": 10240}
+      },
+      "default_params": {
+        "mobilelog_size_mb": 4096,
+        "ylog_size_mb": 4096
+      },
+      "project_preset": null,
+      "step_params": {},
+      "expected": {
+        "mobilelog_size_mb": 4096,
+        "ylog_size_mb": 4096
+      }
     }
   ]
 }

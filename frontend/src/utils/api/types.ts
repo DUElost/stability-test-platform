@@ -1892,6 +1892,7 @@ export type ParameterLayer = 'L1' | 'L2' | 'L3' | 'L4';
 export type ParameterSource =
   | 'schema_default'
   | 'script_default'
+  | 'project_preset'
   | 'step_override'
   | 'dispatch_injection';
 export type ParameterState =
@@ -1900,6 +1901,32 @@ export type ParameterState =
   | 'env_fallback'
   | 'pending_dispatch'
   | 'actual';
+
+export type ProjectLogProfileStatus =
+  | 'applied'
+  | 'not_applicable'
+  | 'skipped_unbound_plan'
+  | 'skipped_project_inactive'
+  | 'skipped_empty_profile'
+  | 'skipped_device_mismatch'
+  | 'pending_devices';
+
+export interface ProjectLogProfileMismatchSummary {
+  unmapped_count: number;
+  other_project_keys: string[];
+  other_project_device_count: number;
+}
+
+export interface ProjectLogProfileProjection {
+  status: ProjectLogProfileStatus;
+  project_id?: number | null;
+  project_key?: string | null;
+  log_profile_version?: number | null;
+  effective_profile: Record<string, unknown>;
+  evaluated_device_ids: number[];
+  excluded_serial_conflict_device_ids: number[];
+  mismatch_summary?: ProjectLogProfileMismatchSummary | null;
+}
 
 export interface ParameterItem {
   path: Array<string | number>;
@@ -1962,6 +1989,7 @@ export interface ParameterProjection {
     device_id?: number | null;
     host_id?: string | null;
   }>;
+  project_log_profile?: ProjectLogProfileProjection | null;
   safe_debug: {
     steps: Array<Record<string, unknown>>;
     plan_settings: Record<string, unknown>;
@@ -1984,6 +2012,7 @@ export interface DraftParameterProjectionRequest {
   barrier_max_wait_seconds?: number | null;
   auto_archive_interval_seconds?: number | null;
   watcher_policy?: Record<string, unknown> | null;
+  project_key?: string | null;
   steps?: PlanStepCreate[];
 }
 

@@ -69,6 +69,10 @@ from backend.services.plan_confirmation import (
     load_plan_graph_for_confirmation,
 )
 from backend.services.plan_parameter_projection import project_saved_plan
+from backend.services.project_log_profile import (
+    partition_serial_conflict_devices,
+    resolve_project_log_profile_for_dispatch,
+)
 from backend.services.suite_binding import (
     SuiteMaterializationConflict,
     freeze_dispatch_suite,
@@ -605,8 +609,19 @@ def preview_plan_dispatch_sync(
     if plan is None:
         raise PlanDispatchError(f"Plan {plan_id} not found")
 
+    if not device_ids:
+        raise PlanDispatchError("device_ids must not be empty")
+
     if not steps:
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
+
+    # ADR-0067 D3.1：与 prepare_plan_run 共用同一 #2649 有效判定设备集拆分。
+    partition = partition_serial_conflict_devices(db, device_ids)
+    if not partition.evaluated_device_ids:
+        raise PlanDispatchError(
+            "Dispatch rejected: all target devices have serial conflicts",
+            unavailable_devices=partition.serial_conflicts,
+        )
 
     disabled = _check_legacy_aee_script_refs(steps)
     if disabled:
@@ -630,8 +645,18 @@ def preview_plan_dispatch_sync(
             f"Plan {plan_id}: scripts unavailable at preview: {', '.join(missing)}",
             missing_scripts=missing,
         )
+    # ADR-0067 D4.3：单次 D3 解析复用至 lifecycle、parameter_projection 与 confirmation_fingerprint
+    project_log_profile = resolve_project_log_profile_for_dispatch(
+        db,
+        plan,
+        steps,
+        evaluated_device_ids=partition.evaluated_device_ids,
+        excluded_serial_conflict_device_ids=partition.excluded_serial_conflict_device_ids,
+    )
     defaults = _script_defaults(metadata)
-    lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
+    lifecycle = _build_lifecycle_from_steps(
+        plan, steps, defaults, project_log_profile=project_log_profile,
+    )
     # #782：预览必须与真实派发共用同一校验，否则会把「派发时必被拒」的生命周期
     # 展示成可执行（例：仅 patrol 无 init）。派发路径在下方同款校验（见
     # ``validate_pipeline_def({"lifecycle": lifecycle})``）。
@@ -641,14 +666,16 @@ def preview_plan_dispatch_sync(
             f"Plan {plan_id} generated invalid lifecycle: {'; '.join(errors)}"
         )
     preview = _build_preview(plan, lifecycle, device_ids)
+    preview["project_log_profile"] = project_log_profile
     preview["parameter_projection"] = project_saved_plan(
         plan,
         list(steps),
         metadata,
         authority="与 preview 同一次读取的 Plan、步骤与脚本元数据",
+        project_log_profile=project_log_profile,
     ).model_dump(mode="json")
     preview["confirmation_fingerprint"] = fingerprint_for(
-        plan, list(steps), metadata,
+        plan, list(steps), metadata, project_log_profile=project_log_profile,
     )
     return preview
 
@@ -716,25 +743,26 @@ def prepare_plan_run(
             f"Dispatch rejected: {len(fatal)} device(s) unavailable",
             unavailable_devices=fatal,
         )
-    # #2649：serial 冲突设备按设备拒绝（owner 2026-09-18 裁决）——手动/定时
-    # 同一流程：从目标集合剔除并记录拒因，准入时物化为 FAILED job（显示 Fail
-    # + 原因），其余设备照常执行；不进入 queue_blockers（不可重试，等无意义）。
-    serial_conflicts = [e for e in unavailable if e["reason"] == "serial_conflict"]
-    if serial_conflicts:
-        conflict_ids = {int(e["id"]) for e in serial_conflicts}
-        device_ids = [d for d in device_ids if d not in conflict_ids]
-        if not device_ids:
+    # #2649 & ADR-0067 D3.1：与 preview 共用同一 serial_conflict 拆分函数——
+    # 从有效判定与执行集剔除并记录拒因，准入时物化为 FAILED job，其余设备照常执行。
+    partition = partition_serial_conflict_devices(
+        db, device_ids, preclassified_unavailable=unavailable,
+    )
+    if partition.serial_conflicts:
+        if not partition.evaluated_device_ids:
             raise PlanDispatchError(
                 "Dispatch rejected: all target devices have serial conflicts",
-                unavailable_devices=serial_conflicts,
+                unavailable_devices=partition.serial_conflicts,
             )
+        conflict_ids = set(partition.excluded_serial_conflict_device_ids)
+        device_ids = [d for d in device_ids if d not in conflict_ids]
         logger.warning(
             "dispatch_serial_conflict_rejected count=%d devices=%s",
-            len(serial_conflicts),
-            [(e["id"], e["serial"]) for e in serial_conflicts][:10],
+            len(partition.serial_conflicts),
+            [(e["id"], e["serial"]) for e in partition.serial_conflicts][:10],
         )
         run_context = dict(run_context or {})
-        run_context["dispatch_rejected_devices"] = serial_conflicts
+        run_context["dispatch_rejected_devices"] = partition.serial_conflicts
     queue_blockers = [
         e for e in unavailable
         if e["reason"] not in _FATAL_DISPATCH_REASONS
@@ -760,8 +788,19 @@ def prepare_plan_run(
             f"Plan {plan_id}: scripts unavailable at prepare: {', '.join(missing)}",
             missing_scripts=missing,
         )
+    # ADR-0067 D4.3：获取 Plan -> TestProject FOR SHARE 后单次 D3 解析并复用至
+    # lifecycle、validate_pipeline_def、assert_confirmation_matches 与 build_plan_snapshot。
+    project_log_profile = resolve_project_log_profile_for_dispatch(
+        db,
+        plan,
+        steps,
+        evaluated_device_ids=partition.evaluated_device_ids,
+        excluded_serial_conflict_device_ids=partition.excluded_serial_conflict_device_ids,
+    )
     defaults = _script_defaults(metadata)
-    lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
+    lifecycle = _build_lifecycle_from_steps(
+        plan, steps, defaults, project_log_profile=project_log_profile,
+    )
 
     # ADR-0030 v1.8（#404 翻转）：mtbf 系脚本必须绑定套件。观测期（WARNING
     # suite_unbound，2026-08-24~25）结论为零存量未绑定流量、唯一 mtbf Plan 已
@@ -782,9 +821,15 @@ def prepare_plan_run(
         )
 
     assert_confirmation_matches(
-        plan, list(steps), metadata, confirmation_fingerprint,
+        plan,
+        list(steps),
+        metadata,
+        confirmation_fingerprint,
+        project_log_profile=project_log_profile,
     )
-    plan_snapshot = _build_plan_snapshot(plan, steps, metadata)
+    plan_snapshot = _build_plan_snapshot(
+        plan, steps, metadata, project_log_profile=project_log_profile,
+    )
     # #3892 / ADR-0063 D4：vbus 刷机计划的目标设备本来就是关机态，device_offline
     # 不构成排队理由。与准入泵同样按冻结的 Plan 快照判定（D4 第 1 条；复核 #3901）。
     if is_vbus_flash_snapshot(plan_snapshot):
