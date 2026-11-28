@@ -1,4 +1,4 @@
-"""L1 确认指纹（#3653 §3.2，ADR-0060 D5）。
+"""L1 确认指纹（#3653 §3.2，ADR-0060 D5，ADR-0067 D4）。
 
 preview 与 prepare 共用本模块的 canonical 文档与 HMAC。密钥是现有
 ``JWT_SECRET_KEY``（``backend.core.security.SECRET_KEY``），不新增 env，
@@ -13,18 +13,24 @@ import json
 import re
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core.security import SECRET_KEY
 from backend.models.plan import Plan, PlanStep
+from backend.models.project import TestProject
 from backend.services.plan_dispatcher_core import PlanDispatchError
+from backend.services.project_log_profile import (
+    DISPATCH_STATUSES,
+    STATUS_APPLIED,
+    STATUS_NOT_APPLICABLE,
+)
 
-FINGERPRINT_PREFIX = "stp-l1-v1:"
-DOMAIN_SEPARATOR = "stp-plan-confirmation-v1"
-_FINGERPRINT_RE = re.compile(r"^stp-l1-v1:[0-9a-f]{64}$")
+FINGERPRINT_PREFIX = "stp-l1-v2:"
+DOMAIN_SEPARATOR = "stp-plan-confirmation-v2"
+_FINGERPRINT_RE = re.compile(r"^stp-l1-v2:[0-9a-f]{64}$")
 
 _PLAN_FIELDS = (
     "id",
@@ -43,6 +49,7 @@ _PLAN_FIELDS = (
     "created_by",
     "updated_at",
 )
+
 
 class PlanConfirmationChanged(PlanDispatchError):
     """预览指纹与 prepare 实际读取的配置不一致。不得携带原配置或新 token。"""
@@ -95,12 +102,64 @@ def _step_sort_key(step: PlanStep) -> tuple:
     )
 
 
+def _canonical_project_log_profile(
+    plan: Plan,
+    project_log_profile: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """ADR-0067 D4.1：纳入确认文档的受控 ``project_log_profile`` 块。
+
+    - 仅允许 6 个派发/预览态（绝不允许 ``pending_devices`` 进入确认指纹）；
+    - ``status == 'applied'`` 时包含 ``log_profile_version`` 与非 ``null`` 规范化
+      ``effective_profile``；
+    - ``status != 'applied'`` 时 ``log_profile_version`` 置 ``None``、
+      ``effective_profile`` 置 ``{}``，避免对未生效的 Plan 产生无关指纹失效。
+    """
+    if project_log_profile is None:
+        return {
+            "status": STATUS_NOT_APPLICABLE,
+            "project_id": getattr(plan, "project_id", None),
+            "project_key": None,
+            "log_profile_version": None,
+            "effective_profile": {},
+        }
+    status = project_log_profile.get("status")
+    if status not in DISPATCH_STATUSES:
+        raise ValueError(
+            f"invalid project_log_profile status for confirmation fingerprint: {status!r}"
+        )
+    project_id = project_log_profile.get("project_id")
+    project_key = project_log_profile.get("project_key")
+    if status == STATUS_APPLIED:
+        raw_profile = project_log_profile.get("effective_profile") or {}
+        effective = {
+            str(k): _json_ready(deepcopy(v))
+            for k, v in raw_profile.items()
+            if v is not None
+        }
+        return {
+            "status": STATUS_APPLIED,
+            "project_id": project_id,
+            "project_key": project_key,
+            "log_profile_version": project_log_profile.get("log_profile_version"),
+            "effective_profile": effective,
+        }
+    return {
+        "status": status,
+        "project_id": project_id,
+        "project_key": project_key,
+        "log_profile_version": None,
+        "effective_profile": {},
+    }
+
+
 def canonical_confirmation_document(
     plan: Plan,
     steps: list[PlanStep],
     script_metadata: dict[tuple[str, str], dict[str, Any]],
+    project_log_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """确认对象。说明、设备/WiFi 选择、套件内容与主机管控不进入此文档。"""
+    """确认对象。说明、设备列表/WiFi 选择、套件内容与主机管控不进入此文档；
+    项目日志预设经 D4.1 受控块纳入。"""
     plan_doc = {
         name: _json_ready(getattr(plan, name))
         for name in _PLAN_FIELDS
@@ -133,7 +192,12 @@ def canonical_confirmation_document(
             "schema_defaults": _schema_defaults(meta.get("param_schema")),
             "default_params": _json_ready(deepcopy(meta.get("default_params") or {})),
         })
-    return {"plan": plan_doc, "steps": step_docs, "scripts": scripts}
+    return {
+        "plan": plan_doc,
+        "steps": step_docs,
+        "scripts": scripts,
+        "project_log_profile": _canonical_project_log_profile(plan, project_log_profile),
+    }
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
@@ -150,9 +214,12 @@ def confirmation_fingerprint(
     plan: Plan,
     steps: list[PlanStep],
     script_metadata: dict[tuple[str, str], dict[str, Any]],
+    project_log_profile: Mapping[str, Any] | None = None,
 ) -> str:
     payload = _canonical_bytes(
-        canonical_confirmation_document(plan, steps, script_metadata),
+        canonical_confirmation_document(
+            plan, steps, script_metadata, project_log_profile=project_log_profile,
+        ),
     )
     digest = hmac.new(
         SECRET_KEY.encode("utf-8"),
@@ -167,11 +234,14 @@ def assert_confirmation_matches(
     steps: list[PlanStep],
     script_metadata: dict[tuple[str, str], dict[str, Any]],
     presented: str | None,
+    project_log_profile: Mapping[str, Any] | None = None,
 ) -> None:
-    """缺省或 NULL 不比较。已携带的指纹必须与本次实际读取对象一致。"""
+    """缺省或 NULL 不比较。已携带的指纹必须与本次实际读取对象一致（旧 v1 一律拒）。"""
     if presented is None:
         return
-    expected = confirmation_fingerprint(plan, steps, script_metadata)
+    expected = confirmation_fingerprint(
+        plan, steps, script_metadata, project_log_profile=project_log_profile,
+    )
     if not hmac.compare_digest(expected, presented):
         raise PlanConfirmationChanged()
 
@@ -184,13 +254,15 @@ def _sqlite(db: Session) -> bool:
 def load_plan_graph_for_confirmation(
     db: Session, plan_id: int,
 ) -> tuple[Plan | None, list[PlanStep]]:
-    """读取阶段对 Plan 取 PostgreSQL FOR SHARE，并刷新身份映射。
+    """读取阶段按固定无环锁序 ``Plan (FOR SHARE) -> TestProject (FOR SHARE)`` 锁定并刷新身份映射。
 
-    与 ``update_plan`` 的 FOR UPDATE 配对：校验通过到 snapshot 落库仍在同一
-    事务，写者不能插入更改。SQLite 没有行锁，调用方不得把该方言当成锁证据。
+    与 ``update_plan`` 的 ``Plan (FOR UPDATE)`` 及 ``update_project`` 的
+    ``TestProject (FOR UPDATE)`` 配对：校验通过到 snapshot 落库仍在同一事务，
+    写者不能插入更改。SQLite 没有行锁，调用方不得把该方言当成锁证据。
     """
+    is_sqlite = _sqlite(db)
     plan_stmt = select(Plan).where(Plan.id == plan_id)
-    if not _sqlite(db):
+    if not is_sqlite:
         plan_stmt = plan_stmt.with_for_update(read=True)
     plan = db.execute(
         plan_stmt,
@@ -198,6 +270,15 @@ def load_plan_graph_for_confirmation(
     ).scalar_one_or_none()
     if plan is None:
         return None, []
+    # ADR-0067 D4.3：固定无环锁序 Plan (FOR SHARE) -> TestProject (FOR SHARE)
+    if plan.project_id is not None:
+        project_stmt = select(TestProject).where(TestProject.id == plan.project_id)
+        if not is_sqlite:
+            project_stmt = project_stmt.with_for_update(read=True)
+        db.execute(
+            project_stmt,
+            execution_options={"populate_existing": True},
+        ).scalar_one_or_none()
     steps = list(
         db.execute(
             select(PlanStep)

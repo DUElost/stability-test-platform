@@ -23,7 +23,7 @@ const projection: ParameterProjection = {
   safe_debug: { steps: [], plan_settings: {}, watcher_policy: {} },
 };
 
-const fingerprint = `stp-l1-v1:${'ab'.repeat(32)}`;
+const fingerprint = `stp-l1-v2:${'ab'.repeat(32)}`;
 
 function renderCockpit(extra: { confirmationStale?: boolean; preview?: PlanRunPreview | null } = {}) {
   return render(

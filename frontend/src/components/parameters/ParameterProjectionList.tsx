@@ -19,6 +19,7 @@ const STATE_LABEL: Record<ParameterState, string> = {
 const SOURCE_LABEL: Record<ParameterSource, string> = {
   schema_default: '模式默认',
   script_default: '脚本默认',
+  project_preset: '项目预设',
   step_override: '步骤覆盖',
   dispatch_injection: '派发填入',
 };

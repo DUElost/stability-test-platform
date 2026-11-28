@@ -8,7 +8,7 @@ import { api, ApiError, fetchAllDevices, fetchAllHosts, fetchAllPlans } from '@/
 import { hostKeys } from '@/utils/api/queryKeys';
 import type { ParameterProjection } from '@/utils/api/types';
 
-const PREVIEW_FINGERPRINT = `stp-l1-v1:${'ab'.repeat(32)}`;
+const PREVIEW_FINGERPRINT = `stp-l1-v2:${'ab'.repeat(32)}`;
 
 // 合成服务端 L1 DTO；展示事实独立于列表返回的 raw Plan。
 const SETTINGS_PROJECTION: ParameterProjection = {
@@ -1808,7 +1808,7 @@ describe('PlanExecutePage', () => {
   });
 
   it('discards an in-flight preview token when the WiFi selection changes', async () => {
-    const staleFingerprint = `stp-l1-v1:${'cd'.repeat(32)}`;
+    const staleFingerprint = `stp-l1-v2:${'cd'.repeat(32)}`;
     let resolvePreview!: (value: unknown) => void;
     (api.plans.previewRun as any).mockReturnValueOnce(
       new Promise((resolve) => {
