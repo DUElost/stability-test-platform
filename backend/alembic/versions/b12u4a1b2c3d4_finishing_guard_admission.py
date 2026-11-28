@@ -1,7 +1,7 @@
 """B12 U4 — global FinishingGuard admission gate (ADR-0065 / #4206).
 
 Revision ID: b12u4a1b2c3d4
-Revises: b13u1c2d3e4f5
+Revises: a67u1c2d3e4f5
 Create Date: 2026-11-28
 """
 
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "b12u4a1b2c3d4"
-down_revision = "b13u1c2d3e4f5"
+down_revision = "a67u1c2d3e4f5"
 branch_labels = None
 depends_on = None
 

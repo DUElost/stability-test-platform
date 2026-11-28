@@ -5,11 +5,13 @@ Filename intentionally omits ``guard`` (static-guard PR path contract).
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -21,7 +23,7 @@ from backend.agent.contracts.capabilities import (
     FORCE_ABORT,
 )
 from backend.agent.contracts.finishing_guard import GUARD_STATE_PRE_REGISTERED
-from backend.core.database import SessionLocal
+from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
 from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
@@ -31,6 +33,8 @@ from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.services import device_return as dr
+from backend.services.agent_completion import _RunCompleteIn, complete_agent_job
+from backend.services.errors import Conflict
 from backend.services.finishing_guard import (
     ActivatePermitIn,
     FinishingGuardError,
@@ -40,7 +44,8 @@ from backend.services.finishing_guard import (
     count_active_atomic_guards_sync,
     pre_register_atomic_commit_sync,
 )
-from backend.services.plan_run_abort import abort_plan_run
+from backend.services.plan_run_abort import PlanRunAbortError, abort_plan_run
+from backend.tasks.session_watchdog import _reconcile_host_heartbeat_timeouts
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "")
 IS_PG = TEST_DATABASE_URL.startswith("postgresql")
@@ -317,7 +322,75 @@ class TestC5ActivatePermitWatchdog:
                 )
             assert exc.value.code == "host_not_online_fresh"
 
-    def test_activate_and_host_exclusive_lock_no_deadlock(self, db_session):
+    def test_boot_id_mismatch_denies_activate(self, db_session):
+        job, _run, host, _dev = _seed_running_atomic_job(db_session)
+        with SessionLocal() as db:
+            pre_register_atomic_commit_sync(
+                db,
+                job_id=job.id,
+                payload=PreRegisterIn(
+                    request_id="req-c5-boot",
+                    min_critical_section_seconds=1,
+                ),
+            )
+            h = db.get(Host, host.id)
+            h.last_heartbeat = _fresh_now()
+            db.commit()
+        with SessionLocal() as db:
+            with pytest.raises(FinishingGuardError) as exc:
+                activate_permit_sync(
+                    db,
+                    job_id=job.id,
+                    host_id=host.id,
+                    payload=ActivatePermitIn(
+                        request_id="req-c5-boot",
+                        client_boot_id="boot-other-instance",
+                    ),
+                )
+            assert exc.value.code == "host_not_online_fresh"
+
+    def test_expired_job_lease_denies_activate(self, db_session):
+        job, _run, host, device = _seed_running_atomic_job(db_session)
+        with SessionLocal() as db:
+            pre_register_atomic_commit_sync(
+                db,
+                job_id=job.id,
+                payload=PreRegisterIn(
+                    request_id="req-c5-lease",
+                    min_critical_section_seconds=1,
+                ),
+            )
+            h = db.get(Host, host.id)
+            h.last_heartbeat = _fresh_now()
+            lease = db.execute(
+                select(DeviceLease).where(
+                    DeviceLease.device_id == device.id,
+                    DeviceLease.job_id == job.id,
+                    DeviceLease.status == LeaseStatus.ACTIVE.value,
+                )
+            ).scalars().one()
+            lease.expires_at = _fresh_now() - timedelta(seconds=1)
+            db.commit()
+        with SessionLocal() as db:
+            with pytest.raises(FinishingGuardError) as exc:
+                activate_permit_sync(
+                    db,
+                    job_id=job.id,
+                    host_id=host.id,
+                    payload=ActivatePermitIn(
+                        request_id="req-c5-lease",
+                        client_boot_id=host.boot_id or "",
+                    ),
+                )
+            assert exc.value.code == "no_active_lease"
+
+    def test_activate_and_session_watchdog_no_deadlock(self, db_session):
+        """Real ``_reconcile_host_heartbeat_timeouts`` × ``activate_permit`` lock order.
+
+        Watchdog advances its scan clock so the host is selected (Host FOR UPDATE
+        → Job FOR UPDATE) while activate still sees a fresh heartbeat wall clock
+        (Host FOR SHARE → Job → PlanRun). Same Host→Job order; must not 40P01.
+        """
         job, _run, host, _dev = _seed_running_atomic_job(db_session)
         job_id, host_id, boot_id = job.id, host.id, host.boot_id or ""
         with SessionLocal() as db:
@@ -329,6 +402,8 @@ class TestC5ActivatePermitWatchdog:
                     min_critical_section_seconds=1,
                 ),
             )
+            h = db.get(Host, host_id)
+            h.last_heartbeat = _fresh_now()
             db.commit()
 
         outcomes: dict[str, object] = {}
@@ -350,25 +425,24 @@ class TestC5ActivatePermitWatchdog:
                     outcomes["activate"] = out["status"]
                 except Exception as exc:  # lock_timeout / FinishingGuardError
                     db.rollback()
-                    outcomes["activate"] = type(exc).__name__
+                    outcomes["activate"] = f"{type(exc).__name__}:{getattr(exc, 'code', exc)}"
 
         def do_watchdog():
-            with SessionLocal() as db:
-                _set_timeouts(db)
-                try:
-                    db.execute(
-                        select(Host).where(Host.id == host_id).with_for_update()
-                    ).scalar_one()
-                    db.execute(
-                        select(JobInstance)
-                        .where(JobInstance.id == job_id)
-                        .with_for_update()
-                    ).scalar_one()
-                    db.commit()
+            async def _run():
+                await async_engine.dispose()
+                async with AsyncSessionLocal() as db:
+                    await db.execute(text("SET LOCAL deadlock_timeout = '200ms'"))
+                    await db.execute(text("SET LOCAL lock_timeout = '5s'"))
+                    # Future scan clock → host appears expired to watchdog only.
+                    scan_now = _fresh_now() + timedelta(hours=2)
+                    await _reconcile_host_heartbeat_timeouts(db, now=scan_now)
+                    await db.commit()
                     outcomes["watchdog"] = "ok"
-                except Exception as exc:
-                    db.rollback()
-                    outcomes["watchdog"] = type(exc).__name__
+
+            try:
+                asyncio.run(_run())
+            except Exception as exc:
+                outcomes["watchdog"] = f"{type(exc).__name__}:{exc}"
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             f1 = pool.submit(do_activate)
@@ -379,7 +453,9 @@ class TestC5ActivatePermitWatchdog:
             except FuturesTimeout as exc:
                 raise AssertionError("C5 concurrent path hung (possible deadlock)") from exc
         assert "activate" in outcomes
-        assert "watchdog" in outcomes
+        assert outcomes.get("watchdog") == "ok"
+        assert "40P01" not in str(outcomes)
+        assert "deadlock" not in str(outcomes).lower()
 
 
 class TestC6CloseAdmission:
@@ -456,6 +532,33 @@ class TestC6CloseAdmission:
                 assert exc.value.code == "admission_closed"
 
 
+def _complete_payload(*, fencing_token: str, status: str = "FINISHED", exit_code: int = 0) -> _RunCompleteIn:
+    return _RunCompleteIn(
+        update={"status": status, "exit_code": exit_code},
+        fencing_token=fencing_token,
+    )
+
+
+def _run_complete_job(job_id: int, payload: _RunCompleteIn) -> dict:
+    """Sync wrapper around async complete with side-effect patches."""
+
+    async def _run():
+        await async_engine.dispose()
+        with patch(
+            "backend.services.agent_completion.broadcast_run_job_update",
+            new=AsyncMock(),
+        ), patch(
+            "backend.core.task_queue.get_queue",
+        ) as get_queue:
+            get_queue.return_value.enqueue = AsyncMock()
+            async with AsyncSessionLocal() as db:
+                await db.execute(text("SET LOCAL deadlock_timeout = '200ms'"))
+                await db.execute(text("SET LOCAL lock_timeout = '5s'"))
+                return await complete_agent_job(db, job_id, payload)
+
+    return asyncio.run(_run())
+
+
 class TestC7ForceAbortComplete:
     def test_force_abort_on_terminal_and_unsupported_host(self, db_session):
         job, run, _host, _dev = _seed_running_atomic_job(db_session)
@@ -502,6 +605,129 @@ class TestC7ForceAbortComplete:
             )
             db.commit()
         assert job.id in summary.abort_requested_jobs
+
+    def test_force_abort_and_complete_interleave_no_deadlock(self, db_session):
+        """C7: concurrent ``abort(force=true)`` × ``/complete`` — no 40P01; settle terminal."""
+        job, run, _host, device = _seed_running_atomic_job(db_session)
+        job_id, run_id = job.id, run.id
+        fencing = f"{device.id}:1"
+        accepted = _complete_payload(fencing_token=fencing)
+        outcomes: dict[str, object] = {}
+
+        def do_abort():
+            with SessionLocal() as db:
+                _set_timeouts(db)
+                try:
+                    with patch(
+                        "backend.services.plan_run_abort.schedule_emit",
+                    ), patch(
+                        "backend.services.plan_run_abort.should_trigger_dedup",
+                        return_value=False,
+                    ):
+                        summary = abort_plan_run(
+                            run_id, db=db, reason="force-race", force=True,
+                        )
+                        db.commit()
+                    outcomes["abort"] = {
+                        "ok": True,
+                        "already_terminal": summary.already_terminal,
+                        "force_before_settle": (
+                            summary.force_requested_before_complete_settled
+                        ),
+                        "abort_requested": list(summary.abort_requested_jobs),
+                    }
+                except PlanRunAbortError as exc:
+                    db.rollback()
+                    # Complete may have terminalized the PlanRun first — still a
+                    # settled race, not a lock failure.
+                    outcomes["abort"] = {
+                        "ok": True,
+                        "plan_run_already_terminal": True,
+                        "error": str(exc),
+                    }
+                except Exception as exc:
+                    db.rollback()
+                    outcomes["abort"] = f"{type(exc).__name__}:{exc}"
+
+        def do_complete():
+            try:
+                result = _run_complete_job(job_id, accepted)
+                outcomes["complete"] = result
+            except Conflict as exc:
+                outcomes["complete"] = {
+                    "conflict": True,
+                    "detail": getattr(exc, "detail", str(exc)),
+                }
+            except Exception as exc:
+                outcomes["complete"] = f"{type(exc).__name__}:{exc}"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(do_abort)
+            f2 = pool.submit(do_complete)
+            try:
+                f1.result(timeout=25)
+                f2.result(timeout=25)
+            except FuturesTimeout as exc:
+                raise AssertionError("C7 concurrent path hung (possible deadlock)") from exc
+
+        assert "abort" in outcomes and "complete" in outcomes
+        assert "40P01" not in str(outcomes)
+        assert "deadlock" not in str(outcomes).lower()
+        assert isinstance(outcomes["abort"], dict) and outcomes["abort"].get("ok") is True
+        # Complete either committed a terminal fact or lost a conflict to abort settle.
+        assert isinstance(outcomes["complete"], dict)
+
+        with SessionLocal() as db:
+            settled = db.get(JobInstance, job_id)
+            assert settled is not None
+            assert settled.status in {
+                JobStatus.COMPLETED.value,
+                JobStatus.ABORTED.value,
+                JobStatus.FAILED.value,
+                JobStatus.RUNNING.value,  # force may only mark abort_requested
+            }
+            token = fencing
+            digest = settled.terminal_payload_digest
+
+        # Idempotent replay + stale/conflict probes when complete left a digest.
+        if digest:
+            replay = _run_complete_job(job_id, accepted)
+            assert replay.get("idempotent") is True or replay.get("status") in {
+                JobStatus.COMPLETED.value,
+                JobStatus.ABORTED.value,
+                JobStatus.FAILED.value,
+            }
+
+            # Wrong fencing on terminal → stale_job_completion_rejected / Conflict.
+            with pytest.raises(Conflict) as stale_exc:
+                _run_complete_job(
+                    job_id,
+                    _complete_payload(fencing_token="wrong-token:0"),
+                )
+            assert stale_exc.value.detail["code"] == "STALE_COMPLETION_TOKEN"
+
+            # Divergent terminal payload → terminal_payload_conflict.
+            with pytest.raises(Conflict) as conflict_exc:
+                _run_complete_job(
+                    job_id,
+                    _RunCompleteIn(
+                        update={"status": "FINISHED", "exit_code": 99},
+                        fencing_token=token,
+                    ),
+                )
+            assert conflict_exc.value.detail["code"] == "TERMINAL_PAYLOAD_CONFLICT"
+        else:
+            # Force won before complete settled: abort_requested must cover job,
+            # or complete lost with a Conflict detail.
+            abort_meta = outcomes["abort"]
+            complete_meta = outcomes["complete"]
+            assert (
+                job_id in abort_meta.get("abort_requested", [])
+                or abort_meta.get("force_before_settle")
+                or abort_meta.get("already_terminal")
+                or abort_meta.get("plan_run_already_terminal")
+                or complete_meta.get("conflict") is True
+            )
 
 
 class TestC8FlashIntegrityDebt:

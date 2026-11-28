@@ -7,11 +7,11 @@ Class: feature
 
 落地 ADR-0065 阶段 3 单元 U4（`#4206` v1.2）控制面侧：
 
-1. 单行全局准入门禁 `finishing_guard_admission`（迁移 `b12u4a1b2c3d4`，`down_revision=b13u1c2d3e4f5`）与 `backend/services/finishing_guard.py` 两阶段握手（`pre_register` / `activate_permit` / `cancel` / 存活心跳）；锁序严格 `Job → PlanRun → admission FOR SHARE` 与 `Host FOR SHARE → Job → PlanRun`。
+1. 单行全局准入门禁 `finishing_guard_admission`（迁移 `b12u4a1b2c3d4`，`down_revision=a67u1c2d3e4f5`，接在 ADR-0067 U1 之后）与 `backend/services/finishing_guard.py` 两阶段握手（`pre_register` / `activate_permit` / `cancel` / 存活心跳）；锁序严格 `Job → PlanRun → admission FOR SHARE` 与 `Host FOR SHARE → Job → PlanRun`。
 2. `POST /plan-runs/{id}/abort` 支持 `force` 单调合并、`UNKNOWN` 纳入中止候选；摘要字段 `already_terminal` / `force_requested_before_complete_settled` / `force_unsupported_hosts`；admin 关门与排空计数端点。
 3. `flash_integrity` 欠账经 `_upsert_open_debt_sync` 在预登记开立；`cancel_pre_registration` 与 `close_flash_integrity_debts_sync` 仅关闭该 family（C8 不触碰 B6）。
 4. Agent API finishing-guard 四端点（同步 Session + 显式 commit）；claim 冻结 `negotiated_capabilities`；recovery `ABORT_LOCAL` 透传 `force`；`build_plan_snapshot` 写入 `atomic_group` / `skip_satisfies_delivery`。
-5. 集成测试 `test_finishing_atomic_pg_interleaving_u4_4206.py` 覆盖 C4–C8（文件名故意不含 `guard`）。
+5. 集成测试 `test_finishing_atomic_pg_interleaving_u4_4206.py` 覆盖 C4–C8（文件名故意不含 `guard`）：C5 对真实 `_reconcile_host_heartbeat_timeouts` 交错，并覆盖 `boot_id` 失配与 ACTIVE JOB 租约过期拒签；C7 为 `abort(force=true)` × `complete_agent_job` 双线程交错，并探针幂等重放 / `STALE_COMPLETION_TOKEN` / `TERMINAL_PAYLOAD_CONFLICT`。
 
 ## Alternatives
 
