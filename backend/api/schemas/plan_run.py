@@ -390,6 +390,8 @@ class PlanRunDevicesMinimapOut(BaseModel):
     facets: PlanRunMinimapFacetsOut
     hosts: dict = Field(default_factory=dict)
     stuck_job_ids: list[int] = Field(default_factory=list)
+    offline_failed_job_ids: list[int] = Field(default_factory=list)
+    offline_expected: bool = False
     devices: list[PlanRunMinimapDeviceOut] = Field(default_factory=list)
 
 

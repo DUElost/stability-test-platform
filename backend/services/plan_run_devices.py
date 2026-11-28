@@ -37,8 +37,14 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
-from backend.models.plan_run import PlanRunHost
+from backend.models.plan import Plan
+from backend.models.plan_run import PlanRun, PlanRunHost
+from backend.models.project import Specialty
 from backend.services.device_return import job_guard_deadline
+from backend.services.plan_run_offline_policy import (
+    is_prolonged_abnormal_offline,
+    resolve_run_offline_policy,
+)
 from backend.services.plan_run_queries import (
     derive_device_link_status,
     device_currently_disconnected,
@@ -332,6 +338,8 @@ class _LightPlanRunRow:
     log_signal_count: int
     patrol_cycle_count: int
     is_stuck: bool
+    raw_job_status: str = ""
+    device_last_seen: Optional[datetime] = None
 
 
 def _load_coord_heartbeats(db: Session, run_id: int) -> dict[str, datetime]:
@@ -396,6 +404,7 @@ def _load_lightweight_plan_run_rows(
             Device.status.label("device_status"),
             Device.adb_state.label("adb_state"),
             Device.adb_connected.label("adb_connected"),
+            Device.last_seen.label("device_last_seen"),
             Host.status.label("host_status"),
             Host.name.label("host_name"),
             Host.ip.label("host_ip"),
@@ -474,6 +483,8 @@ def _load_lightweight_plan_run_rows(
                 log_signal_count=int(row.log_signal_count or 0),
                 patrol_cycle_count=int(row.patrol_cycle_count or 0),
                 is_stuck=stuck,
+                raw_job_status=str(row.status or ""),
+                device_last_seen=row.device_last_seen,
             )
         )
 
@@ -503,6 +514,29 @@ def build_plan_run_devices_minimap(
     light_rows, by_status, by_link_status, by_host, hosts_map, stuck_job_ids = (
         _load_lightweight_plan_run_rows(db, run_id, now=ref_now)
     )
+    run_meta = db.execute(
+        select(PlanRun.plan_snapshot, Specialty.key.label("specialty_key"))
+        .select_from(PlanRun)
+        .outerjoin(Plan, Plan.id == PlanRun.plan_id)
+        .outerjoin(Specialty, Specialty.id == Plan.specialty_id)
+        .where(PlanRun.id == run_id)
+    ).first()
+    offline_expected, offline_threshold = resolve_run_offline_policy(
+        run_meta.plan_snapshot if run_meta else None,
+        run_meta.specialty_key if run_meta else None,
+    )
+    offline_failed_job_ids = [
+        row.job_id
+        for row in light_rows
+        if is_prolonged_abnormal_offline(
+            job_status=row.raw_job_status,
+            link_status=row.device_link_status,
+            device_last_seen=row.device_last_seen,
+            now=ref_now,
+            offline_expected=offline_expected,
+            threshold_seconds=offline_threshold,
+        )
+    ]
     devices = [
         PlanRunMinimapDeviceOut(
             job_id=row.job_id,
@@ -525,6 +559,8 @@ def build_plan_run_devices_minimap(
         ),
         hosts=hosts_map,
         stuck_job_ids=stuck_job_ids,
+        offline_failed_job_ids=offline_failed_job_ids,
+        offline_expected=offline_expected,
         devices=devices,
     )
 

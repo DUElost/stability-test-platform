@@ -1,11 +1,14 @@
-"""Agent 侧 S8 代表证据上送（ADR-0062 D8/D9，B8 G6）。
+"""Agent 侧 S8 代表证据上送（ADR-0062 D8/D9，B8 G6；#4199 B11-U4）。
 
 控制面在 S7 选完代表后写入独立发布记录；本模块按 host 拉取待办，把采集时
 固化的本地事件目录复制到证据区固定目的路径，校验后回执。它与 EventUploader
 共用同一份复制/哈希契约、五次尝试上限与持久尝试计数（重启不清零），但走
 独立的回执端点与目的路径：DLE.remote_path 保持原语义，供溢出补扫读取。
 
-不在中心校验回执前删除本地源（D8 第 4 条 / I4）：本模块从不 prune。
+B11-U4（#4174 §5.3）：复制进隔离临时目录后，在 temp 内按需解包 ``*.dbg`` 生成
+``*.DEC/__exp_main.txt``（或保留已有 DEC），再纳入无 symlink / 目录哈希与原子
+rename 发布；绝不改写或 prune 本地原件（D8 第 4 条 / I4）。缺 DEC 时告警降级，
+由控制面 B11-U3 过渡期补解兜底。
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -30,12 +34,16 @@ try:
         resolve_path_under_aee_local,
     )
     from .contracts.evidence_layout import (
+        EXP_MAIN_NAME,
         EvidenceLayoutError,
         assert_no_symlinks,
         copytree_no_symlinks,
         dir_sha256_and_size,
+        list_dbg_files,
+        list_dec_exp_mains,
         parse_evidence_rel_path,
     )
+    from .tool_cache import resolve_packaged_scan_tool
 except ImportError:  # pragma: no cover - 兼容脚本式导入
     from agent.aee.paths import (
         PathOutsideRootError,
@@ -43,12 +51,16 @@ except ImportError:  # pragma: no cover - 兼容脚本式导入
         resolve_path_under_aee_local,
     )
     from agent.contracts.evidence_layout import (
+        EXP_MAIN_NAME,
         EvidenceLayoutError,
         assert_no_symlinks,
         copytree_no_symlinks,
         dir_sha256_and_size,
+        list_dbg_files,
+        list_dec_exp_mains,
         parse_evidence_rel_path,
     )
+    from agent.tool_cache import resolve_packaged_scan_tool
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +69,7 @@ _MAX_CONCURRENT = 2
 _POLL_INTERVAL = 30.0
 _RETRY_BACKOFF_SECONDS = (60.0, 120.0, 240.0, 480.0)
 _ATTEMPTS_STATE_PREFIX = "evidence_upload_attempts:"
+_AEE_EXTRACT_TIMEOUT_SECONDS = 300.0
 
 
 def _enabled() -> bool:
@@ -259,24 +272,107 @@ class EvidenceUploader:
             with self._lock:
                 self._active.discard(publication_id)
 
+    @staticmethod
+    def _resolve_aee_extract_tool() -> Optional[Path]:
+        """定位与扫描工具同树的 ``aee_extract``；缺失则返回 None（可观测降级）。"""
+        candidates: list[Path] = []
+        script = os.getenv("STP_DEDUP_SCAN_SCRIPT", "").strip()
+        if script:
+            candidates.append(
+                Path(script).resolve().parent / "tools" / "aee_extract" / "aee_extract"
+            )
+        try:
+            pkg = resolve_packaged_scan_tool()
+        except Exception:  # pragma: no cover - 包面解析失败走 env 候选
+            pkg = None
+        if pkg and getattr(pkg, "root", ""):
+            candidates.append(
+                Path(pkg.root) / "tools" / "aee_extract" / "aee_extract"
+            )
+        for candidate in candidates:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+        return None
+
+    @staticmethod
+    def _unpack_dbg_in_place(dbg: Path, tool: Path) -> Path:
+        """在 dbg 所在目录调用 aee_extract，产出 ``{dbg.name}.DEC/__exp_main.txt``。"""
+        cmd = [str(tool), str(dbg)]
+        result = subprocess.run(
+            cmd,
+            cwd=str(dbg.parent),
+            capture_output=True,
+            timeout=_AEE_EXTRACT_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or b"").decode("utf-8", "ignore")[:200]
+            raise EvidenceLayoutError(
+                f"aee_extract failed for {dbg}: rc={result.returncode} {detail}"
+            )
+        exp_main = dbg.parent / f"{dbg.name}.DEC" / EXP_MAIN_NAME
+        if exp_main.is_symlink() or not exp_main.is_file():
+            raise EvidenceLayoutError(f"aee_extract produced no {EXP_MAIN_NAME}: {dbg}")
+        return exp_main
+
+    def _materialize_dec_in_temp(self, temp: Path) -> None:
+        """方案 A：仅在隔离 temp 内并入 / 生成 ``*.DEC/__exp_main.txt``，不触碰 src。"""
+        existing = list_dec_exp_mains(temp)
+        if existing:
+            return
+        dbg_files = list_dbg_files(temp)
+        if not dbg_files:
+            logger.warning("evidence_dec_skip_no_dbg temp=%s", temp)
+            return
+        tool = self._resolve_aee_extract_tool()
+        if tool is None:
+            logger.warning(
+                "evidence_dec_skip_no_extract_tool temp=%s dbg_count=%d",
+                temp, len(dbg_files),
+            )
+            return
+        for dbg in dbg_files:
+            try:
+                self._unpack_dbg_in_place(dbg, tool)
+            except (EvidenceLayoutError, OSError, subprocess.TimeoutExpired):
+                logger.warning(
+                    "evidence_dec_unpack_failed dbg=%s", dbg, exc_info=True,
+                )
+        if not list_dec_exp_mains(temp):
+            logger.warning(
+                "evidence_dec_missing_after_unpack temp=%s dbg_count=%d",
+                temp, len(dbg_files),
+            )
+
     def _copy_to_destination(self, src: Path, dest: Path) -> tuple[str, int]:
         root = Path(self._nfs_root)
         temp = dest.parent / f".stp-evidence-tmp-{uuid.uuid4().hex}"
         try:
+            src_before = dir_sha256_and_size(src)
             copytree_no_symlinks(src, temp, dest_root=root)
-            src_checksum, src_size = dir_sha256_and_size(src)
-            temp_checksum, temp_size = dir_sha256_and_size(temp)
-            if (src_checksum, src_size) != (temp_checksum, temp_size):
+            if dir_sha256_and_size(temp) != src_before:
                 raise EvidenceLayoutError("copy verification failed")
+
+            self._materialize_dec_in_temp(temp)
+
+            assert_no_symlinks(temp)
+            published = dir_sha256_and_size(temp)
+            if dir_sha256_and_size(src) != src_before:
+                raise EvidenceLayoutError("source mutated during evidence copy")
+
             if os.path.lexists(dest):
                 if dest.is_symlink() or not dest.is_dir():
                     raise FileExistsError(str(dest))
-                dest_checksum, dest_size = dir_sha256_and_size(dest)
-                if (dest_checksum, dest_size) != (src_checksum, src_size):
+                dest_identity = dir_sha256_and_size(dest)
+                if dest_identity != published:
                     raise FileExistsError(f"destination conflict: {dest}")
-                return dest_checksum, dest_size
+                return dest_identity
+
+            assert_no_symlinks(temp)
+            if dir_sha256_and_size(temp) != published:
+                raise EvidenceLayoutError("temp verification failed before publish")
             os.rename(temp, dest)
-            return src_checksum, src_size
+            return published
         finally:
             if temp.exists():
                 shutil.rmtree(temp, ignore_errors=True)
@@ -343,13 +439,32 @@ class EvidenceUploader:
                 raise EvidenceLayoutError(f"not a directory: {current}")
         return current
 
+    def _published_identity_from_src(self, src: Path, *, scratch_parent: Path) -> tuple[str, int]:
+        """在隔离 scratch 中复现发布身份（含可选 ``*.DEC``），不改写 src / dest。"""
+        root = Path(self._nfs_root)
+        scratch = scratch_parent / f".stp-evidence-recover-{uuid.uuid4().hex}"
+        src_before = dir_sha256_and_size(src)
+        try:
+            copytree_no_symlinks(src, scratch, dest_root=root)
+            if dir_sha256_and_size(scratch) != src_before:
+                raise EvidenceLayoutError("copy verification failed")
+            self._materialize_dec_in_temp(scratch)
+            assert_no_symlinks(scratch)
+            published = dir_sha256_and_size(scratch)
+            if dir_sha256_and_size(src) != src_before:
+                raise EvidenceLayoutError("source mutated during evidence copy")
+            return published
+        finally:
+            if scratch.exists():
+                shutil.rmtree(scratch, ignore_errors=True)
+
     def _recover_exhausted(self, task: dict, attempts: int) -> None:
         """预算耗尽后的恢复：只核验同一发布身份的既有目标，绝不复制或覆盖。
 
         第五次复制可能已经落盘而 VERIFIED 回执在落库前失败（例如 503）。
-        重启后先比对本地源与既有目标的目录哈希；一致才重发 VERIFIED/attempts=5，
-        由真实回执路由落库。目标缺失、哈希不符、路径含 symlink 或本地源不可读时
-        一律按终态失败收敛，不发起第六次复制。
+        重启后按与 ``_copy_to_destination`` 相同的发布身份（含 ``*.DEC``）比对既有
+        目标；一致才重发 VERIFIED/attempts=5，由真实回执路由落库。目标缺失、哈希
+        不符、路径含 symlink 或本地源不可读时一律按终态失败收敛，不发起第六次复制。
         """
         try:
             src = resolve_path_under_aee_local(str(task["local_path"]))
@@ -374,9 +489,9 @@ class EvidenceUploader:
             assert_no_symlinks(src)
             dest = self._existing_destination(str(task["destination_rel_path"]))
             assert_no_symlinks(dest)
-            src_checksum, src_size = dir_sha256_and_size(src)
-            dest_checksum, dest_size = dir_sha256_and_size(dest)
-            if (src_checksum, src_size) != (dest_checksum, dest_size):
+            published = self._published_identity_from_src(src, scratch_parent=dest.parent)
+            dest_identity = dir_sha256_and_size(dest)
+            if dest_identity != published:
                 raise EvidenceLayoutError("destination hash mismatch")
         except FileNotFoundError:
             self._report_failure(task, reason="copy_failed", terminal=True, attempts=attempts)
@@ -389,8 +504,8 @@ class EvidenceUploader:
         self._post(
             task,
             state="VERIFIED",
-            checksum=src_checksum,
-            size_bytes=src_size,
+            checksum=published[0],
+            size_bytes=published[1],
             attempts=attempts,
             reason=None,
         )

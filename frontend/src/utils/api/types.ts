@@ -2816,6 +2816,8 @@ export interface PlanRunDevicesMinimapPayload {
   facets: PlanRunMinimapFacets;
   hosts: Record<string, string>;
   stuck_job_ids: number[];
+  offline_failed_job_ids?: number[];
+  offline_expected?: boolean;
   devices: PlanRunMinimapDevice[];
 }
 

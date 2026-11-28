@@ -481,10 +481,17 @@ def test_exhausted_budget_recovery_never_reports_verified_or_copies(
         return type("Unavailable", (), {"status_code": 503, "text": "injected unavailable"})()
 
     monkeypatch.setattr(module.requests, "post", reject_before_commit)
-    monkeypatch.setattr(
-        module, "copytree_no_symlinks",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not copy")),
-    )
+    real_copytree = module.copytree_no_symlinks
+
+    def refuse_destination_copy(src, dest, *, dest_root):
+        dest_path = Path(dest).resolve()
+        # B11-U4：恢复可在同父目录建 `.stp-evidence-recover-*` scratch 复算发布身份，
+        # 但不得把内容复制进正式 destination 叶子（不覆盖、不第六次发布）。
+        if dest_path == destination.resolve() or destination.resolve() in dest_path.parents:
+            raise AssertionError("must not copy into destination")
+        return real_copytree(src, dest, dest_root=dest_root)
+
+    monkeypatch.setattr(module, "copytree_no_symlinks", refuse_destination_copy)
     module._durable_set(7, 5)
     uploader._upload(_task(event, attempts=0))
 

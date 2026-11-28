@@ -87,10 +87,12 @@
         {
           "step_id": "monkey_check",
           "action": "script:monkey_check",
-          "version": "2.0.3",
+          "version": "2.0.4",
           "timeout_seconds": 60,
           "retry": 0,
-          "params": {}
+          "params": {
+            "max_offline_seconds": 1800
+          }
         }
       ]
     },
