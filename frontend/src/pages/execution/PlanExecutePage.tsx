@@ -38,6 +38,7 @@ import { DeviceNodeRail } from '@/components/execution/plan-execute/DeviceNodeRa
 import { DeviceTablePanel } from '@/components/execution/plan-execute/DeviceTablePanel';
 import { DeviceWorkspace } from '@/components/execution/plan-execute/DeviceWorkspace';
 import { DispatchCockpit } from '@/components/execution/plan-execute/DispatchCockpit';
+import { analyzePlanNetworkRequirements } from '@/components/execution/plan-execute/networkPoolRequirements';
 import { PlanSelectPhase } from '@/components/execution/plan-execute/PlanSelectPhase';
 import { SelectedDevicesRail } from '@/components/execution/plan-execute/SelectedDevicesRail';
 import {
@@ -245,15 +246,32 @@ export default function PlanExecutePage() {
     refetchInterval: 20_000,
   });
 
+  const selectedPlan = plans?.find(p => p.id === selectedPlanId);
+  const executableStepCount =
+    selectedPlan?.steps?.filter((step) => step.enabled !== false).length ?? 0;
+  const networkRequirements = useMemo(
+    () => analyzePlanNetworkRequirements(selectedPlan?.steps),
+    [selectedPlan?.steps],
+  );
+
   const { data: wifiPoolList, isError: wifiPoolsError, refetch: refetchWifiPools } = useQuery({
-    queryKey: ['resource-pools', 'wifi', 'available'],
-    // #955: available 端点剥密（无 password），普通用户不再因 admin-only
-    // 列表 403 而静默得到空池。
-    queryFn: () => api.resourcePools.available('wifi'),
+    queryKey: [
+      'resource-pools',
+      'available',
+      networkRequirements.requiredType ?? 'all',
+      networkRequirements.requiredEgress ?? 'all',
+    ],
+    // #955 / ADR-0066 D3.5 & D7.3: available 端点白名单剥密，按当前 Plan 启用步骤交集过滤。
+    queryFn: () =>
+      api.resourcePools.available({
+        requiredType: networkRequirements.requiredType,
+        requiredEgress: networkRequirements.requiredEgress,
+      }),
+    enabled: !networkRequirements.conflictReason,
   });
   const wifiPools = useMemo(
-    () => (wifiPoolList ?? []).filter((pool) => pool.is_active),
-    [wifiPoolList],
+    () => (networkRequirements.conflictReason ? [] : (wifiPoolList ?? []).filter((pool) => pool.is_active)),
+    [networkRequirements.conflictReason, wifiPoolList],
   );
 
   // B1b：一次拉取全平台占用（独立 /jobs 路由，避免 hosts/{id} N+1）
@@ -285,10 +303,6 @@ export default function PlanExecutePage() {
     queryFn: () => fetchAllDevices(),
     refetchInterval: 20_000,
   });
-
-  const selectedPlan = plans?.find(p => p.id === selectedPlanId);
-  const executableStepCount =
-    selectedPlan?.steps?.filter((step) => step.enabled !== false).length ?? 0;
 
   const {
     data: savedProjection,
@@ -727,6 +741,12 @@ export default function PlanExecutePage() {
     });
   };
 
+  const networkBlockingReason =
+    networkRequirements.conflictReason ??
+    (networkRequirements.setupRequired && wifiPoolId == null
+      ? '当前 Plan 包含必选网络供给步骤，请先选择一个网络供给池'
+      : null);
+
   const handlePreview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlanId) { toast.error('请选择 Plan'); return; }
@@ -736,6 +756,7 @@ export default function PlanExecutePage() {
     }
     if (selectedSchedulableDeviceIds.length === 0) { toast.error('请至少选择一台设备'); return; }
     if (!readinessResult.passed) { toast.error('测试准备检查未通过'); return; }
+    if (networkBlockingReason) { toast.error(networkBlockingReason); return; }
 
     const generation = ++previewGenerationRef.current;
     setPreviewing(true);
@@ -743,7 +764,7 @@ export default function PlanExecutePage() {
       const frozenDeviceIds = [...selectedSchedulableDeviceIds];
       const p = await api.plans.previewRun(selectedPlanId, {
         device_ids: frozenDeviceIds,
-        ...(wifiPoolId != null ? { wifi_pool_id: wifiPoolId } : {}),
+        ...(wifiPoolId != null ? { network_pool_id: wifiPoolId } : {}),
       });
 
       // #819：响应返回时若代次已变（改 Plan/改选/重新预览），丢弃本次结果，
@@ -778,6 +799,7 @@ export default function PlanExecutePage() {
 
   const handleConfirm = async () => {
     if (!selectedPlanId || !preview || preview.total_steps === 0) return;
+    if (networkBlockingReason) { toast.error(networkBlockingReason); return; }
     const fingerprint = preview.confirmation_fingerprint;
     if (!fingerprint) {
       toast.error('本次预览没有确认指纹，请重新预览');
@@ -789,7 +811,7 @@ export default function PlanExecutePage() {
       const run = await api.plans.run(selectedPlanId, {
         device_ids: [...preview.device_ids],
         ...(trimmedNote ? { note: trimmedNote } : {}),
-        ...(wifiPoolId != null ? { wifi_pool_id: wifiPoolId } : {}),
+        ...(wifiPoolId != null ? { network_pool_id: wifiPoolId } : {}),
         confirmation_fingerprint: fingerprint,
       });
       toast.success('Plan 已发起执行');
@@ -1044,7 +1066,7 @@ export default function PlanExecutePage() {
       ? (!selectedPlanId || executableStepCount === 0)
       : phase === 'select'
         ? selectedSchedulableDeviceIds.length === 0
-        : (previewing || submitting || !selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed);
+        : (previewing || submitting || !selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed || Boolean(networkBlockingReason));
 
   useLayoutEffect(() => {
     primaryActionRef.current = runPrimaryAction;
@@ -1124,8 +1146,8 @@ export default function PlanExecutePage() {
         <div className="space-y-1">
           {wifiPoolsError && (
             <div className={cn(ALERT_BANNER.destructive, 'flex items-center justify-between px-4 py-2 text-xs')}>
-              <span>WiFi 列表加载失败：可选网络可能无法选择。普通用户仅可读去密列表，
-                请联系管理员检查资源池服务。</span>
+              <span>网络供给池列表加载失败：可选网络可能无法选择。普通用户仅可读去密列表，
+                请联系管理员检查网络供给资源池服务。</span>
               <button type="button" onClick={() => void refetchWifiPools()} className="underline underline-offset-2">
                 重试
               </button>
@@ -1521,6 +1543,7 @@ export default function PlanExecutePage() {
             wifiPools={wifiPools}
             wifiPoolId={wifiPoolId}
             onWifiPoolChange={setWifiPoolId}
+            networkRequirements={networkRequirements}
             onNoteChange={setRunNote}
             onEditPlan={() => navigate(`/orchestration/plans/${selectedPlanId}`)}
             onOpenRun={(runId) => navigate(`/execution/plan-runs/${runId}`)}
