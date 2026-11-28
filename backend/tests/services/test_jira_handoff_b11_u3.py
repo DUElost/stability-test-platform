@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -11,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from backend.agent.contracts.evidence_layout import safe_rmtree_no_follow
 from backend.services.jira_handoff_builder import (
     HANDOFF_MANIFEST_SCHEMA,
     HANDOFF_MANIFEST_SCHEMA_VERSION,
@@ -21,6 +23,7 @@ from backend.services.jira_handoff_builder import (
 )
 from backend.services.jira_handoff_export import (
     HANDOFF_STATUS_EXPORTED,
+    ensure_dec_for_entry,
     export_handoff_bundle,
     get_active_extract_peak_for_tests,
     reset_export_runtime_state_for_tests,
@@ -648,3 +651,104 @@ def test_b11_u5_u3_rc255_symlink_inside_dec_fail_closed(tmp_path, monkeypatch):
         # 不得把含 symlink 的 .DEC 复制进导出目录
         for dec in folder.rglob("*.DEC"):
             assert not any(p.is_symlink() for p in dec.rglob("*"))
+
+
+# ── B11-U6（#4199 v1.3）：U3 无权限 DEC fail-closed + 安全清理 ───────────────
+
+
+def test_b11_u6_u3_chmod_000_fail_closed_and_cleanup_no_follow_symlink(
+    tmp_path, monkeypatch,
+):
+    """⑤ U3：chmod 000 的 *.DEC → 502+rc，且清理不跟随 symlink 改外部权限/删外部。"""
+    if os.geteuid() == 0:
+        pytest.skip("root 下 chmod 000 不触发 PermissionError")
+
+    storage = tmp_path / "center"
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(storage))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_EXPORT_ROOT", str(export_root))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_VENDOR_PATH_PREFIX", "/home/jxtinno/sonic_tinno")
+    reset_export_runtime_state_for_tests()
+
+    external = tmp_path / "external_target"
+    external.mkdir()
+    (external / "keep.txt").write_text("keep-me\n", encoding="utf-8")
+    external_mode_before = external.stat().st_mode
+    locked_dirs: list[Path] = []
+
+    def _run(cmd, cwd=None, capture_output=True, timeout=None, check=False):  # noqa: ARG001
+        work = Path(cwd)
+        dbg = Path(cmd[-1])
+        dec = work / f"{dbg.name}.DEC"
+        dec.mkdir(parents=True, exist_ok=True)
+        nested = dec / "nested_locked"
+        nested.mkdir()
+        (nested / "__exp_main.txt").write_text("Exception Class: JE\n", encoding="utf-8")
+        (dec / "escape.link").symlink_to(external)
+        os.chmod(nested, 0o000)
+        os.chmod(dec, 0o000)
+        locked_dirs.extend([nested, dec])
+        return _FakeProc(255)
+
+    tool = tmp_path / "fake_aee_extract_u6"
+    tool.write_text("#!/bin/true\n", encoding="utf-8")
+    tool.chmod(0o755)
+    monkeypatch.setattr("backend.services.jira_handoff_export.subprocess.run", _run)
+
+    bundle_dir, manifest, digest, evidence_dir = _seed_frozen_manifest(
+        storage, handoff_id="hf_u6_chmod000",
+    )
+    try:
+        with pytest.raises(JiraHandoffError) as ei:
+            ensure_dec_for_entry(evidence_dir, aee_extract_tool=tool)
+        assert ei.value.status_code == 502
+        assert ei.value.code == "handoff_dec_extract_failed"
+        assert "rc=255" in str(ei.value.detail)
+        assert not any(evidence_dir.glob("*.DEC"))
+        assert external.is_dir()
+        assert (external / "keep.txt").read_text(encoding="utf-8") == "keep-me\n"
+        assert external.stat().st_mode == external_mode_before
+
+        with pytest.raises(JiraHandoffError) as ei2:
+            _export_u5(
+                storage,
+                export_root,
+                tool=tool,
+                digest=digest,
+                handoff_id=manifest["handoff_id"],
+                folder="MLD_V100_1128_MonkeyAEEinfo_U6_chmod",
+            )
+        assert ei2.value.status_code == 502
+        assert ei2.value.code == "handoff_dec_extract_failed"
+        assert "rc=255" in str(ei2.value.detail)
+        assert not (bundle_dir / "export_receipt.json").exists()
+        frozen = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert frozen["status"] == HANDOFF_STATUS_PENDING_EXPORT
+    finally:
+        for path in locked_dirs:
+            try:
+                os.chmod(path, 0o700)
+            except OSError:
+                pass
+        reset_export_runtime_state_for_tests()
+
+    probe = tmp_path / "u3_probe_tree"
+    probe.mkdir()
+    locked = probe / "locked.DEC"
+    locked.mkdir()
+    (locked / "escape.link").symlink_to(external)
+    os.chmod(locked, 0o000)
+    try:
+        safe_rmtree_no_follow(probe)
+        assert not probe.exists()
+        assert external.is_dir()
+        assert (external / "keep.txt").read_text(encoding="utf-8") == "keep-me\n"
+        assert external.stat().st_mode == external_mode_before
+    finally:
+        if locked.exists():
+            os.chmod(locked, 0o700)
+        if probe.exists():
+            import shutil
+
+            shutil.rmtree(probe, ignore_errors=True)
