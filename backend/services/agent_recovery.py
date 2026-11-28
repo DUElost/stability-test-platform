@@ -20,14 +20,22 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.agent.contracts.device_return import EXECUTING_DISARM
+from backend.agent.contracts.finishing_guard import (
+    FINISHING_KIND_TEARDOWN_DISARM,
+    finishing_kind_of,
+)
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance
+from backend.models.job import JobInstance, StepTrace
 from backend.models.plan_run import PlanRun
 from backend.services.aggregator import PlanAggregator
 from backend.services.errors import Conflict, NotFound
-from backend.services.device_return import handle_job_lease_release
+from backend.services.device_return import (
+    _footprint_families_for_job_async,
+    handle_job_lease_release,
+)
 from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
     extract_dispatch_host_watcher_admin_states,
@@ -114,6 +122,7 @@ async def build_recovery_job_payload(
     """
     watcher_policy = None
     dispatch_host_watcher_admin_states: Dict[str, bool] = {}
+    plan_run: Optional[PlanRun] = None
     if job.plan_run_id is not None:
         plan_run = await db.get(PlanRun, job.plan_run_id)
         if plan_run is not None:
@@ -150,7 +159,29 @@ async def build_recovery_job_payload(
                 prh.total_job_count or prh.device_count or 0
             )
 
-    return {
+    in_teardown = (
+        job.execution_state == EXECUTING_DISARM
+        or getattr(job, "disarm_guard", None) is not None
+        or bool(getattr(job, "disarm_results", None))
+        or (
+            getattr(job, "finishing_guard", None) is not None
+            and finishing_kind_of(job.finishing_guard) == FINISHING_KIND_TEARDOWN_DISARM
+        )
+    )
+    if not in_teardown:
+        teardown_trace = (
+            await db.execute(
+                select(StepTrace.id)
+                .where(
+                    StepTrace.job_id == job.id,
+                    StepTrace.stage == "teardown",
+                )
+                .limit(1)
+            )
+        ).first()
+        in_teardown = teardown_trace is not None
+
+    payload: Dict[str, Any] = {
         "id": job.id,
         "plan_run_id": job.plan_run_id,
         "plan_id": job.plan_id,
@@ -170,6 +201,29 @@ async def build_recovery_job_payload(
         "plan_run_host_id": plan_run_host_id,
         "plan_run_host_total_job_count": plan_run_host_total_job_count,
     }
+    if in_teardown:
+        run_ctx = (
+            plan_run.run_context
+            if plan_run is not None and isinstance(plan_run.run_context, dict)
+            else {}
+        )
+        if getattr(job, "manual_action", None) == "EXIT_REQUESTED":
+            termination_reason = "manual_exit"
+        elif job.id in abort_pending_job_ids(run_ctx, [(job.id, job.host_id)]):
+            termination_reason = "abort"
+        else:
+            termination_reason = "timeout"
+        payload["teardown_resumed"] = True
+        payload["footprint_families"] = sorted(
+            await _footprint_families_for_job_async(db, job)
+        )
+        payload["disarm_results"] = (
+            dict(job.disarm_results)
+            if isinstance(getattr(job, "disarm_results", None), dict)
+            else {}
+        )
+        payload["termination_reason"] = termination_reason
+    return payload
 
 async def resume_expired_lease_for_recovery(
     db: AsyncSession,

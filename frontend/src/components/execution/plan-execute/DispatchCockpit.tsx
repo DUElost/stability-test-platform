@@ -16,6 +16,12 @@ import { ALERT_BOX, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
 import { DuplicateLaunchBanner } from './DuplicateLaunchBanner';
+import {
+  formatNetworkEgressLabel,
+  formatNetworkPoolTypeLabel,
+  poolEgressOf,
+  type PlanNetworkRequirements,
+} from './networkPoolRequirements';
 import { SerialConflictBanner } from './SerialConflictBanner';
 import type { DuplicateMatch } from './planExecuteDuplicate';
 import { RecentPlanRunsInline } from './RecentPlanRunsInline';
@@ -42,11 +48,12 @@ interface DispatchCockpitProps {
   /** 重复检测查询失败（#3495）：失败不得静默——提示不可用，但不阻断发起。 */
   duplicateCheckError?: boolean;
   onRetryDuplicateCheck?: () => void;
-  /** Active wifi resource pools; empty = nothing configured yet. */
+  /** Active network resource pools matching plan requirements; empty = nothing configured yet. */
   wifiPools: ResourcePool[];
   /** null = 不连接（默认） */
   wifiPoolId: number | null;
   onWifiPoolChange: (poolId: number | null) => void;
+  networkRequirements?: PlanNetworkRequirements;
   onNoteChange: (value: string) => void;
   onEditPlan: () => void;
   onOpenRun: (runId: number) => void;
@@ -76,6 +83,7 @@ export function DispatchCockpit({
   wifiPools,
   wifiPoolId,
   onWifiPoolChange,
+  networkRequirements,
   onNoteChange,
   onEditPlan,
   onOpenRun,
@@ -302,44 +310,88 @@ export function DispatchCockpit({
           </div>
         </div>
 
-        <div className="rounded-lg border bg-card px-3 py-2.5">
-            <div className={cn('text-xs font-medium', TEXT.subtitle)}>WiFi 连接（选填）</div>
-            <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>
-              仅本次执行生效。选择网络后，设备会在初始化阶段连接它；不选则跳过这一步。
-            </p>
-            <div className="mt-2 space-y-1.5" role="radiogroup" aria-label="WiFi 连接">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name="plan-execute-wifi"
-                  value=""
-                  checked={wifiPoolId == null}
-                  onChange={() => onWifiPoolChange(null)}
-                />
-                <span>不连接（默认）</span>
-              </label>
-              {wifiPools.map((pool) => (
-                <label key={pool.id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="plan-execute-wifi"
-                    value={pool.id}
-                    checked={wifiPoolId === pool.id}
-                    onChange={() => onWifiPoolChange(pool.id)}
-                  />
-                  <span>{pool.name}</span>
-                  {typeof pool.config?.ssid === 'string' && pool.config.ssid !== pool.name ? (
-                    <span className={cn('text-[11px]', TEXT.subtitle)}>({pool.config.ssid})</span>
-                  ) : null}
-                </label>
-              ))}
+        <div className="rounded-lg border bg-card px-3 py-2.5" data-testid="network-supply-selector">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className={cn('text-xs font-medium', TEXT.subtitle)}>
+                网络供给{networkRequirements?.setupRequired ? '（必选）' : '（选填）'}
+              </div>
+              {networkRequirements?.hasNetworkSteps && !networkRequirements.conflictReason ? (
+                <div className={cn('text-[11px]', TEXT.subtitle)}>
+                  约束：
+                  {networkRequirements.requiredType
+                    ? formatNetworkPoolTypeLabel(networkRequirements.requiredType)
+                    : 'WiFi / USB 反向供网'}
+                  {' · '}
+                  {networkRequirements.requiredEgress
+                    ? formatNetworkEgressLabel(networkRequirements.requiredEgress)
+                    : '直连 / VPN 出口'}
+                </div>
+              ) : null}
             </div>
-            {wifiPools.length === 0 ? (
-              <p className={cn('mt-2 text-[11px]', TEXT.subtitle)}>
-                尚未配置任何 WiFi 网络。需要连接时，先在「资源池」页添加一个 wifi 类型的池
-                （名称 + wifi 名 + 密码）。
-              </p>
-            ) : null}
+            <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>
+              仅本次执行生效。选择网络供给池后，设备会在初始化阶段按池类型（WiFi 或 USB 反向供网）建立连接；不选则跳过（若 Plan 声明 required=true 则必须选择）。
+            </p>
+            {networkRequirements?.conflictReason ? (
+              <div
+                data-testid="network-step-conflict-banner"
+                className={cn(ALERT_BOX.destructive, 'mt-2 rounded px-3 py-2 text-xs')}
+              >
+                {networkRequirements.conflictReason}
+              </div>
+            ) : (
+              <>
+                <div className="mt-2 space-y-1.5" role="radiogroup" aria-label="网络供给">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="plan-execute-wifi"
+                      value=""
+                      checked={wifiPoolId == null}
+                      onChange={() => onWifiPoolChange(null)}
+                    />
+                    <span>不连接（默认）</span>
+                  </label>
+                  {wifiPools.map((pool) => {
+                    const egress = poolEgressOf(pool.config);
+                    const detailText =
+                      pool.resource_type === 'usb_net'
+                        ? typeof pool.config?.bridge_name === 'string'
+                          ? `${pool.config.bridge_name}${typeof pool.config?.subnet_cidr === 'string' ? ` · ${pool.config.subnet_cidr}` : ''}`
+                          : null
+                        : typeof pool.config?.ssid === 'string' && pool.config.ssid !== pool.name
+                          ? pool.config.ssid
+                          : null;
+                    return (
+                      <label key={pool.id} className="flex flex-wrap items-center gap-2 text-sm">
+                        <input
+                          type="radio"
+                          name="plan-execute-wifi"
+                          value={pool.id}
+                          checked={wifiPoolId === pool.id}
+                          onChange={() => onWifiPoolChange(pool.id)}
+                        />
+                        <span>{pool.name}</span>
+                        <span className={cn('rounded px-1.5 py-0.5 text-[11px]', 'bg-primary/10 text-primary')}>
+                          {formatNetworkPoolTypeLabel(pool.resource_type)}
+                        </span>
+                        <span className={cn('rounded px-1.5 py-0.5 text-[11px]', egress === 'vpn' ? 'bg-warning/15 text-warning' : 'bg-muted text-muted-foreground')}>
+                          {formatNetworkEgressLabel(egress)}
+                        </span>
+                        {detailText ? (
+                          <span className={cn('text-[11px]', TEXT.subtitle)}>({detailText})</span>
+                        ) : null}
+                      </label>
+                    );
+                  })}
+                </div>
+                {wifiPools.length === 0 ? (
+                  <p className={cn('mt-2 text-[11px]', TEXT.subtitle)}>
+                    尚未配置符合当前 Plan 约束的网络供给池。需要供网时，请先在「网络供给」页添加相应池
+                    （WiFi 或 USB 反向供网）。
+                  </p>
+                ) : null}
+              </>
+            )}
         </div>
 
         <div className="rounded-lg border bg-card px-3 py-2.5">

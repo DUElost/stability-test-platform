@@ -21,7 +21,9 @@ import os
 from backend.core.adr0026_params import DEFAULTS as _ADR0026_DEFAULTS
 from backend.agent.contracts.device_return import EXECUTING_DISARM, FAMILY_STEPS
 from backend.agent.contracts.finishing_guard import (
+    FINISHING_KIND_TEARDOWN_DISARM,
     abort_request_covers_job as _abort_request_covers_job,
+    finishing_kind_of,
 )
 
 
@@ -161,12 +163,32 @@ def running_heartbeat_timeout_seconds(
     *,
     patrol_stall_multiplier: int | None = None,
 ) -> int:
-    """Graded RUNNING timeout: patrol-active jobs may use a separate window."""
+    """Graded RUNNING timeout: patrol-active jobs may use a separate window.
+
+    Once a job has entered teardown (EXECUTING_DISARM / disarm_guard /
+    disarm_results / teardown_disarm finishing_guard), it is no longer in
+    patrol and must use RUNNING_HEARTBEAT_TIMEOUT_SECONDS rather than the
+    shorter patrol cadence window (#4222).
+    """
+    finishing_guard = getattr(job, "finishing_guard", None)
+    in_teardown = (
+        getattr(job, "execution_state", None) == EXECUTING_DISARM
+        or getattr(job, "disarm_guard", None) is not None
+        or bool(getattr(job, "disarm_results", None))
+        or (
+            finishing_guard is not None
+            and finishing_kind_of(finishing_guard) == FINISHING_KIND_TEARDOWN_DISARM
+        )
+    )
     pipeline_def = getattr(job, "pipeline_def", None)
-    if has_patrol_lifecycle(pipeline_def) and job_in_patrol_phase(
-        patrol_cycle_count=getattr(job, "patrol_cycle_count", None),
-        last_patrol_heartbeat_at=getattr(job, "last_patrol_heartbeat_at", None),
-        current_patrol_step=getattr(job, "current_patrol_step", None),
+    if (
+        not in_teardown
+        and has_patrol_lifecycle(pipeline_def)
+        and job_in_patrol_phase(
+            patrol_cycle_count=getattr(job, "patrol_cycle_count", None),
+            last_patrol_heartbeat_at=getattr(job, "last_patrol_heartbeat_at", None),
+            current_patrol_step=getattr(job, "current_patrol_step", None),
+        )
     ):
         interval = _patrol_interval_seconds(pipeline_def)
         multiplier = patrol_stall_multiplier or PATROL_STALL_MULTIPLIER

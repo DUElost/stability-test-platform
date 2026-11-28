@@ -1164,6 +1164,8 @@ class PipelineEngine:
         self._patrol_cycle_checkpoint_store = patrol_cycle_checkpoint_store
         self._patrol_cycle_checkpoint: Optional[dict] = None
         self._patrol_cycle_resume: bool = False
+        self._teardown_resume: Optional[dict] = None
+        self._teardown_checkpoint_meta: Optional[tuple[str, str]] = None
         self._shared: dict = {}
         self._canceled = False
         self._force_abort = False
@@ -1202,12 +1204,17 @@ class PipelineEngine:
         self._patrol_cycle_checkpoint = checkpoint
         self._patrol_cycle_resume = True
 
+    def set_teardown_resume(self, checkpoint: dict) -> None:
+        """Skip init/patrol and resume directly at Phase 3 teardown (#4222)."""
+        self._teardown_resume = dict(checkpoint or {})
+
     def clear_patrol_cycle_checkpoint(self) -> None:
         self._patrol_cycle_checkpoint = None
         self._patrol_cycle_resume = False
+        self._teardown_resume = None
         self._drop_patrol_cycle_checkpoint_row()
 
-    def _persist_patrol_cycle_checkpoint(self, payload: dict) -> None:
+    def _save_checkpoint_row(self, payload: dict) -> None:
         store = self._patrol_cycle_checkpoint_store
         if store is None:
             return
@@ -1225,6 +1232,25 @@ class PipelineEngine:
                 )
             else:
                 raise
+
+    def _persist_patrol_cycle_checkpoint(self, payload: dict) -> None:
+        self._save_checkpoint_row(payload)
+
+    def _persist_teardown_checkpoint(
+        self,
+        termination_reason: str,
+        lifecycle_error: str,
+    ) -> None:
+        self._teardown_checkpoint_meta = (termination_reason, lifecycle_error)
+        self._save_checkpoint_row(
+            {
+                "phase": "teardown",
+                "termination_reason": termination_reason,
+                "lifecycle_error": lifecycle_error,
+                "footprint_families": sorted(self._footprint_families),
+                "disarm_results": dict(self._disarm_results),
+            }
+        )
 
     def _drop_patrol_cycle_checkpoint_row(self) -> None:
         store = self._patrol_cycle_checkpoint_store
@@ -1960,6 +1986,13 @@ class PipelineEngine:
                 self._update_execution_state(
                     "PATROL_SLEEP" if phase == "patrol" else None
                 )
+            if disarm_step:
+                # Clear finished disarm step evidence immediately so subsequent
+                # non-disarm steps (e.g. powercycle_finish WAITING_EXECUTION_SLOT)
+                # are not hijacked on /coordinator-heartbeat (#4222).
+                coord = getattr(self, "_coordinator", None)
+                if coord is not None:
+                    coord.publish_disarm_evidence(self._run_id, None)
 
     def _run_step_with_retry(
         self,
@@ -2648,12 +2681,32 @@ class PipelineEngine:
             for s in (init_def or [])
         )
 
+        teardown_resume = (
+            self._teardown_resume
+            if isinstance(getattr(self, "_teardown_resume", None), dict)
+            else None
+        )
         patrol_resume: Optional[dict] = None
-        skip_init = False
-        if self._patrol_cycle_resume and self._patrol_cycle_checkpoint is not None:
+        skip_init = teardown_resume is not None
+        if not skip_init and self._patrol_cycle_resume and self._patrol_cycle_checkpoint is not None:
             patrol_resume = self._patrol_cycle_checkpoint
             skip_init = True
         return_checks_passed = skip_init
+        if teardown_resume is not None:
+            termination_reason = str(teardown_resume.get("termination_reason") or "timeout")
+            lifecycle_error = str(teardown_resume.get("lifecycle_error") or "")
+            for family in teardown_resume.get("footprint_families") or ():
+                if isinstance(family, str) and family:
+                    self._footprint_families.add(family)
+            restored_disarm = teardown_resume.get("disarm_results")
+            if isinstance(restored_disarm, dict):
+                for family, entry in restored_disarm.items():
+                    if (
+                        isinstance(family, str)
+                        and isinstance(entry, dict)
+                        and family not in self._disarm_results
+                    ):
+                        self._disarm_results[family] = dict(entry)
 
         # R07-F08 (#1010): a checkpoint resume must not grant a fresh cruise
         # budget. When the persisted checkpoint carries the cruise time already
@@ -2672,180 +2725,198 @@ class PipelineEngine:
 
         try:
             # ── Phase 1: Init ──
-            if skip_init:
+            if teardown_resume is not None:
                 logger.info(
-                    "[Lifecycle] run=%d — skipping init (patrol checkpoint resume)",
-                    self._run_id,
+                    "[Lifecycle] run=%d — skipping init and patrol (teardown resume reason=%s)",
+                    self._run_id, termination_reason,
                 )
-                init_result = StepResult(success=True, exit_code=0)
+                if (
+                    self._coordinator is not None
+                    and self._plan_run_host_id is not None
+                ):
+                    self._coordinator.advance_phase(
+                        self._plan_run_host_id, "TEARDOWN",
+                    )
             else:
-                self._report_job_status_mq("INIT_RUNNING")
-                logger.info("[Lifecycle] run=%d — executing init", self._run_id)
+                if skip_init:
+                    logger.info(
+                        "[Lifecycle] run=%d — skipping init (patrol checkpoint resume)",
+                        self._run_id,
+                    )
+                    init_result = StepResult(success=True, exit_code=0)
+                else:
+                    self._report_job_status_mq("INIT_RUNNING")
+                    logger.info("[Lifecycle] run=%d — executing init", self._run_id)
 
-                defer_prefix = deferred_flash_init_prefix_len(init_def)
-                if defer_prefix > 0:
-                    # ADR-0063 D5 第 3 条 & #4222：vbus_cycle（关机无 ADB）与 adb_reboot 整机刷机
-                    # （如设备卡死开机动画、sys.boot_completed 未就绪）在刷机前拿不到开机回读。
-                    # 残留检查推迟到刷机前缀（[flash_firmware] 或 [flash_preflight, flash_firmware]）
-                    # 成功之后、其余 init 步骤之前；刷机不建立任何专项足迹。
-                    self._init_steps_started = 0
-                    init_result = self._run_lifecycle_steps("init", init_def[:defer_prefix])
-                    if init_result.success:
-                        # 检查期间 teardown 门保持关闭：检查返回失败或抛出异常时，
-                        # 由检查自己承担已尝试的解除（与先查后刷的路径一致）。
+                    defer_prefix = deferred_flash_init_prefix_len(init_def)
+                    if defer_prefix > 0:
+                        # ADR-0063 D5 第 3 条 & #4222：vbus_cycle（关机无 ADB）与 adb_reboot 整机刷机
+                        # （如设备卡死开机动画、sys.boot_completed 未就绪）在刷机前拿不到开机回读。
+                        # 残留检查推迟到刷机前缀（[flash_firmware] 或 [flash_preflight, flash_firmware]）
+                        # 成功之后、其余 init 步骤之前；刷机不建立任何专项足迹。
+                        self._init_steps_started = 0
+                        init_result = self._run_lifecycle_steps("init", init_def[:defer_prefix])
+                        if init_result.success:
+                            # 检查期间 teardown 门保持关闭：检查返回失败或抛出异常时，
+                            # 由检查自己承担已尝试的解除（与先查后刷的路径一致）。
+                            init_result = self._check_init_returns()
+                            return_checks_passed = init_result.success
+                            if init_result.success:
+                                init_result = self._run_lifecycle_steps("init", init_def[defer_prefix:])
+                        else:
+                            # 刷机步骤实际启动过才由本 job 承担 teardown；启动前丢租约或仅宿主预检失败时没有本 job 的设备动作。
+                            return_checks_passed = self._init_steps_started > 0
+                    else:
                         init_result = self._check_init_returns()
                         return_checks_passed = init_result.success
                         if init_result.success:
-                            init_result = self._run_lifecycle_steps("init", init_def[defer_prefix:])
+                            init_result = self._run_lifecycle_steps("init", init_def)
+                if not init_result.success:
+                    # Distinguish lock_lost (abort) from genuine init failure
+                    if init_result.error_message in ("device_lease_lost", "job_aborted"):
+                        termination_reason = "abort"
+                    elif init_result.error_message == "atomic_delivery_skipped":
+                        termination_reason = "init_failure"
+                    elif getattr(self, "_force_abort", False):
+                        termination_reason = "abort"
                     else:
-                        # 刷机步骤实际启动过才由本 job 承担 teardown；启动前丢租约或仅宿主预检失败时没有本 job 的设备动作。
-                        return_checks_passed = self._init_steps_started > 0
-                else:
-                    init_result = self._check_init_returns()
-                    return_checks_passed = init_result.success
-                    if init_result.success:
-                        init_result = self._run_lifecycle_steps("init", init_def)
-            if not init_result.success:
-                # Distinguish lock_lost (abort) from genuine init failure
-                if init_result.error_message in ("device_lease_lost", "job_aborted"):
-                    termination_reason = "abort"
-                elif init_result.error_message == "atomic_delivery_skipped":
-                    termination_reason = "init_failure"
-                elif getattr(self, "_force_abort", False):
-                    termination_reason = "abort"
-                else:
-                    termination_reason = "init_failure"
-                lifecycle_error = f"lifecycle init failed: {init_result.error_message}"
-                logger.error("[Lifecycle] run=%d — init failed: %s", self._run_id, init_result.error_message)
-                # Still count toward INIT→PATROL barrier so peers are not
-                # stuck waiting for a job that will skip patrol.
-                self._arrive_phase_barrier("PATROL")
-                # 单设备 host 没有 barrier 同伴（_barrier_enabled() False），
-                # advance 只发生在 _await_phase_barrier——而 init 失败不经过它，
-                # 于是控制面 host 阶段永远停在 INIT（实测 9-6）。失败也要推进。
-                if (
-                    self._coordinator is not None
-                    and self._plan_run_host_id is not None
-                    and not self._barrier_enabled()
-                ):
-                    self._coordinator.advance_phase(
-                        self._plan_run_host_id, "PATROL",
-                    )
-                # Do NOT return here — fall through to finally for teardown,
-                # then to the unified exit block for MQ status + artifact.
-
-            elif (
-                gate is not None
-                and gate.should_skip_patrol_after_atomic()
-                and has_static_atomic
-            ):
-                # ADR-0065 D5.1：普通 abort 后 atomic_group 已闭环 → 跳过 patrol，
-                # 推进屏障；有足迹则 finally 切入 teardown_disarm。
-                # 纯原子交付（无 patrol）→ COMPLETED；混合 Plan → ABORTED。
-                gate.mark_atomic_group_completed(during_abort_drain=True)
-                if has_patrol:
-                    termination_reason = "abort"
-                    lifecycle_error = "atomic_commit_drain_skip_patrol"
-                else:
-                    termination_reason = "completed"
-                    lifecycle_error = "completed_during_abort_drain"
-                logger.info(
-                    "[Lifecycle] run=%d — atomic_commit drain complete "
-                    "has_patrol=%s reason=%s",
-                    self._run_id, has_patrol, termination_reason,
-                )
-                self._arrive_phase_barrier("PATROL")
-                if (
-                    self._coordinator is not None
-                    and self._plan_run_host_id is not None
-                    and not self._barrier_enabled()
-                ):
-                    self._coordinator.advance_phase(
-                        self._plan_run_host_id, "PATROL",
-                    )
-
-            elif patrol_def:
-                if gate is not None and gate.granted and has_static_atomic:
-                    gate.mark_atomic_group_completed(during_abort_drain=False)
-                # ADR-0026: align all PlanRunHost devices before patrol so
-                # long-run waves share a common start (INIT→PATROL barrier).
-                # Patrol-checkpoint resume already passed this boundary — skip.
-                if skip_init:
+                        termination_reason = "init_failure"
+                    lifecycle_error = f"lifecycle init failed: {init_result.error_message}"
+                    logger.error("[Lifecycle] run=%d — init failed: %s", self._run_id, init_result.error_message)
+                    # Still count toward INIT→PATROL barrier so peers are not
+                    # stuck waiting for a job that will skip patrol.
+                    self._arrive_phase_barrier("PATROL")
+                    # 单设备 host 没有 barrier 同伴（_barrier_enabled() False），
+                    # advance 只发生在 _await_phase_barrier——而 init 失败不经过它，
+                    # 于是控制面 host 阶段永远停在 INIT（实测 9-6）。失败也要推进。
                     if (
                         self._coordinator is not None
                         and self._plan_run_host_id is not None
+                        and not self._barrier_enabled()
                     ):
                         self._coordinator.advance_phase(
                             self._plan_run_host_id, "PATROL",
                         )
-                    barrier_ok = True
-                else:
-                    barrier_ok = self._await_phase_barrier("PATROL")
-                if not barrier_ok:
-                    barrier_reason = getattr(
-                        self, "_barrier_failure_reason", "barrier_timeout"
-                    )
-                    if barrier_reason in ("barrier_max_wait", "barrier_timeout"):
-                        # #174 review: 超时是失败不是取消——终态必须 FAILED。
-                        termination_reason = "barrier_timeout"
-                        lifecycle_error = f"phase barrier failed: {barrier_reason}"
-                    else:
+                    # Do NOT return here — fall through to finally for teardown,
+                    # then to the unified exit block for MQ status + artifact.
+
+                elif (
+                    gate is not None
+                    and gate.should_skip_patrol_after_atomic()
+                    and has_static_atomic
+                ):
+                    # ADR-0065 D5.1：普通 abort 后 atomic_group 已闭环 → 跳过 patrol，
+                    # 推进屏障；有足迹则 finally 切入 teardown_disarm。
+                    # 纯原子交付（无 patrol）→ COMPLETED；混合 Plan → ABORTED。
+                    gate.mark_atomic_group_completed(during_abort_drain=True)
+                    if has_patrol:
                         termination_reason = "abort"
-                        lifecycle_error = "phase barrier aborted or lease lost"
-                    logger.error(
-                        "[Lifecycle] run=%d — INIT→PATROL barrier failed reason=%s",
-                        self._run_id, barrier_reason,
+                        lifecycle_error = "atomic_commit_drain_skip_patrol"
+                    else:
+                        termination_reason = "completed"
+                        lifecycle_error = "completed_during_abort_drain"
+                    logger.info(
+                        "[Lifecycle] run=%d — atomic_commit drain complete "
+                        "has_patrol=%s reason=%s",
+                        self._run_id, has_patrol, termination_reason,
                     )
+                    self._arrive_phase_barrier("PATROL")
+                    if (
+                        self._coordinator is not None
+                        and self._plan_run_host_id is not None
+                        and not self._barrier_enabled()
+                    ):
+                        self._coordinator.advance_phase(
+                            self._plan_run_host_id, "PATROL",
+                        )
+
+                elif patrol_def:
+                    if gate is not None and gate.granted and has_static_atomic:
+                        gate.mark_atomic_group_completed(during_abort_drain=False)
+                    # ADR-0026: align all PlanRunHost devices before patrol so
+                    # long-run waves share a common start (INIT→PATROL barrier).
+                    # Patrol-checkpoint resume already passed this boundary — skip.
+                    if skip_init:
+                        if (
+                            self._coordinator is not None
+                            and self._plan_run_host_id is not None
+                        ):
+                            self._coordinator.advance_phase(
+                                self._plan_run_host_id, "PATROL",
+                            )
+                        barrier_ok = True
+                    else:
+                        barrier_ok = self._await_phase_barrier("PATROL")
+                    if not barrier_ok:
+                        barrier_reason = getattr(
+                            self, "_barrier_failure_reason", "barrier_timeout"
+                        )
+                        if barrier_reason in ("barrier_max_wait", "barrier_timeout"):
+                            # #174 review: 超时是失败不是取消——终态必须 FAILED。
+                            termination_reason = "barrier_timeout"
+                            lifecycle_error = f"phase barrier failed: {barrier_reason}"
+                        else:
+                            termination_reason = "abort"
+                            lifecycle_error = "phase barrier aborted or lease lost"
+                        logger.error(
+                            "[Lifecycle] run=%d — INIT→PATROL barrier failed reason=%s",
+                            self._run_id, barrier_reason,
+                        )
+                    else:
+                        # ── Phase 2: Patrol loop (only if init succeeded) ──
+                        # ADR-0022: per-cycle aggregate via patrol_heartbeat_uploader,
+                        # exponential backoff on consecutive failure, manual_action
+                        # observation for runtime intervention.
+                        termination_reason, lifecycle_error = self._run_patrol_loop(
+                            patrol_def, timeout_seconds, init_completed_at=init_completed_at,
+                            resume=patrol_resume,
+                        )
                 else:
-                    # ── Phase 2: Patrol loop (only if init succeeded) ──
-                    # ADR-0022: per-cycle aggregate via patrol_heartbeat_uploader,
-                    # exponential backoff on consecutive failure, manual_action
-                    # observation for runtime intervention.
-                    termination_reason, lifecycle_error = self._run_patrol_loop(
-                        patrol_def, timeout_seconds, init_completed_at=init_completed_at,
-                        resume=patrol_resume,
-                    )
-            else:
-                # init 成功且无 patrol：纯原子/纯 init 自然完成。
-                if gate is not None and gate.granted and has_static_atomic:
-                    gate.mark_atomic_group_completed(during_abort_drain=False)
+                    # init 成功且无 patrol：纯原子/纯 init 自然完成。
+                    if gate is not None and gate.granted and has_static_atomic:
+                        gate.mark_atomic_group_completed(during_abort_drain=False)
 
         finally:
             # ── Phase 3: Teardown / disarm (best-effort) ──
             # ADR-0061 D3.4 / #3723 §3.2.3: manual_exit must still run disarm
             # (may skip collection-only steps when the family is ONBOARDED).
-            self._report_job_status_mq(
-                "TEARDOWN_RUNNING",
-                reason=f"termination_reason={termination_reason}",
-            )
-            if not return_checks_passed:
-                # The init return check failed (or, for a vbus flash job, the
-                # deferred check failed after the flash). The precheck owns its
-                # attempted disarm; starting this job's teardown would be a new action.
-                teardown_result = StepResult(success=True, metadata={"teardown_status": "SKIPPED"})
-            elif termination_reason == "manual_exit":
-                logger.info(
-                    "[Lifecycle] run=%d — manual_exit: executing disarm "
-                    "(ADR-0061 D3.4; was ADR-0022 BO4 skip)",
-                    self._run_id,
+            try:
+                self._report_job_status_mq(
+                    "TEARDOWN_RUNNING",
+                    reason=f"termination_reason={termination_reason}",
                 )
-                teardown_result = self._execute_teardown_best_effort(
-                    teardown_def, disarm_only=True,
-                )
-            else:
-                logger.info(
-                    "[Lifecycle] run=%d — executing teardown (reason: %s)",
-                    self._run_id, termination_reason,
-                )
-                if termination_reason == "abort":
-                    # Lease-auth failure also aborts without setting cancel
-                    # flags. Honor the lifecycle outcome for GPU collection;
-                    # preserve all other families' existing teardown behavior.
-                    teardown_def = [
-                        step for step in teardown_def
-                        if not self._is_gpu_collection_step(step)
-                    ]
-                teardown_result = self._execute_teardown_best_effort(teardown_def)
+                if not return_checks_passed:
+                    # The init return check failed (or, for a vbus flash job, the
+                    # deferred check failed after the flash). The precheck owns its
+                    # attempted disarm; starting this job's teardown would be a new action.
+                    teardown_result = StepResult(success=True, metadata={"teardown_status": "SKIPPED"})
+                else:
+                    self._persist_teardown_checkpoint(termination_reason, lifecycle_error)
+                    if termination_reason == "manual_exit":
+                        logger.info(
+                            "[Lifecycle] run=%d — manual_exit: executing disarm "
+                            "(ADR-0061 D3.4; was ADR-0022 BO4 skip)",
+                            self._run_id,
+                        )
+                        teardown_result = self._execute_teardown_best_effort(
+                            teardown_def, disarm_only=True,
+                        )
+                    else:
+                        logger.info(
+                            "[Lifecycle] run=%d — executing teardown (reason: %s)",
+                            self._run_id, termination_reason,
+                        )
+                        if termination_reason == "abort":
+                            # Lease-auth failure also aborts without setting cancel
+                            # flags. Honor the lifecycle outcome for GPU collection;
+                            # preserve all other families' existing teardown behavior.
+                            teardown_def = [
+                                step for step in teardown_def
+                                if not self._is_gpu_collection_step(step)
+                            ]
+                        teardown_result = self._execute_teardown_best_effort(teardown_def)
+            finally:
+                self._drop_patrol_cycle_checkpoint_row()
 
         # ── Unified exit: terminal MQ + artifact + StepResult ──
         # #483: 终态前必须排空 step-trace 上传队列——异步批量上传器可能
@@ -3062,7 +3133,8 @@ class PipelineEngine:
             return _accept_heartbeat_ack(ack, observed_sent)
 
         def _end_patrol(reason: str, err: str = "") -> Tuple[str, str]:
-            self._drop_patrol_cycle_checkpoint_row()
+            # Keep checkpoint until teardown finishes (or _run_lifecycle cleanup)
+            # so a teardown-stage UNKNOWN -> RESUME never restarts at Init (#4222).
             return reason, err
 
         self._report_job_status_mq("PATROL_RUNNING")
@@ -3652,12 +3724,34 @@ class PipelineEngine:
                     and (self._canceled or (self._is_aborted is not None and self._is_aborted()))
                 ):
                     continue
+                if getattr(self, "_teardown_resume", None) is not None:
+                    script = script_name_from_step(step)
+                    ver = step_version_of(step)
+                    if step_teardown_role(script, ver, onboarded=ONBOARDED) != STEP_ROLE_COLLECT:
+                        family = family_for_disarm_script(script, version=ver, onboarded=ONBOARDED)
+                        existing_entry = (self._disarm_results or {}).get(family or "")
+                        if (
+                            isinstance(existing_entry, dict)
+                            and existing_entry.get("result") in (
+                                DISARM_RESULT_CONFIRMED,
+                                DISARM_RESULT_EXECUTED_UNVERIFIED,
+                            )
+                        ):
+                            logger.info(
+                                "[Teardown] skipping already-disarmed step '%s' (family=%s result=%s)",
+                                step.get("step_id", "unknown"),
+                                family,
+                                existing_entry.get("result"),
+                            )
+                            continue
                 total_steps += 1
                 step_id = step.get("step_id", "unknown")
                 try:
                     ok = self._run_step_with_permit(
                         "teardown", step, suppress_success_trace=False,
                     )
+                    if getattr(self, "_teardown_checkpoint_meta", None) is not None:
+                        self._persist_teardown_checkpoint(*self._teardown_checkpoint_meta)
                     if not ok:
                         failed_steps += 1
                         error_detail = getattr(self, "_last_step_error", "") or "failed"

@@ -412,6 +412,15 @@ def run_task_wrapper(
             state.release(job_id, fencing_token, device_id, local_worker_token=local_worker_token)
             return
 
+    teardown_resume = None
+    if run.get("teardown_resumed"):
+        teardown_resume = {
+            "phase": "teardown",
+            "termination_reason": run.get("termination_reason") or "timeout",
+            "footprint_families": run.get("footprint_families") or [],
+            "disarm_results": run.get("disarm_results") or {},
+        }
+
     try:
         result = execute_pipeline_run(
             pipeline_def,
@@ -442,6 +451,7 @@ def run_task_wrapper(
             plan_run_host_id=run.get("plan_run_host_id"),
             barrier_total=run.get("plan_run_host_total_job_count"),
             step_trace_uploader=step_trace_uploader,
+            teardown_resume=teardown_resume,
         )
 
         watcher_summary = None

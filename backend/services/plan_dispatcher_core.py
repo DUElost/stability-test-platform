@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +16,10 @@ from sqlalchemy.orm import Session
 from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.host import Device, Host
 from backend.models.plan import Plan, PlanStep
+from backend.services.project_log_profile import (
+    TARGET_SCRIPT_NAME as _LOG_PROFILE_SCRIPT_NAME,
+    extract_applied_log_profile,
+)
 from backend.services.resource_pool import (
     DEFAULT_EGRESS,
     VALID_EGRESSES,
@@ -223,10 +227,15 @@ def apply_step_timing_fields(
 
 
 def build_lifecycle_from_steps(
-    plan: Plan, steps: list[PlanStep], script_defaults: dict[tuple[str, str], dict]
+    plan: Plan,
+    steps: list[PlanStep],
+    script_defaults: dict[tuple[str, str], dict],
+    *,
+    project_log_profile: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     lifecycle: dict[str, Any] = {"init": [], "teardown": []}
     patrol_steps: list[dict] = []
+    applied_preset = extract_applied_log_profile(project_log_profile)
 
     for step in sorted(steps, key=lambda s: (s.stage, s.sort_order)):
         if step.enabled is False:
@@ -239,14 +248,17 @@ def build_lifecycle_from_steps(
                 f"Update the step to an active version before dispatching."
             )
         default_params = script_defaults[key]
-        # #508 步骤级 params：step.params 覆盖 default_params（前端 ParamFormCard
-        # 同语义：step.params overrides default_params）。update 只替换用户声明
-        # 的键、保留未声明的默认键——``step.params={"a": 3}`` + default
-        # ``{"a": 1, "b": 2}`` → ``{"a": 3, "b": 2}``。
-        merged_params = deepcopy(default_params)
-        step_params = getattr(step, "params", None)
-        if step_params:
-            merged_params.update(deepcopy(step_params))
+        # ADR-0067 D2 唯一五层静态合并入口（schema.default + default_params 已在
+        # script_defaults 内合完，此处依次叠加第 3 层 project_preset 与第 4 层 step.params）。
+        step_preset = (
+            applied_preset if step.script_name == _LOG_PROFILE_SCRIPT_NAME else None
+        )
+        merged_params = merge_effective_params(
+            None,
+            default_params,
+            getattr(step, "params", None),
+            project_preset=step_preset,
+        )
         step_def: dict[str, Any] = {
             "step_id": step.step_key,
             "action": f"script:{step.script_name}",
@@ -299,6 +311,9 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
     snapshot = plan_snapshot or {}
     plan_data = snapshot.get("plan") or {}
     snapshot_steps = snapshot.get("steps") or []
+    # ADR-0067 D5.2：只消费冻结的 plan_snapshot["project_log_profile"]，绝不回读活表；
+    # 历史快照缺失该键按未启用处理（D5.3）。
+    applied_preset = extract_applied_log_profile(snapshot.get("project_log_profile"))
     lifecycle: dict[str, Any] = {"init": [], "teardown": []}
     patrol_steps: list[dict[str, Any]] = []
 
@@ -315,13 +330,15 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
         script_version = step.get("script_version")
         if not script_name or not script_version:
             raise PlanDispatchError("snapshot step is missing script identity")
-        # #508/#977 步骤级 params：快照固化生效参数（schema.default +
-        # default_params + step.params 合并，与派发同优先级），历史 run 可复核；
-        # 旧快照无 param_schema/params 键 → 两处均按空处理，行为不变。
+        # #508/#977/ADR-0067 D2：schema.default < default_params < project_preset < step.params
+        step_preset = (
+            applied_preset if script_name == _LOG_PROFILE_SCRIPT_NAME else None
+        )
         merged_params = merge_effective_params(
             step.get("param_schema"),
             step.get("default_params"),
             step.get("params"),
+            project_preset=step_preset,
         )
         step_def: dict[str, Any] = {
             "step_id": step.get("step_key"),
@@ -568,6 +585,16 @@ def iter_lifecycle_steps(pipeline: dict):
             yield "patrol", step
 
 
+def _is_empty_str_param(value: Any) -> bool:
+    """ADR-0067 D2.5：字符串凭据/项目键填空谓词（缺键/None/空串，不把 False 视为空）。"""
+    return value is None or value == ""
+
+
+def _is_empty_count_param(value: Any) -> bool:
+    """ADR-0067 D2.5：计数字段填空谓词（缺键/None/0，不把 False 视为空）。"""
+    return value is None or (value == 0 and not isinstance(value, bool))
+
+
 def inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
     """Push the allocated WiFi credentials into the steps that consume them.
 
@@ -580,7 +607,7 @@ def inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
       makes "connect WiFi" an opt-in choice per execution rather than a
       hard requirement.
 
-    Existing values win — a plan that hardcodes an ssid is left alone.
+    Existing non-empty values win — a plan that hardcodes an ssid is left alone.
     """
     if not wifi_params or not wifi_params.get("ssid"):
         return pipeline
@@ -590,17 +617,17 @@ def inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
         action = step.get("action", "")
         if "connect_wifi" in action:
             params = dict(step.get("params") or {})
-            if not params.get("ssid"):
+            if _is_empty_str_param(params.get("ssid")):
                 params["ssid"] = ssid
-            if not params.get("password"):
+            if _is_empty_str_param(params.get("password")):
                 params["password"] = password
             step["params"] = params
         elif "monkey_setup" in action:
             params = dict(step.get("params") or {})
             wifi_cfg = dict(params.get("wifi") or {})
-            if not wifi_cfg.get("ssid"):
+            if _is_empty_str_param(wifi_cfg.get("ssid")):
                 wifi_cfg["ssid"] = ssid
-            if not wifi_cfg.get("password"):
+            if _is_empty_str_param(wifi_cfg.get("password")):
                 wifi_cfg["password"] = password
             params["wifi"] = wifi_cfg
             step["params"] = params
@@ -636,9 +663,9 @@ def inject_network_params(pipeline: dict, network_params: dict | None) -> dict:
         if pool_name:
             params["pool_name"] = pool_name
         if resource_type == "wifi":
-            if network_params.get("ssid") and not params.get("ssid"):
+            if network_params.get("ssid") and _is_empty_str_param(params.get("ssid")):
                 params["ssid"] = network_params["ssid"]
-            if network_params.get("password") and not params.get("password"):
+            if network_params.get("password") and _is_empty_str_param(params.get("password")):
                 params["password"] = network_params["password"]
         elif resource_type == "usb_net":
             for key in ("bridge_name", "subnet_cidr", "max_devices_per_host"):
@@ -684,7 +711,11 @@ def inject_suite_params(pipeline: dict, suite_params: dict | None) -> dict:
                 f"(declared={declared_project!r}, expected={expected_project!r})",
             )
         for key, value in suite_params.items():
-            if not params.get(key):
+            cur = params.get(key)
+            if key == "expected_testpoint_count":
+                if _is_empty_count_param(cur):
+                    params[key] = value
+            elif _is_empty_str_param(cur):
                 params[key] = value
         step["params"] = params
     return pipeline
@@ -721,8 +752,10 @@ def build_plan_snapshot(
     plan: Plan,
     steps: list[PlanStep],
     script_metadata: dict[tuple[str, str], dict[str, dict]],
+    *,
+    project_log_profile: Optional[Mapping[str, Any]] = None,
 ) -> dict:
-    return {
+    snapshot: dict[str, Any] = {
         "plan": {
             "id": plan.id,
             "name": plan.name,
@@ -756,8 +789,7 @@ def build_plan_snapshot(
                     .get((step.script_name, step.script_version), {})
                     .get("default_params", {})
                 ),
-                # #508 步骤级 params：固化生效参数，重放时 default_params + params
-                # 合并（见 build_lifecycle_from_snapshot）。旧快照无此键 → 行为不变。
+                # #508 步骤级 params：固化原始步骤覆写，不写回 project_log_profile（ADR-0067 D5.1）。
                 "params": getattr(step, "params", None) or {},
                 "timeout_seconds": step.timeout_seconds,
                 "stall_seconds": step.stall_seconds,
@@ -774,3 +806,6 @@ def build_plan_snapshot(
             for step in sorted(steps, key=lambda s: (s.stage, s.sort_order))
         ],
     }
+    if project_log_profile is not None:
+        snapshot["project_log_profile"] = deepcopy(dict(project_log_profile))
+    return snapshot

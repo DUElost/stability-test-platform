@@ -1,4 +1,4 @@
-"""计划参数分层投影的响应模型（#3653 U1）。"""
+"""计划参数分层投影的响应模型（#3653 U1 / ADR-0067 U2）。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -12,6 +12,7 @@ LayerName = Literal["L1", "L2", "L3", "L4"]
 ParamSource = Literal[
     "schema_default",
     "script_default",
+    "project_preset",
     "step_override",
     "dispatch_injection",
 ]
@@ -22,6 +23,32 @@ ParamState = Literal[
     "pending_dispatch",
     "actual",
 ]
+ProjectLogProfileStatus = Literal[
+    "applied",
+    "not_applicable",
+    "skipped_unbound_plan",
+    "skipped_project_inactive",
+    "skipped_empty_profile",
+    "skipped_device_mismatch",
+    "pending_devices",
+]
+
+
+class ProjectLogProfileMismatchSummary(ORMBaseModel):
+    unmapped_count: int = 0
+    other_project_keys: list[str] = Field(default_factory=list)
+    other_project_device_count: int = 0
+
+
+class ProjectLogProfileProjection(ORMBaseModel):
+    status: ProjectLogProfileStatus
+    project_id: Optional[int] = None
+    project_key: Optional[str] = None
+    log_profile_version: Optional[int] = None
+    effective_profile: dict[str, Any] = Field(default_factory=dict)
+    evaluated_device_ids: list[int] = Field(default_factory=list)
+    excluded_serial_conflict_device_ids: list[int] = Field(default_factory=list)
+    mismatch_summary: Optional[ProjectLogProfileMismatchSummary] = None
 
 
 class ParameterItem(ORMBaseModel):
@@ -109,6 +136,7 @@ class ParameterProjection(ORMBaseModel):
     plan_settings: list[ParameterItem] = Field(default_factory=list)
     watcher_policy: WatcherProjection
     dispatch_decisions: list[DispatchDecision] = Field(default_factory=list)
+    project_log_profile: Optional[ProjectLogProfileProjection] = None
     safe_debug: SafeDebug
 
 

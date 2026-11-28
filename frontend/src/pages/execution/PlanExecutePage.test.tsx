@@ -8,7 +8,7 @@ import { api, ApiError, fetchAllDevices, fetchAllHosts, fetchAllPlans } from '@/
 import { hostKeys } from '@/utils/api/queryKeys';
 import type { ParameterProjection } from '@/utils/api/types';
 
-const PREVIEW_FINGERPRINT = `stp-l1-v1:${'ab'.repeat(32)}`;
+const PREVIEW_FINGERPRINT = `stp-l1-v2:${'ab'.repeat(32)}`;
 
 // 合成服务端 L1 DTO；展示事实独立于列表返回的 raw Plan。
 const SETTINGS_PROJECTION: ParameterProjection = {
@@ -1009,7 +1009,7 @@ describe('PlanExecutePage', () => {
     await screen.findByTestId('dispatch-cockpit');
   }
 
-  it('defaults to not connecting WiFi and omits wifi_pool_id from the run payload', async () => {
+  it('defaults to not connecting network and omits network_pool_id from the run payload', async () => {
     await goToDispatchWithWifi(WIFI_POOLS);
 
     expect((await screen.findByLabelText(/不连接/)) as HTMLInputElement).toBeChecked();
@@ -1019,19 +1019,35 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
 
     await waitFor(() => expect(api.plans.run).toHaveBeenCalled());
+    expect((api.plans.run as any).mock.calls[0][1]).not.toHaveProperty('network_pool_id');
     expect((api.plans.run as any).mock.calls[0][1]).not.toHaveProperty('wifi_pool_id');
   });
 
-  it('sends the chosen pool id when the operator picks a network', async () => {
-    await goToDispatchWithWifi(WIFI_POOLS);
+  it('sends the chosen network_pool_id when the operator picks a network pool (wifi or usb_net)', async () => {
+    const MIXED_POOLS = [
+      ...WIFI_POOLS,
+      {
+        id: 12,
+        name: 'usbnet-dir-1',
+        resource_type: 'usb_net',
+        config: { egress: 'direct', bridge_name: 'br-stpusb-dir', subnet_cidr: '10.200.0.0/22' },
+        max_concurrent_devices: 8,
+        host_group: null,
+        is_active: true,
+      },
+    ];
+    await goToDispatchWithWifi(MIXED_POOLS);
 
-    fireEvent.click(await screen.findByLabelText(/lab-test/));
+    expect(screen.getByText('USB 反向供网')).toBeInTheDocument();
+    expect(screen.getAllByText('普通直连').length).toBeGreaterThan(0);
+
+    fireEvent.click(await screen.findByLabelText(/usbnet-dir-1/));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     await screen.findByText(/预览已生成并冻结 1 台设备/);
     fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
 
     await waitFor(() => expect(api.plans.run).toHaveBeenCalled());
-    expect((api.plans.run as any).mock.calls[0][1].wifi_pool_id).toBe(4);
+    expect((api.plans.run as any).mock.calls[0][1].network_pool_id).toBe(12);
   });
 
   it('never asks for a password in the dispatch form', async () => {
@@ -1039,12 +1055,12 @@ describe('PlanExecutePage', () => {
     expect(screen.queryByLabelText(/密码/)).not.toBeInTheDocument();
   });
 
-  it('points to the resource pool page when no wifi network is configured', async () => {
+  it('points to the network supply page when no matching network pool is configured', async () => {
     await goToDispatchWithWifi([]);
 
     expect(await screen.findByLabelText(/不连接/)).toBeInTheDocument();
     expect(screen.queryByLabelText(/office-5G/)).not.toBeInTheDocument();
-    expect(screen.getByText(/尚未配置任何 WiFi 网络/)).toBeInTheDocument();
+    expect(screen.getByText(/尚未配置符合当前 Plan 约束的网络供给池/)).toBeInTheDocument();
   });
 
   it('keeps preview confirmation inline without reopening a dialog', async () => {
@@ -1808,7 +1824,7 @@ describe('PlanExecutePage', () => {
   });
 
   it('discards an in-flight preview token when the WiFi selection changes', async () => {
-    const staleFingerprint = `stp-l1-v1:${'cd'.repeat(32)}`;
+    const staleFingerprint = `stp-l1-v2:${'cd'.repeat(32)}`;
     let resolvePreview!: (value: unknown) => void;
     (api.plans.previewRun as any).mockReturnValueOnce(
       new Promise((resolve) => {
@@ -1872,7 +1888,7 @@ describe('PlanExecutePage', () => {
       wifiPoolsFailure: new Error('network down'),
     });
 
-    expect(await screen.findByText(/WiFi 列表加载失败/)).toBeInTheDocument();
+    expect(await screen.findByText(/网络供给池列表加载失败/)).toBeInTheDocument();
   });
 
 it('selects Carrier devices independently from ordinary NX3 and restores the product URL filter', async () => {
@@ -1925,4 +1941,82 @@ it('scopes version, model, and product filter options when readyOnly is enabled'
   fireEvent.click(screen.getByRole('combobox', { name: 'Product 筛选' }));
   expect(screen.getByRole('option', { name: 'P-READY' })).toBeInTheDocument();
   expect(screen.queryByRole('option', { name: 'P-OFFLINE' })).not.toBeInTheDocument();
+});
+
+it('passes requiredType and requiredEgress to available pools and blocks preview until required pool is selected', async () => {
+  renderPage({
+    plans: [
+      {
+        id: 7,
+        name: 'USB Direct Plan',
+        description: null,
+        steps: [
+          {
+            step_key: 'setup_network',
+            script_name: 'setup_network',
+            params: { required_type: 'usb_net', required_egress: 'direct', required: true },
+          },
+        ],
+        updated_at: '2026-07-01T00:00:00Z',
+      },
+    ],
+    devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE', adb_connected: true }],
+    hosts: [{ id: 'h1', ip: '192.0.2.88', status: 'ONLINE' }],
+    wifiPools: [
+      {
+        id: 21,
+        name: 'usbnet-dir-21',
+        resource_type: 'usb_net',
+        config: { egress: 'direct', bridge_name: 'br-stpusb-dir' },
+        max_concurrent_devices: 8,
+        host_group: null,
+        is_active: true,
+      },
+    ],
+  });
+
+  await waitFor(() =>
+    expect(api.resourcePools.available).toHaveBeenCalledWith({
+      requiredType: 'usb_net',
+      requiredEgress: 'direct',
+    }),
+  );
+
+  await goToDeviceStep();
+  fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
+  fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+
+  expect(await screen.findByText('网络供给（必选）')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /生成执行预览/ })).toBeDisabled();
+
+  fireEvent.click(screen.getByLabelText(/usbnet-dir-21/));
+  expect(screen.getByRole('button', { name: /生成执行预览/ })).toBeEnabled();
+});
+
+it('blocks dispatch preview when Plan has conflicting network step types', async () => {
+  renderPage({
+    plans: [
+      {
+        id: 7,
+        name: 'Conflicting Network Plan',
+        description: null,
+        steps: [
+          { step_key: 'step_wifi', script_name: 'connect_wifi', params: {} },
+          { step_key: 'step_usb', script_name: 'setup_network', params: { required_type: 'usb_net' } },
+        ],
+        updated_at: '2026-07-01T00:00:00Z',
+      },
+    ],
+    devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE', adb_connected: true }],
+    hosts: [{ id: 'h1', ip: '192.0.2.88', status: 'ONLINE' }],
+  });
+
+  await goToDeviceStep();
+  fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
+  fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+
+  expect(await screen.findByTestId('network-step-conflict-banner')).toHaveTextContent(
+    /usb_net 与 connect_wifi\/monkey_setup 不能混用/,
+  );
+  expect(screen.getByRole('button', { name: /生成执行预览/ })).toBeDisabled();
 });
