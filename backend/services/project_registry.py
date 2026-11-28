@@ -12,15 +12,22 @@ inventory / map 映射链（那些仍属 projects.py 的其它业务线）。
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 from backend.services.errors import Conflict, NotFound, UnprocessableEntity
+from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from backend.services.audit_writer import record_audit
+from backend.api.schemas.project_log_profile import (
+    format_log_profile_validation_error,
+    normalize_log_profile,
+)
 from backend.models.host import Device
 from backend.models.project import SEED_PROJECT_KEYS, TestProject
 from backend.models.project_model import ProjectModel
@@ -29,20 +36,27 @@ from backend.realtime.socketio_server import emit_project_changed
 USER_SOURCE = "USER"
 SEED_SOURCE = "SEED"
 
-#: 可被 ``PUT /projects/{key}`` 修改的 facet —— 其余字段（platform/key 等）不可改。
+#: 可被 ``PUT /projects/{key}`` 修改的字段 —— 其余字段（platform/key 等）不可改。
 UPDATABLE_FIELDS = (
     "display_name",
     "customer",
     "jira_project_key",
+    "log_profile",
 )
 
 
-def get_project_or_404(db: Session, project_key: str) -> TestProject:
-    project = (
-        db.query(TestProject)
-        .filter(TestProject.project_key == project_key)
-        .first()
-    )
+def get_project_or_404(
+    db: Session,
+    project_key: str,
+    *,
+    for_update: bool = False,
+) -> TestProject:
+    query = db.query(TestProject).filter(TestProject.project_key == project_key)
+    if for_update:
+        bind = db.get_bind()
+        if bind is None or not bind.dialect.name.startswith("sqlite"):
+            query = query.with_for_update()
+    project = query.first()
     if project is None:
         raise NotFound("project not found")
     return project
@@ -137,27 +151,53 @@ def update_project_facets(
     ``provided`` 只含请求显式给出的键；全部与现值相同（或无键可改）时不提交、
     不发变更事件，直接返回当前对象——与切分前的行为逐字一致。
     """
-    project = get_project_or_404(db, project_key)
+    # ADR-0067 D4.3：与 prepare_plan_run 的 Plan(FOR SHARE) → TestProject(FOR SHARE)
+    # 锁序配对——项目写路径只锁 TestProject(FOR UPDATE)，永不反向锁 Plan。
+    project = get_project_or_404(db, project_key, for_update=True)
     require_user_project(project)
     if project.status == "ARCHIVED":
         raise Conflict("archived project cannot be updated")
 
-    changed: list[tuple[str, object, object]] = []
+    changed: list[tuple[str, object, object, dict[str, Any]]] = []
     for field in UPDATABLE_FIELDS:
         if field not in provided:
             continue
+        if field == "log_profile":
+            try:
+                new_value = normalize_log_profile(provided[field])
+            except (ValidationError, ValueError) as exc:
+                raise UnprocessableEntity(
+                    format_log_profile_validation_error(exc)
+                ) from None
+            old_raw = getattr(project, "log_profile", None)
+            old_value = normalize_log_profile(old_raw) if old_raw else None
+            if old_value == new_value:
+                continue
+            old_version = int(getattr(project, "log_profile_version", 0) or 0)
+            new_version = old_version + 1
+            project.log_profile = deepcopy(new_value) if new_value is not None else None
+            project.log_profile_version = new_version
+            flag_modified(project, "log_profile")
+            changed.append((
+                field,
+                old_value,
+                new_value,
+                {"old_version": old_version, "new_version": new_version},
+            ))
+            continue
+
         new_value = provided[field]
         old_value = getattr(project, field)
         if old_value == new_value:
             continue
         setattr(project, field, new_value)
-        changed.append((field, old_value, new_value))
+        changed.append((field, old_value, new_value, {}))
 
     if not changed:
         return project
 
     project.updated_at = datetime.now(timezone.utc)
-    for field, old_value, new_value in changed:
+    for field, old_value, new_value, extra_details in changed:
         record_audit(
             db,
             action="update_project",
@@ -168,6 +208,7 @@ def update_project_facets(
                 "field": field,
                 "old": old_value,
                 "new": new_value,
+                **extra_details,
             },
             user_id=actor_id,
             username=actor_username,
