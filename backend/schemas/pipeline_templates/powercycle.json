@@ -61,7 +61,7 @@
         {
           "step_id": "powercycle_check",
           "action": "script:powercycle_check",
-          "version": "1.0.12",
+          "version": "1.0.13",
           "timeout_seconds": 60,
           "retry": 0,
           "params": {}

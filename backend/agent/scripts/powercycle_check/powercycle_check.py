@@ -1,6 +1,18 @@
 # -*- coding: utf-8 -*-
 """PowerCycle 轮询（patrol 阶段，issue #462 P0b；G15 对齐 §3.2）。
 
+v1.0.13（#4222 问题 1，2026-11-28）：
+- 开机卡死（bootanimation deadlock / SWT）早停：当 ``device_online()`` 为真但
+  ``service_alive()`` 为假时，按 ``boot_check_interval_seconds``（默认 120s，0=每轮）
+  抽检 ``getprop sys.boot_completed``；若连续超过 ``boot_hang_timeout_seconds``
+  （默认 600s）未就绪，立即返回 ``patrol_fail=True`` 与结构化诊断摘要；
+- 打破 ``result_bytes == 0`` 与 boot 转换（``not was_online``）的永久豁免：
+  新增 ``zero_result_timeout_seconds``（默认 900s，0=关闭）；超时仍无结果写入
+  且服务未存活或零进展时不再清零 ``dead_streak``，达到 ``dead_grace_cycles`` 即判死；
+- 持续 ADB 离线有界检测：新增 ``max_offline_seconds``（默认 1800s，0=关闭），
+  对 ``boot_hang_since`` / ``zero_result_since`` / ``offline_since`` 均以时间锚持久化，
+  bootloop 交替掉线重连也不被清零。
+
 v1.0.11（NX3 开关机专项，2026-11-12）：
 - 判死不再豁免 cycles_done==0：NX3 应用读不到 prefs 时 current_count 恒 0，
   结果文件只有旧行、服务已死，旧逻辑每轮清零 dead_streak ⇒ 永远 PATROL_SLEEP。
@@ -64,7 +76,11 @@ STP_STEP_PARAMS:
     "expected_cycles": 100,      // 可选注入（P1 suite 绑定后自动填充）；0=用 prefs test_times
     "dead_grace_cycles": 2,
     "collect_window_start": "00:00",   // 定时收取窗口起点（Agent 本地时间；空=不启用）
-    "collect_window_minutes": 30       // 窗口时长（10/30/60）
+    "collect_window_minutes": 30,      // 窗口时长（10/30/60）
+    "boot_check_interval_seconds": 120,  // 服务未存活时抽检 sys.boot_completed 的最小间隔（0=每轮）
+    "boot_hang_timeout_seconds": 600,    // ADB 在线但 boot_completed!=1 超过该秒数判开机卡死（0=关闭）
+    "zero_result_timeout_seconds": 900,  // 服务未存活且结果文件持续为空/零进展超时（0=关闭）
+    "max_offline_seconds": 1800          // 连续 ADB 离线超过该秒数发 patrol_fail（0=关闭）
 }
 
 输出 (stdout): {"success": true/false, "progress": {...}}
@@ -280,11 +296,35 @@ def _wait_online_short(timeout_s: int) -> bool:
     return False
 
 
+def _boot_completed() -> bool:
+    """检查 Android 系统是否完成启动（getprop sys.boot_completed == '1'）。"""
+    try:
+        result = subprocess.run(
+            [adb_path(), "-s", device_serial(), "shell", "getprop", "sys.boot_completed"],
+            capture_output=True, text=True, timeout=15,
+        )
+        return result.returncode == 0 and (result.stdout or "").strip() == "1"
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def _int_param(cfg: dict, key: str, env_key: str, default: int) -> int:
+    raw = str(param_or_env(cfg, key, env_key, str(default)) or str(default)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
 def _run(cfg: dict) -> dict:
     grace = max(1, int(str(param_or_env(cfg, "dead_grace_cycles", "STP_POWER_CYCLE_DEAD_GRACE_CYCLES", "2")) or 2))
     injected = int(str(cfg.get("expected_cycles") or 0) or 0)
     project = str(param_or_env(cfg, "project", "STP_POWER_CYCLE_PROJECT", "legacy"))
     apk_flavor = resolve_apk_flavor(cfg)
+    boot_check_interval = _int_param(cfg, "boot_check_interval_seconds", "STP_POWER_CYCLE_BOOT_CHECK_INTERVAL_SECONDS", 120)
+    boot_hang_timeout = _int_param(cfg, "boot_hang_timeout_seconds", "STP_POWER_CYCLE_BOOT_HANG_TIMEOUT_SECONDS", 600)
+    zero_result_timeout = _int_param(cfg, "zero_result_timeout_seconds", "STP_POWER_CYCLE_ZERO_RESULT_TIMEOUT_SECONDS", 900)
+    max_offline = _int_param(cfg, "max_offline_seconds", "STP_POWER_CYCLE_MAX_OFFLINE_SECONDS", 1800)
 
     state = _load_state()
     # #1028（R08-F10）：巡检状态是「单次运行」语义——新 Job 不继承上一 Job 的
@@ -296,11 +336,17 @@ def _run(cfg: dict) -> dict:
         state = {"job_id": job_id}
         _save_state(state)
 
+    now = time.time()
 
     if not device_online():
-        # 重启周期中设备离线属正常：不判服务死亡，也不推进 dead_streak。
-        # 持续离线由平台心跳 UNKNOWN → grace → FAILED 链路处理。
+        # 重启周期中设备离线属正常，短暂离线不判死；但持续离线超过
+        # max_offline_seconds（默认 1800s）发 patrol_fail 避免长时间黑洞（#4222）。
         state["last_online"] = False
+        offline_since = state.get("offline_since")
+        if not isinstance(offline_since, (int, float)) or offline_since <= 0:
+            offline_since = now
+            state["offline_since"] = offline_since
+        offline_elapsed = int(max(0.0, now - float(offline_since)))
         payload = {
             "seq": int(state.get("seq", 0)) + 1,
             "step": "powercycle_check",
@@ -309,12 +355,24 @@ def _run(cfg: dict) -> dict:
             "result_bytes": 0,
             "device_online": False,
             "service_alive": False,
+            "offline_elapsed_seconds": offline_elapsed,
         }
         state["seq"] = payload["seq"]
         _save_state(state)
         progress_stamp(payload)
+        if max_offline > 0 and offline_elapsed >= max_offline:
+            return {
+                "success": False,
+                "patrol_fail": True,
+                "error_message": (
+                    f"设备连续 ADB 离线 {offline_elapsed}s（超过阈值 {max_offline}s），"
+                    "开关机压测异常（可能死机/掉卡/USB断连）"
+                ),
+                "progress": payload,
+            }
         return {"success": True, "progress": payload}
 
+    state["offline_since"] = None
     was_online = bool(state.get("last_online", True))
 
     if _in_collect_window(cfg):
@@ -404,6 +462,8 @@ def _run(cfg: dict) -> dict:
 
     if _run_finished() if apk_flavor == "stp" else _run_finished(apk_flavor):
         # 自然收尾：报完成（成败由 teardown 解析 final_status 定）
+        state["boot_hang_since"] = None
+        state["zero_result_since"] = None
         payload = {
             "seq": int(state.get("seq", 0)) + 1,
             "step": "powercycle_check",
@@ -420,41 +480,125 @@ def _run(cfg: dict) -> dict:
         progress_stamp(payload)
         return {"success": True, "progress": payload}
 
-    # ⑥ 修复（v1.0.6 定稿）：**文件停滞判定**——判死 = 结果文件 mtime 停止
-    # 增长（服务死且无进展），而非「服务死 N 周期」。
-    #   - 服务在跑 / cycles==0 / result_bytes==0（boot 早期 sdcard 未就绪）
-    #     / 设备刚上线（转换）→ 不累计
-    #   - 文件 mtime 较上轮变化（有写入）→ 清零（服务在工作）
-    #   - 文件停滞（mtime 不变）→ 累计——真死永久停滞判死；偶发启动失败
-    #     会在下轮 reboot 后文件增长时清零（最终验收实测的自愈场景）
+    # #4222 问题 1a：仅在 service_alive()==False 时按窗口抽检 sys.boot_completed，
+    # 避免对健康运行态主机/设备产生额外 ADB 并发压力。
+    boot_completed_now: bool | None = None
+    if alive:
+        state["boot_hang_since"] = None
+        boot_completed_now = True
+    elif boot_hang_timeout > 0:
+        last_boot_check = float(state.get("last_boot_check_at") or 0.0)
+        hang_since_raw = state.get("boot_hang_since")
+        hang_due = (
+            isinstance(hang_since_raw, (int, float))
+            and hang_since_raw > 0
+            and (now - float(hang_since_raw)) >= boot_hang_timeout
+        )
+        if last_boot_check <= 0 or (now - last_boot_check) >= boot_check_interval or hang_due:
+            boot_completed_now = _boot_completed()
+            state["last_boot_check_at"] = now
+            if boot_completed_now:
+                state["boot_hang_since"] = None
+            elif not isinstance(hang_since_raw, (int, float)) or hang_since_raw <= 0:
+                state["boot_hang_since"] = now
+
+    boot_hang_since = state.get("boot_hang_since")
+    if (
+        not alive
+        and boot_hang_timeout > 0
+        and isinstance(boot_hang_since, (int, float))
+        and boot_hang_since > 0
+    ):
+        boot_hang_elapsed = int(max(0.0, now - float(boot_hang_since)))
+        if boot_hang_elapsed >= boot_hang_timeout:
+            state["last_online"] = True
+            payload = {
+                "seq": int(state.get("seq", 0)) + 1,
+                "step": "powercycle_check",
+                "cycles_done": cycles_done,
+                "expected_cycles": expected,
+                "result_bytes": result_bytes,
+                "device_online": True,
+                "service_alive": False,
+                "boot_completed": False,
+                "boot_hang_elapsed_seconds": boot_hang_elapsed,
+                "failure_reason": "boot_hang_timeout",
+            }
+            state["seq"] = payload["seq"]
+            _save_state(state)
+            progress_stamp(payload)
+            return {
+                "success": False,
+                "patrol_fail": True,
+                "error_message": (
+                    f"设备 ADB 在线但 sys.boot_completed 连续 {boot_hang_elapsed}s 未就绪"
+                    f"（超过阈值 {boot_hang_timeout}s），疑似开机卡死/bootanimation deadlock"
+                ),
+                "progress": payload,
+            }
+
+    # ⑥ 修复（v1.0.6 定稿）+ #4222 问题 1b（有界零进展突破永久豁免）：
     mtime = _result_mtime() if apk_flavor == "stp" else _result_mtime(apk_flavor)
-    # v1.0.11：cycles_done==0 不再作为「不判死」的豁免。NX3 假健康取证：
-    # 应用读不到 prefs（SELinux category 不匹配）时 current_count 恒为 0，
-    # 结果文件只有旧的 "cycle 1/..." 行；服务已死但 cycles_done==0 让
-    # dead_streak 每轮清零，PATROL_SLEEP 永远不会升级成失败。首轮基线由
-    # mtime==0 / result_bytes==0 / not was_online 三个条件兜住；文件已有内容
-    # 且 mtime 停滞时，无论 current_count 是否为 0 都应计入死亡周期。
-    if alive or result_bytes == 0 or not was_online:
+    prev_cycles = int(state.get("last_cycles_done", 0) or 0)
+    prev_bytes = int(state.get("last_result_bytes", 0) or 0)
+    made_progress = (
+        alive
+        or cycles_done > prev_cycles
+        or result_bytes > prev_bytes
+        or (mtime > 0 and state.get("last_mtime") not in (None, 0) and mtime != state.get("last_mtime"))
+    )
+    if made_progress:
+        state["zero_result_since"] = None
+    elif result_bytes == 0:
+        if not isinstance(state.get("zero_result_since"), (int, float)) or state["zero_result_since"] <= 0:
+            state["zero_result_since"] = now
+
+    zero_result_since = state.get("zero_result_since")
+    zero_result_elapsed = (
+        int(max(0.0, now - float(zero_result_since)))
+        if isinstance(zero_result_since, (int, float)) and zero_result_since > 0
+        else 0
+    )
+    zero_result_timed_out = (
+        not alive
+        and result_bytes == 0
+        and zero_result_timeout > 0
+        and zero_result_elapsed >= zero_result_timeout
+    )
+
+    if alive:
+        state["dead_streak"] = 0
+    elif zero_result_timed_out:
+        state["dead_streak"] = int(state.get("dead_streak", 0)) + 1
+    elif result_bytes == 0 or not was_online:
         state["dead_streak"] = 0
     elif mtime > 0 and mtime == state.get("last_mtime"):
         state["dead_streak"] = int(state.get("dead_streak", 0)) + 1
     else:
         state["dead_streak"] = 0
     state["last_mtime"] = mtime
+    state["last_cycles_done"] = cycles_done
+    state["last_result_bytes"] = result_bytes
     state["last_online"] = True
     _save_state(state)
 
     if state["dead_streak"] >= grace:
         svc_name = "RebootService" if apk_flavor == "r30" else "PowerCycleService"
+        detail = (
+            f"（结果文件持续为空 {zero_result_elapsed}s，无重启进展）"
+            if zero_result_timed_out
+            else ""
+        )
         return {
             "success": False,
-            "error_message": f"{svc_name} 连续 {state['dead_streak']} 个周期未存活",
+            "error_message": f"{svc_name} 连续 {state['dead_streak']} 个周期未存活{detail}",
             "progress": {
                 "cycles_done": cycles_done,
                 "expected_cycles": expected,
                 "result_bytes": result_bytes,
                 "device_online": True,
                 "service_alive": False,
+                **({"zero_result_elapsed_seconds": zero_result_elapsed} if zero_result_timed_out else {}),
             },
         }
 
