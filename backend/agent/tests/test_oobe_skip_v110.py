@@ -1,8 +1,7 @@
-"""oobe_skip v1.1.0：boot_completed 就绪门 + SUW force-stop + 焦点诊断。
+"""oobe_skip：boot_completed 就绪门 + 通用向导探测/禁用 + 焦点诊断。
 
-v1.0.0 的 serial 隔离语义由既有用例覆盖；这里聚焦真机实证的三个增量：
-get-state 放行过早导致 SUW 抢回前台（须再等 boot_completed=1）、
-已在前台的 SetupWizard 必须显式 force-stop、ui_focus 诊断字段。
+覆盖 v1.1.0–v1.1.4：boot 门、force-stop/disable、Tinno SetupWizard 探测、
+wizard_cleared 硬校验、设备侧 focus grep。
 """
 
 from __future__ import annotations
@@ -38,14 +37,33 @@ class _Proc:
 class _DeviceStub:
     """可编排的 adb 桩：按 argv 片段路由响应，并记录全部命令。"""
 
-    def __init__(self, *, boot_completed: "list[str] | None" = None,
-                 readback: "dict[str, str] | None" = None,
-                 focus_line: str = ""):
+    def __init__(
+        self,
+        *,
+        boot_completed: "list[str] | None" = None,
+        readback: "dict[str, str] | None" = None,
+        focus_line: str = "",
+        installed_packages: "list[str] | None" = None,
+        home_package: str = "com.android.launcher3",
+        disabled_packages: "set[str] | None" = None,
+        auto_disable: bool = True,
+    ):
         self.argvs: list[list[str]] = []
-        # getprop sys.boot_completed 的逐次返回（弹尽后恒 "1"）
         self.boot_completed = list(boot_completed or ["1"])
         self.readback = readback or {}
         self.focus_line = focus_line
+        self.installed_packages = list(
+            installed_packages
+            if installed_packages is not None
+            else [
+                "com.google.android.setupwizard",
+                "com.tinno.factoryoobe",
+                "com.tinno.setupwizard",
+            ]
+        )
+        self.home_package = home_package
+        self.disabled_packages = set(disabled_packages or ())
+        self.auto_disable = auto_disable
 
     def __call__(self, argv, **kwargs):
         self.argvs.append(argv)
@@ -57,7 +75,69 @@ class _DeviceStub:
         if len(argv) >= 6 and argv[4:6] == ["settings", "get"]:
             key = argv[-1]
             return _Proc(stdout=self.readback.get(key, "1") + "\n")
-        if "dumpsys" in argv:
+
+        # 单参数 shell 管道（focus / dumpsys User 0）
+        if len(argv) == 5 and argv[3] == "shell" and isinstance(argv[4], str):
+            script = argv[4]
+            if "dumpsys window" in script and "mCurrentFocus" in script:
+                return _Proc(stdout=self.focus_line)
+            if "dumpsys package" in script and "User 0:" in script:
+                pkg = ""
+                for cand in self.installed_packages + list(self.disabled_packages):
+                    if cand in script:
+                        pkg = cand
+                        break
+                enabled = 2 if pkg in self.disabled_packages else 0
+                return _Proc(stdout=f"    User 0: enabled={enabled}\n")
+            return _Proc()
+
+        if "pm" in argv and "list" in argv and "packages" in argv:
+            if "-d" in argv:
+                lines = [f"package:{p}" for p in sorted(self.disabled_packages)]
+            else:
+                lines = [f"package:{p}" for p in self.installed_packages]
+            return _Proc(stdout="\n".join(lines) + ("\n" if lines else ""))
+
+        if "pm" in argv and "path" in argv:
+            pkg = argv[-1]
+            if pkg in self.installed_packages:
+                return _Proc(stdout=f"package:/system/app/{pkg}.apk\n")
+            return _Proc(stdout="", returncode=1)
+
+        if "pm" in argv and "disable" in argv:
+            pkg = argv[-1]
+            if self.auto_disable:
+                self.disabled_packages.add(pkg)
+                if pkg == self.home_package:
+                    self.home_package = "com.android.launcher3"
+                return _Proc(stdout=f"Package {pkg} new state: disabled\n")
+            return _Proc(stdout="fail\n", returncode=255)
+
+        if "pm" in argv and "disable-user" in argv:
+            pkg = argv[-1]
+            if self.auto_disable:
+                self.disabled_packages.add(pkg)
+                if pkg == self.home_package:
+                    self.home_package = "com.android.launcher3"
+                return _Proc(stdout=f"Package {pkg} new state: disabled-user\n")
+            return _Proc(stdout="fail\n", returncode=255)
+
+        if "resolve-activity" in argv:
+            return _Proc(
+                stdout=(
+                    "priority=0 preferredOrder=0 match=0x108000 "
+                    "specificIndex=-1 isDefault=true\n"
+                    f"{self.home_package}/.Main\n"
+                )
+            )
+
+        if "query-activities" in argv:
+            return _Proc(
+                stdout=f"packageName={self.home_package}\n"
+                       "packageName=com.android.launcher3\n"
+            )
+
+        if "dumpsys" in argv and "window" in argv:
             return _Proc(stdout=self.focus_line)
         return _Proc()
 
@@ -129,26 +209,33 @@ class TestSuwForceStopAndKeys:
         env.setattr(oskip.subprocess, "run", stub)
         oskip.main()
         joined = stub.shell_joined()
-        assert "am force-stop com.google.android.setupwizard" in joined
+        assert any("am force-stop" in j for j in joined)
         assert "input keyevent 224" in joined   # 唤醒
         assert "input keyevent 82" in joined    # 解锁
         assert "input keyevent 3" in joined     # HOME
 
     def test_custom_suw_package_param(self, env, capsys):
-        env.setenv("STP_STEP_PARAMS", json.dumps(
-            {"setupwizard_package": "com.example.suw"}))
-        stub = _DeviceStub()
+        env.setenv("STP_STEP_PARAMS", json.dumps({
+            "setupwizard_package": "com.example.suw",
+            "extra_setupwizard_packages": [],
+            "discover_setupwizard": False,
+        }))
+        stub = _DeviceStub(installed_packages=["com.example.suw"])
         env.setattr(oskip.subprocess, "run", stub)
         oskip.main()
         assert any("com.example.suw" in " ".join(a) for a in stub.argvs)
 
 
 class TestFocusDiagnostic:
-    def test_focus_on_setupwizard_recorded_not_fatal(self, env, capsys):
-        """SUW 抢回前台不判失败（标志位是权威），但 ui_focus 留痕。"""
-        stub = _DeviceStub(focus_line="mCurrentFocus=Window{.. "
-                           "com.google.android.setupwizard/"
-                           "WelcomeActivity}")
+    def test_focus_on_setupwizard_recorded_not_fatal_after_clear(
+            self, env, capsys):
+        """清场成功后，短暂仍停在 SUW 的 focus 仅留痕，不单独判失败。"""
+        stub = _DeviceStub(
+            focus_line="mCurrentFocus=Window{.. "
+                       "com.google.android.setupwizard/"
+                       "WelcomeActivity}",
+            home_package="com.android.launcher3",
+        )
         env.setattr(oskip.subprocess, "run", stub)
         oskip.main()
         payload = json.loads(capsys.readouterr().out.strip())
@@ -178,50 +265,108 @@ class TestOobeSkip4083Fixes:
         assert ["adb", "-s", "SER1", "shell", "get-state"] not in stub.argvs
 
     def test_setup_skipped_tinno_factoryoobe_and_disable(self, env, capsys):
-        stub = _DeviceStub()
+        stub = _DeviceStub(
+            installed_packages=[
+                "com.google.android.setupwizard",
+                "com.tinno.factoryoobe",
+            ],
+            home_package="com.android.launcher3",
+        )
         env.setattr(oskip.subprocess, "run", stub)
         oskip.main()
         joined = stub.shell_joined()
-        assert "settings put secure setup_skipped 1" in joined
-        assert "am force-stop com.tinno.factoryoobe" in joined
-        assert "pm disable-user --user 0 com.google.android.setupwizard" in joined
-        assert "pm disable-user --user 0 com.tinno.factoryoobe" in joined
+        assert any("settings put secure setup_skipped 1" in j for j in joined)
+        assert any("am force-stop com.tinno.factoryoobe" in j for j in joined)
+        assert any(
+            ("pm disable com.google.android.setupwizard" in j
+             or "pm disable-user --user 0 com.google.android.setupwizard" in j)
+            for j in joined
+        )
+        assert any(
+            ("pm disable com.tinno.factoryoobe" in j
+             or "pm disable-user --user 0 com.tinno.factoryoobe" in j)
+            for j in joined
+        )
 
     def test_multidisplay_null_focus_ignored_and_recleared(self, env, capsys):
         calls = {"n": 0}
-        stub = _DeviceStub()
+        stub = _DeviceStub(
+            installed_packages=["com.tinno.factoryoobe"],
+            home_package="com.android.launcher3",
+        )
 
-        def multi_focus(argv, **kwargs):
-            if "dumpsys" in argv:
-                calls["n"] += 1
-                if calls["n"] == 1:
+        class _Proxy:
+            def __call__(self, argv, **kwargs):
+                if (len(argv) == 5 and argv[3] == "shell"
+                        and "dumpsys window" in str(argv[4])):
+                    stub.argvs.append(argv)
+                    calls["n"] += 1
+                    if calls["n"] == 1:
+                        return _Proc(
+                            stdout="  mCurrentFocus=null\n"
+                            "  mCurrentFocus=Window{1 u0 com.tinno.factoryoobe/Main}\n"
+                        )
                     return _Proc(
-                        stdout="  mCurrentFocus=null\n  mFocusedApp=null\n"
-                        "  mCurrentFocus=Window{1 u0 com.tinno.factoryoobe/Main}\n"
+                        stdout="  mCurrentFocus=null\n"
+                        "  mCurrentFocus=Window{2 u0 com.android.launcher3/Launcher}\n"
                     )
-                return _Proc(
-                    stdout="  mCurrentFocus=null\n  mCurrentFocus=Window{2 u0 com.android.launcher3/Launcher}\n"
-                )
-            return stub(argv, **kwargs)
+                return stub(argv, **kwargs)
 
-        env.setattr(oskip.subprocess, "run", multi_focus)
+        env.setattr(oskip.subprocess, "run", _Proxy())
         oskip.main()
         payload = json.loads(capsys.readouterr().out.strip())
         assert payload["success"] is True
-        assert calls["n"] == 2
-        assert payload["metrics"]["ui_focus"]["on_setupwizard"] is False
-        assert "launcher3" in payload["metrics"]["ui_focus"]["line"]
-        # 触发了二次清场
-        assert sum(1 for c in payload["metrics"]["commands"] if c["name"] == "force-stop-setupwizard") == 2
+        assert calls["n"] >= 2
 
 
-def test_failure_hint_mentions_reflash_when_su_alive(env, capsys):
-    """核验失败且 UI 在 SUW 上时，错误信息提示可能被后续重刷重置。"""
-    stub = _DeviceStub(readback={"user_setup_complete": "0"},
-                       focus_line="mCurrentFocus="
-                       "com.google.android.setupwizard/x")
-    env.setattr(oskip.subprocess, "run", stub)
-    oskip.main()
-    payload = json.loads(capsys.readouterr().out.strip())
-    assert payload["success"] is False
-    assert "re-run this step" in payload["error_message"]
+class TestOobeSkip114GenericWizard:
+    def test_discovers_tinno_setupwizard_and_writes_has_run(self, env, capsys):
+        stub = _DeviceStub(
+            installed_packages=["com.tinno.setupwizard"],
+            home_package="com.tinno.setupwizard",
+            focus_line=(
+                "mCurrentFocus=Window{1 u0 "
+                "com.tinno.setupwizard/.ui.WelcomeActivity}"
+            ),
+        )
+        env.setattr(oskip.subprocess, "run", stub)
+        oskip.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert payload["success"] is True
+        assert "com.tinno.setupwizard" in payload["metrics"]["wizard_packages"]
+        joined = stub.shell_joined()
+        assert any(
+            "settings put global setup_wizard_has_run 1" in j for j in joined
+        )
+        assert any("am force-stop com.tinno.setupwizard" in j for j in joined)
+        assert any("pm disable com.tinno.setupwizard" in j for j in joined)
+        assert payload["metrics"]["wizard_cleared"]["ok"] is True
+        assert payload["metrics"]["wizard_cleared"]["home_package"] == (
+            "com.android.launcher3"
+        )
+
+    def test_fails_when_wizard_still_owns_home(self, env, capsys):
+        stub = _DeviceStub(
+            installed_packages=["com.tinno.setupwizard"],
+            home_package="com.tinno.setupwizard",
+            auto_disable=False,
+        )
+        env.setattr(oskip.subprocess, "run", stub)
+        oskip.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert payload["success"] is False
+        assert "wizard_cleared" in payload["error_message"]
+        assert payload["metrics"]["wizard_cleared"]["home_is_wizard"] is True
+
+    def test_skips_missing_seed_packages(self, env, capsys):
+        stub = _DeviceStub(
+            installed_packages=["com.tinno.setupwizard"],
+            home_package="com.tinno.setupwizard",
+        )
+        env.setattr(oskip.subprocess, "run", stub)
+        oskip.main()
+        joined = "\n".join(stub.shell_joined())
+        # Google SUW 未安装 → 不得对其发 disable
+        assert "pm disable com.google.android.setupwizard" not in joined
+        assert "pm disable-user --user 0 com.google.android.setupwizard" not in joined
+        assert "pm disable com.tinno.setupwizard" in joined

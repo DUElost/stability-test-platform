@@ -77,10 +77,14 @@ SCRIPT_TAG_REGISTRY: dict[str, ScriptTagSpec] = {
     "gpu_check": ScriptTagSpec(role="patrol", specialties=("gpu",)),
     "gpu_disarm": ScriptTagSpec(role="teardown", specialties=("gpu",)),
     "gpu_finish": ScriptTagSpec(role="teardown", specialties=("gpu",)),
-    # Sleep
+    # Sleep (device APK)
     "sleep_setup": ScriptTagSpec(role="specialty_init", specialties=("sleep",)),
     "sleep_check": ScriptTagSpec(role="patrol", specialties=("sleep",)),
     "sleep_finish": ScriptTagSpec(role="teardown", specialties=("sleep",)),
+    # Sleep (host-driven ADB)
+    "sleep_adb_setup": ScriptTagSpec(role="specialty_init", specialties=("sleep",)),
+    "sleep_adb_patrol": ScriptTagSpec(role="patrol", specialties=("sleep",)),
+    "sleep_adb_finish": ScriptTagSpec(role="teardown", specialties=("sleep",)),
     # Aging DDR (mapped to ops until dedicated specialty is seeded)
     "aging_ddr_setup": ScriptTagSpec(role="specialty_init", specialties=("ops",)),
     "aging_ddr_check": ScriptTagSpec(role="patrol", specialties=("ops",)),
