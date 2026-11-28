@@ -113,4 +113,10 @@ export const DEVICE_UI_STATUS: Record<DeviceUiStatus, DeviceUiStatusStyle> = {
     cellCls: 'bg-muted-foreground/30 hover:bg-muted-foreground/40',
     tone: 'default',
   },
+  // #4206 U2：词表含 finishing；页面行为由 U3 消费，此处仅补齐 Record 穷尽以过 tsc。
+  finishing: {
+    label: '收尾中',
+    cellCls: 'bg-warning/70 hover:bg-warning/80',
+    tone: 'warning',
+  },
 };
