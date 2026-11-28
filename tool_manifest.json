@@ -1380,6 +1380,14 @@
           "retired": false,
           "script": "monkey_check.py",
           "version": "2.0.3"
+        },
+        {
+          "artifact": "packages/monkey_check/2.0.4.tar.gz",
+          "package_sha256": "9604cec42189605e4adb90846a3a56c1e26425a4e330cd9f0ad64dbd54f53fb2",
+          "python": null,
+          "retired": false,
+          "script": "monkey_check.py",
+          "version": "2.0.4"
         }
       ]
     },
@@ -2547,6 +2555,14 @@
           "retired": false,
           "script": "sleep_check.py",
           "version": "1.0.6"
+        },
+        {
+          "artifact": "packages/sleep_check/1.0.7.tar.gz",
+          "package_sha256": "58ef0d3eb50274da9c8ff22557c440a13de83edfc05d2fd8afb6e2654a9ab59e",
+          "python": null,
+          "retired": false,
+          "script": "sleep_check.py",
+          "version": "1.0.7"
         }
       ]
     },

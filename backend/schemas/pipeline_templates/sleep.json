@@ -61,10 +61,12 @@
         {
           "step_id": "sleep_check",
           "action": "script:sleep_check",
-          "version": "1.0.6",
+          "version": "1.0.7",
           "timeout_seconds": 60,
           "retry": 0,
-          "params": {}
+          "params": {
+            "max_offline_seconds": 1800
+          }
         }
       ]
     },
