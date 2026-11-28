@@ -94,6 +94,7 @@ def execute_pipeline_run(
         plan_run_host_id=plan_run_host_id,
         barrier_total=barrier_total,
         step_trace_uploader=step_trace_uploader,
+        host_id=host_id,
     )
 
     local_row = (
@@ -157,4 +158,15 @@ def execute_pipeline_run(
     meta = getattr(result, "metadata", None)
     if isinstance(meta, dict) and isinstance(meta.get("disarm_results"), dict):
         out["disarm_results"] = meta["disarm_results"]
+    # ADR-0065 D5.2 / B12 U5：atomic_commit 终态字段随 /complete 落盘。
+    if isinstance(meta, dict):
+        for key in (
+            "atomic_group_completed",
+            "completed_during_abort_drain",
+            "finishing_kind",
+            "abort_mode",
+            "atomic_group_evidence",
+        ):
+            if key in meta and meta.get(key) is not None:
+                out[key] = meta[key]
     return out

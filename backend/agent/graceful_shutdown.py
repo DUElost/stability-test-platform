@@ -22,12 +22,17 @@ from .contracts.device_return import (
     DISARM_RESULT_READBACK_FAILED,
     make_disarm_result,
 )
+from .contracts.finishing_guard import FINISHING_KIND_ATOMIC_COMMIT
+from .critical_section import terminal_cas
 from .event_uploader import EventUploader
 from .evidence_uploader import EvidenceUploader
 from .local_disk_monitor import LocalDiskMonitor
 from .log_archiver import LogArchiver
 
 logger = logging.getLogger(__name__)
+
+_SHUTDOWN_ATOMIC_CLAIMANT = "graceful_shutdown"
+_SHUTDOWN_ATOMIC_REASON = "shutdown_atomic_unverified"
 
 # Family results that already finished during the disarm window — keep as-is
 # when persisting leftover jobs at shutdown cut-off (#3723 §3.2.4).
@@ -197,6 +202,96 @@ def _persist_incomplete_disarm_to_outbox(
 
 
 
+def _force_kill_atomic_leftovers(job_runner_state: Optional[Any]) -> int:
+    """CAS-claim leftover atomic_commit jobs and SIGTERM→SIGKILL their PG (C10)."""
+    if job_runner_state is None:
+        return 0
+    killed = 0
+    for job_id, runner in _iter_leftover_runners(job_runner_state):
+        if not terminal_cas().try_claim(job_id, _SHUTDOWN_ATOMIC_CLAIMANT):
+            continue
+        gate = getattr(runner, "_critical_section", None)
+        granted = bool(gate is not None and getattr(gate, "granted", False))
+        if not granted and not getattr(runner, "_force_abort", False):
+            # Still force-kill any leftover non-teardown process group.
+            pass
+        try:
+            cancel = getattr(runner, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel(force=True)
+                except TypeError:
+                    cancel()
+            killed += 1
+        except Exception:
+            logger.exception("shutdown_atomic_force_kill_failed job=%d", job_id)
+    return killed
+
+
+def _persist_unverified_atomic_to_outbox(
+    job_runner_state: Optional[Any],
+    local_db: Any,
+    lease_renewer: Optional[Any] = None,
+) -> int:
+    """Persist unverified atomic_commit terminal facts for CAS-claimed leftovers."""
+    if job_runner_state is None or local_db is None:
+        return 0
+    enqueue = getattr(local_db, "enqueue_terminal", None)
+    if not callable(enqueue):
+        return 0
+    try:
+        lease_tokens = {
+            int(entry["job_id"]): entry.get("fencing_token")
+            for entry in local_db.get_active_jobs()
+        }
+    except Exception:
+        logger.exception("shutdown_atomic_outbox_registry_read_failed")
+        lease_tokens = {}
+    persisted = 0
+    for job_id, runner in _iter_leftover_runners(job_runner_state):
+        if terminal_cas().owner(job_id) != _SHUTDOWN_ATOMIC_CLAIMANT:
+            # Worker already claimed or no CAS — skip to avoid dual settlement.
+            if terminal_cas().owner(job_id) is not None:
+                continue
+            if not terminal_cas().try_claim(job_id, _SHUTDOWN_ATOMIC_CLAIMANT):
+                continue
+        gate = getattr(runner, "_critical_section", None)
+        if gate is None or not getattr(gate, "granted", False):
+            continue
+        fencing_token = lease_tokens.get(job_id)
+        if not isinstance(fencing_token, str) or not fencing_token:
+            get_token = getattr(lease_renewer, "get_fencing_token", None)
+            fencing_token = get_token(job_id) if callable(get_token) else None
+        if not isinstance(fencing_token, str) or not fencing_token:
+            logger.warning("shutdown_atomic_outbox_skip_no_token job=%d", job_id)
+            continue
+        fields = {}
+        term = getattr(gate, "terminal_fields", None)
+        if callable(term):
+            fields = dict(term() or {})
+        fields.setdefault("finishing_kind", FINISHING_KIND_ATOMIC_COMMIT)
+        fields.setdefault("atomic_group_completed", False)
+        fields.setdefault("abort_mode", "force")
+        payload = _build_complete_payload(
+            {
+                "status": "ABORTED",
+                "exit_code": 0,
+                "error_message": _SHUTDOWN_ATOMIC_REASON,
+                **fields,
+            },
+            fencing_token,
+        )
+        try:
+            enqueue(job_id, payload)
+            persisted += 1
+            logger.info("shutdown_atomic_outbox_enqueued job=%d", job_id)
+        except ValueError as exc:
+            logger.info("shutdown_atomic_outbox_conflict job=%d: %s", job_id, exc)
+        except Exception:
+            logger.exception("shutdown_atomic_outbox_failed job=%d", job_id)
+    return persisted
+
+
 def shutdown_agent_runtime(
     *,
     coordinator: Any,
@@ -220,6 +315,7 @@ def shutdown_agent_runtime(
     # #3723 §3.2.4 / ADR-0061 D3: abort in-flight jobs FIRST so started disarm
     # steps can finish; wait up to 20s; then shut down the scheduler. Do not
     # change systemd TimeoutStopSec (unit stays 30s).
+    # ADR-0065 D4.37：atomic_commit 与 teardown_disarm 共用有界停机结算窗。
     if job_runner_state is not None:
         try:
             for _jid in list(job_runner_state.active_runners):
@@ -227,6 +323,13 @@ def shutdown_agent_runtime(
         except Exception:
             logger.exception("shutdown_cancel_runners_failed")
     _await_started_disarm(job_runner_state, timeout_seconds=20.0)
+    # D4.39–D4.40 / C10：窗到期后 CAS 占领未核实 atomic 作业并强杀进程组。
+    try:
+        killed = _force_kill_atomic_leftovers(job_runner_state)
+        if killed:
+            logger.info("shutdown_atomic_force_killed count=%d", killed)
+    except Exception:
+        logger.exception("shutdown_atomic_force_kill_failed")
     # R07-F12 (#1012): scheduler.shutdown() wakes remaining permit waiters
     # (teardown waiters record incomplete → local outbox via complete_job).
     operation_scheduler.shutdown()
@@ -248,6 +351,14 @@ def shutdown_agent_runtime(
             logger.info("shutdown_incomplete_outbox_persisted count=%d", n)
     except Exception:
         logger.exception("shutdown_incomplete_outbox_persist_failed")
+    try:
+        n_atomic = _persist_unverified_atomic_to_outbox(
+            job_runner_state, local_db, lease_renewer=lease_renewer,
+        )
+        if n_atomic:
+            logger.info("shutdown_atomic_outbox_persisted count=%d", n_atomic)
+    except Exception:
+        logger.exception("shutdown_atomic_outbox_persist_failed")
     # Flush step traces via HTTP before shutdown
     try:
         flushed = step_trace_uploader.drain_sync()

@@ -326,21 +326,24 @@ def build_control_handler(
         elif command == "abort":
             # #805-2：坏 id 不得中断整个 handler（否则同批其它 job 的 abort 丢失）。
             job_ids = parse_abort_job_ids(payload)
+            force = bool(payload.get("force"))
             for job_id in job_ids:
                 # ADR-0026 Step 5b: signal abort FIRST so _is_aborted()
                 # returns True, THEN cancel the permit waiter. If cancel
                 # fires first, the waiter sees PermitDenied before the
                 # abort flag is set, retries, and re-acquires the permit.
+                # ADR-0065: force=true 立即杀临界区进程组；普通 abort 保 grant。
                 job_runner_state = deps.job_runner_state
                 if job_runner_state is not None:
-                    requested = job_runner_state.request_abort(job_id)
+                    requested = job_runner_state.request_abort(job_id, force=force)
                 else:
                     requested = False
                 deps.coordinator.cancel_waiting_job(job_id)
                 logger.info(
-                    "control_abort job_id=%s requested=%s",
+                    "control_abort job_id=%s requested=%s force=%s",
                     job_id,
                     requested,
+                    force,
                 )
         elif command == "archive_now":
             arch = LogArchiver.instance()

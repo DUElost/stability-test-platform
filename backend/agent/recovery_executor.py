@@ -422,8 +422,17 @@ def execute_recovery_actions_impl(
             # would stop lease renewal and let reconciler reclaim mid-teardown.
             # Defer cleanup to worker exit (_cleanup_after_job_exit). CLEANUP
             # (boot mismatch, worker already gone) keeps immediate cleanup.
+            # ADR-0065 / U4：job_payload.force 透传至 Agent（U5 兑现 force 杀组）。
+            abort_force = bool((a.get("job_payload") or {}).get("force"))
             if abort_local_job is not None:
-                abort_local_job(jid)
+                # 仅 force=True 时带关键字，保持零参签名与旧 mock/调用方兼容。
+                if abort_force:
+                    try:
+                        abort_local_job(jid, force=True)
+                    except TypeError:
+                        abort_local_job(jid)
+                else:
+                    abort_local_job(jid)
             worker_alive = False
             if is_worker_alive is not None:
                 try:
