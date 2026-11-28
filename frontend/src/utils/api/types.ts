@@ -2511,6 +2511,8 @@ export interface PlanRunAbortRequest {
   deadline_at?: string | null;
   requested_job_ids?: number[];
   acknowledged_job_ids?: number[];
+  /** ADR-0065 / #4206 U4：主体中止强度（force > graceful，单调不降级）。 */
+  force?: boolean;
 }
 
 /** #300 P3-2: merge_task 落 run_context.upload_summary 的事件上送进度。 */

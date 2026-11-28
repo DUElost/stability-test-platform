@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from pydantic import BaseModel, Field
@@ -46,7 +46,10 @@ from backend.models.finishing_guard_admission import (
 from backend.models.host import Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
-from backend.services.device_return import _upsert_open_debt_sync
+from backend.services.device_return import (
+    _upsert_open_debt_sync,
+    close_flash_integrity_debts_sync,
+)
 from backend.services.plan_run_context import (
     abort_pending_job_ids,
     effective_abort_force,
@@ -314,7 +317,7 @@ def pre_register_atomic_commit_sync(
         raise FinishingGuardError("job_not_running", job_status=job.status)
 
     negotiated = job.negotiated_capabilities if isinstance(job.negotiated_capabilities, dict) else {}
-    if not negotiated.get(ATOMIC_COMMIT):
+    if not negotiated.get(FINISHING_GUARD_V2) or not negotiated.get(ATOMIC_COMMIT):
         raise FinishingGuardError("atomic_commit_not_negotiated")
 
     existing = coerce_job_finishing_guard(job.finishing_guard, job.disarm_guard)
@@ -458,10 +461,28 @@ def activate_permit_sync(
     job.finishing_guard = updated
     db.flush()
 
+    lease_exp = lease.expires_at
+    if lease_exp is not None and lease_exp.tzinfo is None:
+        lease_exp = lease_exp.replace(tzinfo=timezone.utc)
+    lease_remaining = (
+        max(0, int((lease_exp - now).total_seconds())) if lease_exp is not None else 0
+    )
+    hb = host.last_heartbeat
+    if hb is not None and hb.tzinfo is None:
+        hb = hb.replace(tzinfo=timezone.utc)
+    host_hb_remaining = 0
+    if hb is not None:
+        host_hb_remaining = max(
+            0,
+            int(HOST_HEARTBEAT_TIMEOUT_SECONDS - (now - hb).total_seconds()),
+        )
     return {
         "status": "granted",
+        "activated_at": updated.get("granted_at"),
         "D_atomic": updated.get("D_atomic"),
-        "lease_expires_at": lease.expires_at.isoformat() if lease.expires_at else None,
+        "lease_expires_at": lease_exp.isoformat() if lease_exp is not None else None,
+        "lease_remaining_seconds": lease_remaining,
+        "host_heartbeat_remaining_seconds": host_hb_remaining,
         "finishing_guard": updated,
     }
 
@@ -494,6 +515,13 @@ def cancel_pre_registration_sync(
     if guard.get("request_id") != payload.request_id:
         raise FinishingGuardError("request_id_mismatch")
 
+    # Never granted ⇒ revoke flash_integrity obligation opened at pre_register.
+    close_flash_integrity_debts_sync(
+        db,
+        device_id=job.device_id,
+        closed_reason="cancelled_pre_registration",
+        now=_utc_now(),
+    )
     job.finishing_guard = None
     db.flush()
     return {"status": "cancelled"}

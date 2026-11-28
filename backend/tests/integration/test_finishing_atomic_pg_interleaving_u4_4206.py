@@ -1,12 +1,14 @@
-"""ADR-0065 / #4206 U4 — PostgreSQL interleaving C4–C8 (finishing_guard service).
+"""ADR-0065 / #4206 U4 — PostgreSQL interleaving C4–C8 (atomic_commit handshake).
 
 Pattern: ``backend/tests/services/test_device_return_lock_order_3728.py``.
+Filename intentionally omits ``guard`` (static-guard PR path contract).
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -18,9 +20,10 @@ from backend.agent.contracts.capabilities import (
     FINISHING_GUARD_V2,
     FORCE_ABORT,
 )
+from backend.agent.contracts.finishing_guard import GUARD_STATE_PRE_REGISTERED
 from backend.core.database import SessionLocal
-from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.device_lease import DeviceLease
+from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.finishing_guard_admission import FinishingGuardAdmission
 from backend.models.host import Device, Host
@@ -34,6 +37,7 @@ from backend.services.finishing_guard import (
     PreRegisterIn,
     activate_permit_sync,
     close_admission_sync,
+    count_active_atomic_guards_sync,
     pre_register_atomic_commit_sync,
 )
 from backend.services.plan_run_abort import abort_plan_run
@@ -47,16 +51,23 @@ _NOW = datetime.now(timezone.utc)
 
 def _set_timeouts(db):
     db.execute(text("SET LOCAL deadlock_timeout = '200ms'"))
-    db.execute(text("SET LOCAL lock_timeout = '8s'"))
+    db.execute(text("SET LOCAL lock_timeout = '5s'"))
 
 
 def _ensure_admission_row(db) -> None:
-    if db.get(FinishingGuardAdmission, 1) is None:
+    row = db.get(FinishingGuardAdmission, 1)
+    if row is None:
         db.add(FinishingGuardAdmission(id=1, admission_open=True))
-        db.flush()
+    else:
+        row.admission_open = True
+    db.flush()
 
 
-def _seed_running_atomic_job(db) -> tuple[JobInstance, PlanRun, Host, Device]:
+def _seed_running_atomic_job(
+    db,
+    *,
+    unknown: bool = False,
+) -> tuple[JobInstance, PlanRun, Host, Device]:
     _ensure_admission_row(db)
     suffix = uuid4().hex[:8]
     host = Host(
@@ -66,11 +77,7 @@ def _seed_running_atomic_job(db) -> tuple[JobInstance, PlanRun, Host, Device]:
         last_heartbeat=_NOW,
         created_at=_NOW,
         boot_id=f"boot-{suffix}",
-        agent_capabilities=[
-            FINISHING_GUARD_V2,
-            ATOMIC_COMMIT,
-            FORCE_ABORT,
-        ],
+        agent_capabilities=[FINISHING_GUARD_V2, ATOMIC_COMMIT, FORCE_ABORT],
     )
     device = Device(
         serial=f"FG-{suffix}",
@@ -100,7 +107,7 @@ def _seed_running_atomic_job(db) -> tuple[JobInstance, PlanRun, Host, Device]:
         plan_id=plan.id,
         device_id=device.id,
         host_id=host.id,
-        status=JobStatus.RUNNING.value,
+        status=JobStatus.UNKNOWN.value if unknown else JobStatus.RUNNING.value,
         pipeline_def={"lifecycle": {"init": [], "teardown": []}},
         negotiated_capabilities={
             FINISHING_GUARD_V2: True,
@@ -132,51 +139,11 @@ def _seed_running_atomic_job(db) -> tuple[JobInstance, PlanRun, Host, Device]:
 
 
 class TestC4PreRegisterAbort:
-    def test_abort_before_pre_register_rejects(self, db_session):
+    def test_abort_first_then_pre_register_rejects(self, db_session):
         job, run, _host, _dev = _seed_running_atomic_job(db_session)
-
-        def do_abort():
-            with SessionLocal() as db:
-                _set_timeouts(db)
-                abort_plan_run(
-                    run.id, db=db, reason="race", force=False,
-                )
-                db.commit()
-            return True
-
-        def do_pre_reg():
-            with SessionLocal() as db:
-                _set_timeouts(db)
-                try:
-                    pre_register_atomic_commit_sync(
-                        db,
-                        job_id=job.id,
-                        payload=PreRegisterIn(
-                            request_id="req-a",
-                            min_critical_section_seconds=1,
-                        ),
-                    )
-                    db.commit()
-                    return "ok"
-                except FinishingGuardError as exc:
-                    db.rollback()
-                    return exc.code
-            return "unknown"
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_abort = pool.submit(do_abort)
-            f_pre = pool.submit(do_pre_reg)
-            results = {f_abort.result(timeout=30), f_pre.result(timeout=30)}
-        assert True in results
-        assert "ok" in results or "abort_already_committed" in results
-
-
-class TestC6CloseAdmission:
-    def test_close_admission_blocks_late_pre_register(self, db_session):
-        job, _run, _host, _dev = _seed_running_atomic_job(db_session)
         with SessionLocal() as db:
             _set_timeouts(db)
-            close_admission_sync(db)
+            abort_plan_run(run.id, db=db, reason="abort-first", force=False)
             db.commit()
         with SessionLocal() as db:
             _set_timeouts(db)
@@ -185,11 +152,320 @@ class TestC6CloseAdmission:
                     db,
                     job_id=job.id,
                     payload=PreRegisterIn(
-                        request_id="req-b",
+                        request_id="req-abort-first",
+                        min_critical_section_seconds=1,
+                    ),
+                )
+            assert exc.value.code in {
+                "abort_already_committed",
+                "force_abort_pending",
+            }
+
+    def test_pre_register_first_then_abort_sees_guard(self, db_session):
+        job, run, _host, _dev = _seed_running_atomic_job(db_session)
+        with SessionLocal() as db:
+            _set_timeouts(db)
+            pre_register_atomic_commit_sync(
+                db,
+                job_id=job.id,
+                payload=PreRegisterIn(
+                    request_id="req-pre-first",
+                    min_critical_section_seconds=1,
+                ),
+            )
+            db.commit()
+        with SessionLocal() as db:
+            _set_timeouts(db)
+            summary = abort_plan_run(run.id, db=db, reason="after-pre", force=False)
+            db.commit()
+        assert job.id in summary.abort_requested_jobs
+        with SessionLocal() as db:
+            j = db.get(JobInstance, job.id)
+            assert j.finishing_guard["guard_state"] == GUARD_STATE_PRE_REGISTERED
+            assert j.finishing_guard["request_id"] == "req-pre-first"
+
+    def test_concurrent_pre_register_and_abort_no_deadlock(self, db_session):
+        job, run, _host, _dev = _seed_running_atomic_job(db_session)
+        job_id, run_id = job.id, run.id
+        outcomes: dict[str, object] = {}
+
+        def do_abort():
+            with SessionLocal() as db:
+                _set_timeouts(db)
+                abort_plan_run(run_id, db=db, reason="race", force=False)
+                db.commit()
+                outcomes["abort"] = "ok"
+
+        def do_pre():
+            with SessionLocal() as db:
+                _set_timeouts(db)
+                try:
+                    pre_register_atomic_commit_sync(
+                        db,
+                        job_id=job_id,
+                        payload=PreRegisterIn(
+                            request_id="req-race",
+                            min_critical_section_seconds=1,
+                        ),
+                    )
+                    db.commit()
+                    outcomes["pre"] = "ok"
+                except FinishingGuardError as exc:
+                    db.rollback()
+                    outcomes["pre"] = exc.code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(do_abort)
+            f2 = pool.submit(do_pre)
+            try:
+                f1.result(timeout=20)
+                f2.result(timeout=20)
+            except FuturesTimeout as exc:
+                raise AssertionError("C4 concurrent path hung (possible deadlock)") from exc
+        assert outcomes.get("abort") == "ok"
+        assert "pre" in outcomes
+
+
+class TestC5ActivatePermitWatchdog:
+    def test_activate_grants_when_host_fresh(self, db_session):
+        job, _run, host, _dev = _seed_running_atomic_job(db_session)
+        with SessionLocal() as db:
+            pre_register_atomic_commit_sync(
+                db,
+                job_id=job.id,
+                payload=PreRegisterIn(
+                    request_id="req-c5",
+                    min_critical_section_seconds=1,
+                ),
+            )
+            db.commit()
+        with SessionLocal() as db:
+            out = activate_permit_sync(
+                db,
+                job_id=job.id,
+                host_id=host.id,
+                payload=ActivatePermitIn(
+                    request_id="req-c5",
+                    client_boot_id=host.boot_id or "",
+                ),
+            )
+            db.commit()
+        assert out["status"] == "granted"
+        assert "lease_remaining_seconds" in out
+        assert "host_heartbeat_remaining_seconds" in out
+
+    def test_stale_host_heartbeat_denies_activate(self, db_session):
+        job, _run, host, _dev = _seed_running_atomic_job(db_session)
+        with SessionLocal() as db:
+            pre_register_atomic_commit_sync(
+                db,
+                job_id=job.id,
+                payload=PreRegisterIn(
+                    request_id="req-c5-stale",
+                    min_critical_section_seconds=1,
+                ),
+            )
+            h = db.get(Host, host.id)
+            h.last_heartbeat = _NOW - timedelta(hours=2)
+            db.commit()
+        with SessionLocal() as db:
+            with pytest.raises(FinishingGuardError) as exc:
+                activate_permit_sync(
+                    db,
+                    job_id=job.id,
+                    host_id=host.id,
+                    payload=ActivatePermitIn(
+                        request_id="req-c5-stale",
+                        client_boot_id=host.boot_id or "",
+                    ),
+                )
+            assert exc.value.code == "host_not_online_fresh"
+
+    def test_activate_and_host_exclusive_lock_no_deadlock(self, db_session):
+        job, _run, host, _dev = _seed_running_atomic_job(db_session)
+        job_id, host_id, boot_id = job.id, host.id, host.boot_id or ""
+        with SessionLocal() as db:
+            pre_register_atomic_commit_sync(
+                db,
+                job_id=job_id,
+                payload=PreRegisterIn(
+                    request_id="req-c5-race",
+                    min_critical_section_seconds=1,
+                ),
+            )
+            db.commit()
+
+        outcomes: dict[str, object] = {}
+
+        def do_activate():
+            with SessionLocal() as db:
+                _set_timeouts(db)
+                try:
+                    out = activate_permit_sync(
+                        db,
+                        job_id=job_id,
+                        host_id=host_id,
+                        payload=ActivatePermitIn(
+                            request_id="req-c5-race",
+                            client_boot_id=boot_id,
+                        ),
+                    )
+                    db.commit()
+                    outcomes["activate"] = out["status"]
+                except Exception as exc:  # lock_timeout / FinishingGuardError
+                    db.rollback()
+                    outcomes["activate"] = type(exc).__name__
+
+        def do_watchdog():
+            with SessionLocal() as db:
+                _set_timeouts(db)
+                try:
+                    db.execute(
+                        select(Host).where(Host.id == host_id).with_for_update()
+                    ).scalar_one()
+                    db.execute(
+                        select(JobInstance)
+                        .where(JobInstance.id == job_id)
+                        .with_for_update()
+                    ).scalar_one()
+                    db.commit()
+                    outcomes["watchdog"] = "ok"
+                except Exception as exc:
+                    db.rollback()
+                    outcomes["watchdog"] = type(exc).__name__
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(do_activate)
+            f2 = pool.submit(do_watchdog)
+            try:
+                f1.result(timeout=20)
+                f2.result(timeout=20)
+            except FuturesTimeout as exc:
+                raise AssertionError("C5 concurrent path hung (possible deadlock)") from exc
+        assert "activate" in outcomes
+        assert "watchdog" in outcomes
+
+
+class TestC6CloseAdmission:
+    def test_close_then_drain_zero_blocks_pre_register(self, db_session):
+        job, _run, _host, _dev = _seed_running_atomic_job(db_session)
+        with SessionLocal() as db:
+            close_admission_sync(db)
+            db.commit()
+        with SessionLocal() as db:
+            assert db.get(FinishingGuardAdmission, 1).admission_open is False
+            assert count_active_atomic_guards_sync(db) == 0
+            with pytest.raises(FinishingGuardError) as exc:
+                pre_register_atomic_commit_sync(
+                    db,
+                    job_id=job.id,
+                    payload=PreRegisterIn(
+                        request_id="req-c6-late",
                         min_critical_section_seconds=1,
                     ),
                 )
             assert exc.value.code == "admission_closed"
+
+    def test_close_and_pre_register_race_no_deadlock(self, db_session):
+        job, _run, _host, _dev = _seed_running_atomic_job(db_session)
+        job_id = job.id
+        outcomes: dict[str, object] = {}
+
+        def do_close():
+            with SessionLocal() as db:
+                _set_timeouts(db)
+                close_admission_sync(db)
+                db.commit()
+                outcomes["close"] = "ok"
+
+        def do_pre():
+            with SessionLocal() as db:
+                _set_timeouts(db)
+                try:
+                    pre_register_atomic_commit_sync(
+                        db,
+                        job_id=job_id,
+                        payload=PreRegisterIn(
+                            request_id="req-c6-race",
+                            min_critical_section_seconds=1,
+                        ),
+                    )
+                    db.commit()
+                    outcomes["pre"] = "ok"
+                except FinishingGuardError as exc:
+                    db.rollback()
+                    outcomes["pre"] = exc.code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(do_close)
+            f2 = pool.submit(do_pre)
+            try:
+                f1.result(timeout=20)
+                f2.result(timeout=20)
+            except FuturesTimeout as exc:
+                raise AssertionError("C6 concurrent path hung (possible deadlock)") from exc
+        assert outcomes.get("close") == "ok"
+        assert outcomes.get("pre") in {"ok", "admission_closed"}
+        with SessionLocal() as db:
+            if count_active_atomic_guards_sync(db) == 0:
+                with pytest.raises(FinishingGuardError) as exc:
+                    pre_register_atomic_commit_sync(
+                        db,
+                        job_id=job_id,
+                        payload=PreRegisterIn(
+                            request_id="req-c6-after",
+                            min_critical_section_seconds=1,
+                        ),
+                    )
+                assert exc.value.code == "admission_closed"
+
+
+class TestC7ForceAbortComplete:
+    def test_force_abort_on_terminal_and_unsupported_host(self, db_session):
+        job, run, _host, _dev = _seed_running_atomic_job(db_session)
+        with SessionLocal() as db:
+            j = db.get(JobInstance, job.id)
+            j.status = JobStatus.COMPLETED.value
+            j.ended_at = _NOW
+            fact = {
+                "update": {"status": "COMPLETED"},
+                "artifact": None,
+                "watcher_summary": None,
+                "disarm_results": None,
+            }
+            j.terminal_payload_digest = hashlib.sha256(
+                json.dumps(
+                    fact, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            db.commit()
+        with SessionLocal() as db:
+            summary = abort_plan_run(
+                run.id, db=db, reason="force-after-complete", force=True,
+            )
+            db.commit()
+        assert summary.already_terminal or summary.force_requested_before_complete_settled
+
+        _job2, run2, host2, _ = _seed_running_atomic_job(db_session)
+        with SessionLocal() as db:
+            h = db.get(Host, host2.id)
+            h.agent_capabilities = [FINISHING_GUARD_V2, ATOMIC_COMMIT]
+            db.commit()
+        with SessionLocal() as db:
+            summary2 = abort_plan_run(
+                run2.id, db=db, reason="force-no-cap", force=True,
+            )
+            db.commit()
+        assert host2.id in summary2.force_unsupported_hosts
+
+    def test_force_abort_includes_unknown_candidate(self, db_session):
+        job, run, _host, _dev = _seed_running_atomic_job(db_session, unknown=True)
+        with SessionLocal() as db:
+            summary = abort_plan_run(
+                run.id, db=db, reason="force-unknown", force=True,
+            )
+            db.commit()
+        assert job.id in summary.abort_requested_jobs
 
 
 class TestC8FlashIntegrityDebt:
@@ -229,32 +505,3 @@ class TestC8FlashIntegrityDebt:
             )
         ).scalars().all()
         assert open_rows == ["power-cycle"]
-
-
-class TestC5ActivatePermit:
-    def test_activate_permit_grants(self, db_session):
-        job, _run, host, _dev = _seed_running_atomic_job(db_session)
-        with SessionLocal() as db:
-            _set_timeouts(db)
-            pre_register_atomic_commit_sync(
-                db,
-                job_id=job.id,
-                payload=PreRegisterIn(
-                    request_id="req-c",
-                    min_critical_section_seconds=1,
-                ),
-            )
-            db.commit()
-        with SessionLocal() as db:
-            _set_timeouts(db)
-            out = activate_permit_sync(
-                db,
-                job_id=job.id,
-                host_id=host.id,
-                payload=ActivatePermitIn(
-                    request_id="req-c",
-                    client_boot_id=host.boot_id or "",
-                ),
-            )
-            db.commit()
-        assert out["status"] == "granted"

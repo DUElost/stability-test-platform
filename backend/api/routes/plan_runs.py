@@ -184,13 +184,10 @@ def abort_plan_run_endpoint(
 ):
     """ADR-0021 D7 — abort；终态 409，未知 404。"""
     reason = (payload.reason if payload else None) or "aborted_by_user"
-    abort_force = bool(payload.force) if payload is not None else False
     try:
         summary = abort_plan_run(
-            run_id,
-            db=db,
-            reason=reason,
-            force=abort_force,
+            run_id, db=db, reason=reason,
+            force=bool(payload.force) if payload is not None else False,
             triggered_by=current_user.username if current_user else "api",
             audit_user_id=current_user.id if current_user else None,
             audit_username=current_user.username if current_user else None,
