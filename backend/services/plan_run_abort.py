@@ -47,6 +47,7 @@ from backend.core.metrics import (
 )
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.job import JobInstance
+from backend.models.host import Host
 from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.services.plan_run_aggregation import (
     apply_plan_run_aggregation,
@@ -59,6 +60,11 @@ from backend.services.plan_run_finalization import (
 from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
 from backend.services.network_supply import release_unclaimed_network_sessions_sync
 from backend.services.state_machine import PlanRunStateMachine
+from backend.agent.contracts.finishing_guard import (
+    abort_intensity_of,
+    max_abort_intensity,
+)
+from backend.services.finishing_guard import host_supports_force_abort
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +81,13 @@ _TERMINAL_JOB_STATUSES = {
     JobStatus.ABORTED.value,
 }
 
-_ACTIVE_JOB_STATUSES = (
+_ABORT_CANDIDATE_STATUSES = (
     JobStatus.PENDING.value,
     JobStatus.RUNNING.value,
+    JobStatus.UNKNOWN.value,
 )
+
+_ACTIVE_JOB_STATUSES = _ABORT_CANDIDATE_STATUSES
 
 
 class PlanRunAbortError(Exception):
@@ -297,6 +306,7 @@ def abort_plan_run(
     audit_username: Optional[str] = None,
     audit_action: str = "abort_plan_run",
     host_id: Optional[str] = None,
+    force: bool = False,
 ) -> PlanRunAbortSummaryOut:
     """Abort a PlanRun, or only the active jobs on one host.
 
@@ -362,6 +372,11 @@ def abort_plan_run(
     #      aggregation guard,把状态改回 FAILED" 的覆盖。锁与 aggregator 同列。
     #      FOR NO KEY UPDATE 与 FK 触发的 FOR KEY SHARE 兼容,避免与 complete_job 的
     #      job UPDATE autoflush 死锁(见 aggregator.py 详细注释)。
+    force_unsupported_hosts: list[str] = []
+    already_terminal = False
+    force_requested_before_complete_settled = False
+    run_force = max_abort_intensity(force) == abort_intensity_of(force=True)
+
     lock_t0 = time.perf_counter()
     pr = db.execute(
         select(PlanRun)
@@ -476,7 +491,7 @@ def abort_plan_run(
         active_rows = db.execute(
             select(JobInstance.id, JobInstance.host_id, JobInstance.status).where(
                 JobInstance.plan_run_id == plan_run_id,
-                JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+                JobInstance.status.in_(_ABORT_CANDIDATE_STATUSES),
             )
         ).all()
         if host_id is not None:
@@ -511,12 +526,20 @@ def abort_plan_run(
             if row.status == JobStatus.PENDING.value
         }
         for row in active_rows:
-            if row.status != JobStatus.RUNNING.value:
+            if row.status not in (
+                JobStatus.RUNNING.value,
+                JobStatus.UNKNOWN.value,
+            ):
                 continue
             abort_requested_jobs.append(row.id)
             if row.host_id:
                 abort_hosts.add(row.host_id)
                 abort_jobs_by_host[row.host_id].append(row.id)
+
+        run_force = max_abort_intensity(
+            bool(existing_abort.get("force")) if isinstance(existing_abort, dict) else False,
+            force,
+        ) == abort_intensity_of(force=True)
 
         if host_id is not None:
             merged_requested = list(
@@ -532,6 +555,7 @@ def abort_plan_run(
                 "triggered_by": triggered_by,
                 "requested_job_ids": merged_requested,
                 "acknowledged_job_ids": existing_ack,
+                "force": run_force,
             }
         else:
             # ADR-0043 D2 / ADR-0065 D4.5 / #4206 v1.1 B4：
@@ -549,6 +573,7 @@ def abort_plan_run(
                     "triggered_by": triggered_by,
                     "requested_job_ids": merged_run_requested,
                     "acknowledged_job_ids": existing_ack,
+                    "force": run_force,
                 }
             else:
                 abort_requested_payload = {
@@ -560,6 +585,7 @@ def abort_plan_run(
                     ).isoformat(),
                     "requested_job_ids": merged_run_requested,
                     "acknowledged_job_ids": [],
+                    "force": run_force,
                 }
         run_ctx["abort_requested"] = abort_requested_payload
         # #1928 注记（**已失效**，ADR-0043 v1.1 / #2154）：本写入**曾**重置 run 级
@@ -581,11 +607,18 @@ def abort_plan_run(
                 candidate = existing_hosts.get(host_id)
                 if isinstance(candidate, dict):
                     existing_host_clock = candidate
+            host_force = max_abort_intensity(
+                bool(existing_host_clock.get("force"))
+                if isinstance(existing_host_clock, dict)
+                else False,
+                force,
+            ) == abort_intensity_of(force=True)
             if existing_host_clock and existing_host_clock.get("at"):
                 host_clock_payload = {
                     **existing_host_clock,
                     "reason": reason,
                     "triggered_by": triggered_by,
+                    "force": host_force,
                 }
             else:
                 host_clock_payload = {
@@ -595,6 +628,7 @@ def abort_plan_run(
                     "deadline_at": (
                         now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
                     ).isoformat(),
+                    "force": host_force,
                 }
             if not isinstance(run_ctx.get("abort_requested_hosts"), dict):
                 run_ctx["abort_requested_hosts"] = {}
@@ -808,6 +842,13 @@ def abort_plan_run(
         host_job_ids = abort_jobs_by_host.get(emit_host_id, [])
         if not host_job_ids:
             continue
+        emit_force = run_force
+        if host_id is not None:
+            hosts_ctx = run_ctx.get("abort_requested_hosts")
+            if isinstance(hosts_ctx, dict):
+                hc = hosts_ctx.get(emit_host_id)
+                if isinstance(hc, dict):
+                    emit_force = bool(hc.get("force"))
         control_items.append(
             (
                 emit_host_id,
@@ -817,11 +858,33 @@ def abort_plan_run(
                         "plan_run_id": plan_run_id,
                         "job_ids": host_job_ids,
                         "reason": reason,
+                        "force": emit_force,
                     },
                 },
             )
         )
     schedule_agent_control_fanout(control_items)
+
+    if run_force:
+        host_rows = db.execute(
+            select(Host.id, Host.agent_capabilities).where(
+                Host.id.in_(list(abort_hosts)),
+            )
+        ).all()
+        for hid, caps in host_rows:
+            if not host_supports_force_abort(caps):
+                force_unsupported_hosts.append(str(hid))
+
+    terminal_in_scope = db.execute(
+        select(JobInstance.id).where(
+            JobInstance.plan_run_id == plan_run_id,
+            JobInstance.status.in_(_TERMINAL_JOB_STATUSES),
+        )
+    ).scalars().all()
+    if force and terminal_in_scope and not abort_requested_jobs:
+        force_requested_before_complete_settled = True
+    if not abort_requested_jobs and not aborted_jobs and not in_precheck:
+        already_terminal = True
 
     # ADR-0025 Sprint 4: abort 导致 PlanRun 终态时触发归档-2 scan + merge
     if should_trigger_dedup(pr.status):
@@ -895,6 +958,9 @@ def abort_plan_run(
         phase="precheck" if in_precheck else "running",
         aborted_jobs=aborted_jobs,
         abort_requested_jobs=abort_requested_jobs,
+        already_terminal=already_terminal,
+        force_requested_before_complete_settled=force_requested_before_complete_settled,
+        force_unsupported_hosts=sorted(force_unsupported_hosts),
     )
 
 
@@ -927,7 +993,11 @@ def abort_jobs_for_host(
         .filter(
             JobInstance.host_id == host_id,
             JobInstance.status.in_(
-                [JobStatus.PENDING.value, JobStatus.RUNNING.value]
+                [
+                    JobStatus.PENDING.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.UNKNOWN.value,
+                ]
             ),
         )
         .distinct()

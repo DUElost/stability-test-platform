@@ -186,9 +186,8 @@ def abort_plan_run_endpoint(
     reason = (payload.reason if payload else None) or "aborted_by_user"
     try:
         summary = abort_plan_run(
-            run_id,
-            db=db,
-            reason=reason,
+            run_id, db=db, reason=reason,
+            force=bool(payload.force) if payload is not None else False,
             triggered_by=current_user.username if current_user else "api",
             audit_user_id=current_user.id if current_user else None,
             audit_username=current_user.username if current_user else None,

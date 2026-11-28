@@ -40,6 +40,7 @@ from backend.services.plan_dispatcher_core import (
 )
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 from backend.services.vbus_flash_admission import is_vbus_flash_pipeline
+from backend.services.finishing_guard import negotiate_job_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -693,6 +694,9 @@ async def claim_jobs_for_host(
                 JobStateMachine.transition(job, JobStatus.RUNNING, "claimed_by_agent")
                 job.host_id = host_id
                 job.started_at = now
+                job.negotiated_capabilities = negotiate_job_capabilities(
+                    host_row.agent_capabilities if host_row is not None else (),
+                )
 
                 lease = await acquire_lease(
                     db,
