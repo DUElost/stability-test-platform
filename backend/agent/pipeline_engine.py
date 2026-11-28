@@ -12,7 +12,11 @@ init -> patrol loop -> teardown.
 from .device_discovery import discover_devices
 from .device_platform import detect_device_platform
 from .device_return import run_init_checks
-from .contracts.vbus_flash import is_vbus_flash_init
+from .contracts.vbus_flash import (
+    FLASH_PREFLIGHT_ACTION,
+    deferred_flash_init_prefix_len,
+    is_deferred_flash_step,
+)
 from .contracts.device_return import (
     disarm_execution_budget, probe_result_policy, PLATFORM_INTERRUPTED_EXIT_CODES,
     DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS, PROBE_READBACK_VALUES,
@@ -2063,9 +2067,9 @@ class PipelineEngine:
                 )
             return result
 
-        # ADR-0063 D5 第 3 条（复核 #3915 P1）：紧挨 STARTED 边界判断——许可交接、状态写入之后
-        # 已知丢租约或已取消时不得启动 vbus 刷机（不发 STARTED、计数保持 0，本 job 不承担 teardown）。
-        if phase == "init" and is_vbus_flash_init([step]) and (self._is_lock_lost() or self._canceled):
+        # ADR-0063 D5 第 3 条（复核 #3915 P1）& #4222：紧挨 STARTED 边界判断——许可交接、状态写入之后
+        # 已知丢租约或已取消时不得启动推迟残留检查的刷机/预检步骤（不发 STARTED、计数保持 0，本 job 不承担 teardown）。
+        if phase == "init" and is_deferred_flash_step(step) and (self._is_lock_lost() or self._canceled):
             self._last_step_error = "not_executed:lease_lost"
             return StepResult(success=False, exit_code=1, error_message="not_executed:lease_lost")
 
@@ -2078,8 +2082,10 @@ class PipelineEngine:
         # R3: footprint at STARTED boundary after permit + enabled check.
         if phase == "init":
             note_footprint_started(self._footprint_families, step)
-            # ADR-0063 D5 第 3 条：vbus 作业按刷机步骤是否实际启动决定 teardown 归属。
-            self._init_steps_started = getattr(self, "_init_steps_started", 0) + 1
+            # ADR-0063 D5 第 3 条 & #4222：推迟检查的刷机作业按是否实际启动设备侧步骤决定 teardown 归属；
+            # flash_preflight 为纯宿主预检，不触碰设备，不计入设备动作。
+            if action != FLASH_PREFLIGHT_ACTION:
+                self._init_steps_started = getattr(self, "_init_steps_started", 0) + 1
 
         log_file = None
         if self._log_dir:
@@ -2525,21 +2531,23 @@ class PipelineEngine:
                 self._report_job_status_mq("INIT_RUNNING")
                 logger.info("[Lifecycle] run=%d — executing init", self._run_id)
 
-                if is_vbus_flash_init(init_def):
-                    # ADR-0063 D5 第 3 条：vbus 刷机作业的设备常态关机，探针（adb）
-                    # 在刷机前必然拿不到结果。残留检查推迟到第一个步骤（vbus 刷机）
+                defer_prefix = deferred_flash_init_prefix_len(init_def)
+                if defer_prefix > 0:
+                    # ADR-0063 D5 第 3 条 & #4222：vbus_cycle（关机无 ADB）与 adb_reboot 整机刷机
+                    # （如设备卡死开机动画、sys.boot_completed 未就绪）在刷机前拿不到开机回读。
+                    # 残留检查推迟到刷机前缀（[flash_firmware] 或 [flash_preflight, flash_firmware]）
                     # 成功之后、其余 init 步骤之前；刷机不建立任何专项足迹。
                     self._init_steps_started = 0
-                    init_result = self._run_lifecycle_steps("init", init_def[:1])
+                    init_result = self._run_lifecycle_steps("init", init_def[:defer_prefix])
                     if init_result.success:
                         # 检查期间 teardown 门保持关闭：检查返回失败或抛出异常时，
                         # 由检查自己承担已尝试的解除（与先查后刷的路径一致）。
                         init_result = self._check_init_returns()
                         return_checks_passed = init_result.success
                         if init_result.success:
-                            init_result = self._run_lifecycle_steps("init", init_def[1:])
+                            init_result = self._run_lifecycle_steps("init", init_def[defer_prefix:])
                     else:
-                        # 刷机步骤实际启动过才由本 job 承担 teardown；启动前丢租约时没有本 job 的动作。
+                        # 刷机步骤实际启动过才由本 job 承担 teardown；启动前丢租约或仅宿主预检失败时没有本 job 的设备动作。
                         return_checks_passed = self._init_steps_started > 0
                 else:
                     init_result = self._check_init_returns()

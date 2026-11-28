@@ -66,7 +66,7 @@
         {
           "step_id": "powercycle_adb_patrol",
           "action": "script:powercycle_adb_patrol",
-          "version": "1.0.0",
+          "version": "1.0.1",
           "timeout_seconds": 90,
           "retry": 0,
           "params": {}

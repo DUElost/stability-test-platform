@@ -263,21 +263,31 @@ def test_patrol_boot_timeout_triggers_terminal_patrol_fail(isolated_env, monkeyp
     assert Path(fin["detail_uri"]).is_file()
 
 
-def test_patrol_same_boot_id_detects_ineffective_reboot(isolated_env, monkeypatch):
-    """设备未真正重启（boot_id 长期不变）超过 reboot_confirm_timeout_seconds 判失败。"""
+def test_patrol_same_boot_id_retries_then_recovers_on_transient_adb_glitch(isolated_env, monkeypatch):
+    """v1.0.1：单次 adb reboot 瞬态失败后，超时自动补发重试；补发生效（boot_id 变化）则正常续跑。"""
     setup_mod, setup_lib = _load_script_module("powercycle_adb_setup")
     patrol_mod, patrol_lib = _load_script_module("powercycle_adb_patrol")
 
     clock = _FakeClock()
-    fixed_boot_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    boot_ids = [
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    ]
+    state = {"boot_idx": 0, "reboot_calls": 0}
+
+    def _reboot(timeout=30):
+        state["reboot_calls"] += 1
+        if state["reboot_calls"] == 1:
+            return 1, "", "error: device 'DEV_ADB_001' not found"
+        return 0, "", ""
 
     for lib, mod in ((setup_lib, setup_mod), (patrol_lib, patrol_mod)):
         monkeypatch.setattr(lib, "device_online", lambda timeout=15: True)
         monkeypatch.setattr(lib, "boot_completed", lambda timeout=15: True)
-        monkeypatch.setattr(lib, "read_boot_id", lambda timeout=15: fixed_boot_id)
+        monkeypatch.setattr(lib, "read_boot_id", lambda timeout=15: boot_ids[state["boot_idx"]])
         monkeypatch.setattr(lib, "set_device_stayon_best_effort", lambda: True)
         monkeypatch.setattr(lib, "unlock_to_home", lambda timeout=20: True)
-        monkeypatch.setattr(lib, "trigger_adb_reboot", lambda timeout=30: (1, "", "reboot denied"))
+        monkeypatch.setattr(lib, "trigger_adb_reboot", _reboot)
         monkeypatch.setattr(mod, "unlock_to_home", lib.unlock_to_home, raising=False)
         monkeypatch.setattr(mod, "read_boot_id", lib.read_boot_id, raising=False)
         monkeypatch.setattr(mod, "system_ready", lib.system_ready, raising=False)
@@ -286,19 +296,82 @@ def test_patrol_same_boot_id_detects_ineffective_reboot(isolated_env, monkeypatc
 
     setup_mod._run({"test_times": 5, "reboot_confirm_timeout_seconds": 25}, now_fn=clock.time, sleep_fn=clock.sleep)
     patrol_mod._run({}, now_fn=clock.time, sleep_fn=clock.sleep)
+    assert state["reboot_calls"] == 1
 
-    # 10s 内仍在宽限期，不误判
+    # 10s 内仍在宽限期，不触发补发
     clock.advance(10)
     r_wait = patrol_mod._run({}, now_fn=clock.time, sleep_fn=clock.sleep)
     assert r_wait["success"] is True
     assert r_wait["progress"]["observed"] == "reboot_pending"
+    assert state["reboot_calls"] == 1
 
-    # 30s 后 boot_id 仍不变 → 判定 adb reboot 未生效
+    # 30s 后 boot_id 仍不变 → 自动触发第 1 次补发重试（不失败）
     clock.advance(20)
+    r_retry = patrol_mod._run({}, now_fn=clock.time, sleep_fn=clock.sleep)
+    assert r_retry["success"] is True
+    assert "patrol_fail" not in r_retry
+    assert r_retry["progress"]["observed"] == "reboot_retry_1"
+    assert r_retry["progress"]["reboot_retries_used"] == 1
+    assert state["reboot_calls"] == 2
+
+    # 补发后设备真实重启（boot_id 变化）→ 正常记账 cycle 1 PASS 并清零重试计数
+    clock.advance(50)
+    state["boot_idx"] = 1
+    r_ok = patrol_mod._run({}, now_fn=clock.time, sleep_fn=clock.sleep)
+    assert r_ok["success"] is True
+    assert r_ok["progress"]["cycles_done"] == 1
+    assert r_ok["progress"]["reboot_failures"] == 0
+
+
+def test_patrol_same_boot_id_fails_after_exhausting_reboot_retries(isolated_env, monkeypatch):
+    """v1.0.1：耗尽 reboot_retry_attempts（含 0 与默认 2）后仍未重启才判失败终止。"""
+    setup_mod, setup_lib = _load_script_module("powercycle_adb_setup")
+    patrol_mod, patrol_lib = _load_script_module("powercycle_adb_patrol")
+
+    clock = _FakeClock()
+    fixed_boot_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    calls = {"n": 0}
+
+    def _reboot(timeout=30):
+        calls["n"] += 1
+        return 1, "", "reboot denied"
+
+    for lib, mod in ((setup_lib, setup_mod), (patrol_lib, patrol_mod)):
+        monkeypatch.setattr(lib, "device_online", lambda timeout=15: True)
+        monkeypatch.setattr(lib, "boot_completed", lambda timeout=15: True)
+        monkeypatch.setattr(lib, "read_boot_id", lambda timeout=15: fixed_boot_id)
+        monkeypatch.setattr(lib, "set_device_stayon_best_effort", lambda: True)
+        monkeypatch.setattr(lib, "unlock_to_home", lambda timeout=20: True)
+        monkeypatch.setattr(lib, "trigger_adb_reboot", _reboot)
+        monkeypatch.setattr(mod, "unlock_to_home", lib.unlock_to_home, raising=False)
+        monkeypatch.setattr(mod, "read_boot_id", lib.read_boot_id, raising=False)
+        monkeypatch.setattr(mod, "system_ready", lib.system_ready, raising=False)
+        monkeypatch.setattr(mod, "trigger_adb_reboot", lib.trigger_adb_reboot, raising=False)
+        monkeypatch.setattr(mod, "set_device_stayon_best_effort", lib.set_device_stayon_best_effort, raising=False)
+
+    setup_mod._run({"test_times": 5, "reboot_confirm_timeout_seconds": 25}, now_fn=clock.time, sleep_fn=clock.sleep)
+    patrol_mod._run({}, now_fn=clock.time, sleep_fn=clock.sleep)  # attempt 1
+
+    # 重试 1
+    clock.advance(30)
+    r1 = patrol_mod._run({}, now_fn=clock.time, sleep_fn=clock.sleep)
+    assert r1["success"] is True
+    assert r1["progress"]["observed"] == "reboot_retry_1"
+
+    # 重试 2
+    clock.advance(30)
+    r2 = patrol_mod._run({}, now_fn=clock.time, sleep_fn=clock.sleep)
+    assert r2["success"] is True
+    assert r2["progress"]["observed"] == "reboot_retry_2"
+
+    # 3 次（1+2）均未生效 → 终态失败
+    clock.advance(30)
     r_fail = patrol_mod._run({}, now_fn=clock.time, sleep_fn=clock.sleep)
     assert r_fail["success"] is False
     assert r_fail["patrol_fail"] is True
-    assert "未生效" in r_fail["error_message"]
+    assert calls["n"] == 3
+    assert "已尝试 3 次" in r_fail["error_message"]
+    assert "reboot denied" in r_fail["error_message"]
 
 
 def test_unlock_command_uses_wakeup_dismiss_keyguard_3x_keyevent82_and_home():
