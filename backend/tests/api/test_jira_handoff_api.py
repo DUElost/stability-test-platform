@@ -135,6 +135,76 @@ def test_jira_handoff_api_end_to_end_and_error_codes(tmp_path: Path, monkeypatch
     assert r_bad_kind.status_code == 400
 
 
+def test_jira_handoff_api_export_rejects_tampered_manifest_sha(tmp_path: Path, monkeypatch):
+    """B11-U3：export 端点对篡改/错误 manifest_sha256 返回 409，且不写 15.4。"""
+    from backend.services.jira_handoff_builder import (
+        HANDOFF_MANIFEST_SCHEMA,
+        HANDOFF_MANIFEST_SCHEMA_VERSION,
+        _atomic_write_bytes,
+        _canonical_json_bytes,
+        compute_manifest_sha256,
+    )
+    from backend.services.jira_handoff_identity import HANDOFF_STATUS_PENDING_EXPORT
+
+    storage = tmp_path / "center"
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    handoff_id = "hf_api_export_1"
+    bundle_dir = storage / "_meta" / "handoff" / handoff_id
+    bundle_dir.mkdir(parents=True)
+    body = {
+        "schema": HANDOFF_MANIFEST_SCHEMA,
+        "schema_version": HANDOFF_MANIFEST_SCHEMA_VERSION,
+        "handoff_id": handoff_id,
+        "status": HANDOFF_STATUS_PENDING_EXPORT,
+        "platform": "mtk",
+        "created_at": "2026-11-27T00:00:00+00:00",
+        "created_by": "qa",
+        "plan_run_ids": [201],
+        "snapshot_cutoff": "2026-11-27T00:00:00+00:00",
+        "gates": {"coverage_complete": True, "identity_degraded": False, "blocking_issues": [], "warnings": []},
+        "identity_gate": {
+            "total_org_rows": 0, "unique_events": 0, "keyed_rows": 0, "compat_fallback_rows": 0,
+            "unbound_rows": 0, "after_cutoff_skipped_rows": 0, "unbound_by_reason": {},
+        },
+        "runs": [],
+        "unbound_rows": [],
+        "builds": [],
+    }
+    digest = compute_manifest_sha256(body)
+    body["manifest_sha256"] = digest
+    _atomic_write_bytes(bundle_dir / "manifest.json", _canonical_json_bytes(body))
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(storage))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_EXPORT_ROOT", str(export_root))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_VENDOR_PATH_PREFIX", "/home/jxtinno/sonic_tinno")
+    monkeypatch.setenv("STP_JIRA_HANDOFF_DEC_EXTRACT_LOCK_DIR", str(tmp_path / "locks"))
+
+    db = _setup_base_db(run_id=201)
+    client = TestClient(_build_app(db, authed=True))
+    bad = "0" * 64
+    resp = client.post(
+        f"/api/v1/jira/handoff/bundles/{handoff_id}/export",
+        json={
+            "manifest_sha256": bad,
+            "builds": [
+                {
+                    "build": "V100",
+                    "target_folder_name": "MLD_V100_1127_MonkeyAEEinfo",
+                    "merge_strategy": "create_new",
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] in {
+        "handoff_manifest_sha256_mismatch",
+        "handoff_manifest_tampered",
+        "handoff_export_empty_manifest",
+    }
+    assert list(export_root.iterdir()) == []
+
+
 def test_jira_handoff_api_all_unbound_returns_422_with_row_details(tmp_path: Path, monkeypatch):
     storage = tmp_path / "center"
     t0 = datetime(2026, 11, 20, 10, 0, 0, tzinfo=timezone.utc)
