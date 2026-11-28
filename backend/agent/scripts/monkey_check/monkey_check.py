@@ -29,11 +29,49 @@ STP_STEP_PARAMS:
     {"success": true/false, "metrics": {...}, "restarted": true/false}
 """
 
+import json
+import os
+import re
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 from _adb import adb_path, device_serial, output_result, params
+
+_DEFAULT_MAX_OFFLINE_SECONDS = 1800  # 30 分钟：Monkey 非预期长时间 ADB 离线发 patrol_fail（0=关闭）
+
+
+def _state_file(serial: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", serial)
+    return Path(tempfile.gettempdir()) / f"monkey_check_{safe}.json"
+
+
+def _load_state(serial: str, job_id: str) -> dict:
+    try:
+        data = json.loads(_state_file(serial).read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("job_id") == job_id:
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"job_id": job_id, "offline_since": None}
+
+
+def _save_state(serial: str, state: dict) -> None:
+    try:
+        _state_file(serial).write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _resolve_max_offline_seconds(args: dict) -> int:
+    raw = args.get("max_offline_seconds")
+    if raw is None or str(raw).strip() == "":
+        raw = os.environ.get("STP_MONKEY_MAX_OFFLINE_SECONDS", "")
+    if raw is None or str(raw).strip() == "":
+        return _DEFAULT_MAX_OFFLINE_SECONDS
+    return max(0, int(str(raw).strip()))
 
 
 def _shell(serial: str, cmd: str, timeout: int = 30) -> tuple[int, str]:
@@ -98,12 +136,49 @@ def main():
 
     process_names = args.get("process_names", ["com.android.commands.monkey"])
     watchdog_pattern = args.get("watchdog_script", "MonkeyTest.sh")
+    max_offline = _resolve_max_offline_seconds(args)
+    job_id = os.environ.get("STP_JOB_ID", "").strip()
+    state = _load_state(serial, job_id)
 
     # ── 预检 ──
-    rc, _ = _shell(serial, "echo ready", timeout=10)
+    try:
+        rc, _ = _shell(serial, "echo ready", timeout=10)
+    except subprocess.TimeoutExpired:
+        rc = -1
     if rc != 0:
-        output_result(False, error_message=f"Device {serial} not reachable")
+        now = time.time()
+        offline_since = state.get("offline_since")
+        if not isinstance(offline_since, (int, float)) or offline_since <= 0:
+            offline_since = now
+            state["offline_since"] = offline_since
+        _save_state(serial, state)
+        offline_elapsed = int(max(0.0, now - float(offline_since)))
+        metrics = {
+            "online": False,
+            "offline_elapsed_seconds": offline_elapsed,
+            "max_offline_seconds": max_offline,
+        }
+        if max_offline > 0 and offline_elapsed >= max_offline:
+            output_result(
+                False,
+                patrol_fail=True,
+                error_message=(
+                    f"Device {serial} not reachable for {offline_elapsed}s "
+                    f"(exceeded {max_offline}s)"
+                ),
+                metrics=metrics,
+            )
+            sys.exit(1)
+        output_result(
+            False,
+            error_message=f"Device {serial} not reachable",
+            metrics=metrics,
+        )
         sys.exit(1)
+
+    if state.get("offline_since") is not None:
+        state["offline_since"] = None
+        _save_state(serial, state)
 
     # ── 检查 monkey 进程 ──
     # #809：排除 MonkeyWatchdog——aimwd 的 cmdline 也含

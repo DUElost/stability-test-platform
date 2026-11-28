@@ -9,11 +9,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.agent.contracts.vbus_flash import is_vbus_flash_init, is_vbus_flash_lifecycle
+from backend.agent.contracts.vbus_flash import (
+    deferred_flash_init_prefix_len,
+    is_deferred_flash_step,
+    is_vbus_flash_init,
+    is_vbus_flash_lifecycle,
+)
 from backend.agent.pipeline_engine import PipelineEngine, StepResult
 
 _FLASH = {"step_id": "flash", "action": "script:flash_firmware", "version": "1.4.0",
           "params": {"trigger_mode": "vbus_cycle"}, "timeout_seconds": 5}
+_ADB_FLASH = {"step_id": "flash", "action": "script:flash_firmware", "version": "1.4.4",
+              "params": {"trigger_mode": "adb_reboot"}, "timeout_seconds": 5}
+_ADB_FLASH_DEFAULT = {"step_id": "flash", "action": "script:flash_firmware", "version": "1.4.4",
+                      "params": {}, "timeout_seconds": 5}
+_PREFLIGHT = {"step_id": "precheck", "action": "script:flash_preflight", "version": "1.0.8",
+              "params": {}, "timeout_seconds": 5}
 _CHECK = {"step_id": "check", "action": "script:check_device", "version": "1.0.0",
           "params": {}, "timeout_seconds": 5}
 
@@ -256,3 +267,107 @@ def test_lease_lost_during_executing_state_update_blocks_started(loss):
     assert teardown == []
     assert result.metadata["termination_reason"] == "abort"
     assert result.metadata["teardown_status"] == "SKIPPED"
+
+
+@pytest.mark.parametrize("init,expected_prefix", [
+    ([_FLASH, _CHECK], 1),
+    ([_ADB_FLASH, _CHECK], 1),
+    ([_ADB_FLASH_DEFAULT, _CHECK], 1),
+    ([{**_ADB_FLASH, "params": None}, _CHECK], 1),
+    ([{**_ADB_FLASH, "params": {"trigger_mode": ""}}, _CHECK], 1),
+    ([_PREFLIGHT, _ADB_FLASH, _CHECK], 2),
+    ([_PREFLIGHT, _ADB_FLASH_DEFAULT, _CHECK], 2),
+    ([_PREFLIGHT, _FLASH, _CHECK], 2),
+    ([_PREFLIGHT, _CHECK], 0),
+    ([_CHECK, _ADB_FLASH], 0),
+    ([_CHECK, _FLASH], 0),
+    ([{**_ADB_FLASH, "enabled": False}, _CHECK], 0),
+    ([_PREFLIGHT, {**_ADB_FLASH, "enabled": False}, _CHECK], 0),
+    ([{**_ADB_FLASH, "params": {"trigger_mode": "adb"}}, _CHECK], 0),
+    ([], 0),
+    (None, 0),
+])
+def test_deferred_flash_prefix_len_4222(init, expected_prefix):
+    assert deferred_flash_init_prefix_len(init) == expected_prefix
+
+
+def test_adb_flash_does_not_match_vbus_admission_predicate_4222():
+    # 控制面 vbus 准入（allow_device_offline / vbus_slots）不得放宽到 adb_reboot 刷机。
+    assert is_vbus_flash_init([_ADB_FLASH, _CHECK]) is False
+    assert is_vbus_flash_init([_PREFLIGHT, _ADB_FLASH, _CHECK]) is False
+    assert is_vbus_flash_init([_PREFLIGHT, _FLASH, _CHECK]) is False
+    assert is_deferred_flash_step(_ADB_FLASH) is True
+    assert is_deferred_flash_step(_PREFLIGHT) is True
+    assert is_deferred_flash_step(_CHECK) is False
+
+
+def test_adb_flash_job_defers_return_check_after_flash_4222():
+    result, calls, teardown = _run([_ADB_FLASH, _CHECK])
+    assert calls == ["flash", "return_check", "check"]
+    assert result.success, result.error_message
+    assert teardown
+
+
+def test_preflight_then_adb_flash_defers_return_check_4222():
+    result, calls, teardown = _run([_PREFLIGHT, _ADB_FLASH_DEFAULT, _CHECK])
+    assert calls == ["precheck", "flash", "return_check", "check"]
+    assert result.success, result.error_message
+    assert teardown
+
+
+def test_preflight_then_adb_flash_deferred_check_failure_skips_teardown_4222():
+    result, calls, teardown = _run([_PREFLIGHT, _ADB_FLASH, _CHECK], check_ok=False)
+    assert calls == ["precheck", "flash", "return_check"]
+    assert result.metadata["termination_reason"] == "init_failure"
+    assert "init_return_check:failed" in result.error_message
+    assert teardown == []
+
+
+def test_preflight_failure_before_adb_flash_skips_return_check_and_teardown_4222():
+    # flash_preflight 为纯宿主预检，不触碰设备；预检失败时不应触发本 job 的 teardown。
+    engine, teardown = _real_step_engine(
+        StepResult(success=False, exit_code=1, error_message="preflight failed")
+    )
+    pipeline_def = {
+        "lifecycle": {
+            "timeout_seconds": 1,
+            "init": [{**_PREFLIGHT, "retry": 0}, {**_ADB_FLASH, "retry": 0}, _CHECK],
+            "teardown": _TEARDOWN,
+        }
+    }
+    with patch("backend.agent.pipeline_engine.time.sleep", return_value=None):
+        result = engine._execute_lifecycle(pipeline_def)
+    assert result.metadata["termination_reason"] == "init_failure"
+    assert engine._init_steps_started == 0
+    assert teardown == []
+
+
+def test_lease_lost_between_preflight_and_adb_flash_blocks_flash_and_teardown_4222():
+    # 宿主预检完成后、刷机步骤启动前丢失租约：不得启动刷机，终态 abort，不跑 teardown。
+    lost = {"v": False}
+    flashed = []
+    engine, teardown = _real_step_engine(StepResult(success=True), is_aborted=lambda: lost["v"])
+
+    def resolve(action, step):
+        def run(ctx):
+            if step["step_id"] == "precheck":
+                lost["v"] = True
+                return StepResult(success=True)
+            flashed.append(step["step_id"])
+            return StepResult(success=True)
+        return run
+
+    engine._resolve_action = resolve
+    pipeline_def = {
+        "lifecycle": {
+            "timeout_seconds": 1,
+            "init": [_PREFLIGHT, _ADB_FLASH, _CHECK],
+            "teardown": _TEARDOWN,
+        }
+    }
+    with patch("backend.agent.pipeline_engine.time.sleep", return_value=None):
+        result = engine._execute_lifecycle(pipeline_def)
+    assert flashed == []
+    assert engine._init_steps_started == 0
+    assert teardown == []
+    assert result.metadata["termination_reason"] == "abort"

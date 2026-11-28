@@ -22,6 +22,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
+from backend.models.project import Specialty
 from backend.services import plan_run_devices as prd_svc
 
 
@@ -859,3 +860,205 @@ class TestPlanRunTimeoutParityAndDisarmGuard:
         assert by_jid[j_stuck.id]["is_stuck"] is True
         assert r_det_ok.json()["data"]["is_stuck"] is False
         assert r_det_stuck.json()["data"]["is_stuck"] is True
+
+    def test_minimap_prolonged_offline_policy_via_plan_specialty_join(
+        self, client, db_session, auth_headers
+    ):
+        """回归验证：Minimap 通过 Plan.specialty_id -> Specialty.key 解析专项离线策略。"""
+        suffix = uuid4().hex[:6]
+        now = datetime.now(timezone.utc)
+
+        def _get_or_create_specialty(key: str, display_name: str) -> Specialty:
+            spec = db_session.query(Specialty).filter(Specialty.key == key).first()
+            if spec is None:
+                spec = Specialty(key=key, display_name=display_name, sort_order=99)
+                db_session.add(spec)
+                db_session.flush()
+            return spec
+
+        spec_sleep = _get_or_create_specialty("sleep", "休眠唤醒")
+        spec_powercycle = _get_or_create_specialty("power-cycle", "开关机")
+
+        host_online = _make_host(
+            db_session,
+            host_id=f"b23-off-on-{suffix}",
+            name=f"OnlineHost-{suffix}",
+            ip=f"10.68.1.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            status=HostStatus.ONLINE.value,
+        )
+        host_offline = _make_host(
+            db_session,
+            host_id=f"b23-off-down-{suffix}",
+            name=f"OfflineHost-{suffix}",
+            ip=f"10.68.2.{int(uuid4().hex[:2], 16) % 200 + 10}",
+            status=HostStatus.OFFLINE.value,
+        )
+
+        # 1) Sleep 专项：Host 在线 + 持续离线 2h -> 命中 offline_failed_job_ids；
+        #    离线 5 分钟未达阈值、Host 离线均不命中
+        plan_sleep = Plan(name=f"Sleep-{suffix}", specialty_id=spec_sleep.id)
+        db_session.add(plan_sleep)
+        db_session.flush()
+        run_sleep = PlanRun(
+            plan_id=plan_sleep.id,
+            status=PlanRunStatus.RUNNING.value,
+            run_type="MANUAL",
+            triggered_by="pytest",
+            plan_snapshot={
+                "steps": [
+                    {"stage": "patrol", "step_key": "patrol_sleep", "script_name": "sleep_check", "script_version": "1.0.6"},
+                ]
+            },
+        )
+        db_session.add(run_sleep)
+        db_session.flush()
+
+        d_long_off = Device(
+            serial=f"SN-SLP-LONG-{suffix}",
+            host_id=host_online.id,
+            model="MLD_NX3",
+            status=DeviceStatus.OFFLINE.value,
+            adb_state="offline",
+            adb_connected=False,
+            last_seen=now - timedelta(hours=2),
+        )
+        d_short_off = Device(
+            serial=f"SN-SLP-SHORT-{suffix}",
+            host_id=host_online.id,
+            model="MLD_NX3",
+            status=DeviceStatus.OFFLINE.value,
+            adb_state="offline",
+            adb_connected=False,
+            last_seen=now - timedelta(minutes=5),
+        )
+        d_host_down = Device(
+            serial=f"SN-SLP-HDOWN-{suffix}",
+            host_id=host_offline.id,
+            model="MLD_NX3",
+            status=DeviceStatus.OFFLINE.value,
+            adb_state="offline",
+            adb_connected=False,
+            last_seen=now - timedelta(hours=3),
+        )
+        db_session.add_all([d_long_off, d_short_off, d_host_down])
+        db_session.flush()
+
+        j_long_off = JobInstance(
+            plan_run_id=run_sleep.id,
+            plan_id=plan_sleep.id,
+            device_id=d_long_off.id,
+            host_id=host_online.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {}},
+        )
+        j_short_off = JobInstance(
+            plan_run_id=run_sleep.id,
+            plan_id=plan_sleep.id,
+            device_id=d_short_off.id,
+            host_id=host_online.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {}},
+        )
+        j_host_down = JobInstance(
+            plan_run_id=run_sleep.id,
+            plan_id=plan_sleep.id,
+            device_id=d_host_down.id,
+            host_id=host_offline.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {}},
+        )
+        db_session.add_all([j_long_off, j_short_off, j_host_down])
+
+        # 2) PowerCycle 专项（仅通过 Plan.specialty_id -> Specialty.key='power-cycle' 判定，snapshot 为空）
+        plan_pc = Plan(name=f"PowerCycle-{suffix}", specialty_id=spec_powercycle.id)
+        db_session.add(plan_pc)
+        db_session.flush()
+        run_pc = PlanRun(
+            plan_id=plan_pc.id,
+            status=PlanRunStatus.RUNNING.value,
+            run_type="MANUAL",
+            triggered_by="pytest",
+            plan_snapshot={},
+        )
+        db_session.add(run_pc)
+        db_session.flush()
+
+        d_pc_off = Device(
+            serial=f"SN-PC-OFF-{suffix}",
+            host_id=host_online.id,
+            model="MLD_NX3",
+            status=DeviceStatus.OFFLINE.value,
+            adb_state="offline",
+            adb_connected=False,
+            last_seen=now - timedelta(hours=4),
+        )
+        db_session.add(d_pc_off)
+        db_session.flush()
+        j_pc = JobInstance(
+            plan_run_id=run_pc.id,
+            plan_id=plan_pc.id,
+            device_id=d_pc_off.id,
+            host_id=host_online.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {}},
+        )
+        db_session.add(j_pc)
+
+        # 3) Aging DDR 专项（通过 plan_snapshot 脚本名豁免）
+        plan_ddr = Plan(name=f"AgingDDR-{suffix}")
+        db_session.add(plan_ddr)
+        db_session.flush()
+        run_ddr = PlanRun(
+            plan_id=plan_ddr.id,
+            status=PlanRunStatus.RUNNING.value,
+            run_type="MANUAL",
+            triggered_by="pytest",
+            plan_snapshot={
+                "steps": [
+                    {"stage": "patrol", "step_key": "patrol_ddr", "script_name": "aging_ddr_check", "script_version": "1.0.0"},
+                ]
+            },
+        )
+        db_session.add(run_ddr)
+        db_session.flush()
+        d_ddr_off = Device(
+            serial=f"SN-DDR-OFF-{suffix}",
+            host_id=host_online.id,
+            model="MLD_NX3",
+            status=DeviceStatus.OFFLINE.value,
+            adb_state="offline",
+            adb_connected=False,
+            last_seen=now - timedelta(hours=5),
+        )
+        db_session.add(d_ddr_off)
+        db_session.flush()
+        j_ddr = JobInstance(
+            plan_run_id=run_ddr.id,
+            plan_id=plan_ddr.id,
+            device_id=d_ddr_off.id,
+            host_id=host_online.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {}},
+        )
+        db_session.add(j_ddr)
+        db_session.commit()
+
+        r_sleep = client.get(f"/api/v1/plan-runs/{run_sleep.id}/devices/minimap", headers=auth_headers)
+        r_pc = client.get(f"/api/v1/plan-runs/{run_pc.id}/devices/minimap", headers=auth_headers)
+        r_ddr = client.get(f"/api/v1/plan-runs/{run_ddr.id}/devices/minimap", headers=auth_headers)
+
+        assert r_sleep.status_code == 200
+        assert r_pc.status_code == 200
+        assert r_ddr.status_code == 200
+
+        sleep_data = r_sleep.json()["data"]
+        assert sleep_data["offline_expected"] is False
+        assert sleep_data["offline_failed_job_ids"] == [j_long_off.id]
+
+        pc_data = r_pc.json()["data"]
+        assert pc_data["offline_expected"] is True
+        assert pc_data["offline_failed_job_ids"] == []
+
+        ddr_data = r_ddr.json()["data"]
+        assert ddr_data["offline_expected"] is True
+        assert ddr_data["offline_failed_job_ids"] == []
