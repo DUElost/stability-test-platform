@@ -5,7 +5,7 @@ Class: bug-fix
 
 ## Decision
 
-在 PlanRun 1765（10 台 `INFINIX_X6728` 7 天宿主侧 ADB 开关机压测）实跑取证中，设备 `901`（`MTK0002503011642`，Job `211167`）在连续稳定完成 **606 轮**真实重启后，第 607 轮下发 `adb reboot` 瞬间遭遇单次 USB/adbd 瞬态抖动，返回 `rc=1`（`error: device 'MTK0002503011642' not found`），命令未送达设备；随后设备立刻在线但 `boot_id` 自然未变，v1.0.0 在等待 `30s` 后直接按 `reboot_not_effective` 终止了整条 7 天 Job。
+在 PlanRun 1765（10 台 `INFINIX_X6728` 7 天宿主侧 ADB 开关机压测）实跑取证中，设备 `901`（串号 `MTK00025****1642`，已脱敏，Job `211167`）在连续稳定完成 **606 轮**真实重启后，第 607 轮下发 `adb reboot` 瞬间遭遇单次 USB/adbd 瞬态抖动，返回 `rc=1`（`error: device 'MTK00025****1642' not found`），命令未送达设备；随后设备立刻在线但 `boot_id` 自然未变，v1.0.0 在等待 `30s` 后直接按 `reboot_not_effective` 终止了整条 7 天 Job。
 
 本次在 `powercycle_adb_patrol` 登记新版本 **`1.0.1`**，同步钉扎模板 `backend/schemas/pipeline_templates/powercycle_adb.json`：
 
