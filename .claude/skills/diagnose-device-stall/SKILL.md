@@ -95,3 +95,5 @@ description: 设备离线 / PlanRun 卡死（界面上称「任务」卡死）�
 - 执行者不得对 `/sys/bus/usb/devices` 运行 `find -L`（`peer` 符号链接存在环路，会导致命令卡死超时）；执行者查端口禁用态必须使用非递归通配（`/sys/bus/usb/devices/*/*/*-port*/disable` 与 `/sys/bus/usb/devices/*/*-port*/disable`），且在 `usb_link_degraded` 的 Agent host 上执行 `lsusb`、`uhubctl` 或 `adb` 时执行者建议加 `timeout 5` 限流。
 - 控制面 `/hosts` 的 `ONLINE` 状态由 Agent 主动上报心跳维护，与控制面入向 SSH 连通性无关；通过 `hosts.ini` 批量 SSH 时，执行者必须按 `[android:vars]` 节（或对应主机行）解析凭据，不得抓取文件首个无关分组的密码。
 - 以 `android` 用户直接运行 `adb devices` 只会查询 `android` 用户自己的 5037 端口；执行者核对平台真实识别到的 ADB 设备数必须以控制面 `GET /api/v1/hosts` 的 `capacity.adb_state_counts` 为准。
+- 执行者遇到设备处于 `adb_state=device`、但长期停留在开关机或准入步骤（如 `init_return_check` / `oobe_skip` / `powercycle_check` 零进展）时，必须先在设备上执行 `getprop sys.boot_completed` 与 `getprop init.svc.bootanim` 核查启动状态，不得直接判定为主机侧、USB Hub 侧或平台侧故障。
+- 若设备 `sys.boot_completed` 为空且 `init.svc.bootanim` 为 `running`，执行者必须转按 `docs/operations/incident-2026-11-28-p535aa-v108-bootanim-deadlock-and-recovery.md` 取证 `/data/anr/`、`logcat -b events` 与 `/data/system/shutdown-checkpoints/`。
