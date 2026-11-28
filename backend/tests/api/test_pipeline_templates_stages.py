@@ -156,7 +156,7 @@ def test_stability_templates_pin_unisoc_sysdump_config_after_sync_device_time():
 def test_builtin_templates_have_explicit_specialty_mapping_and_metadata():
     templates = pipeline_routes.list_pipeline_templates(specialty_key=None)
     by_name = {tpl.name: tpl for tpl in templates}
-    assert len(by_name) == 12
+    assert len(by_name) == 13
 
     for tpl in templates:
         assert tpl.display_name.strip(), f"{tpl.name} missing display_name"
@@ -168,6 +168,8 @@ def test_builtin_templates_have_explicit_specialty_mapping_and_metadata():
     # Explicit specialty -> template mappings (#4182 Phase 2)
     assert by_name["powercycle"].specialty_key == "power-cycle"
     assert by_name["powercycle_adb"].specialty_key == "power-cycle"
+    assert by_name["sleep"].specialty_key == "sleep"
+    assert by_name["sleep_adb"].specialty_key == "sleep"
     assert by_name["monkey"].specialty_key == "monkey"
     assert by_name["monkey_watcher_patrol"].specialty_key == "monkey"
     assert by_name["monkey_watcher_patrol"].plan_defaults == {
@@ -183,6 +185,8 @@ def test_builtin_templates_have_explicit_specialty_mapping_and_metadata():
     assert {tpl.name for tpl in monkey_only} == {"monkey", "monkey_watcher_patrol"}
     power_only = pipeline_routes.list_pipeline_templates(specialty_key="power-cycle")
     assert {tpl.name for tpl in power_only} == {"powercycle", "powercycle_adb"}
+    sleep_only = pipeline_routes.list_pipeline_templates(specialty_key="sleep")
+    assert {tpl.name for tpl in sleep_only} == {"sleep", "sleep_adb"}
 
 
 def test_mtbf_template_contains_complete_lifecycle_steps():
@@ -244,7 +248,7 @@ def test_stability_templates_pin_log_prepare_after_cleanup_and_exclude_flash():
     template_files = sorted(TEMPLATES_DIR.glob("*.json"))
     stability_templates = [p for p in template_files if not p.name.startswith("flash_")]
     flash_templates = [p for p in template_files if p.name.startswith("flash_")]
-    assert len(stability_templates) == 10
+    assert len(stability_templates) == 11
 
     for path in stability_templates:
         data = json.loads(path.read_text(encoding="utf-8"))

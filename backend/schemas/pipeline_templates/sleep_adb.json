@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "display_name": "休眠唤醒压测（宿主 ADB 驱动）",
+  "specialty_key": "sleep",
+  "status": "ready",
+  "description": "Host-driven ADB sleep/wakeup stress test: no APK signing or system alarm permission required; drives KEYCODE_SLEEP / KEYCODE_WAKEUP from Agent host with mWakefulness verification",
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": [
+      {
+        "step_id": "check_device",
+        "action": "script:check_device",
+        "version": "1.0.2",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "sync_device_time",
+        "action": "script:sync_device_time",
+        "version": "1.0.1",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "timezone": "Asia/Shanghai"
+        }
+      },
+      {
+        "step_id": "unisoc_sysdump_config",
+        "action": "script:unisoc_sysdump_config",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "enabled": true
+        }
+      },
+      {
+        "step_id": "log_prepare",
+        "action": "script:log_prepare",
+        "version": "1.0.0",
+        "timeout_seconds": 120,
+        "retry": 1,
+        "params": {
+          "mobilelog_size_mb": 4096,
+          "ylog_size_mb": 4096
+        }
+      },
+      {
+        "step_id": "sleep_adb_setup",
+        "action": "script:sleep_adb_setup",
+        "version": "1.0.0",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {
+          "test_times": 100,
+          "wake_seconds": 60,
+          "sleep_seconds": 300,
+          "unlock_to_home": true
+        }
+      }
+    ],
+    "patrol": {
+      "interval_seconds": 30,
+      "steps": [
+        {
+          "step_id": "sleep_adb_patrol",
+          "action": "script:sleep_adb_patrol",
+          "version": "1.0.0",
+          "timeout_seconds": 90,
+          "retry": 0,
+          "params": {}
+        }
+      ]
+    },
+    "teardown": [
+      {
+        "step_id": "sleep_adb_finish",
+        "action": "script:sleep_adb_finish",
+        "version": "1.0.0",
+        "timeout_seconds": 180,
+        "retry": 1,
+        "params": {}
+      }
+    ]
+  }
+}
