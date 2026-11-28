@@ -683,8 +683,8 @@ async def claim_jobs_for_host(
             db, host_id, vbus_slots,
         )
 
-    # 7-8. Claim loop
-    for job in pending_jobs:
+    # 7-8. Claim loop (已按 FIFO 截断入选集合；按 (device_id, id) 确定性全序加锁防死锁)
+    for job in sorted(pending_jobs, key=lambda j: (j.device_id, j.id)):
         if job.device_id in claimed_device_ids:
             continue
 
