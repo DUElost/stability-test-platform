@@ -13,6 +13,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.api.schemas.base import ORMBaseModel
+from backend.api.schemas.project_log_profile import ProjectLogProfile
 
 _PROJECT_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 
@@ -28,6 +29,9 @@ class ProjectOut(ORMBaseModel):
     status: str
     source: str = "USER"
     match_models: List[str] = []
+    # ADR-0067 D1（#4182 Phase 3）：受控白名单日志预设与单调递增版本号。
+    log_profile: Optional[ProjectLogProfile] = None
+    log_profile_version: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -117,6 +121,7 @@ class ProjectUpdateIn(BaseModel):
     display_name: Optional[str] = Field(default=None, max_length=256)
     customer: Optional[str] = Field(default=None, max_length=64)
     jira_project_key: Optional[str] = None
+    log_profile: Optional[ProjectLogProfile] = None
 
     @model_validator(mode="after")
     def reject_explicit_null_on_nonnullable(self) -> "ProjectUpdateIn":
