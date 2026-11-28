@@ -127,10 +127,11 @@
 1. 后端实施者必须新增独立只读端点 `GET /api/v1/plan-runs/{run_id}/devices/minimap`，不得新增同义查询参数 `?view=minimap` 制造双权威。
 2. 后端实施者必须令 Minimap 轻量投影的每条设备记录仅包含 7 个命名字段：`job_id`、`device_id`、`device_serial`、`host_id`、`job_exec_status`（必返，删除旧回退字段 `ui_status`）、`device_link_status`、`log_signal_count`（驱动悬停与无障碍精确异常条数，不得降为布尔）。
 3. 后端实施者必须使 `job_exec_status` 与同响应 `facets.by_status` 的词表包含 `"finishing"`（与分页表 / Job 详情的 `ui_status="finishing"` 共用同一服务端判定谓词；ADR-0065 D1）。
-4. 后端实施者不得在 Minimap 设备记录中新增 `finishing_kind`、`finishing_trigger` 或 `finishing_deadline_at`；上述子类型明细必须仅由设备分页表与 Job 详情提供。
-5. 后端实施者必须在同一 Minimap 响应中返回全集口径 `facets`（`total`、`by_status`、`by_link_status`、`by_host`）、按 Agent host 去重的显示名映射（包含退役 Agent host 并定义无主机桶）以及全局心跳超时 `stuck_job_ids`。
-6. 后端实施者必须在构造 Minimap 响应时直接生成轻量全集与全局计数，不得先构造全量重 `DeviceMatrixItem` 再裁剪，也不得在 Minimap 响应中序列化 `disarm_results`、长错误栈或完整时间线明细。
-7. 前端实施者在 Minimap 视图下必须消费 `GET /api/v1/plan-runs/{run_id}/devices/minimap`，在本地仅对服务端已投影字段做即时筛选且清空筛选时恢复全集；心跳超时横幅、Watcher 串号反查与快照设备选择器必须复用该轻量身份索引，不得由表格单页数据推导，也不得回拉旧重列表。
+4. 后端实施者不得在 Minimap 设备记录中新增 `finishing_kind`、`finishing_trigger` 或 `finishing_deadline_at`。
+5. 后端实施者必须仅由设备分页表与 Job 详情提供 `finishing_kind`、`finishing_trigger` 与 `finishing_deadline_at` 子类型明细。
+6. 后端实施者必须在同一 Minimap 响应中返回全集口径 `facets`（`total`、`by_status`、`by_link_status`、`by_host`）、按 Agent host 去重的显示名映射（包含退役 Agent host 并定义无主机桶）以及全局心跳超时 `stuck_job_ids`。
+7. 后端实施者必须在构造 Minimap 响应时直接生成轻量全集与全局计数，不得先构造全量重 `DeviceMatrixItem` 再裁剪，也不得在 Minimap 响应中序列化 `disarm_results`、长错误栈或完整时间线明细。
+8. 前端实施者在 Minimap 视图下必须消费 `GET /api/v1/plan-runs/{run_id}/devices/minimap`，在本地仅对服务端已投影字段做即时筛选且清空筛选时恢复全集；心跳超时横幅、Watcher 串号反查与快照设备选择器必须复用该轻量身份索引，不得由表格单页数据推导，也不得回拉旧重列表。
 
 ### 5.2 表格真分页视图与聚合 KPI 并集筛选
 

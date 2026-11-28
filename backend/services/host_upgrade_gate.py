@@ -38,7 +38,7 @@ from backend.services.host_maintenance import (
 )
 from backend.services.plan_run_abort import abort_jobs_for_host
 from backend.services.plan_run_devices import project_job_finishing
-from backend.services.plan_run_read_common import iso as _iso_utc
+from backend.services.plan_run_read_common import aware, iso as _iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -99,16 +99,34 @@ class HostAbortPendingError(HostUpgradeGateError):
 
     code = "HOST_ABORT_PENDING"
 
-    def __init__(self, active_jobs: list[dict], retry_after_seconds: int) -> None:
+    def __init__(
+        self,
+        active_jobs: list[dict],
+        retry_after_seconds: int,
+        *,
+        finishing_kind: Optional[str] = None,
+        finishing_deadline_at: Optional[str] = None,
+        suggested_retry_window_seconds: Optional[int] = None,
+    ) -> None:
+        detail = {
+            "active_jobs": active_jobs,
+            "retry_after_seconds": retry_after_seconds,
+        }
+        if finishing_kind is not None:
+            detail["finishing_kind"] = finishing_kind
+        if finishing_deadline_at is not None:
+            detail["finishing_deadline_at"] = finishing_deadline_at
+        if suggested_retry_window_seconds is not None:
+            detail["suggested_retry_window_seconds"] = suggested_retry_window_seconds
         super().__init__(
             f"Abort is still draining for {len(active_jobs)} job(s)",
-            detail={
-                "active_jobs": active_jobs,
-                "retry_after_seconds": retry_after_seconds,
-            },
+            detail=detail,
         )
         self.active_jobs = active_jobs
         self.retry_after_seconds = retry_after_seconds
+        self.finishing_kind = finishing_kind
+        self.finishing_deadline_at = finishing_deadline_at
+        self.suggested_retry_window_seconds = suggested_retry_window_seconds
 
 
 class HostAbortDrainTimeoutError(HostUpgradeGateError):
@@ -176,8 +194,10 @@ def _drain_timeout_finishing_hint(
         for pr in db.query(PlanRun).filter(PlanRun.id.in_(pr_ids)).all()
     } if pr_ids else {}
     now = datetime.now(timezone.utc)
-    kinds: list[str] = []
-    nearest = None
+    host_row = db.get(Host, host_id) if host_id else None
+    host_status = host_row.status if host_row is not None else None
+    host_hb = aware(host_row.last_heartbeat) if host_row is not None else None
+    projections: list[Any] = []
     for job in rows:
         pr = pr_map.get(job.plan_run_id)
         proj = project_job_finishing(
@@ -185,18 +205,24 @@ def _drain_timeout_finishing_hint(
             now=now,
             db=db,
             run_context=pr.run_context if pr is not None else None,
+            host_status=host_status,
+            host_last_heartbeat=host_hb,
         )
         if proj is None:
             continue
-        kinds.append(proj.kind)
-        if proj.deadline_at is not None:
-            nearest = (
-                proj.deadline_at
-                if nearest is None
-                else min(nearest, proj.deadline_at)
-            )
-    # 多 kind 并存时取字典序稳定代表值，并在 suggested 中给出排空预算下限。
-    kind = sorted(set(kinds))[0] if kinds else None
+        projections.append(proj)
+    # B4：finishing_kind 必须与所报 finishing_deadline_at 来自同一最紧截止 Job。
+    with_deadline = [p for p in projections if p.deadline_at is not None]
+    if with_deadline:
+        chosen = min(with_deadline, key=lambda p: p.deadline_at)
+        nearest = chosen.deadline_at
+        kind = chosen.kind
+    elif projections:
+        nearest = None
+        kind = projections[0].kind
+    else:
+        nearest = None
+        kind = None
     if nearest is not None:
         retry_after = max(
             1,
@@ -372,9 +398,19 @@ def begin_host_upgrade(
         if active_summary:
             if not abort_running_jobs:
                 if len(pending_ids) == len(active_summary):
+                    pending_hint = _drain_timeout_finishing_hint(
+                        db, host_id, [int(j["id"]) for j in active_summary],
+                    )
                     raise HostAbortPendingError(
                         active_summary,
                         _abort_pending_retry_after(db, rows, pending_ids),
+                        finishing_kind=pending_hint.get("finishing_kind"),
+                        finishing_deadline_at=pending_hint.get(
+                            "finishing_deadline_at",
+                        ),
+                        suggested_retry_window_seconds=pending_hint.get(
+                            "suggested_retry_window_seconds",
+                        ),
                     )
                 raise HostHasActiveJobsError(active_summary)
 

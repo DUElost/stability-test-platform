@@ -47,6 +47,41 @@ from backend.services.plan_run_read_common import (
 PLAN_RUN_UI_STATUS_FINISHING = "finishing"
 
 
+class PlanRunListQueryError(Exception):
+    """列表查询参数校验错误（路由薄壳转为 HTTPException，遵守 C2）。"""
+
+    def __init__(self, status_code: int, detail: Any):
+        super().__init__(str(detail))
+        self.status_code = status_code
+        self.detail = detail
+
+
+def _validate_status_filters(statuses: Optional[list]) -> None:
+    """B3：非法 status（如 PENDING）必须 422；允许投影哨兵 finishing。"""
+    if not statuses:
+        return
+    invalid: list[str] = []
+    for item in statuses:
+        raw = str(getattr(item, "value", item) or "").strip()
+        if not raw:
+            continue
+        if raw.lower() == PLAN_RUN_UI_STATUS_FINISHING:
+            continue
+        try:
+            PlanRunStatus(raw)
+        except ValueError:
+            invalid.append(raw)
+    if invalid:
+        raise PlanRunListQueryError(
+            422,
+            {
+                "code": "INVALID_STATUS_FILTER",
+                "message": f"Unsupported status filter value(s): {invalid}",
+                "invalid": invalid,
+            },
+        )
+
+
 def _project_run_context(pr: PlanRun) -> Optional[dict]:
     if not isinstance(pr.run_context, dict):
         return pr.run_context
@@ -289,6 +324,7 @@ def build_plan_run_list_page(
     run_type: Optional[str] = None,
     started_after: Optional[datetime] = None,
 ) -> PlanRunListPageOut:
+    _validate_status_filters(statuses)
     needle = (q or "").strip()
     need_plan_join = bool(needle)
     persisted_statuses, want_finishing = _split_status_filters(statuses)
@@ -333,19 +369,17 @@ def build_plan_run_list_page(
     now = datetime.now(timezone.utc)
     if want_finishing:
         # 投影筛选需按 Job 级谓词精确求值，保证 total 与 items 同口径（D1.15）。
+        # B3：与持久化 status 多选时按并集保留（不得丢普通 RUNNING / FAILED）。
         candidates = db.execute(base).scalars().unique().all()
         matched: list[tuple[PlanRun, dict[str, Any]]] = []
+        persisted_values = {s.value for s in persisted_statuses}
         for pr in candidates:
             is_finishing, agg = _plan_run_is_finishing_projection(db, pr, now=now)
-            if not is_finishing:
+            keep = bool(want_finishing and is_finishing)
+            if persisted_values and pr.status in persisted_values:
+                keep = True
+            if not keep:
                 continue
-            if persisted_statuses and pr.status not in {
-                s.value for s in persisted_statuses
-            }:
-                # want_finishing 与其它持久化 status 并集：非 RUNNING 的持久化值仍可命中
-                # （极少）；finishing 投影本身要求活跃收尾，通常仅 RUNNING。
-                if pr.status != PlanRunStatus.RUNNING.value:
-                    continue
             matched.append((pr, agg))
         total = len(matched)
         page = matched[skip: skip + limit]

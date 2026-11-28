@@ -212,3 +212,116 @@ def test_pending_and_unknown_never_finishing():
         _job(status=JobStatus.UNKNOWN.value, execution_state=EXECUTING_DISARM),
         now=now,
     ) is None
+
+
+def test_b1_abort_during_init_collection_plan_stays_running():
+    """B1：仅计划含采集 teardown、当下仍在 init 时 abort 不得误标 finishing。"""
+    now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+    job = _job(
+        execution_state="EXECUTING_STEP",
+        pipeline_def=_collection_pipeline(),
+        lifecycle_stage="init",
+    )
+    run_context = {
+        "abort_requested": {
+            "at": now.isoformat(),
+            "requested_job_ids": [101],
+        }
+    }
+    assert project_job_finishing(job, now=now, run_context=run_context) is None
+
+
+def test_b1_gpu_finish_collect_only_version_projects_finishing():
+    """B1：gpu_finish@1.1.0 按版本为纯采集，真实 teardown 须标 finishing。"""
+    now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+    job = _job(
+        execution_state="EXECUTING_STEP",
+        lifecycle_stage="teardown",
+        pipeline_def={
+            "lifecycle": {
+                "teardown": [{
+                    "step_id": "tail",
+                    "action": "script:gpu_finish",
+                    "version": "1.1.0",
+                    "enabled": True,
+                    "timeout_seconds": 60,
+                }],
+            }
+        },
+    )
+    proj = project_job_finishing(job, now=now, run_context={})
+    assert proj is not None
+    assert proj.kind == FINISHING_KIND_TEARDOWN_DISARM
+    assert proj.deadline_at is None
+
+
+def test_b2_force_abort_does_not_keep_atomic_finishing():
+    now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+    stamp = now.timestamp()
+    job = _job(
+        id=303,
+        finishing_guard={
+            "kind": FINISHING_KIND_ATOMIC_COMMIT,
+            "guard_state": GUARD_STATE_GRANTED,
+            "D_atomic": stamp + 1800,
+            "last_liveness_receipt_at": stamp,
+            "last_progress_receipt_at": stamp,
+            "last_server_at": stamp,
+        },
+    )
+    run_context = {
+        "abort_requested_hosts": {
+            "h1": {"at": now.isoformat(), "force": True},
+        }
+    }
+    assert project_job_finishing(
+        job,
+        now=now,
+        run_context=run_context,
+        host_status="ONLINE",
+        host_last_heartbeat=now,
+    ) is None
+
+
+def test_b2_stale_host_heartbeat_drops_atomic_finishing(monkeypatch):
+    now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+    stamp = now.timestamp()
+    job = _job(
+        id=304,
+        finishing_guard={
+            "kind": FINISHING_KIND_ATOMIC_COMMIT,
+            "guard_state": GUARD_STATE_GRANTED,
+            "D_atomic": stamp + 1800,
+            "last_liveness_receipt_at": stamp,
+            "last_progress_receipt_at": stamp,
+            "last_server_at": stamp,
+        },
+    )
+    run_context = {
+        "abort_requested": {
+            "at": now.isoformat(),
+            "requested_job_ids": [304],
+        }
+    }
+    monkeypatch.setattr(
+        "backend.services.plan_run_devices.job_guard_deadline",
+        lambda *a, **k: now + timedelta(seconds=600),
+    )
+    assert project_job_finishing(
+        job,
+        now=now,
+        db=MagicMock(),
+        run_context=run_context,
+        host_status="ONLINE",
+        host_last_heartbeat=now - timedelta(minutes=20),
+    ) is None
+    device = SimpleNamespace(adb_connected=False, adb_state="offline", status="OFFLINE")
+    assert ui_status_for_job(
+        job,
+        now,
+        device,
+        "ONLINE",
+        db=MagicMock(),
+        run_context=run_context,
+        host_last_heartbeat=now - timedelta(minutes=20),
+    ) == "unknown"

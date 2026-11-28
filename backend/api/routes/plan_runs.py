@@ -46,6 +46,7 @@ from backend.services.plan_parameter_projection import (
     load_job_parameter_projection,
 )
 from backend.services.plan_run_catalog import (
+    PlanRunListQueryError,
     build_plan_run_detail,
     build_plan_run_jobs,
     build_plan_run_list_page,
@@ -123,11 +124,14 @@ def list_plan_runs(
     _current_user: User = Depends(get_current_active_user),
 ):
     """薄壳：``plan_run_catalog.build_plan_run_list_page``。"""
-    return ok(build_plan_run_list_page(
-        db,
-        skip=skip, limit=limit, plan_id=plan_id, statuses=status,
-        project_key=project_key, q=q, run_type=run_type, started_after=started_after,
-    ))
+    try:
+        page = build_plan_run_list_page(
+            db, skip=skip, limit=limit, plan_id=plan_id, statuses=status,
+            project_key=project_key, q=q, run_type=run_type, started_after=started_after,
+        )
+    except PlanRunListQueryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return ok(page)
 
 
 @router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunDetailOut])
@@ -137,11 +141,7 @@ def get_plan_run(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """薄壳：``plan_run_catalog.build_plan_run_detail``。
-
-    #2623：`include_jobs=false` 时不查也不序列化内嵌 jobs（实测占响应 98.9%）；
-    默认 True 保持既有契约不变（仓外调用方不受影响）。
-    """
+    """薄壳：``plan_run_catalog.build_plan_run_detail``（#2623：`include_jobs=false` 可省略内嵌 jobs）。"""
     return ok(build_plan_run_detail(db, run_id, include_jobs=include_jobs))
 
 
