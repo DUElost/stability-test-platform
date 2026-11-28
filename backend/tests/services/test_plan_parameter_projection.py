@@ -84,9 +84,16 @@ def _dump(value) -> str:
 def test_shared_fixture_matches_backend_shallow_merge():
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
+    assert payload["log_prepare_v110_schema_bounds"] == {
+        "mobilelog_size_mb": {"minimum": 256, "maximum": 20480},
+        "ylog_size_mb": {"minimum": 64, "maximum": 10240},
+    }
     for case in payload["cases"]:
         merged = merge_effective_params(
-            case["param_schema"], case["default_params"], case["step_params"],
+            case["param_schema"],
+            case["default_params"],
+            case["step_params"],
+            project_preset=case.get("project_preset"),
         )
         assert merged == case["expected"], case["id"]
     deep = next(case for case in payload["cases"] if case["id"] == "deep-copy")

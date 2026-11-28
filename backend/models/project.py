@@ -22,6 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.core.database import Base
 
@@ -60,6 +61,10 @@ class TestProject(Base):
     # USER = 人工登记（工作台可见）；SEED = P1 脚本回填，不是客户/项目/机型。
     source           = Column(String(16), nullable=False, default="USER",
                               server_default="USER")
+    # ADR-0067 D1（#4182 Phase 3）：结构化白名单日志预设 + 单调递增版本号。
+    log_profile         = Column(JSONB, nullable=True)
+    log_profile_version = Column(Integer, nullable=False, default=0,
+                                 server_default="0")
     created_at       = Column(DateTime(timezone=True), nullable=False,
                               default=lambda: datetime.now(timezone.utc))
     updated_at       = Column(
@@ -74,6 +79,8 @@ class TestProject(Base):
                         name="ck_test_project_status"),
         CheckConstraint("source IN ('USER', 'SEED')",
                         name="ck_test_project_source"),
+        CheckConstraint("log_profile_version >= 0",
+                        name="ck_test_project_log_profile_version_nonneg"),
         UniqueConstraint("project_key", name="uq_test_project_key"),
         Index(
             "uq_test_project_key_lower",

@@ -35,7 +35,7 @@ from backend.services.script_tags import get_script_tags
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
 
-_VALID_PARAM_TYPES = {"string", "integer", "boolean", "number"}
+_VALID_PARAM_TYPES = {"string", "integer", "boolean", "number", "array"}
 _VALID_SCRIPT_TYPES = {"python", "shell"}
 
 # A rebaseline changes what precheck expects mid-flight, so it is refused while

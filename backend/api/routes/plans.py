@@ -35,6 +35,7 @@ from backend.models.project import Specialty, TestProject
 from backend.models.suite import TestSuite
 from backend.models.script import Script as ScriptModel
 from backend.services.script_progress_capability import script_supports_progress
+from backend.services.project_log_profile import resolve_project_log_profile_static
 from backend.services.script_params import merge_effective_params
 from backend.services.plan_dispatcher_core import apply_step_timing_fields
 from backend.services.vbus_flash_admission import is_vbus_flash_plan_steps
@@ -235,7 +236,16 @@ class DraftParameterProjectionIn(BaseModel):
     barrier_max_wait_seconds: Optional[int] = Field(default=None, ge=1)
     auto_archive_interval_seconds: Optional[int] = Field(default=None, ge=1)
     watcher_policy: Optional[dict] = None
+    project_key: Optional[str] = None
     steps: List[PlanStepIn] = Field(default_factory=list)
+
+    @field_validator("project_key")
+    @classmethod
+    def normalize_project_key(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 class PlanRunTrigger(BaseModel):
@@ -249,7 +259,7 @@ class PlanRunTrigger(BaseModel):
     # with different values returns 400.
     network_pool_id: Optional[int] = Field(default=None, gt=0)
     wifi_pool_id: Optional[int] = Field(default=None, gt=0)
-    # #3653 §3.2：可选。缺省/NULL 不比较；空串或格式错误为 422。
+    # #3653 §3.2 / ADR-0067 D4：可选。缺省/NULL 不比较；空串或格式错误（含旧 v1）为 422。
     confirmation_fingerprint: Optional[str] = None
 
     @field_validator("confirmation_fingerprint")
@@ -259,7 +269,7 @@ class PlanRunTrigger(BaseModel):
             return None
         if not fingerprint_format_ok(value):
             raise ValueError(
-                "confirmation_fingerprint must be stp-l1-v1:<64 lowercase hex>"
+                "confirmation_fingerprint must be stp-l1-v2:<64 lowercase hex>"
             )
         return value
 
@@ -1253,9 +1263,13 @@ def get_plan_parameter_projection(
     if plan is None or _plan_steps_include_legacy_aee_scripts(steps):
         _projection_plan_not_found()
     metadata = _fetch_script_metadata(db, steps)
+    project_log_profile = resolve_project_log_profile_static(
+        db, steps, plan_project_id=plan.project_id,
+    )
     return ok(project_saved_plan(
         plan, steps, metadata,
         authority="当前已保存 Plan 与步骤；未创建 PlanRun",
+        project_log_profile=project_log_profile,
     ))
 
 
@@ -1269,7 +1283,15 @@ def draft_parameter_projection(
     _current_user: User = Depends(get_current_active_user),
 ):
     metadata = _fetch_script_metadata(db, payload.steps)
-    return ok(project_draft(payload.model_dump(), payload.steps, metadata))
+    project_log_profile = resolve_project_log_profile_static(
+        db, payload.steps, project_key=payload.project_key,
+    )
+    return ok(project_draft(
+        payload.model_dump(),
+        payload.steps,
+        metadata,
+        project_log_profile=project_log_profile,
+    ))
 
 
 @router.put("/plans/{plan_id}", response_model=ApiResponse[PlanOut])

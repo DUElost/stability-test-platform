@@ -95,7 +95,9 @@ def _is_transient_readback_failure(entry: dict) -> bool:
 
 
 def run_init_checks(engine: Any, result_type: Callable):
-    for family in ONBOARDED:
+    for family, spec in ONBOARDED.items():
+        if isinstance(spec, dict) and spec.get("init_check_enabled") is False:
+            continue
         step_id = "return_check." + family
         executions = []
         entry = None

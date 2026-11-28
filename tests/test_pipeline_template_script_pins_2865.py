@@ -63,6 +63,9 @@ PINNED_SCRIPTS: dict[str, str] = {
     "script:powercycle_disarm": "powercycle_disarm",
     "script:powercycle_finish": "powercycle_finish",
     "script:powercycle_setup": "powercycle_setup",
+    "script:sleep_adb_finish": "sleep_adb_finish",
+    "script:sleep_adb_patrol": "sleep_adb_patrol",
+    "script:sleep_adb_setup": "sleep_adb_setup",
     "script:sleep_check": "sleep_check",
     "script:sleep_finish": "sleep_finish",
     "script:sleep_setup": "sleep_setup",
@@ -99,6 +102,10 @@ EXCEPTIONS: dict[str, tuple[str, str]] = {
     "script:powercycle_disarm": (
         "1.0.8",
         "PR #3994（#3989 Part A）已登记 powercycle_disarm@1.0.9，待控制面站点 --publish 与真机复测刷新 report_ref 后（#3989 阶段激活）追平 powercycle.json pin 至 1.0.9 并移除本豁免",
+    ),
+    "script:log_prepare": (
+        "1.0.0",
+        "#4182 ADR-0067 U2 已登记 log_prepare@1.1.0 并建立控制面种子默认（U2→U3 遮蔽窗口），待生产 --publish 与 POST /api/v1/scripts/scan 激活闸门通过后，由 U3 追平 10 套模板 pin 至 1.1.0 并移除本豁免",
     ),
 }
 

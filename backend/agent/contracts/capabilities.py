@@ -22,6 +22,11 @@ FORCE_ABORT = "force_abort"
 AGENT_CAPABILITIES: tuple[str, ...] = (SCAN_ROUND_V1, FIRMWARE_CACHE_V1)
 
 
+def finishing_guard_capability_bundle() -> tuple[str, ...]:
+    """Control-plane / script negotiation bundle (B12 U4)."""
+    return (FINISHING_GUARD_V2, ATOMIC_COMMIT, FORCE_ABORT)
+
+
 def normalize_capabilities(raw: object) -> tuple[str, ...]:
     """Return a stable, duplicate-free tuple of non-empty capability names.
 

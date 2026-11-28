@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -279,3 +280,144 @@ def test_direct_copy_rejects_when_recheck_raises(env, monkeypatch):
         uploader._copy_to_destination(event, dest)
     assert not dest.exists()
     assert event.is_dir()
+
+
+# ── B11-U5（#4199 v1.2）：rc=255 产出实证判据 ─────────────────────────────
+
+
+class _FakeExtractProc:
+    def __init__(self, returncode: int, *, stderr: bytes = b"mtk-rc255", stdout: bytes = b""):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = stdout
+
+
+def _install_u5_fake_extract(monkeypatch, tmp_path: Path, *, rc: int, mode: str):
+    tool = tmp_path / "fake_aee_extract_u4"
+    tool.write_text("#!/bin/true\n", encoding="utf-8")
+    tool.chmod(0o755)
+
+    def _run(cmd, cwd=None, capture_output=True, timeout=None, check=False):  # noqa: ARG001
+        work = Path(cwd)
+        dbg = Path(cmd[-1])
+        dec = work / f"{dbg.name}.DEC"
+        if mode == "ok":
+            dec.mkdir(parents=True, exist_ok=True)
+            (dec / EXP_MAIN_NAME).write_bytes(DEC_BODY)
+        elif mode == "missing_dec":
+            pass
+        elif mode == "missing_exp":
+            dec.mkdir(parents=True, exist_ok=True)
+        elif mode == "empty":
+            dec.mkdir(parents=True, exist_ok=True)
+            (dec / EXP_MAIN_NAME).write_bytes(b"")
+        elif mode == "blank":
+            dec.mkdir(parents=True, exist_ok=True)
+            (dec / EXP_MAIN_NAME).write_text(" \n\t ", encoding="utf-8")
+        elif mode == "symlink_inside":
+            dec.mkdir(parents=True, exist_ok=True)
+            (dec / EXP_MAIN_NAME).write_bytes(DEC_BODY)
+            (dec / "evil.link").symlink_to(dec / EXP_MAIN_NAME)
+        else:
+            raise AssertionError(f"unknown fake extract mode: {mode}")
+        return _FakeExtractProc(rc)
+
+    monkeypatch.setattr(module.subprocess, "run", _run)
+    monkeypatch.setattr(
+        EvidenceUploader,
+        "_resolve_aee_extract_tool",
+        staticmethod(lambda: tool),
+    )
+    return tool
+
+
+def test_b11_u5_u4_rc255_full_dec_publishes_with_warning(env, tmp_path, monkeypatch, caplog):
+    """① 正例：rc=255 + 完整合法 DEC → dest 含 .DEC，src 零污染，记 WARNING。"""
+    import logging
+
+    uploader, local_root, log_root = env
+    event = _event_dir(local_root)
+    before_inv = _file_inventory(event)
+    before_hash = dir_sha256_and_size(event)
+    _install_u5_fake_extract(monkeypatch, tmp_path, rc=255, mode="ok")
+    calls = _capture_posts(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="backend.agent.evidence_uploader"):
+        uploader._upload(_task(event))
+
+    dest = log_root / f"evidence/42_{FOLDER}/{SERIAL}/{EVENT}"
+    assert event.is_dir()
+    assert _file_inventory(event) == before_inv
+    assert dir_sha256_and_size(event) == before_hash
+    mains = list_dec_exp_mains(dest)
+    assert len(mains) == 1
+    assert mains[0].read_bytes() == DEC_BODY
+    assert calls and calls[-1]["state"] == "VERIFIED"
+    assert any("aee_extract_nonzero_rc" in r.message for r in caplog.records)
+
+
+def test_b11_u5_u4_rc255_missing_dec_or_exp_degrades(env, tmp_path, monkeypatch):
+    """② 反例 A：rc=255 + 缺 .DEC / 缺 __exp_main → EvidenceLayoutError 降级，不发布坏产物。"""
+    uploader, local_root, log_root = env
+
+    for mode in ("missing_dec", "missing_exp"):
+        event = _event_dir(local_root / mode)
+        before = dir_sha256_and_size(event)
+        _install_u5_fake_extract(monkeypatch, tmp_path, rc=255, mode=mode)
+        calls = _capture_posts(monkeypatch)
+
+        with pytest.raises(EvidenceLayoutError):
+            EvidenceUploader._unpack_dbg_in_place(event / "main.dbg", tmp_path / "fake_aee_extract_u4")
+
+        uploader._upload(_task(event))
+        dest = log_root / f"evidence/42_{FOLDER}/{SERIAL}/{EVENT}"
+        assert dest.is_dir()
+        assert list_dec_exp_mains(dest) == []
+        assert dir_sha256_and_size(event) == before
+        assert calls[-1]["state"] == "VERIFIED"
+        # 清理 dest 以免下一 mode 撞 destination_conflict
+        shutil.rmtree(dest)
+
+
+def test_b11_u5_u4_rc255_empty_or_blank_exp_fail_closed(env, tmp_path, monkeypatch):
+    """③ 反例 B：rc=255 + 0 字节 / 纯空白 __exp_main → fail-closed，不发布坏 DEC。"""
+    uploader, local_root, log_root = env
+
+    for mode in ("empty", "blank"):
+        event = _event_dir(local_root / mode)
+        before = dir_sha256_and_size(event)
+        tool = _install_u5_fake_extract(monkeypatch, tmp_path, rc=255, mode=mode)
+
+        with pytest.raises(EvidenceLayoutError):
+            EvidenceUploader._unpack_dbg_in_place(event / "main.dbg", tool)
+        assert list_dec_exp_mains(event) == []
+
+        calls = _capture_posts(monkeypatch)
+        uploader._upload(_task(event))
+        dest = log_root / f"evidence/42_{FOLDER}/{SERIAL}/{EVENT}"
+        assert dest.is_dir()
+        assert list_dec_exp_mains(dest) == []
+        assert dir_sha256_and_size(event) == before
+        assert calls[-1]["state"] == "VERIFIED"
+        shutil.rmtree(dest)
+
+
+def test_b11_u5_u4_rc255_symlink_inside_dec_fail_closed(env, tmp_path, monkeypatch):
+    """④ 反例 C：rc=255 + *.DEC 含 symlink → fail-closed，绝不发布坏产物。"""
+    uploader, local_root, log_root = env
+    event = _event_dir(local_root)
+    before = dir_sha256_and_size(event)
+    tool = _install_u5_fake_extract(monkeypatch, tmp_path, rc=255, mode="symlink_inside")
+
+    with pytest.raises(EvidenceLayoutError):
+        EvidenceUploader._unpack_dbg_in_place(event / "main.dbg", tool)
+    assert list_dec_exp_mains(event) == []
+
+    calls = _capture_posts(monkeypatch)
+    uploader._upload(_task(event))
+    dest = log_root / f"evidence/42_{FOLDER}/{SERIAL}/{EVENT}"
+    assert dest.is_dir()
+    assert list_dec_exp_mains(dest) == []
+    assert not any(p.is_symlink() for p in dest.rglob("*"))
+    assert dir_sha256_and_size(event) == before
+    assert calls[-1]["state"] == "VERIFIED"

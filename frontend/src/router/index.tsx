@@ -26,7 +26,7 @@ const RunReportPage = lazy(() => import('../pages/runs/RunReportPage'));
 const HostsPage = lazy(() => import('../pages/hosts/HostsPage'));
 const DevicesPage = lazy(() => import('../pages/devices/DevicesPage'));
 const ResultsPage = lazy(() => import('../pages/results/ResultsPage'));
-const WifiPage = lazy(() => import('../pages/wifi/WifiPage'));
+const NetworkSupplyPage = lazy(() => import('../pages/network-supply/NetworkSupplyPage'));
 const UsersPage = lazy(() => import('../pages/users/UsersPage'));
 const NotificationsPage = lazy(() => import('../pages/notifications/NotificationsPage'));
 const SettingsPage = lazy(() => import('../pages/settings/SettingsPage'));
@@ -210,9 +210,10 @@ export default function AppRouter() {
               <Route path="settings/ai-assistant" element={<AiAssistantSettingsPage />} />
               <Route path="audit" element={<AuditLogPage />} />
               <Route path="storage" element={<FileServerPage />} />
-              {/* #2360：WiFi 资源池的列表/详情/loads 全是 require_admin——
-                  入口隐藏之外，直连 URL 也按 admin 门控（对齐 storage）。 */}
-              <Route path="wifi" element={<WifiPage />} />
+              {/* #2360 / ADR-0066 D7.1：网络供给（/network-supply）全接口 admin-only，
+                  入口隐藏之外直连 URL 也按 admin 门控；/wifi 保留重定向兼容旧链接。 */}
+              <Route path="network-supply" element={<NetworkSupplyPage />} />
+              <Route path="wifi" element={<Navigate to="/network-supply" replace />} />
             </Route>
 
             {/* ADR-0020 Plan 路由 */}

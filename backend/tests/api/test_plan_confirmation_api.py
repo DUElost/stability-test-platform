@@ -12,7 +12,7 @@ from backend.services.plan_confirmation import (
 )
 from backend.services.plan_dispatcher_sync import _fetch_script_metadata
 
-PREFIX = "stp-l1-v1:"
+PREFIX = "stp-l1-v2:"
 MESSAGE = "计划配置已变化，请重新预览并确认"
 
 
@@ -118,7 +118,7 @@ def test_wrong_token_is_409_and_creates_nothing(
         "code": "PLAN_CONFIRMATION_CHANGED",
         "message": MESSAGE,
     }
-    assert "stp-l1-v1" not in resp.text
+    assert "stp-l1-v2" not in resp.text
     assert "SENTINEL_PASSWORD" not in resp.text
     assert _counts(db_session) == before
 
@@ -129,6 +129,7 @@ def test_illegal_token_is_422_and_creates_nothing(
     illegal = [
         "",
         "nope",
+        "stp-l1-v1:" + "a" * 64,
         PREFIX + "AB" * 32,
         PREFIX + "a" * 63,
     ]

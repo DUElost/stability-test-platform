@@ -1519,8 +1519,23 @@ export interface Project {
   source: 'USER' | 'SEED';
   /** 旧版后端（未部署 mapping 端点前）响应不含该字段——消费方需 ?? [] 防御。 */
   match_models?: string[];
+  /** ADR-0067 D1（#4182 Phase 3）：受控白名单项目日志预设（NULL = 未配置）。 */
+  log_profile?: ProjectLogProfile | null;
+  /** ADR-0067 D1：单调递增日志预设版本号（未配置为 0）。 */
+  log_profile_version?: number;
   created_at: string;
   updated_at: string;
+}
+
+/** ADR-0067 D1.2：项目级持续日志预设（仅 7 个白名单键）。 */
+export interface ProjectLogProfile {
+  mobilelog_size_mb?: number | null;
+  mtk_auto_start?: boolean | null;
+  mtk_sublog_cmd?: string | null;
+  aee_mode?: string | null;
+  ylog_size_mb?: number | null;
+  ylog_rotate?: boolean | null;
+  ylog_required_streams?: Array<'android' | 'kernel' | 'uboot' | 'lastlog'> | null;
 }
 
 /** ADR-0029 D6（#405）：专项字典行，与后端 Specialty 表同步。 */
@@ -1592,6 +1607,7 @@ export interface ProjectUpdateInput {
   display_name?: string;
   customer?: string | null;
   jira_project_key?: string | null;
+  log_profile?: ProjectLogProfile | null;
 }
 
 export interface ProjectMapConflict {
@@ -1876,6 +1892,7 @@ export type ParameterLayer = 'L1' | 'L2' | 'L3' | 'L4';
 export type ParameterSource =
   | 'schema_default'
   | 'script_default'
+  | 'project_preset'
   | 'step_override'
   | 'dispatch_injection';
 export type ParameterState =
@@ -1884,6 +1901,32 @@ export type ParameterState =
   | 'env_fallback'
   | 'pending_dispatch'
   | 'actual';
+
+export type ProjectLogProfileStatus =
+  | 'applied'
+  | 'not_applicable'
+  | 'skipped_unbound_plan'
+  | 'skipped_project_inactive'
+  | 'skipped_empty_profile'
+  | 'skipped_device_mismatch'
+  | 'pending_devices';
+
+export interface ProjectLogProfileMismatchSummary {
+  unmapped_count: number;
+  other_project_keys: string[];
+  other_project_device_count: number;
+}
+
+export interface ProjectLogProfileProjection {
+  status: ProjectLogProfileStatus;
+  project_id?: number | null;
+  project_key?: string | null;
+  log_profile_version?: number | null;
+  effective_profile: Record<string, unknown>;
+  evaluated_device_ids: number[];
+  excluded_serial_conflict_device_ids: number[];
+  mismatch_summary?: ProjectLogProfileMismatchSummary | null;
+}
 
 export interface ParameterItem {
   path: Array<string | number>;
@@ -1946,6 +1989,7 @@ export interface ParameterProjection {
     device_id?: number | null;
     host_id?: string | null;
   }>;
+  project_log_profile?: ProjectLogProfileProjection | null;
   safe_debug: {
     steps: Array<Record<string, unknown>>;
     plan_settings: Record<string, unknown>;
@@ -1968,6 +2012,7 @@ export interface DraftParameterProjectionRequest {
   barrier_max_wait_seconds?: number | null;
   auto_archive_interval_seconds?: number | null;
   watcher_policy?: Record<string, unknown> | null;
+  project_key?: string | null;
   steps?: PlanStepCreate[];
 }
 
@@ -2336,9 +2381,12 @@ export interface PlanRunCreate {
   /** Optional operator note → PlanRun.run_context.note */
   note?: string;
   /**
-   * Per-execution WiFi choice → PlanRun.run_context.wifi_pool_id.
-   * Omit / null = do not connect (default). Credentials are never sent
-   * inline — pick a pre-configured wifi ResourcePool instead.
+   * Per-execution network supply choice → PlanRun.run_context.network_pool_id
+   * (ADR-0066 D3.1: wifi / usb_net ResourcePool id; credentials stay server-side).
+   */
+  network_pool_id?: number | null;
+  /**
+   * Backward-compatible WiFi alias → PlanRun.run_context.wifi_pool_id.
    */
   wifi_pool_id?: number | null;
   /**
@@ -2495,6 +2543,8 @@ export interface PlanRunAbortRequest {
   deadline_at?: string | null;
   requested_job_ids?: number[];
   acknowledged_job_ids?: number[];
+  /** ADR-0065 / #4206 U4：主体中止强度（force > graceful，单调不降级）。 */
+  force?: boolean;
 }
 
 /** #300 P3-2: merge_task 落 run_context.upload_summary 的事件上送进度。 */
@@ -3257,6 +3307,13 @@ export interface JobManualActionResult {
   current_failure_streak: number;
 }
 
+/** `POST /plan-runs/{id}/abort` 请求体（`PlanRunAbortIn`）。 */
+export interface PlanRunAbortInput {
+  reason?: string | null;
+  /** ADR-0065 / #4206 U4 */
+  force?: boolean;
+}
+
 export interface PlanRunAbortResult {
   // #1520 写侧正规化：后端模型五键**恒在**（QUEUED/PRECHECK 分支的
   // abort_requested_jobs 由缺键统一为空数组——「空」用值表达，#2089 判据）；
@@ -3266,6 +3323,10 @@ export interface PlanRunAbortResult {
   phase: 'precheck' | 'running' | 'queued';
   aborted_jobs: number[];
   abort_requested_jobs: number[];
+  /** ADR-0065 / #4206 U4 */
+  already_terminal?: boolean;
+  force_requested_before_complete_settled?: boolean;
+  force_unsupported_hosts?: string[];
 }
 
 export interface PlanRunDispatchRetryResult {
@@ -3306,6 +3367,73 @@ export interface ResourcePoolCreatePayload {
   max_concurrent_devices?: number;
   host_group?: string | null;
   is_active?: boolean;
+}
+
+// ─── Network Supply Sessions (ADR-0066 D2/D7) ──────────────────────────────────
+
+export type NetworkResourceType = 'wifi' | 'usb_net';
+export type NetworkEgressType = 'direct' | 'vpn';
+export type NetworkSessionStatus =
+  | 'RESERVED'
+  | 'PROVISIONING'
+  | 'ACTIVE'
+  | 'RELEASING'
+  | 'RELEASE_FAILED'
+  | 'RELEASED';
+export type NetworkSessionSource = 'job' | 'manual';
+
+export interface NetworkSession {
+  id: number;
+  device_id: number;
+  device_serial: string | null;
+  host_id: string;
+  resource_pool_id: number;
+  pool_name: string | null;
+  resource_type: NetworkResourceType | string;
+  egress: NetworkEgressType | string;
+  source: NetworkSessionSource | string;
+  plan_run_id: number | null;
+  job_instance_id: number | null;
+  lease_id: number | null;
+  generation: number | null;
+  legacy_path: boolean;
+  status: NetworkSessionStatus | string;
+  release_reason: string | null;
+  assigned_ip: string | null;
+  usb_devpath: string | null;
+  created_by: string | null;
+  expires_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  released_at: string | null;
+  usbnet_grant?: string;
+  usbnet_grant_exp?: number | null;
+}
+
+export interface ManualNetworkEnablePayload {
+  device_id: number;
+  resource_pool_id: number;
+  ttl_seconds?: number;
+}
+
+export interface NetworkSessionAuditOverridePayload {
+  reason_category: string;
+  evidence_ref: string;
+}
+
+export interface NetworkSessionAuditOverrideResult {
+  session: NetworkSession;
+  closed_debt_count: number;
+  lease_released: boolean;
+  lease_converted_to_debt: boolean;
+  open_debt_count: number;
+  usbnet_revoke_directive: {
+    session_id: number;
+    generation: number;
+    device_serial: string;
+    host_id: string;
+    usb_devpath: string | null;
+  } | null;
 }
 
 // ─── 平台 AI 助手（ADR-0031，/api/v1/ai-assistant）─────────────────────────────

@@ -24,6 +24,7 @@ from backend.api.schemas.plan_parameter_projection import (
     DispatchDecision,
     ParameterItem,
     ParameterProjection,
+    ProjectLogProfileProjection,
     ProjectionContext,
     ProjectionStep,
     SafeDebug,
@@ -54,7 +55,27 @@ from backend.services.plan_dispatcher_core import (
     iter_lifecycle_steps,
     script_defaults,
 )
+from backend.services.project_log_profile import (
+    STATUS_APPLIED,
+    STATUS_NOT_APPLICABLE,
+    STATUS_PENDING_DEVICES,
+    STATUS_SKIPPED_DEVICE_MISMATCH,
+    STATUS_SKIPPED_EMPTY_PROFILE,
+    STATUS_SKIPPED_PROJECT_INACTIVE,
+    STATUS_SKIPPED_UNBOUND_PLAN,
+    TARGET_SCRIPT_NAME as _LOG_PROFILE_SCRIPT_NAME,
+    extract_applied_log_profile,
+    extract_preview_log_profile,
+)
 from backend.services.script_params import merge_effective_params
+
+_VALID_PARAM_SOURCES = frozenset({
+    "schema_default",
+    "script_default",
+    "project_preset",
+    "step_override",
+    "dispatch_injection",
+})
 
 _SETTINGS_PATH = Path(__file__).resolve().parents[1] / "schemas" / "plan_settings.json"
 _PROBE = "\u0000stp-u1-probe"
@@ -142,14 +163,23 @@ def project_saved_plan(
     metadata: Mapping[tuple[str, str], Mapping[str, Any]],
     *,
     authority: str,
+    project_log_profile: Mapping[str, Any] | None = None,
 ) -> ParameterProjection:
-    return _project_l1(plan, list(steps), metadata, authority=authority)
+    return _project_l1(
+        plan,
+        list(steps),
+        metadata,
+        authority=authority,
+        project_log_profile=project_log_profile,
+    )
 
 
 def project_draft(
     plan_fields: Mapping[str, Any],
     steps: list[Any],
     metadata: Mapping[tuple[str, str], Mapping[str, Any]],
+    *,
+    project_log_profile: Mapping[str, Any] | None = None,
 ) -> ParameterProjection:
     plan = SimpleNamespace(
         id=None,
@@ -180,6 +210,7 @@ def project_draft(
         namespaces,
         metadata,
         authority="未保存草稿；只读计算，未写数据库",
+        project_log_profile=project_log_profile,
     )
 
 
@@ -297,7 +328,14 @@ async def load_job_parameter_projection(
     )
 
 
-def _project_l1(plan: Any, steps: list[Any], metadata: Mapping, *, authority: str) -> ParameterProjection:
+def _project_l1(
+    plan: Any,
+    steps: list[Any],
+    metadata: Mapping,
+    *,
+    authority: str,
+    project_log_profile: Mapping[str, Any] | None = None,
+) -> ParameterProjection:
     norm = [_norm_step(step) for step in steps]
     meta = {
         key: {
@@ -306,8 +344,20 @@ def _project_l1(plan: Any, steps: list[Any], metadata: Mapping, *, authority: st
         }
         for key, value in metadata.items()
     }
-    lifecycle_params = _l1_lifecycle_params(plan, steps, meta)
-    lifecycle = _lifecycle_or_none(plan, steps, meta)
+    preview_preset = extract_preview_log_profile(project_log_profile)
+    preset_authority = _preset_authority_label(project_log_profile)
+    lifecycle_profile = (
+        {**dict(project_log_profile), "status": STATUS_APPLIED}
+        if isinstance(project_log_profile, Mapping)
+        and project_log_profile.get("status") == STATUS_PENDING_DEVICES
+        else project_log_profile
+    )
+    lifecycle_params = _l1_lifecycle_params(
+        plan, steps, meta, project_log_profile=lifecycle_profile,
+    )
+    lifecycle = _lifecycle_or_none(
+        plan, steps, meta, project_log_profile=lifecycle_profile,
+    )
     wifi_paths, suite_paths = _l1_pending(plan, lifecycle)
     built_steps = []
     debug_steps = []
@@ -318,14 +368,21 @@ def _project_l1(plan: Any, steps: list[Any], metadata: Mapping, *, authority: st
         schema = {} if info is None else info["param_schema"]
         defaults = {} if info is None else info["default_params"]
         step_params = step["params"] if isinstance(step["params"], dict) else None
+        step_preset = (
+            preview_preset
+            if step["enabled"] and step["script_name"] == _LOG_PROFILE_SCRIPT_NAME
+            else None
+        )
         if missing:
             merged = deepcopy(step_params or {})
             sources = {name: "step_override" for name in merged}
         else:
-            sources = _source_map(schema, defaults, step_params)
+            sources = _source_map(
+                schema, defaults, step_params, project_preset=step_preset,
+            )
             from_builder = None if lifecycle_params is None else lifecycle_params.get(step["step_key"])
             merged = deepcopy(from_builder) if isinstance(from_builder, dict) else merge_effective_params(
-                schema, defaults, step_params,
+                schema, defaults, step_params, project_preset=step_preset,
             )
         paths = _sensitive_paths(step["script_name"], step["script_version"])
         pending = set()
@@ -351,6 +408,7 @@ def _project_l1(plan: Any, steps: list[Any], metadata: Mapping, *, authority: st
                 _leaf_items(
                     step["script_name"], step["script_version"], schema, merged, sources, paths,
                     pending=pending, factors=factors, authority=authority,
+                    preset_authority=preset_authority,
                 ),
                 pending, factors, step["script_name"], step["script_version"], schema, paths,
                 authority,
@@ -369,6 +427,8 @@ def _project_l1(plan: Any, steps: list[Any], metadata: Mapping, *, authority: st
             step_params=redact_params(step_params, paths) if step_params is not None else None,
         ))
     plan_fields = _plan_fields(plan)
+    decisions = _l1_decisions(wifi_paths, suite_paths)
+    decisions.extend(_project_log_profile_decisions(project_log_profile))
     projection = _assemble(
         layer="L1",
         authority=authority,
@@ -379,7 +439,8 @@ def _project_l1(plan: Any, steps: list[Any], metadata: Mapping, *, authority: st
         run_context=None,
         claim_policy=None,
         debug_steps=debug_steps,
-        decisions=_l1_decisions(wifi_paths, suite_paths),
+        decisions=decisions,
+        project_log_profile=project_log_profile,
     )
     _reject_probe(projection)
     return projection
@@ -399,6 +460,10 @@ def _project_l2(
     )
     raw_steps = snapshot.get("steps") if isinstance(snapshot.get("steps"), list) else []
     plan_data = snapshot.get("plan") if isinstance(snapshot.get("plan"), dict) else {}
+    raw_profile = snapshot.get("project_log_profile")
+    project_log_profile = raw_profile if isinstance(raw_profile, dict) else None
+    applied_preset = extract_applied_log_profile(project_log_profile)
+    preset_authority = _preset_authority_label(project_log_profile)
     lifecycle = _snapshot_lifecycle(snapshot)
     wifi_paths, suite_paths = _l2_pending(lifecycle, run_context)
     built_steps = []
@@ -414,14 +479,24 @@ def _project_l2(
         schema = deepcopy(raw.get("param_schema") or {}) if schema_present else {}
         defaults = deepcopy(raw.get("default_params") or {}) if defaults_present else {}
         step_params = deepcopy(raw.get("params")) if isinstance(raw.get("params"), dict) else None
+        step_preset = (
+            applied_preset
+            if step["enabled"] and step["script_name"] == _LOG_PROFILE_SCRIPT_NAME
+            else None
+        )
         if missing:
             merged = deepcopy(step_params or {})
             sources = {name: "step_override" for name in merged}
         else:
-            sources = _source_map(schema, defaults, step_params if params_present else None)
+            sources = _source_map(
+                schema,
+                defaults,
+                step_params if params_present else None,
+                project_preset=step_preset,
+            )
             from_builder = None if lifecycle is None else _lifecycle_param_map(lifecycle).get(step["step_key"])
             merged = deepcopy(from_builder) if isinstance(from_builder, dict) else merge_effective_params(
-                schema, defaults, step_params,
+                schema, defaults, step_params, project_preset=step_preset,
             )
         paths = _sensitive_paths(step["script_name"], step["script_version"])
         pending: set[tuple] = set()
@@ -451,6 +526,7 @@ def _project_l2(
                     step["script_name"], step["script_version"], schema, merged, sources, paths,
                     pending=pending, factors=factors,
                     authority="plan_snapshot",
+                    preset_authority=preset_authority,
                 ),
                 pending, factors, step["script_name"], step["script_version"], schema, paths,
                 "plan_snapshot",
@@ -472,6 +548,7 @@ def _project_l2(
     if historical:
         authority += "；历史缺失"
     decisions = _frozen_host_decisions(run_context)
+    decisions.extend(_project_log_profile_decisions(project_log_profile))
     if historical:
         decisions.append(DispatchDecision(
             kind="snapshot",
@@ -496,6 +573,7 @@ def _project_l2(
         claim_policy=None,
         debug_steps=debug_steps,
         decisions=decisions,
+        project_log_profile=project_log_profile,
         read_at=read_at,
     )
     _reject_probe(projection)
@@ -593,6 +671,7 @@ def _project_l3(
             params = _l3_items(
                 script_name, version, base_params, inj_params, job_params, sources, paths,
                 wifi_changed, suite_changed,
+                preset_authority=_preset_authority_label(snapshot.get("project_log_profile")),
             )
             built_steps.append(ProjectionStep(
                 step_key=step_id,
@@ -647,6 +726,7 @@ def _project_l3(
         claim_policy=claim_watcher_policy,
         debug_steps=debug_steps,
         decisions=decisions,
+        project_log_profile=snapshot.get("project_log_profile") if isinstance(snapshot.get("project_log_profile"), dict) else None,
         has_patrol=_snapshot_has_patrol(plan_snapshot),
     )
     _reject_probe(projection)
@@ -664,6 +744,7 @@ def _assemble(
     claim_policy: Mapping[str, Any] | None,
     debug_steps: list[SafeDebugStep],
     decisions: list[DispatchDecision],
+    project_log_profile: Mapping[str, Any] | None = None,
     plan_id: int | None = None,
     plan_run_id: int | None = None,
     job_id: int | None = None,
@@ -680,6 +761,11 @@ def _assemble(
     safe_plan = {
         key: plan_fields.get(key) for key in _PLAN_NUMBER_KEYS
     }
+    profile_model = (
+        ProjectLogProfileProjection.model_validate(dict(project_log_profile))
+        if isinstance(project_log_profile, Mapping)
+        else None
+    )
     projection = ParameterProjection(
         layer=layer,  # type: ignore[arg-type]
         context=ProjectionContext(
@@ -695,6 +781,7 @@ def _assemble(
         plan_settings=_plan_setting_items(plan_fields, patrol),
         watcher_policy=watcher,
         dispatch_decisions=decisions,
+        project_log_profile=profile_model,
         safe_debug=SafeDebug(
             steps=debug_steps,
             plan_settings=redact_params(safe_plan, ()),
@@ -919,6 +1006,7 @@ def _leaf_items(
     pending: set[tuple],
     factors: Mapping[tuple, list[str]],
     authority: str,
+    preset_authority: str | None = None,
 ) -> list[ParameterItem]:
     items = []
     for path, raw in _iter_leaves(merged):
@@ -932,6 +1020,12 @@ def _leaf_items(
         )
         sensitive = _path_sensitive(path, paths, raw)
         source = sources.get(path[0]) if isinstance(path[0], str) else None
+        valid_source = source if source in _VALID_PARAM_SOURCES else None
+        item_authority = (
+            preset_authority
+            if valid_source == "project_preset" and preset_authority
+            else authority
+        )
         if path in pending:
             items.append(ParameterItem(
                 path=list(path),
@@ -939,9 +1033,7 @@ def _leaf_items(
                 meaning=doc.meaning,
                 unit=doc.unit,
                 cautions=doc.cautions,
-                source=source if source in {
-                    "schema_default", "script_default", "step_override", "dispatch_injection",
-                } else None,
+                source=valid_source,  # type: ignore[arg-type]
                 state="pending_dispatch",
                 value=None,
                 sensitive=sensitive,
@@ -949,7 +1041,7 @@ def _leaf_items(
                 base_value=None if not is_set_value(raw) else _shown(raw, path, paths, sensitive),
                 decision_factors=list(factors.get(path, [])),
                 diagnostic=doc.diagnostic,
-                authority=authority,
+                authority=item_authority,
             ))
             continue
         items.append(ParameterItem(
@@ -958,15 +1050,13 @@ def _leaf_items(
             meaning=doc.meaning,
             unit=doc.unit,
             cautions=doc.cautions,
-            source=source if source in {
-                "schema_default", "script_default", "step_override", "dispatch_injection",
-            } else None,
+            source=valid_source,  # type: ignore[arg-type]
             state="explicit",
             value=_shown(raw, path, paths, sensitive),
             sensitive=sensitive,
             is_set=is_set_value(raw),
             diagnostic=doc.diagnostic,
-            authority=authority,
+            authority=item_authority,
         ))
     return items
 
@@ -981,6 +1071,8 @@ def _l3_items(
     paths: set[tuple],
     wifi_changed: set[tuple],
     suite_changed: set[tuple],
+    *,
+    preset_authority: str | None = None,
 ) -> list[ParameterItem]:
     base_leaves = dict(_iter_leaves(baseline))
     inj_leaves = dict(_iter_leaves(injected))
@@ -1010,7 +1102,7 @@ def _l3_items(
             source = None
             diagnostic = "来源不可追溯"
             raw = None if raw_job is _MISSING else raw_job
-        if source not in {"schema_default", "script_default", "step_override", "dispatch_injection"}:
+        if source not in _VALID_PARAM_SOURCES:
             source = None
         doc = resolve_doc(
             load_param_docs(script_name or "").entries,
@@ -1019,6 +1111,11 @@ def _l3_items(
             None,
         )
         sensitive = _path_sensitive(path, paths, None if raw is _MISSING else raw)
+        item_authority = (
+            preset_authority
+            if source == "project_preset" and preset_authority
+            else ("Job.pipeline_def" if source else "来源不可追溯")
+        )
         items.append(ParameterItem(
             path=list(path),
             label=doc.label,
@@ -1031,7 +1128,7 @@ def _l3_items(
             sensitive=sensitive,
             is_set=raw is not _MISSING and is_set_value(raw),
             diagnostic=diagnostic or doc.diagnostic,
-            authority="Job.pipeline_def" if source else "来源不可追溯",
+            authority=item_authority,
             decision_factors=(
                 ["WiFi/套件填空，显式值未被覆盖"] if source == "dispatch_injection" else []
             ),
@@ -1063,16 +1160,111 @@ def _sensitive_paths(script_name: str | None, version: str | None) -> set[tuple]
     return union_sensitive_paths(script_name, sensitive_registry_paths(loaded.entries))
 
 
-def _source_map(schema: Mapping | None, defaults: Mapping | None, step_params: Mapping | None) -> dict[str, str]:
+def _source_map(
+    schema: Mapping | None,
+    defaults: Mapping | None,
+    step_params: Mapping | None,
+    *,
+    project_preset: Mapping | None = None,
+) -> dict[str, str]:
     sources: dict[str, str] = {}
     for key, field in (schema or {}).items():
         if isinstance(field, dict) and "default" in field:
             sources[key] = "schema_default"
     for key in defaults or {}:
         sources[key] = "script_default"
+    for key, val in (project_preset or {}).items():
+        if val is not None:
+            sources[key] = "project_preset"
     for key in step_params or {}:
         sources[key] = "step_override"
     return sources
+
+
+def _preset_authority_label(project_log_profile: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(project_log_profile, Mapping):
+        return None
+    pkey = project_log_profile.get("project_key")
+    ver = project_log_profile.get("log_profile_version")
+    if pkey and ver is not None:
+        return f"project_preset:{pkey}@v{ver}"
+    if pkey:
+        return f"project_preset:{pkey}"
+    return None
+
+
+def _project_log_profile_decisions(
+    project_log_profile: Mapping[str, Any] | None,
+) -> list[DispatchDecision]:
+    if not isinstance(project_log_profile, Mapping):
+        return []
+    status = project_log_profile.get("status")
+    if not status or status == STATUS_NOT_APPLICABLE:
+        return []
+    pkey = project_log_profile.get("project_key") or "unknown"
+    ver = project_log_profile.get("log_profile_version")
+    ver_tag = f"{pkey}@v{ver}" if ver is not None else str(pkey)
+    if status == STATUS_PENDING_DEVICES:
+        return [DispatchDecision(
+            kind="project_log_profile",
+            state="pending_dispatch",
+            factors=[
+                f"项目 {ver_tag} 日志预设：仅在全部有效目标设备归属该项目时生效；"
+                "混跑或含未映射设备时回退为脚本默认与步骤显式配置"
+            ],
+        )]
+    if status == STATUS_APPLIED:
+        eval_ids = project_log_profile.get("evaluated_device_ids") or []
+        excl_ids = project_log_profile.get("excluded_serial_conflict_device_ids") or []
+        factors = [f"已应用项目 {ver_tag} 日志预设（有效判定设备 {len(eval_ids)} 台）"]
+        if excl_ids:
+            factors.append(f"已按 #2649 剔除序列号冲突设备 {len(excl_ids)} 台")
+        return [DispatchDecision(
+            kind="project_log_profile",
+            state="explicit",
+            factors=factors,
+        )]
+    if status == STATUS_SKIPPED_DEVICE_MISMATCH:
+        summary = project_log_profile.get("mismatch_summary") or {}
+        unmapped = int(summary.get("unmapped_count") or 0)
+        other_keys = list(summary.get("other_project_keys") or [])
+        other_cnt = int(summary.get("other_project_device_count") or 0)
+        reasons: list[str] = []
+        if unmapped:
+            reasons.append(f"未映射设备 {unmapped} 台")
+        if other_cnt or other_keys:
+            reasons.append(
+                f"归属其他项目设备 {other_cnt} 台（{', '.join(other_keys)}）"
+                if other_keys
+                else f"归属其他项目设备 {other_cnt} 台"
+            )
+        detail = "；".join(reasons) if reasons else "目标设备与项目归属不一致"
+        return [DispatchDecision(
+            kind="project_log_profile",
+            state="unset_definite",
+            factors=[
+                f"项目 {ver_tag} 日志预设未生效（{detail}），已回退为脚本默认与步骤显式配置"
+            ],
+        )]
+    if status == STATUS_SKIPPED_UNBOUND_PLAN:
+        return [DispatchDecision(
+            kind="project_log_profile",
+            state="unset_definite",
+            factors=["Plan 未绑定项目，未应用项目日志预设（回退为脚本默认与步骤显式配置）"],
+        )]
+    if status == STATUS_SKIPPED_PROJECT_INACTIVE:
+        return [DispatchDecision(
+            kind="project_log_profile",
+            state="unset_definite",
+            factors=["绑定项目不存在、非 USER 或已归档，未应用项目日志预设（回退为脚本默认与步骤显式配置）"],
+        )]
+    if status == STATUS_SKIPPED_EMPTY_PROFILE:
+        return [DispatchDecision(
+            kind="project_log_profile",
+            state="unset_definite",
+            factors=[f"绑定项目 {pkey} 未配置日志预设，已回退为脚本默认与步骤显式配置"],
+        )]
+    return []
 
 
 def _iter_leaves(value: Any, prefix: tuple = ()):
@@ -1124,8 +1316,16 @@ def _params_of(pipeline: Mapping, step_id: Any) -> dict:
     return {}
 
 
-def _l1_lifecycle_params(plan: Any, steps: list[Any], metadata: Mapping) -> dict[str, dict] | None:
-    lifecycle = _lifecycle_or_none(plan, steps, metadata)
+def _l1_lifecycle_params(
+    plan: Any,
+    steps: list[Any],
+    metadata: Mapping,
+    *,
+    project_log_profile: Mapping[str, Any] | None = None,
+) -> dict[str, dict] | None:
+    lifecycle = _lifecycle_or_none(
+        plan, steps, metadata, project_log_profile=project_log_profile,
+    )
     if lifecycle is None:
         return None
     return _lifecycle_param_map(lifecycle)
@@ -1139,12 +1339,23 @@ def _lifecycle_param_map(lifecycle: Mapping) -> dict[str, dict]:
     return found
 
 
-def _lifecycle_or_none(plan: Any, steps: list[Any], metadata: Mapping) -> dict | None:
+def _lifecycle_or_none(
+    plan: Any,
+    steps: list[Any],
+    metadata: Mapping,
+    *,
+    project_log_profile: Mapping[str, Any] | None = None,
+) -> dict | None:
     enabled = [step for step in steps if getattr(step, "enabled", True) is not False]
     if any((step.script_name, step.script_version) not in metadata for step in enabled):
         return None
     try:
-        return build_lifecycle_from_steps(plan, steps, script_defaults(dict(metadata)))
+        return build_lifecycle_from_steps(
+            plan,
+            steps,
+            script_defaults(dict(metadata)),
+            project_log_profile=project_log_profile,
+        )
     except PlanDispatchError:
         return None
 
