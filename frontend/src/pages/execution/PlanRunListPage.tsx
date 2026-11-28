@@ -37,8 +37,8 @@ import { formatDateTimeFull, formatDurationSeconds, parseIsoToDate } from '@/uti
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useUrlFilterParams } from '@/hooks/useUrlFilterState';
 import {
-  formatFinishingKindCountsSummary,
-  isUiStatusFinishing,
+  getPlanRunDisplayStatus,
+  getRunFinishingSummary,
 } from '@/components/plan-run/planRunStatus';
 
 /** 列表状态筛选：全部 + 常用终态/运行态；排队合并 QUEUED+PRECHECK；收尾中为投影态 */
@@ -99,6 +99,29 @@ function formatPassRate(run: PlanRun): string {
 function formatFailedDevices(run: PlanRun): string {
   const failed = run.result_summary?.failed;
   return typeof failed === 'number' && failed > 0 ? String(failed) : '—';
+}
+
+function RunStatusCell({ run }: { run: PlanRun }) {
+  const status = getPlanRunDisplayStatus(run);
+  const summary = getRunFinishingSummary(run);
+  return (
+    <TableCell
+      className="px-3 py-2.5"
+      data-testid={`plan-run-row-${run.id}-${status === 'finishing' ? 'finishing' : 'status'}`}
+    >
+      <div className="flex flex-col items-start gap-0.5">
+        <StatusBadge kind="plan-run" status={status} size="sm" spin={status === 'RUNNING'} />
+        {summary.counts && (
+          <span className={cn('text-[10px]', TEXT.caption)} data-testid={`plan-run-row-${run.id}-finishing-kinds`}>
+            {summary.counts}
+          </span>
+        )}
+        {summary.deadline && (
+          <span className={cn('whitespace-nowrap text-[10px]', TEXT.caption)}>{summary.deadline}</span>
+        )}
+      </div>
+    </TableCell>
+  );
 }
 
 export default function PlanRunListPage() {
@@ -387,34 +410,7 @@ export default function PlanRunListPage() {
                         <TableCell className={cn('px-3 py-2.5 font-mono text-xs', TEXT.subtitle)}>
                           #{run.id}
                         </TableCell>
-                        <TableCell
-                          className="px-3 py-2.5"
-                          data-testid={
-                            isUiStatusFinishing(run.ui_status)
-                              ? `plan-run-row-${run.id}-finishing`
-                              : `plan-run-row-${run.id}-status`
-                          }
-                        >
-                          <div className="flex flex-col gap-0.5">
-                            <StatusBadge
-                              kind="plan-run"
-                              status={isUiStatusFinishing(run.ui_status) ? 'finishing' : run.status}
-                              size="sm"
-                              spin={
-                                isUiStatusFinishing(run.ui_status) || run.status === 'RUNNING'
-                              }
-                            />
-                            {isUiStatusFinishing(run.ui_status) &&
-                              formatFinishingKindCountsSummary(run.finishing_kind_counts) && (
-                                <span
-                                  className={cn('text-[10px]', TEXT.caption)}
-                                  data-testid={`plan-run-row-${run.id}-finishing-kinds`}
-                                >
-                                  {formatFinishingKindCountsSummary(run.finishing_kind_counts)}
-                                </span>
-                              )}
-                          </div>
-                        </TableCell>
+                        <RunStatusCell run={run} />
                         <TableCell className="max-w-[260px] px-3 py-2.5">
                           <span className="flex min-w-0 items-center gap-1.5">
                             <span className={cn('truncate text-sm', TEXT.heading)}>

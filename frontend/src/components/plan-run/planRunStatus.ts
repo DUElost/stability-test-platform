@@ -4,9 +4,11 @@ import {
   AlertTriangle,
   Loader2,
   Hourglass,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import type { PlanRun, PlanRunStatus } from "@/utils/api/types";
+import { formatDateTimeFull, parseIsoToDate } from "@/utils/format";
 
 export const TERMINAL_STATUSES: ReadonlyArray<PlanRunStatus> = [
   "SUCCESS",
@@ -19,10 +21,11 @@ export interface PlanRunStatusPill {
   Icon: LucideIcon;
 }
 
-export const PLAN_RUN_PILL: Record<PlanRunStatus, PlanRunStatusPill> = {
+export const PLAN_RUN_PILL: Record<PlanRunStatus | "finishing", PlanRunStatusPill> = {
   QUEUED: { label: "QUEUED", Icon: Hourglass },
   PRECHECK: { label: "PRECHECK", Icon: Loader2 },
-  RUNNING: { label: "RUNNING", Icon: Loader2 },
+  RUNNING: { label: "运行中", Icon: Loader2 },
+  finishing: { label: "收尾中", Icon: ShieldCheck },
   SUCCESS: { label: "SUCCESS", Icon: CheckCircle },
   PARTIAL_SUCCESS: { label: "PARTIAL", Icon: AlertTriangle },
   FAILED: { label: "FAILED", Icon: XCircle },
@@ -60,17 +63,19 @@ export function finishingTriggerLabel(trigger: string | null | undefined): strin
   return FINISHING_TRIGGER_LABELS[trigger] ?? trigger;
 }
 
-/** Run 级 finishing_kind_counts 摘要，例如「解除配置中 ×2 · 刷机临界区保护中 ×1」。 */
-export function formatFinishingKindCounts(
-  counts: PlanRun["finishing_kind_counts"] | null | undefined,
-): string | null {
-  if (!counts) return null;
-  const parts: string[] = [];
-  for (const [kind, n] of Object.entries(counts)) {
-    if (typeof n !== "number" || n <= 0) continue;
-    parts.push(`${finishingKindLabel(kind) ?? kind} ×${n}`);
-  }
-  return parts.length > 0 ? parts.join(" · ") : null;
+export function getRunFinishingSummary(run: PlanRun | undefined) {
+  const groups = Object.entries(run?.finishing_kind_counts ?? {}).flatMap(([kind, count]) => {
+    if (count == null || count <= 0) return [];
+    const label = kind === "teardown_disarm" ? "解除配置" : kind === "atomic_commit" ? "刷机临界区保护" : "其他";
+    return [`${label} ×${count}`];
+  });
+  const deadline = run?.finishing_deadline_at;
+  return {
+    counts: groups.length > 0
+      ? `${run?.ui_status === "running" ? "部分设备收尾中" : "剩余设备"}：${groups.join(" · ")}`
+      : null,
+    deadline: parseIsoToDate(deadline) ? `最近截止 ${formatDateTimeFull(deadline)}` : null,
+  };
 }
 
 /**
@@ -82,9 +87,9 @@ export function finishingDeadlineRemainingSeconds(
   nowMs: number = Date.now(),
 ): number | null {
   if (deadlineAt == null || deadlineAt === "") return null;
-  const t = new Date(deadlineAt).getTime();
-  if (Number.isNaN(t)) return null;
-  return Math.max(0, Math.ceil((t - nowMs) / 1000));
+  const deadline = parseIsoToDate(deadlineAt);
+  if (!deadline) return null;
+  return Math.max(0, Math.ceil((deadline.getTime() - nowMs) / 1000));
 }
 
 /** 倒计时文案；无截止时返回 null（调用方不得渲染假倒计时）。 */
@@ -98,14 +103,8 @@ export function formatFinishingDeadlineCountdown(
   return `${remaining}s`;
 }
 
-export function isPlanRunUiFinishing(run: Pick<PlanRun, "ui_status"> | null | undefined): boolean {
-  return run?.ui_status === "finishing";
+export function getPlanRunDisplayStatus(run: PlanRun): PlanRunStatus | "finishing" {
+  if (run.ui_status === "finishing") return "finishing";
+  if (run.ui_status === "running") return "RUNNING";
+  return run.status;
 }
-
-/** 直接判断 ui_status 字符串（列表行 / 详情横幅）。 */
-export function isUiStatusFinishing(uiStatus: string | null | undefined): boolean {
-  return uiStatus === "finishing";
-}
-
-/** @deprecated alias — PlanRunDetailPage 导入名 */
-export const formatFinishingKindCountsSummary = formatFinishingKindCounts;

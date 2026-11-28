@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { DeviceMatrixItem } from '@/utils/api/types';
@@ -576,6 +576,30 @@ describe('DeviceDetailDrawer — 解除结果（ADR-0061 D1.2 / U6）', () => {
 });
 
 describe('DeviceDetailDrawer — finishing 投影 (#4206 U3)', () => {
+  it('ticks an open drawer through expiry without a new response', () => {
+    vi.useFakeTimers();
+    try {
+      render_(
+        <DeviceDetailDrawer
+          device={makeDevice({
+            ui_status: 'finishing',
+            job_exec_status: 'finishing',
+            finishing_kind: 'atomic_commit',
+            finishing_deadline_at: new Date(Date.now() + 2500).toISOString(),
+          })}
+          {...handlers}
+        />,
+      );
+      expect(screen.getByText('3s')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(screen.getByText('2s')).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(1500); });
+      expect(screen.getByText('已到期')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('展示收尾中徽章与子类型，并渲染截止倒计时', () => {
     const deadline = new Date(Date.now() + 120_000).toISOString();
     render_(

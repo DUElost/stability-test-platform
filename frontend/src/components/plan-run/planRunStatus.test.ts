@@ -4,8 +4,7 @@ import {
   finishingKindLabel,
   finishingTriggerLabel,
   formatFinishingDeadlineCountdown,
-  formatFinishingKindCountsSummary,
-  isUiStatusFinishing,
+  getRunFinishingSummary,
 } from './planRunStatus';
 
 describe('planRunStatus finishing helpers (#4206 U3)', () => {
@@ -21,6 +20,7 @@ describe('planRunStatus finishing helpers (#4206 U3)', () => {
     expect(finishingDeadlineRemainingSeconds(null)).toBeNull();
     expect(finishingDeadlineRemainingSeconds(undefined)).toBeNull();
     expect(formatFinishingDeadlineCountdown(null)).toBeNull();
+    expect(formatFinishingDeadlineCountdown('invalid')).toBeNull();
   });
 
   it('有效 deadline 按剩余秒格式化', () => {
@@ -30,20 +30,7 @@ describe('planRunStatus finishing helpers (#4206 U3)', () => {
     expect(formatFinishingDeadlineCountdown(deadline, now)).toBe('90s');
   });
 
-  it('汇总 finishing_kind_counts', () => {
-    expect(
-      formatFinishingKindCountsSummary({
-        teardown_disarm: 2,
-        atomic_commit: 1,
-      }),
-    ).toBe('解除配置中 ×2 · 刷机临界区保护中 ×1');
-    expect(formatFinishingKindCountsSummary(null)).toBeNull();
-    expect(formatFinishingKindCountsSummary({ teardown_disarm: 0 })).toBeNull();
-  });
-
-  it('isUiStatusFinishing 仅认 finishing', () => {
-    expect(isUiStatusFinishing('finishing')).toBe(true);
-    expect(isUiStatusFinishing('running')).toBe(false);
-    expect(isUiStatusFinishing(null)).toBe(false);
+  it('无 Run 投影时不显示空摘要', () => {
+    expect(getRunFinishingSummary(undefined)).toEqual({ counts: null, deadline: null });
   });
 });

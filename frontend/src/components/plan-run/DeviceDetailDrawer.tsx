@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -53,6 +53,7 @@ import {
   finishingTriggerLabel,
   formatFinishingDeadlineCountdown,
 } from './planRunStatus';
+import { useFinishingClock } from './useFinishingClock';
 import { formatDateTimeShort } from '@/utils/format';
 import {
   DEVICE_LINK_STATUS,
@@ -144,6 +145,10 @@ function DeviceDetailDrawerInner({
   const retryRequested = device?.manual_action === 'RETRY_NOW';
   const linkStatus = device?.device_link_status;
   const execStatus = (device?.job_exec_status ?? device?.ui_status ?? 'unknown') as DeviceUiStatus;
+  const finishingDeadline = isOpen && execStatus === 'finishing' ? device?.finishing_deadline_at : null;
+  const finishingDeadlines = useMemo(() => finishingDeadline ? [finishingDeadline] : [], [finishingDeadline]);
+  const finishingNow = useFinishingClock(finishingDeadlines);
+  const finishingCountdown = formatFinishingDeadlineCountdown(finishingDeadline, finishingNow);
   const linkReachable =
     linkStatus == null || isDeviceLinkReachable(linkStatus);
   // Why: 「设备不可达」必须只有一处判定并直接否决 canManualRetry。
@@ -307,7 +312,7 @@ function DeviceDetailDrawerInner({
               kind="device-ui"
               status={execStatus}
               size="sm"
-              spin={execStatus === 'running' || execStatus === 'finishing'}
+              spin={execStatus === 'running'}
             />
             {execStatus === 'finishing' && finishingKindLabel(device.finishing_kind) && (
               <span
@@ -378,13 +383,8 @@ function DeviceDetailDrawerInner({
               ...(execStatus === 'finishing' && finishingTriggerLabel(device.finishing_trigger)
                 ? [['收尾触发', finishingTriggerLabel(device.finishing_trigger)!, false] as KvRow]
                 : []),
-              ...(execStatus === 'finishing' &&
-              formatFinishingDeadlineCountdown(device.finishing_deadline_at) != null
-                ? [[
-                    '收尾截止',
-                    formatFinishingDeadlineCountdown(device.finishing_deadline_at)!,
-                    false,
-                  ] as KvRow]
+              ...(finishingCountdown != null
+                ? [['收尾截止', finishingCountdown, false] as KvRow]
                 : []),
               ...(device.busy_reason
                 ? [[

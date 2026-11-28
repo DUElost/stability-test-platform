@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ComponentProps } from 'react';
 import DeviceOverview from './DeviceOverview';
@@ -415,7 +415,38 @@ describe('DeviceOverview', () => {
     // badge + filter chip 都会出现「收尾中」；断言徽章 data-status 与等待列即可。
     expect(document.querySelector('[data-kind="device-ui"][data-status="finishing"]')).toBeTruthy();
     expect(screen.getByTestId('device-wait-3012')).toHaveTextContent('解除配置中');
+    expect(screen.getByTestId('device-wait-3012')).toHaveTextContent('自然到点');
     expect(screen.getByTestId('device-wait-3012')).not.toHaveTextContent('截止');
+    expect(within(screen.getByTestId('device-row-3012')).getAllByTitle(/收尾触发：自然到点/)).toHaveLength(2);
+  });
+
+  it('ticks the finishing table cell and tooltip through expiry without a new response', () => {
+    vi.useFakeTimers();
+    try {
+      renderInTableView({ data: {
+        ...fixture,
+        by_status: { all: 1, finishing: 1 },
+        devices: [{
+          ...fixture.devices[0],
+          ui_status: 'finishing',
+          job_exec_status: 'finishing',
+          finishing_kind: 'atomic_commit',
+          finishing_trigger: 'manual_abort',
+          finishing_deadline_at: new Date(Date.now() + 2500).toISOString(),
+        }],
+      } });
+      const waitCell = screen.getByTestId('device-wait-3001');
+      const row = within(screen.getByTestId('device-row-3001'));
+      expect(waitCell).toHaveTextContent('刷机临界区保护中 · 手动中止 · 截止 3s');
+      expect(row.getAllByTitle(/收尾触发：手动中止.*收尾截止 3s/)).toHaveLength(2);
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(waitCell).toHaveTextContent('截止 2s');
+      act(() => { vi.advanceTimersByTime(1500); });
+      expect(waitCell).toHaveTextContent('截止 已到期');
+      expect(row.getAllByTitle(/收尾触发：手动中止.*收尾截止 已到期/)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows pending claim SLA countdown in status tooltip', () => {
@@ -794,14 +825,14 @@ describe('B3-3 双视图分离：1,000 格全量 Minimap 与表格真分页', ()
         minimapData={{
           plan_run_id: 1747,
           facets: {
-            total: 2,
-            by_status: { all: 2, running: 2 },
-            by_link_status: { all: 2, online: 1, adb_error: 1 },
-            by_host: { 'host-a': 2 },
+            total: 3,
+            by_status: { all: 3, running: 2, finishing: 1 },
+            by_link_status: { all: 3, online: 1, adb_error: 1, offline: 1 },
+            by_host: { 'host-a': 3 },
           },
           hosts: { 'host-a': '机柜 A' },
           stuck_job_ids: [],
-          offline_failed_job_ids: [210658],
+          offline_failed_job_ids: [210658, 210660],
           offline_expected: false,
           devices: [
             {
@@ -822,6 +853,15 @@ describe('B3-3 双视图分离：1,000 格全量 Minimap 与表格真分页', ()
               device_link_status: 'online',
               log_signal_count: 0,
             },
+            {
+              job_id: 210660,
+              device_id: 1290,
+              device_serial: 'FIN-OFFLINE',
+              host_id: 'host-a',
+              job_exec_status: 'finishing',
+              device_link_status: 'offline',
+              log_signal_count: 2,
+            },
           ],
         }}
         viewMode="grid"
@@ -838,8 +878,13 @@ describe('B3-3 双视图分离：1,000 格全量 Minimap 与表格真分页', ()
     expect(healthyCell).not.toHaveAttribute('data-offline-failed');
     expect(healthyCell.className).toContain('bg-warning');
 
+    const finishingCell = screen.getByRole('button', { name: 'FIN-OFFLINE — 收尾中 · 离线 · 异常 2' });
+    expect(finishingCell).toHaveAttribute('title', 'FIN-OFFLINE — 收尾中 · 离线 · 异常 2');
+    expect(finishingCell).toHaveClass('bg-warning/70', 'border-destructive');
+    expect(finishingCell).not.toHaveClass('bg-destructive/90');
+
     expect(screen.getByTestId('minimap-offline-failed-banner')).toHaveTextContent(
-      '检测到 1 台设备长时间 ADB 离线异常',
+      '检测到 2 台设备长时间 ADB 离线异常',
     );
     fireEvent.click(screen.getByTestId('minimap-filter-offline-failed-btn'));
     expect(onLinkFilterChange).toHaveBeenCalledWith('abnormal');

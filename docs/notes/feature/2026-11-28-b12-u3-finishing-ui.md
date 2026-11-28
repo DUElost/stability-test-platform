@@ -8,43 +8,36 @@ Class: feature
 落地 ADR-0065 阶段 2 单元 U3（`#4206` v1.2）：消费 U2 已同步的 `ui_status` /
 `finishing_*` 投影字段，不改 `frontend/src/utils/api/types.ts`（与并行 U4 零冲突）。
 
-1. `status-badge` / `planRunStatus` 统一「收尾中」文案；子类型
-   （`解除配置中` / `刷机临界区保护中`）与倒计时 helper 集中在 `planRunStatus.ts`。
-2. PlanRun 列表支持 `status=finishing` 筛选；行内在 `ui_status=finishing` 时渲染
-   投影徽章（持久化 `status` 仍为 `RUNNING`）。
-3. PlanRun 详情 Hero 下方展示 Run 级 `finishing_kind_counts` 与最近
-   `finishing_deadline_at`（`null` 不渲染假倒计时）。
-4. KPI（`by_status.finishing`）/ 设备表 / Job 抽屉 / Minimap 统一消费
-   `job_exec_status=finishing`；Minimap 仅靠 7 字段着色，不假设格子携带
-   `finishing_*`。
-5. 子类型文案与截止倒计时仅出现在设备表等待列与 Job 详情抽屉。
-6. `DeviceFilterBar` 不在方案文件列表：KPI 切到 `finishing` 时由
-   `DeviceOverview` 补激活态指示条（偏离说明见 PR）。
+1. PlanRun 列表支持 `status=finishing` 筛选。列表与详情 Hero 的主状态服从 `ui_status`：
+   纯收尾显示「收尾中」，混合 Run 显示「运行中」。Run 摘要只展示分组计数与最近截止时间点；
+   混合 Run 的计数标为「部分设备收尾中」，不附第二个 Run 状态徽章。
+2. Job 子类型（`解除配置中` / `刷机临界区保护中`）、触发原因与秒级倒计时仅在设备分页表和
+   Job 详情抽屉展示。有效截止随本地时钟更新，到点显示「已到期」，不依赖轮询；无截止不显示倒计时。
+3. Minimap 只消费原有 7 字段以及响应级 `offline_failed_job_ids`。收尾设备同时命中离线标记时，
+   保留「收尾中」着色和可访问标签，用边框与连接状态提示离线，不将执行态改写为失败。
+4. `DeviceFilterBar` 虽未列入方案文件表，实际已增加 `finishing` 词条，使 KPI 的
+   `by_status.finishing` 筛选有对应芯片和计数。Run 与 Job 的浅色收尾徽章共享高对比度配色。
 
 ## Alternatives
 
-- 改 `PlanRunHero` 承载 Run 级摘要：Hero 不在方案文件列表，改为 DetailPage
-  Hero 下方摘要块（偏离说明见 PR）。
-- 越界修改 `DeviceFilterBar` 加 chip：与方案文件边界冲突；改用 KPI + Overview
-  激活指示，观察记入 PR。
+- 在 Hero 下方加第二个 Run 徽章：会使混合 Run 同时显示两个主状态，否决；
+  Hero 显示投影主状态，DetailPage 的摘要独立展示设备计数。
+- 在 `DeviceOverview` 另做收尾筛选指示：会与现有筛选栏重复，改为复用 `DeviceFilterBar`。
 - 列表仍只显示持久化 `RUNNING`：无法满足 D1「收尾中」可视性，否决。
 - 在 Minimap 附加子类型字段：破坏契约 §5.1，否决。
 
 ## Verification
 
-- `npx tsc --noEmit` → 通过
-- `npx eslint <touched> --max-warnings 0` → 通过
-- `npx vitest run`（planRunStatus / status-badge / PlanRunKpiGrid /
-  DeviceOverview / DeviceDetailDrawer / PlanRunListPage / PlanRunDetailPage）
-  → 155 passed
-- `./scripts/project_python.sh scripts/run_gates.py check:quick` → 16 gates OK
-- `ui_review_env.py up --sha 3dac7ebfe` + 定向 Playwright
-  （`/execution/plan-runs` 收尾中 tab 空闲/激活态）：
-  `docOverflow=0`（1440/1280），筛选控件高度差 0px；
-  截图 `/tmp/ui-review-probe-u3/plan_runs_*_finishing_*.png`
+- 首轮复核反馈 B1–B5 和 B6/B7 已处理。`npx tsc --noEmit`、改动文件 ESLint
+  `--max-warnings 0`、`check:quick`（16 项）通过；未配置 `DATABASE_URL`，schema 对齐检查跳过。
+- 定向 Vitest 7 文件 159 个用例通过，覆盖 Run 投影与分层、表格和抽屉跨截止、触发文案、
+  空截止及七字段 Minimap 的收尾与离线共存。
+- 本地 Vite 构建 + Playwright/Chromium API 夹具核验 B1–B5：设备表和抽屉均实际等待
+  `5s → 4s → 已到期`，期间 Run、设备表及 Job 详情没有重新请求。浅色列表、Hero 与设备表徽章
+  对比度实测约 `8.24:1`；1440×900 / 1280×800 页面横向溢出均为 0，列表筛选控件高度差为 0px。
+  本地复核脚本、日志与截图位于 `/tmp/stp-4232-r2/`，不涉及生产或真实设备。
 
 ## Revisit
 
 - U7 落地 `force=true` 二次确认与 `force_unsupported_hosts` 回执；本单元明确不做。
 - 阶段 2 激活后以线上 B6 解除期 PlanRun 核验「收尾中」投影与 `null` deadline。
-- 若产品要求 DeviceFilterBar 原生 chip，可单开小补丁纳入过滤条（本批保持零越界）。
