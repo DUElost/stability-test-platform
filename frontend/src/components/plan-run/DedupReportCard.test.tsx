@@ -6,6 +6,8 @@ import DedupReportCard from './DedupReportCard';
 import { api } from '@/utils/api';
 import type { RunContextExtractSummary } from '@/utils/api/types';
 
+const navigate = vi.fn();
+
 vi.mock('@/utils/api', () => ({
   api: {
     planRuns: {
@@ -18,6 +20,11 @@ vi.mock('@/utils/api', () => ({
     },
   },
 }));
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return { ...actual, useNavigate: () => navigate };
+});
 
 vi.mock('@/hooks/useToast', () => ({
   useToast: () => ({
@@ -55,6 +62,19 @@ describe('DedupReportCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     queryClient.clear();
+    navigate.mockReset();
+  });
+
+  it('B11-U2: 「生成提单表单」深链至 /issue-tracker?tab=handoff&planRunIds=<id>', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1594,
+      artifacts: [],
+    });
+
+    render(<DedupReportCard runId={1594} />, { wrapper });
+
+    fireEvent.click(await screen.findByTestId('dedup-handoff-btn'));
+    expect(navigate).toHaveBeenCalledWith('/issue-tracker?tab=handoff&planRunIds=1594');
   });
 
   it('#2185: 扫描阶段含完成度、未回执与零报表位（失败态走 destructive）', async () => {
