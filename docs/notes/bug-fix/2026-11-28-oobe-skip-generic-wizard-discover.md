@@ -23,7 +23,7 @@ Class: bug-fix
 4. **硬校验 `verify_wizard_cleared`（默认 true）**：目标向导仍 enabled，或 HOME
    仍解析到向导包 → 失败。覆盖「flags 已是 1 但仍停 WelcomeActivity」的虚假成功。
 
-P532AA 真机（`MSW********xxxxx`）对照：
+P532AA 真机（`MSW000003J6AU****`）对照：
 
 - `oobe_skip@1.1.3`：`success=true`，但前台仍是
   `com.tinno.setupwizard/.ui.WelcomeActivity`，HOME 仍指向该包。
