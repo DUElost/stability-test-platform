@@ -37,8 +37,8 @@ Class: feature
 - `npx vitest run`（planRunStatus / status-badge / PlanRunKpiGrid /
   DeviceOverview / DeviceDetailDrawer / PlanRunListPage / PlanRunDetailPage）
   → 155 passed
-- `./scripts/project_python.sh scripts/run_gates.py check:quick` →（见 PR 正文）
-- ui-preview / Playwright 截图自检 →（见 PR 正文）
+- `./scripts/project_python.sh scripts/run_gates.py check:quick` → 16 gates OK
+- ui-preview / Playwright 截图自检 →（见 PR 正文；`ui_review_env.py up --sha 3dac7ebfe`）
 
 ## Revisit
 
