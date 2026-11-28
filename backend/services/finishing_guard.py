@@ -258,9 +258,136 @@ def _active_job_lease(
     return lease
 
 
-def _compute_d_atomic(t_arm: float, step_timeout: int) -> float:
-    budget = min(step_timeout, ATOMIC_HARD_CAP_SECONDS)
-    return min(t_arm + budget, t_arm + ATOMIC_HARD_CAP_SECONDS)
+# Platform reserve folded into PLAN_INIT_WALL_CAP (ADR-0065 D4.9); kept small —
+# real retry budgets arrive via second-layer frozen member timeouts.
+_PLAN_INIT_PLATFORM_RESERVE_SECONDS = 60
+
+
+def _snapshot_steps(plan_snapshot: object) -> list[dict[str, Any]]:
+    if not isinstance(plan_snapshot, dict):
+        return []
+    steps = plan_snapshot.get("steps")
+    if not isinstance(steps, list):
+        return []
+    return [s for s in steps if isinstance(s, dict)]
+
+
+def _step_identity(step: Mapping[str, Any]) -> str:
+    for key in ("step_key", "script_name", "id"):
+        value = step.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _normalize_frozen_members(
+    raw: list[Any],
+    *,
+    snapshot_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve atomic_group_frozen to ordered members with normalized timeouts.
+
+    Entries may be step identity strings (looked up in plan_snapshot) or dicts
+    carrying explicit ``timeout_seconds`` (VBUS return_check second-layer freeze).
+    """
+    by_id = {_step_identity(s): s for s in snapshot_steps if _step_identity(s)}
+    # Static first-layer: snapshot steps that declare the same atomic_group.
+    snapshot_atomic = [
+        s for s in snapshot_steps
+        if s.get("atomic_group") and s.get("enabled") is not False
+    ]
+    members: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    source = list(raw) if raw else [
+        _step_identity(s) for s in sorted(
+            snapshot_atomic,
+            key=lambda s: (int(s.get("sort_order") or 0), _step_identity(s)),
+        )
+    ]
+    for item in source:
+        if isinstance(item, str):
+            step = by_id.get(item.strip())
+            if step is None:
+                # Unknown identity still counts with default timeout (fail-closed budget).
+                ident = item.strip()
+                timeout = normalize_atomic_step_timeout(None)
+            else:
+                ident = _step_identity(step) or item.strip()
+                timeout = normalize_atomic_step_timeout(step.get("timeout_seconds"))
+            payload = {
+                "step_key": ident,
+                "timeout_seconds": timeout,
+                "source": "snapshot" if step is not None else "client",
+            }
+        elif isinstance(item, Mapping):
+            ident = str(
+                item.get("step_key")
+                or item.get("script_name")
+                or item.get("id")
+                or ""
+            ).strip()
+            timeout = normalize_atomic_step_timeout(item.get("timeout_seconds"))
+            payload = {
+                "step_key": ident or f"frozen_{len(members)}",
+                "timeout_seconds": timeout,
+                "source": str(item.get("source") or "client"),
+            }
+        else:
+            continue
+        if payload["step_key"] in seen:
+            continue
+        seen.add(payload["step_key"])
+        members.append(payload)
+    return members
+
+
+def _plan_init_wall_cap_seconds(
+    snapshot_steps: list[dict[str, Any]],
+    frozen_members: list[Mapping[str, Any]],
+) -> int:
+    """PLAN_INIT_WALL_CAP：init 归一化超时之和 + 二层冻结成员 + 平台余量。
+
+    不得引用 ``lifecycle.timeout_seconds``（ADR-0065 D4.9）。
+    """
+    total = 0
+    for step in snapshot_steps:
+        if step.get("enabled") is False:
+            continue
+        stage = str(step.get("stage") or "").lower()
+        if stage and stage != "init":
+            continue
+        total += normalize_atomic_step_timeout(step.get("timeout_seconds"))
+    # Second-layer members not already covered by init steps (e.g. synthetic
+    # VBUS return_check) still extend the wall cap.
+    covered = {
+        _step_identity(s)
+        for s in snapshot_steps
+        if _step_identity(s)
+    }
+    for member in frozen_members:
+        key = str(member.get("step_key") or "")
+        if key and key not in covered:
+            total += normalize_atomic_step_timeout(member.get("timeout_seconds"))
+    return total + _PLAN_INIT_PLATFORM_RESERVE_SECONDS
+
+
+def compute_d_atomic(
+    *,
+    t_arm: float,
+    e_curr_rem: float,
+    subsequent_timeouts: list[int],
+    t_job_start: float | None,
+    plan_init_wall_cap: int,
+) -> float:
+    """``D_atomic = min(D_steps, D_cap, D_run)`` (ADR-0065 D4.9)."""
+    d_steps = t_arm + max(0.0, float(e_curr_rem)) + float(sum(subsequent_timeouts))
+    d_cap = t_arm + float(ATOMIC_HARD_CAP_SECONDS)
+    if t_job_start is None:
+        d_run = d_cap
+    else:
+        d_run = float(t_job_start) + float(max(plan_init_wall_cap, 0))
+    return min(d_steps, d_cap, d_run)
 
 
 # ── payloads ─────────────────────────────────────────────────────────────────
@@ -270,7 +397,11 @@ class PreRegisterIn(BaseModel):
     request_id: str = Field(min_length=1, max_length=128)
     step_timeout_seconds: int | None = None
     min_critical_section_seconds: int = Field(default=0, ge=0)
-    atomic_group_frozen: list[str] = Field(default_factory=list)
+    #: Ordered frozen members: step identity strings and/or dicts with
+    #: ``timeout_seconds`` (VBUS return_check second-layer expansions).
+    atomic_group_frozen: list[Any] = Field(default_factory=list)
+    current_step_key: str | None = None
+    elapsed_pre_arm_seconds: float = Field(default=0.0, ge=0.0)
     t_arm: float | None = None
     client_boot_id: str = ""
 
@@ -335,13 +466,53 @@ def pre_register_atomic_commit_sync(
     if effective_abort_force(plan_run.run_context, job.id, job.host_id):
         raise FinishingGuardError("force_abort_pending")
 
-    step_timeout = normalize_atomic_step_timeout(payload.step_timeout_seconds)
-    e_rem = step_timeout  # remaining budget at T_arm (simplified server view)
+    snapshot_steps = _snapshot_steps(plan_run.plan_snapshot)
+    frozen_members = _normalize_frozen_members(
+        list(payload.atomic_group_frozen or []),
+        snapshot_steps=snapshot_steps,
+    )
+    if not frozen_members:
+        # Fail closed: without a resolvable atomic_group the control plane
+        # cannot freeze D_steps / D_run honestly.
+        raise FinishingGuardError("atomic_group_frozen_empty")
+
+    current_key = (payload.current_step_key or "").strip()
+    if current_key:
+        curr_idx = next(
+            (i for i, m in enumerate(frozen_members) if m["step_key"] == current_key),
+            0,
+        )
+    else:
+        curr_idx = 0
+    current_member = frozen_members[curr_idx]
+    e_curr_norm = normalize_atomic_step_timeout(
+        payload.step_timeout_seconds
+        if payload.step_timeout_seconds is not None
+        else current_member.get("timeout_seconds")
+    )
+    e_curr_rem = max(0.0, float(e_curr_norm) - float(payload.elapsed_pre_arm_seconds or 0.0))
+    subsequent = [
+        int(m["timeout_seconds"])
+        for m in frozen_members[curr_idx + 1 :]
+    ]
+    t_job_start: float | None = None
+    if isinstance(job.started_at, datetime):
+        started = job.started_at
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        t_job_start = started.timestamp()
+    plan_init_wall = _plan_init_wall_cap_seconds(snapshot_steps, frozen_members)
+    d_atomic = compute_d_atomic(
+        t_arm=t_arm,
+        e_curr_rem=e_curr_rem,
+        subsequent_timeouts=subsequent,
+        t_job_start=t_job_start,
+        plan_init_wall_cap=plan_init_wall,
+    )
     min_cs = payload.min_critical_section_seconds
-    if e_rem < min_cs or (_compute_d_atomic(t_arm, step_timeout) - t_arm) < min_cs:
+    if e_curr_rem < min_cs or (d_atomic - t_arm) < min_cs:
         raise FinishingGuardError("insufficient_atomic_budget")
 
-    d_atomic = _compute_d_atomic(t_arm, step_timeout)
     permit_expires_at = min(d_atomic, t_arm + PRE_REG_GRACE_SECONDS)
 
     host = db.get(Host, job.host_id) if job.host_id else None
@@ -357,12 +528,20 @@ def pre_register_atomic_commit_sync(
         "t0": t_arm,
         "T_arm": t_arm,
         "D_atomic": d_atomic,
+        "D_steps": t_arm + e_curr_rem + float(sum(subsequent)),
+        "D_cap": t_arm + float(ATOMIC_HARD_CAP_SECONDS),
+        "D_run": (
+            float(t_job_start) + float(plan_init_wall)
+            if t_job_start is not None
+            else t_arm + float(ATOMIC_HARD_CAP_SECONDS)
+        ),
+        "E_curr_rem": e_curr_rem,
         "permit_expires_at": permit_expires_at,
         "last_liveness_receipt_at": t_arm,
         "last_progress_receipt_at": t_arm,
         "last_server_at": _epoch(now),
         "silent_write_progress_window_seconds": ATOMIC_SILENT_WRITE_PROGRESS_WINDOW_SECONDS,
-        "atomic_group_frozen": list(payload.atomic_group_frozen),
+        "atomic_group_frozen": frozen_members,
         "negotiated_capabilities": dict(negotiated),
     }
     job.finishing_guard = guard

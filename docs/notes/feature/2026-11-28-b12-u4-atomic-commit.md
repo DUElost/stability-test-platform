@@ -17,21 +17,20 @@ Class: feature
 
 - **预登记锁序 Host 先行**：ADR 方案 4 已否决，采用 Job → PlanRun → admission FOR SHARE。
 - **force 仅 SocketIO 不传 run_context**：不满足 D5.8 重连恢复与审计，故 run/host 上下文与下发载荷均持久化 `force`。
-- **D_atomic 完整多步求和**：本单元以当前步骤归一化超时 + hard cap 作为服务端预算底座；完整 `sum(E_i)` 与 `D_run` 在 U5/U6 冻结成员齐全后收紧（见偏离说明）。
 
 ## Verification
 
 ```bash
 ./scripts/project_python.sh scripts/run_pytest.py \
-  backend/tests/integration/test_finishing_atomic_pg_interleaving_u4_4206.py -q
-./scripts/project_python.sh scripts/run_pytest.py \
-  backend/tests/api/test_plan_run_abort_api.py \
-  backend/agent/tests/test_finishing_guard_u1_4206.py -q
+  backend/tests/integration/test_finishing_atomic_pg_interleaving_u4_4206.py \
+  backend/tests/services/test_finishing_atomic_d_atomic_u4_4206.py \
+  backend/tests/api/test_plan_run_shape_1520.py \
+  backend/tests/api/test_plan_run_abort_api.py -q
 ./scripts/project_python.sh scripts/run_gates.py check:quick
 ```
 
 ## Revisit
 
-- U5 Agent 仲裁与 `enter/grant` IPC、心跳三向能力上报。
-- D_atomic 多成员预算与 VBUS `return_check` 展开校验在 U5/U6 与脚本新版本对齐后收紧。
+- U5 Agent 仲裁与 `enter/grant` IPC、心跳三向能力上报；Agent 侧展开 VBUS `return_check` 后经 `atomic_group_frozen` 上报二层成员。
 - `already_terminal` / `force_requested_before_complete_settled` 当前为 run 级布尔；若 U7 需要逐 Job 清单可再加 list 字段而不改布尔语义。
+- CI 长跑下宿主心跳夹具必须用 per-call `_fresh_now()`（不得模块级冻结时间戳）。

@@ -46,7 +46,11 @@ TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "")
 IS_PG = TEST_DATABASE_URL.startswith("postgresql")
 pytestmark = pytest.mark.skipif(not IS_PG, reason="U4 interleaving requires PostgreSQL")
 
-_NOW = datetime.now(timezone.utc)
+def _fresh_now() -> datetime:
+    """Per-call wall clock — module-level stamps go stale under long CI suites
+    (HOST_HEARTBEAT_TIMEOUT_SECONDS=300s) and trip ``host_not_online_fresh``.
+    """
+    return datetime.now(timezone.utc)
 
 
 def _set_timeouts(db):
@@ -69,13 +73,14 @@ def _seed_running_atomic_job(
     unknown: bool = False,
 ) -> tuple[JobInstance, PlanRun, Host, Device]:
     _ensure_admission_row(db)
+    now = _fresh_now()
     suffix = uuid4().hex[:8]
     host = Host(
         id=f"fg-{suffix}",
         hostname=f"fg-{suffix}",
         status="ONLINE",
-        last_heartbeat=_NOW,
-        created_at=_NOW,
+        last_heartbeat=now,
+        created_at=now,
         boot_id=f"boot-{suffix}",
         agent_capabilities=[FINISHING_GUARD_V2, ATOMIC_COMMIT, FORCE_ABORT],
     )
@@ -84,8 +89,8 @@ def _seed_running_atomic_job(
         host_id=host.id,
         status="ONLINE",
         tags=[],
-        created_at=_NOW,
-        last_seen=_NOW,
+        created_at=now,
+        last_seen=now,
         lease_generation=1,
     )
     plan = Plan(name=f"fg-{suffix}", description="u4", created_by="test")
@@ -94,10 +99,33 @@ def _seed_running_atomic_job(
     run = PlanRun(
         plan_id=plan.id,
         status="RUNNING",
-        plan_snapshot={"name": plan.name, "plan_id": plan.id},
+        plan_snapshot={
+            "name": plan.name,
+            "plan_id": plan.id,
+            "steps": [
+                {
+                    "stage": "init",
+                    "step_key": "flash",
+                    "script_name": "flash_firmware",
+                    "timeout_seconds": 1800,
+                    "atomic_group": "flash_atomic",
+                    "enabled": True,
+                    "sort_order": 0,
+                },
+                {
+                    "stage": "init",
+                    "step_key": "oobe_skip",
+                    "script_name": "oobe_skip",
+                    "timeout_seconds": 300,
+                    "atomic_group": "flash_atomic",
+                    "enabled": True,
+                    "sort_order": 1,
+                },
+            ],
+        },
         run_type="MANUAL",
         triggered_by="test",
-        started_at=_NOW,
+        started_at=now,
         total_job_count=1,
     )
     db.add(run)
@@ -114,7 +142,7 @@ def _seed_running_atomic_job(
             ATOMIC_COMMIT: True,
             FORCE_ABORT: True,
         },
-        started_at=_NOW,
+        started_at=now,
     )
     db.add(job)
     db.flush()
@@ -127,9 +155,9 @@ def _seed_running_atomic_job(
         fencing_token=f"{device.id}:1",
         lease_generation=1,
         agent_instance_id=host.id,
-        acquired_at=_NOW,
-        renewed_at=_NOW,
-        expires_at=_NOW + timedelta(hours=1),
+        acquired_at=now,
+        renewed_at=now,
+        expires_at=now + timedelta(hours=1),
     )
     db.add(lease)
     db.commit()
@@ -235,9 +263,14 @@ class TestC5ActivatePermitWatchdog:
                 job_id=job.id,
                 payload=PreRegisterIn(
                     request_id="req-c5",
+                    current_step_key="flash",
                     min_critical_section_seconds=1,
                 ),
             )
+            # Refresh heartbeat immediately before activate so long CI suites
+            # cannot age the seed stamp past HOST_HEARTBEAT_TIMEOUT_SECONDS.
+            h = db.get(Host, host.id)
+            h.last_heartbeat = _fresh_now()
             db.commit()
         with SessionLocal() as db:
             out = activate_permit_sync(
@@ -250,9 +283,12 @@ class TestC5ActivatePermitWatchdog:
                 ),
             )
             db.commit()
+            j = db.get(JobInstance, job.id)
+            guard = j.finishing_guard
         assert out["status"] == "granted"
         assert "lease_remaining_seconds" in out
         assert "host_heartbeat_remaining_seconds" in out
+        assert guard["D_atomic"] == min(guard["D_steps"], guard["D_cap"], guard["D_run"])
 
     def test_stale_host_heartbeat_denies_activate(self, db_session):
         job, _run, host, _dev = _seed_running_atomic_job(db_session)
@@ -266,7 +302,7 @@ class TestC5ActivatePermitWatchdog:
                 ),
             )
             h = db.get(Host, host.id)
-            h.last_heartbeat = _NOW - timedelta(hours=2)
+            h.last_heartbeat = _fresh_now() - timedelta(hours=2)
             db.commit()
         with SessionLocal() as db:
             with pytest.raises(FinishingGuardError) as exc:
@@ -426,7 +462,7 @@ class TestC7ForceAbortComplete:
         with SessionLocal() as db:
             j = db.get(JobInstance, job.id)
             j.status = JobStatus.COMPLETED.value
-            j.ended_at = _NOW
+            j.ended_at = _fresh_now()
             fact = {
                 "update": {"status": "COMPLETED"},
                 "artifact": None,
@@ -471,7 +507,7 @@ class TestC7ForceAbortComplete:
 class TestC8FlashIntegrityDebt:
     def test_closing_flash_only_keeps_b6_debt(self, db_session):
         job, _run, _host, device = _seed_running_atomic_job(db_session)
-        now = _NOW
+        now = _fresh_now()
         dr._upsert_open_debt_sync(
             db_session,
             device_id=device.id,
