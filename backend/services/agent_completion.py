@@ -326,6 +326,15 @@ async def complete_agent_job(
                 disarm_results=payload.disarm_results,
             )
             if late is not None and late.get("ok"):
+                if late.get("idempotent"):
+                    current_status = job.status
+                    await db.rollback()
+                    return {
+                        "job_id": job_id,
+                        "status": current_status,
+                        "late_confirmed": late,
+                        "idempotent": True,
+                    }
                 await record_audit_async(
                     db,
                     action="job_late_confirmed_debt_closed",
