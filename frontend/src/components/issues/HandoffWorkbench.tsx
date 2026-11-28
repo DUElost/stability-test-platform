@@ -17,6 +17,14 @@ import type {
 import { Button } from '@/components/ui/button';
 import { InlineError } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { ALERT_BOX, FORM, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
@@ -100,35 +108,38 @@ function CoverageGatePanel({ preflight }: { preflight: HandoffPreflightOut }) {
         )}
       </div>
 
-      <div className="overflow-x-auto rounded-md border border-border">
-        <table className="min-w-[720px] w-full text-left text-xs">
-          <thead className="border-b text-muted-foreground">
-            <tr>
-              <th className="px-2 py-1.5">PlanRun</th>
-              <th className="px-2 py-1.5">Jira 项目</th>
-              <th className="px-2 py-1.5">分区</th>
-              <th className="px-2 py-1.5">缺失主机</th>
-              <th className="px-2 py-1.5">多余主机</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="rounded-md border border-border">
+        <Table className="min-w-[720px] text-xs">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="h-8 px-2 py-1.5">PlanRun</TableHead>
+              <TableHead className="h-8 px-2 py-1.5">Jira 项目</TableHead>
+              <TableHead className="h-8 px-2 py-1.5">分区</TableHead>
+              <TableHead className="h-8 px-2 py-1.5">缺失主机</TableHead>
+              <TableHead className="h-8 px-2 py-1.5">多余主机</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {runs.map((run) => (
-              <tr key={run.plan_run_id} className="border-b last:border-0" data-testid={`handoff-run-${run.plan_run_id}`}>
-                <td className="px-2 py-1.5 font-mono">#{run.plan_run_id}</td>
-                <td className="px-2 py-1.5 font-mono">
+              <TableRow key={run.plan_run_id} data-testid={`handoff-run-${run.plan_run_id}`}>
+                <TableCell className="px-2 py-1.5 font-mono">#{run.plan_run_id}</TableCell>
+                <TableCell className="px-2 py-1.5 font-mono">
                   {run.jira_project_key || run.project_key || '—'}
-                </td>
-                <td className="px-2 py-1.5">{run.partition_mode}</td>
-                <td className="px-2 py-1.5 text-destructive" data-testid={`handoff-missing-hosts-${run.plan_run_id}`}>
+                </TableCell>
+                <TableCell className="px-2 py-1.5">{run.partition_mode}</TableCell>
+                <TableCell
+                  className="px-2 py-1.5 text-destructive"
+                  data-testid={`handoff-missing-hosts-${run.plan_run_id}`}
+                >
                   {run.missing_hosts.length > 0 ? run.missing_hosts.join(', ') : '—'}
-                </td>
-                <td className="px-2 py-1.5">
+                </TableCell>
+                <TableCell className="px-2 py-1.5">
                   {run.unexpected_hosts.length > 0 ? run.unexpected_hosts.join(', ') : '—'}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       <div className={cn('text-xs', TEXT.caption)} data-testid="handoff-identity-gate">
@@ -143,31 +154,30 @@ function CoverageGatePanel({ preflight }: { preflight: HandoffPreflightOut }) {
             未绑定行明细（{unbound_rows.length}）
           </div>
           <div className="max-h-48 overflow-auto rounded-md border border-border">
-            <table className="min-w-[640px] w-full text-left text-[11px]">
-              <thead className="sticky top-0 border-b bg-card text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-1">Run</th>
-                  <th className="px-2 py-1">Host</th>
-                  <th className="px-2 py-1">行</th>
-                  <th className="px-2 py-1">串号</th>
-                  <th className="px-2 py-1">原因</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table className="min-w-[640px] text-[11px]" containerClassName="overflow-visible">
+              <TableHeader className="sticky top-0 bg-card [&_tr]:border-b">
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="h-7 px-2 py-1">Run</TableHead>
+                  <TableHead className="h-7 px-2 py-1">Host</TableHead>
+                  <TableHead className="h-7 px-2 py-1">行</TableHead>
+                  <TableHead className="h-7 px-2 py-1">串号</TableHead>
+                  <TableHead className="h-7 px-2 py-1">原因</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {unbound_rows.map((row) => (
-                  <tr
+                  <TableRow
                     key={`${row.plan_run_id}-${row.host_id}-${row.row_no}-${row.reason}`}
-                    className="border-b last:border-0"
                   >
-                    <td className="px-2 py-1 font-mono">#{row.plan_run_id}</td>
-                    <td className="px-2 py-1 font-mono">{row.host_id}</td>
-                    <td className="px-2 py-1 font-mono">{row.row_no}</td>
-                    <td className="px-2 py-1 font-mono">{row.serial || '—'}</td>
-                    <td className="px-2 py-1">{row.reason}</td>
-                  </tr>
+                    <TableCell className="px-2 py-1 font-mono">#{row.plan_run_id}</TableCell>
+                    <TableCell className="px-2 py-1 font-mono">{row.host_id}</TableCell>
+                    <TableCell className="px-2 py-1 font-mono">{row.row_no}</TableCell>
+                    <TableCell className="px-2 py-1 font-mono">{row.serial || '—'}</TableCell>
+                    <TableCell className="px-2 py-1">{row.reason}</TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         </div>
       )}
@@ -276,31 +286,31 @@ function BundleDetail({
                 </Button>
               </div>
               {build.issues.length > 0 && (
-                <div className="overflow-x-auto rounded border border-border/60">
-                  <table className="min-w-[560px] w-full text-left text-[11px]">
-                    <thead className="border-b text-muted-foreground">
-                      <tr>
-                        <th className="px-2 py-1">#</th>
-                        <th className="px-2 py-1">Count</th>
-                        <th className="px-2 py-1">DeviceCount</th>
-                        <th className="px-2 py-1">基线</th>
-                        <th className="px-2 py-1">代表串号</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                <div className="rounded border border-border/60">
+                  <Table className="min-w-[560px] text-[11px]">
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="h-7 px-2 py-1">#</TableHead>
+                        <TableHead className="h-7 px-2 py-1">Count</TableHead>
+                        <TableHead className="h-7 px-2 py-1">DeviceCount</TableHead>
+                        <TableHead className="h-7 px-2 py-1">基线</TableHead>
+                        <TableHead className="h-7 px-2 py-1">代表串号</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {build.issues.map((issue) => (
-                        <tr key={issue.issue_index} className="border-b last:border-0">
-                          <td className="px-2 py-1 font-mono">{issue.issue_index}</td>
-                          <td className="px-2 py-1 font-mono">{issue.count}</td>
-                          <td className="px-2 py-1 font-mono">{issue.device_count}</td>
-                          <td className="px-2 py-1">{issue.baseline_class}</td>
-                          <td className="px-2 py-1 font-mono">
+                        <TableRow key={issue.issue_index}>
+                          <TableCell className="px-2 py-1 font-mono">{issue.issue_index}</TableCell>
+                          <TableCell className="px-2 py-1 font-mono">{issue.count}</TableCell>
+                          <TableCell className="px-2 py-1 font-mono">{issue.device_count}</TableCell>
+                          <TableCell className="px-2 py-1">{issue.baseline_class}</TableCell>
+                          <TableCell className="px-2 py-1 font-mono">
                             {issue.representative?.serial || '—'}
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               )}
             </div>
