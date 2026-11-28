@@ -15,8 +15,9 @@ Data migration:
    ``ylog_required_streams=["android", "kernel"]``).
 2. Does NOT modify or deactivate ``log_prepare@1.0.0`` (ADR-0051 / AGENTS.md
    immutability invariant; existing Plans and templates stay valid until U3).
-3. Follows ``backend/services/script_seed_governance.py`` (#942): embeds
-   ``_raise_if_version_referenced`` before updating any pre-existing row.
+3. Follows ``backend/services/script_seed_governance.py`` (#942 / #2055): embeds
+   ``_raise_if_any_version_referenced`` before updating any pre-existing row
+   or deactivating in ``downgrade()``.
 """
 
 from __future__ import annotations
@@ -109,11 +110,11 @@ LOG_PREPARE_V110_DEFAULT_PARAMS: dict[str, Any] = {
 }
 
 
-def _raise_if_version_referenced(
+def _count_plan_step_references(
     conn: Any, *, script_name: str, script_version: str
-) -> None:
-    """内嵌自 backend/services/script_seed_governance.py（#942 裁决：迁移自包含）。"""
-    n = int(
+) -> int:
+    """plan_step 中引用该 (script_name, script_version) 的步骤数。"""
+    return int(
         conn.execute(
             text(
                 "SELECT COUNT(*) FROM plan_step "
@@ -122,12 +123,24 @@ def _raise_if_version_referenced(
             {"name": script_name, "ver": script_version},
         ).scalar_one()
     )
-    if n > 0:
+
+
+def _raise_if_any_version_referenced(
+    conn: Any, *, script_name: str, versions: list[str]
+) -> None:
+    """内嵌自 backend/services/script_seed_governance.py（#942/#2055 裁决：迁移自包含）。"""
+    blocked: list[tuple[str, int]] = []
+    for ver in versions:
+        n = _count_plan_step_references(
+            conn, script_name=script_name, script_version=ver
+        )
+        if n > 0:
+            blocked.append((ver, n))
+    if blocked:
+        detail = ", ".join(f"{script_name} {v} ×{n}" for v, n in blocked)
         raise RuntimeError(
-            f"seed migration aborted: {script_name} {script_version} 仍被 "
-            f"{n} 个 plan_step 引用——种子迁移不得原地覆写/停用被引用版本。"
-            "请把引用的 plan_step 重指到新版本，或以新建版本表达参数变化，"
-            "然后重跑迁移。"
+            f"seed migration aborted: 待修改/停用版本仍被 plan_step 引用：{detail}。"
+            "请重指 plan_step 到在用版本，或以新建版本表达参数变化后重跑迁移。"
         )
 
 
@@ -197,8 +210,8 @@ def upgrade() -> None:
     ):
         return
 
-    _raise_if_version_referenced(
-        conn, script_name=SCRIPT_NAME, script_version=SCRIPT_VERSION
+    _raise_if_any_version_referenced(
+        conn, script_name=SCRIPT_NAME, versions=[SCRIPT_VERSION]
     )
     conn.execute(
         text(
@@ -224,8 +237,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     conn = op.get_bind()
     now = datetime.now(timezone.utc)
-    _raise_if_version_referenced(
-        conn, script_name=SCRIPT_NAME, script_version=SCRIPT_VERSION
+    _raise_if_any_version_referenced(
+        conn, script_name=SCRIPT_NAME, versions=[SCRIPT_VERSION]
     )
     conn.execute(
         text(
