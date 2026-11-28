@@ -1,7 +1,7 @@
 """seed log_prepare@1.1.0 authoritative param_schema and default_params (ADR-0067 D2.6)
 
 Revision ID: a67u2b3c4d5e6
-Revises: a67u1c2d3e4f5
+Revises: b12u4a1b2c3d4
 Create Date: 2026-11-28
 
 Data migration:
@@ -30,7 +30,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision = "a67u2b3c4d5e6"
-down_revision = "a67u1c2d3e4f5"
+down_revision = "b12u4a1b2c3d4"
 branch_labels = None
 depends_on = None
 
