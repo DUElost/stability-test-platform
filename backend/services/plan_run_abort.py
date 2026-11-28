@@ -57,6 +57,7 @@ from backend.services.plan_run_finalization import (
     notify_plan_run_terminal,
 )
 from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
+from backend.services.network_supply import release_unclaimed_network_sessions_sync
 from backend.services.state_machine import PlanRunStateMachine
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,10 @@ def _bulk_abort_pending_jobs(
     n = len(aborted_ids)
     if not n:
         return []
+
+    # ADR-0066 D2.4 Point 3: cancel RESERVED network sessions for unclaimed PENDING jobs
+    # in the same transaction without touching any DeviceLease.
+    release_unclaimed_network_sessions_sync(db, aborted_ids, now=now)
 
     pr.aborted_job_count = int(pr.aborted_job_count or 0) + n
     pr.terminal_job_count = int(pr.terminal_job_count or 0) + n

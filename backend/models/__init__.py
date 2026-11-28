@@ -4,6 +4,7 @@ from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
 from backend.models.device_return_debt import DeviceReturnDebt
 from backend.models.device_log_event import DeviceLogEvent
+from backend.models.network_session import DeviceNetworkSession
 from backend.models.host import Device, Host
 from backend.models.issue_fact import (
     CompatRerun,
@@ -54,6 +55,7 @@ __all__ = [
     "AiChatSession",
     "Device",
     "DeviceLease",
+    "DeviceNetworkSession",
     "DeviceReturnDebt",
     "DeviceLogEvent",
     "CompatRerun",

@@ -2304,6 +2304,16 @@ export interface PlanRun {
   priority?: number;
   /** #3653 U1：详情为 L2 投影；列表为 null。 */
   parameter_projection?: ParameterProjection | null;
+  /** ADR-0065 / #4206 U2：Run 级收尾投影（混合活跃时多为 running）。 */
+  ui_status?: 'running' | 'finishing' | 'completed' | 'failed' | 'aborted' | 'pending' | string | null;
+  /** Run 内按 finishing_kind 分组计数；无收尾 Job 时为 null。 */
+  finishing_kind_counts?: {
+    teardown_disarm?: number;
+    atomic_commit?: number;
+    [kind: string]: number | undefined;
+  } | null;
+  /** Run 内最近有效 finishing_deadline_at（ISO）；纯采集或无截止时可为 null。 */
+  finishing_deadline_at?: string | null;
 }
 
 /** GET /plan-runs 分页响应（ApiResponse.data）。 */
@@ -2705,7 +2715,8 @@ export type DeviceUiStatus =
   | 'aborted'
   | 'unknown'
   | 'backoff'
-  | 'pending';
+  | 'pending'
+  | 'finishing';
 
 /** Device ADB / host reachability — orthogonal to job execution state. */
 export type DeviceLinkStatus =
@@ -2777,6 +2788,12 @@ export interface DeviceMatrixItem {
   busy_lease_job_id?: number | null;
   /** Authoritative manual actions for the current Job state. */
   capabilities?: JobActionCapabilities | null;
+  /** ADR-0065 / #4206 U2：单 Job 收尾子类型（Minimap 不得出现）。 */
+  finishing_kind?: 'teardown_disarm' | 'atomic_commit' | string | null;
+  /** 收尾触发原因：natural_end / manual_abort / manual_exit 等。 */
+  finishing_trigger?: 'natural_end' | 'manual_abort' | 'manual_exit' | string | null;
+  /** 单 Job 护盾截止（ISO）；纯采集 teardown 恒为 null。 */
+  finishing_deadline_at?: string | null;
 }
 
 export interface PlanRunDevicesPayload {

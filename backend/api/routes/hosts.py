@@ -980,19 +980,25 @@ def host_hot_update(
             audit_username=current_user.username if current_user else None,
         )
     except HostAbortPendingError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_ABORT_PENDING",
-                "message": (
-                    f"Abort is still draining for {len(exc.active_jobs)} job(s) "
-                    f"on host {host_id}. Retry in approximately "
-                    f"{exc.retry_after_seconds}s."
-                ),
-                "active_jobs": exc.active_jobs,
-                "retry_after_seconds": exc.retry_after_seconds,
-            },
-        ) from None
+        pending_detail = {
+            "code": "HOST_ABORT_PENDING",
+            "message": (
+                f"Abort is still draining for {len(exc.active_jobs)} job(s) "
+                f"on host {host_id}. Retry in approximately "
+                f"{exc.retry_after_seconds}s."
+            ),
+            "active_jobs": exc.active_jobs,
+            "retry_after_seconds": exc.retry_after_seconds,
+        }
+        if getattr(exc, "finishing_kind", None) is not None:
+            pending_detail["finishing_kind"] = exc.finishing_kind
+        if getattr(exc, "finishing_deadline_at", None) is not None:
+            pending_detail["finishing_deadline_at"] = exc.finishing_deadline_at
+        if getattr(exc, "suggested_retry_window_seconds", None) is not None:
+            pending_detail["suggested_retry_window_seconds"] = (
+                exc.suggested_retry_window_seconds
+            )
+        raise HTTPException(status_code=409, detail=pending_detail) from None
     except HostHasActiveJobsError as exc:
         raise HTTPException(
             status_code=409,

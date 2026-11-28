@@ -36,7 +36,11 @@ from backend.services.host_upgrade_gate import (
 def register_domain_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ServiceError)
     async def _domain_exception_handler(request, exc: ServiceError):
-        return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+        return JSONResponse(
+            status_code=exc.status,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
 
 
 # 端点的 except 元组必须与本文件 raise_upgrade_gate_http 映射的每一个领域异常
@@ -61,19 +65,25 @@ def raise_upgrade_gate_http(host_id: str, exc: Exception) -> None:
             detail={"code": "HOST_NOT_FOUND", "message": str(exc)},
         ) from None
     if isinstance(exc, HostAbortPendingError):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "HOST_ABORT_PENDING",
-                "message": (
-                    f"Abort is still draining for {len(exc.active_jobs)} job(s) "
-                    f"on host {host_id}. Retry in approximately "
-                    f"{exc.retry_after_seconds}s."
-                ),
-                "active_jobs": exc.active_jobs,
-                "retry_after_seconds": exc.retry_after_seconds,
-            },
-        ) from None
+        pending_detail = {
+            "code": "HOST_ABORT_PENDING",
+            "message": (
+                f"Abort is still draining for {len(exc.active_jobs)} job(s) "
+                f"on host {host_id}. Retry in approximately "
+                f"{exc.retry_after_seconds}s."
+            ),
+            "active_jobs": exc.active_jobs,
+            "retry_after_seconds": exc.retry_after_seconds,
+        }
+        if getattr(exc, "finishing_kind", None) is not None:
+            pending_detail["finishing_kind"] = exc.finishing_kind
+        if getattr(exc, "finishing_deadline_at", None) is not None:
+            pending_detail["finishing_deadline_at"] = exc.finishing_deadline_at
+        if getattr(exc, "suggested_retry_window_seconds", None) is not None:
+            pending_detail["suggested_retry_window_seconds"] = (
+                exc.suggested_retry_window_seconds
+            )
+        raise HTTPException(status_code=409, detail=pending_detail) from None
     if isinstance(exc, HostHasActiveJobsError):
         raise HTTPException(
             status_code=409,

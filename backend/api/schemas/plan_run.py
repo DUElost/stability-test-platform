@@ -102,6 +102,10 @@ class PlanRunDetailOut(BaseModel):
     priority: int = 0
     # #3653 U1：详情带 L2 投影；列表保持 null，不在列表路径上计算。
     parameter_projection: Optional[ParameterProjection] = None
+    # ADR-0065 / B12 U2：只读 finishing 投影（持久化 status 仍为 RUNNING）
+    ui_status: Optional[str] = None
+    finishing_kind_counts: Optional[dict] = None
+    finishing_deadline_at: Optional[str] = None
 
 
 class PlanRunListStatsOut(BaseModel):
@@ -314,7 +318,8 @@ class DeviceMatrixItem(BaseModel):
     host_id: Optional[str] = None
     job_id: int
     job_status: str
-    ui_status: str                     # completed/running/failed/aborted/risk/backoff/pending/unknown
+    # completed/running/failed/aborted/risk/backoff/pending/unknown/finishing
+    ui_status: str
     current_stage: str
     current_step: Optional[str] = None
     patrol_cycle_count: int = 0
@@ -337,7 +342,8 @@ class DeviceMatrixItem(BaseModel):
     busy_reason: Optional[str] = None
     busy_lease_job_id: Optional[int] = None
     device_link_status: str = "unknown"   # online | offline | adb_error | host_offline | unknown
-    job_exec_status: str = "unknown"      # running | backoff | pending | completed | failed | aborted | unknown
+    # running | backoff | pending | completed | failed | aborted | unknown | finishing
+    job_exec_status: str = "unknown"
     adb_state: Optional[str] = None
     adb_connected: Optional[bool] = None
     capabilities: Optional[dict] = None
@@ -347,6 +353,10 @@ class DeviceMatrixItem(BaseModel):
     current_script_version: Optional[str] = None
     # ADR-0061 D4.4 / #3723 U6：按专项解除结果（六值 + 证据），运行详情抽屉展示。
     disarm_results: Optional[dict] = None
+    # ADR-0065 / B12 U2：分页表与 Job 详情子类型明细（Minimap 严禁携带）
+    finishing_kind: Optional[str] = None
+    finishing_trigger: Optional[str] = None
+    finishing_deadline_at: Optional[str] = None
 
 
 class PlanRunDevicesOut(BaseModel):
@@ -354,7 +364,7 @@ class PlanRunDevicesOut(BaseModel):
     total: int
     # #83 / #4117 B2-3：当前筛选条件下的精确匹配数（严禁覆盖 total 的 PlanRun 全集口径）
     filtered_total: int = 0
-    # Job 执行投影(与设备连接正交):{all/completed/running/failed/unknown/backoff/pending/aborted: int}
+    # Job 执行投影(与设备连接正交):含 finishing
     by_status: dict
     # 设备 ADB / Host 可达性:{all/online/offline/adb_error/host_offline/unknown: int}
     by_link_status: dict = {}
@@ -363,7 +373,10 @@ class PlanRunDevicesOut(BaseModel):
 
 
 class PlanRunMinimapDeviceOut(BaseModel):
-    """#83 / #4117 B2-3：Minimap 轻量 7 字段设备投影（不含 ui_status / disarm_results）。"""
+    """#83 / #4117 B2-3 / ADR-0065 D1.5：Minimap 轻量精确 7 字段（不含子类型）。
+
+    ``job_exec_status`` 词表含 ``finishing``；严禁新增 finishing_kind / trigger / deadline。
+    """
 
     job_id: int
     device_id: int

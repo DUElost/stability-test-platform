@@ -62,6 +62,9 @@ _REGISTERED: dict[str, str] = {
     "logs.py:/log-signals/orphans": (
         "前端零调用方（types.ts 只有类型镜像，无 fetch/hook；#213 D3 的孤儿 signal 诊断端点）"
     ),
+    "network_supply.py:/sessions": (
+        "B13 U1/U5（#4212）：归属统一网络供给管理页（入口 adminOnly 隐藏 + AdminRoute 门控；U1 阶段前端零调用方）"
+    ),
     "notifications.py:/channels": "通知页内按角色收窄：配置页签（渠道）仅 admin 可见",
     "notifications.py:/rules": "通知页内按角色收窄：配置页签（规则）仅 admin 可见",
     "resource_pools.py:/": "#2360：入口 adminOnly 隐藏 + /wifi 路由移入 AdminRoute",
