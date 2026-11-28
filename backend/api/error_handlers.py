@@ -36,7 +36,11 @@ from backend.services.host_upgrade_gate import (
 def register_domain_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ServiceError)
     async def _domain_exception_handler(request, exc: ServiceError):
-        return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+        return JSONResponse(
+            status_code=exc.status,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
 
 
 # 端点的 except 元组必须与本文件 raise_upgrade_gate_http 映射的每一个领域异常

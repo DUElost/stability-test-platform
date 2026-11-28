@@ -804,7 +804,11 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
             "RESOURCE_BUSY", [{"reason": "wifi_pool_full", "error": str(exc)}],
         ) from exc
     except IntegrityError as exc:
-        if "uq_job_active_per_device" not in str(exc.orig or exc):
+        err_text = str(exc.orig or exc)
+        if (
+            "uq_job_active_per_device" not in err_text
+            and "uq_device_network_session_active_per_device" not in err_text
+        ):
             raise
         db.rollback()
         raise _RetryableAdmission(

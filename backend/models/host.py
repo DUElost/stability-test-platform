@@ -93,6 +93,12 @@ class Host(Base):
     emptied_by     = Column(String(128), nullable=True)
     emptied_reason = Column(Text, nullable=True)
 
+    # ADR-0066 D2.7 / D6.3 / B13 U1：USB 反向供网单机绝对硬上限与冷却屏障（显式列，禁 Host.extra 裸键）。
+    # usbnet_max_devices 由宿主 root 属主配置定义、Agent 心跳上报（NULL 按缺省 8 结算）；
+    # usbnet_min_allowed_iat_by_egress 持久化宿主 usbnet-status 上报的 {egress: int} 冷却时间屏障。
+    usbnet_max_devices = Column(Integer, nullable=True)
+    usbnet_min_allowed_iat_by_egress = Column(JSONB, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("hostname", name="host_hostname_key"),
         # 心跳超时巡检（reconciler / watchdog）按 last_heartbeat 排序扫描

@@ -25,6 +25,10 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
+from backend.models.network_session import (
+    ACTIVE_NETWORK_SESSION_STATUSES,
+    DeviceNetworkSession,
+)
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.services.plan_run_context import run_abort_pending
@@ -33,8 +37,10 @@ from backend.models.project_model import ProjectModel
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.models.script import Script
 from backend.services.host_maintenance import in_maintenance_window
+from backend.services.network_supply import host_supports_usbnet
 from backend.services.plan_dispatcher_core import (
     PlanDispatchError,
+    analyze_lifecycle_network_requirements as _analyze_lifecycle_network_requirements,
     build_lifecycle_from_steps as _build_lifecycle_from_steps,
     build_lifecycle_from_snapshot as _build_lifecycle_from_snapshot,
     build_plan_snapshot as _build_plan_snapshot,
@@ -42,13 +48,20 @@ from backend.services.plan_dispatcher_core import (
     check_legacy_aee_script_refs as _check_legacy_aee_script_refs,
     check_script_keys_complete as _check_script_keys_complete,
     check_suite_binding_required as _check_suite_binding_required,
+    inject_network_params as _inject_network_params,
     inject_suite_params as _inject_suite_params,
-    inject_wifi_params as _inject_wifi_params,
     iter_lifecycle_steps as _iter_lifecycle_steps,
-    lifecycle_consumes_wifi as _lifecycle_consumes_wifi,
-    lifecycle_has_connect_wifi_step as _lifecycle_has_connect_wifi_step,
     script_defaults as _script_defaults,
     snapshot_dispatch_host_watcher_admin_states,
+)
+from backend.services.resource_pool import (
+    DEFAULT_EGRESS,
+    VALID_RESOURCE_TYPES,
+    current_host_usbnet_device_sets_sync,
+    current_pool_device_sets_sync,
+    effective_host_usbnet_hard_cap,
+    effective_pool_host_cap,
+    pool_egress,
 )
 from backend.services.plan_confirmation import (
     assert_confirmation_matches,
@@ -161,6 +174,23 @@ def _classify_dispatch_devices_sync(
     for row in active_job_rows:
         active_job_by_device.setdefault(row.device_id, (row.id, row.status))
 
+    # ADR-0066 D2.5: unreleased device_network_session also blocks dispatch
+    # (catches RESERVED / RELEASING / RELEASE_FAILED sessions alongside active leases).
+    active_net_rows = db.execute(
+        select(
+            DeviceNetworkSession.device_id,
+            DeviceNetworkSession.id,
+            DeviceNetworkSession.status,
+            DeviceNetworkSession.source,
+        ).where(
+            DeviceNetworkSession.device_id.in_(device_ids),
+            DeviceNetworkSession.status.in_(ACTIVE_NETWORK_SESSION_STATUSES),
+        )
+    ).all()
+    active_net_by_device = {
+        row.device_id: (row.id, row.status, row.source) for row in active_net_rows
+    }
+
     unavailable: list[dict] = []
     for did in device_ids:
         snap = device_snapshot.get(did)
@@ -251,6 +281,15 @@ def _classify_dispatch_devices_sync(
                 "job_status": conflict_status,
             })
             continue
+        if did in active_net_by_device:
+            sess_id, sess_status, sess_source = active_net_by_device[did]
+            unavailable.append({
+                "id": did, "reason": "active_network_session",
+                "session_id": sess_id,
+                "session_status": sess_status,
+                "session_source": sess_source,
+            })
+            continue
 
     return unavailable, device_host_map
 
@@ -338,114 +377,195 @@ def _pool_host_group_matches(
     return group in host_keys
 
 
-def _load_host_match_keys(
+def _load_hosts_by_id(
     db: Session, host_ids: set[str],
-) -> dict[str, frozenset[str]]:
+) -> dict[str, Host]:
     if not host_ids:
         return {}
     rows = db.execute(
-        select(Host).where(Host.id.in_(host_ids))
+        select(Host).where(Host.id.in_(sorted(host_ids)))
     ).scalars().all()
-    return {h.id: _host_match_keys(h) for h in rows}
+    return {h.id: h for h in rows}
+
+
+def _build_allocated_params(pool: ResourcePool) -> dict[str, Any]:
+    config = pool.config or {}
+    egress = pool_egress(config)
+    params: dict[str, Any] = {
+        "pool_name": pool.name,
+        "pool_id": pool.id,
+        "resource_type": pool.resource_type,
+        "egress": egress,
+    }
+    if pool.resource_type == "wifi":
+        params["ssid"] = config.get("ssid", "")
+        params["password"] = config.get("password", "")
+    elif pool.resource_type == "usb_net":
+        for key in ("bridge_name", "subnet_cidr", "max_devices_per_host"):
+            if config.get(key) is not None:
+                params[key] = config[key]
+    return params
 
 
 def _sync_allocate_devices(
     db: Session,
     device_ids: list[int],
-    resource_type: str = "wifi",
+    resource_type: str | None = "wifi",
     pool_id: int | None = None,
     device_host_map: dict[int, str] | None = None,
+    *,
+    allowed_types: frozenset[str] | None = None,
+    allowed_egresses: frozenset[str] | None = None,
+    egress: str | None = None,
 ) -> dict[int, tuple[ResourcePool, dict[str, Any]]]:
-    """Assign each device a resource pool, respecting per-pool concurrency.
+    """Assign each device a network-supply resource pool under ADR-0066 D2.7 & D3.3.
 
-    ``pool_id`` restricts the choice to one specific pool — used when the
-    operator picked a WiFi network for this execution. Without it the caller
-    gets the legacy behaviour of load-balancing across every active pool.
-
-    Pools with a non-empty ``host_group`` are only eligible for devices whose
-    host id, name, or hostname matches that value.
+    - Locks candidate ``ResourcePool`` rows ``FOR UPDATE`` in ascending ``id`` order.
+    - Uses union-deduplicated global occupancy across active ``device_network_session``
+      and active legacy ``resource_allocation`` rows (no double counting; counts
+      post-terminal ``RELEASING``/``RELEASE_FAILED`` slots).
+    - For ``usb_net``, enforces host ``"usb_net"`` capability, cross-pool per-host
+      hard cap (``Host.usbnet_max_devices``, default 8), and pool per-host soft cap.
+    - Enforces Phase 1 gate (rejects ``usb_net + vpn``).
     """
-    query = select(ResourcePool).where(
-        ResourcePool.resource_type == resource_type,
-        ResourcePool.is_active.is_(True),
+    type_filter = (
+        set(allowed_types)
+        if allowed_types is not None
+        else ({resource_type} if resource_type else set(VALID_RESOURCE_TYPES))
     )
+    egress_filter: set[str] | None = None
+    if allowed_egresses is not None:
+        egress_filter = set(allowed_egresses)
+    if egress is not None:
+        egress_filter = (
+            (egress_filter & {egress}) if egress_filter is not None else {egress}
+        )
+
+    query = select(ResourcePool).where(ResourcePool.is_active.is_(True))
     if pool_id is not None:
         query = query.where(ResourcePool.id == pool_id)
+    if type_filter:
+        query = query.where(ResourcePool.resource_type.in_(sorted(type_filter)))
+    else:
+        raise AllocationError("No allowed network resource types for allocation")
+
     pools = db.execute(
         query.order_by(ResourcePool.id).with_for_update()
     ).scalars().all()
 
-    if not pools:
+    # Phase 1 gate + egress filter
+    eligible_pools: list[ResourcePool] = []
+    for p in pools:
+        p_egress = pool_egress(p.config)
+        if p.resource_type == "usb_net" and p_egress == "vpn":
+            if pool_id is not None:
+                raise AllocationError(
+                    f"resource pool {pool_id} uses usb_net + vpn which is disabled in Phase 1"
+                )
+            continue
+        if egress_filter is not None and p_egress not in egress_filter:
+            if pool_id is not None:
+                raise AllocationError(
+                    f"resource pool {pool_id} has egress={p_egress!r}, "
+                    f"expected one of {sorted(egress_filter)}"
+                )
+            continue
+        eligible_pools.append(p)
+
+    if not eligible_pools:
         if pool_id is not None:
             raise AllocationError(
-                f"{resource_type} resource pool {pool_id} is missing or inactive"
+                f"network resource pool {pool_id} is missing, inactive, or incompatible"
             )
-        raise AllocationError(f"No active {resource_type} resource pools")
-
-    pool_ids = [p.id for p in pools]
-
-    # Current loads
-    load_rows = db.execute(
-        select(
-            ResourceAllocation.resource_pool_id,
-            func.count(ResourceAllocation.id),
+        raise AllocationError(
+            f"No active {resource_type or 'network'} resource pools matching requirements"
         )
-        .join(JobInstance, JobInstance.id == ResourceAllocation.job_instance_id)
-        .where(
-            ResourceAllocation.resource_pool_id.in_(pool_ids),
-            JobInstance.status.in_(ACTIVE_JOB_STATUSES),
-        )
-        .group_by(ResourceAllocation.resource_pool_id)
-    ).all()
-    loads = {row[0]: row[1] for row in load_rows}
 
-    host_match_keys_by_id: dict[str, frozenset[str]] = {}
-    if device_host_map:
-        host_match_keys_by_id = _load_host_match_keys(
-            db, {hid for hid in device_host_map.values() if hid},
-        )
+    pool_ids = [p.id for p in eligible_pools]
+    pool_device_sets = current_pool_device_sets_sync(db, pool_ids)
+
+    host_ids_set = {
+        hid for hid in (device_host_map or {}).values() if hid
+    }
+    hosts_by_id = _load_hosts_by_id(db, host_ids_set)
+    host_match_keys_by_id = {
+        hid: _host_match_keys(h) for hid, h in hosts_by_id.items()
+    }
+    host_usbnet_sets, host_pool_usbnet_sets = current_host_usbnet_device_sets_sync(
+        db, sorted(host_ids_set),
+    )
 
     allocations: dict[int, tuple[ResourcePool, dict[str, Any]]] = {}
 
     for device_id in device_ids:
         host_id = device_host_map.get(device_id) if device_host_map else None
+        host = hosts_by_id.get(host_id) if host_id else None
         host_keys = host_match_keys_by_id.get(host_id) if host_id else None
-        eligible = [p for p in pools if _pool_host_group_matches(p, host_keys)]
+        eligible = [
+            p for p in eligible_pools if _pool_host_group_matches(p, host_keys)
+        ]
         if not eligible:
-            if pool_id is not None and pools:
+            if pool_id is not None:
                 raise AllocationError(
-                    f"{resource_type} resource pool {pool_id} is not allowed "
+                    f"network resource pool {pool_id} is not allowed "
                     f"for device {device_id} host {host_id!r}"
                 )
             raise AllocationError(
-                f"No {resource_type} resource pool for device {device_id} "
-                f"host {host_id!r}"
+                f"No network resource pool for device {device_id} host {host_id!r}"
             )
 
-        ordered = sorted(eligible, key=lambda p: (loads.get(p.id, 0), p.id))
+        ordered = sorted(
+            eligible,
+            key=lambda p: (len(pool_device_sets.get(p.id, set())), p.id),
+        )
 
         chosen = None
+        last_reason = "all eligible pools full"
         for pool in ordered:
-            current_load = loads.get(pool.id, 0)
-            if current_load >= pool.max_concurrent_devices:
+            cur_global = pool_device_sets.setdefault(pool.id, set())
+            if len(cur_global | {device_id}) > pool.max_concurrent_devices:
+                last_reason = (
+                    f"pool {pool.id} global capacity exceeded "
+                    f"({len(cur_global)}/{pool.max_concurrent_devices})"
+                )
                 continue
+            if pool.resource_type == "usb_net":
+                if host is not None and not host_supports_usbnet(host):
+                    last_reason = (
+                        f"host {host_id!r} does not declare 'usb_net' capability"
+                    )
+                    continue
+                if host_id:
+                    host_cap = effective_host_usbnet_hard_cap(host)
+                    cur_host_usb = host_usbnet_sets.setdefault(host_id, set())
+                    if len(cur_host_usb | {device_id}) > host_cap:
+                        last_reason = (
+                            f"host {host_id!r} usb_net hard cap exceeded "
+                            f"({len(cur_host_usb)}/{host_cap})"
+                        )
+                        continue
+                    pool_host_cap = effective_pool_host_cap(host, pool)
+                    cur_hp = host_pool_usbnet_sets.setdefault((host_id, pool.id), set())
+                    if len(cur_hp | {device_id}) > pool_host_cap:
+                        last_reason = (
+                            f"pool {pool.id} per-host cap exceeded on {host_id!r} "
+                            f"({len(cur_hp)}/{pool_host_cap})"
+                        )
+                        continue
             chosen = pool
             break
 
         if chosen is None:
             raise AllocationError(
-                f"No capacity for device {device_id}: all eligible pools full"
+                f"No capacity for device {device_id}: {last_reason}"
             )
 
-        loads[chosen.id] = loads.get(chosen.id, 0) + 1
-        config = chosen.config or {}
-        allocated_params = {
-            "ssid": config.get("ssid", ""),
-            "password": config.get("password", ""),
-            "pool_name": chosen.name,
-            "pool_id": chosen.id,
-        }
-        allocations[device_id] = (chosen, allocated_params)
+        pool_device_sets.setdefault(chosen.id, set()).add(device_id)
+        if chosen.resource_type == "usb_net" and host_id:
+            host_usbnet_sets.setdefault(host_id, set()).add(device_id)
+            host_pool_usbnet_sets.setdefault((host_id, chosen.id), set()).add(device_id)
+
+        allocations[device_id] = (chosen, _build_allocated_params(chosen))
 
     return allocations
 
@@ -1117,45 +1237,69 @@ def materialize_jobs_and_allocations(
     device_ids: list[int],
     device_host_map: dict,
 ) -> dict[int, int]:
-    """Shared materializer: WiFi allocation (when the lifecycle needs it) + one
-    PENDING JobInstance per device + resource allocation rows.
+    """Shared materializer: unified network supply allocation + PENDING JobInstances
+    + ``resource_allocation`` + ``device_network_session(status='RESERVED')`` (Point 1).
 
-    WiFi is allocated in two cases:
-      1. the lifecycle contains a ``connect_wifi`` step (pool chosen by load), or
-      2. the operator picked a WiFi network for this execution, recorded as
-         ``run_context["wifi_pool_id"]`` — then that pool specifically.
-
-    Flushes but does NOT commit. Raises to the caller, whose policy differs:
-      - AllocationError (pool full): legacy → FAILED; V2 admission → requeue
-        (RESOURCE_BUSY, invariant ④).
-      - IntegrityError (uq_job_active_per_device race): legacy → FAILED;
-        V2 admission → requeue (DEVICE_BUSY).
+    Network supply is allocated when:
+      1. the lifecycle contains a legacy ``connect_wifi`` step (auto-picks
+         active ``wifi(direct)`` pool when no explicit pool was passed), OR
+      2. the operator passed ``network_pool_id`` / ``wifi_pool_id`` and the
+         lifecycle has an enabled network consumer step (``setup_network``,
+         ``connect_wifi``, or ``monkey_setup``).
     """
-    wifi_allocations: dict[int, dict] = {}
-    requested_pool_id = (pr.run_context or {}).get("wifi_pool_id")
-    consumes_wifi = _lifecycle_consumes_wifi(lifecycle)
-    has_connect_wifi = _lifecycle_has_connect_wifi_step(lifecycle)
-    if requested_pool_id is not None and not consumes_wifi:
+    run_ctx = pr.run_context or {}
+    net_pool_id = run_ctx.get("network_pool_id")
+    wifi_pool_id = run_ctx.get("wifi_pool_id")
+    if (
+        net_pool_id is not None
+        and wifi_pool_id is not None
+        and net_pool_id != wifi_pool_id
+    ):
+        raise AllocationError(
+            f"network_pool_id ({net_pool_id}) conflicts with wifi_pool_id ({wifi_pool_id})"
+        )
+    requested_pool_id = net_pool_id if net_pool_id is not None else wifi_pool_id
+
+    reqs = _analyze_lifecycle_network_requirements(lifecycle)
+    if reqs.is_contradictory:
+        raise AllocationError(reqs.conflict_reason or "conflicting network step requirements")
+
+    if requested_pool_id is not None and not reqs.has_network_steps:
         logger.warning(
-            "wifi_pool_id ignored — lifecycle has no WiFi consumer steps plan_run=%d",
+            "network_pool_id ignored — lifecycle has no network consumer steps plan_run=%d",
             pr.id,
         )
         requested_pool_id = None
-    # connect_wifi always allocates (auto-pick pool); monkey_setup only when the
-    # operator chose a pool for this execution.
-    needs_wifi = has_connect_wifi or (
-        requested_pool_id is not None and consumes_wifi
+
+    needs_network = reqs.has_connect_wifi or (
+        requested_pool_id is not None and reqs.has_network_steps
     )
-    if needs_wifi:
-        assignments = _sync_allocate_devices(
-            db, device_ids, resource_type="wifi", pool_id=requested_pool_id,
-            device_host_map=device_host_map,
+    if not needs_network and reqs.setup_network_required:
+        raise AllocationError("network_pool_id is required when setup_network.required=true")
+
+    network_assignments: dict[int, tuple[ResourcePool, dict[str, Any]]] = {}
+    if needs_network:
+        # ADR-0066 D3.3: connect_wifi auto-select MUST strictly pick wifi(direct).
+        auto_egress = (
+            DEFAULT_EGRESS
+            if requested_pool_id is None and reqs.has_connect_wifi and not reqs.has_setup_network
+            else None
         )
-        for device_id, (_pool, alloc_params) in assignments.items():
-            wifi_allocations[device_id] = alloc_params
+        network_assignments = _sync_allocate_devices(
+            db,
+            device_ids,
+            resource_type=None,
+            pool_id=requested_pool_id,
+            device_host_map=device_host_map,
+            allowed_types=reqs.allowed_types,
+            allowed_egresses=reqs.allowed_egresses,
+            egress=auto_egress,
+        )
         logger.info(
-            "plan_dispatch_wifi_allocated: devices=%d pool=%s",
-            len(device_ids), requested_pool_id if requested_pool_id is not None else "auto",
+            "plan_dispatch_network_allocated: devices=%d pool=%s legacy=%s",
+            len(device_ids),
+            requested_pool_id if requested_pool_id is not None else "auto",
+            reqs.is_legacy_only,
         )
 
     now = datetime.now(timezone.utc)
@@ -1166,13 +1310,14 @@ def materialize_jobs_and_allocations(
     # ADR-0030 §3.4：托管套件的 mtbf_* 步骤参数注入。以 prepare 冻结的
     # dispatch_suite 为源（快照语义——绑定事后解除不改变在途 Run 的行为）；
     # 无冻结块的 Run（P0 存量）完全不注入，脚本侧 env 回落保持原样。
-    suite_ctx = (pr.run_context or {}).get("dispatch_suite") or {}
+    suite_ctx = run_ctx.get("dispatch_suite") or {}
     suite_params = step_params_for_dispatch(db, suite_ctx) if suite_ctx else {}
     for device_id in device_ids:
-        wifi_params = wifi_allocations.get(device_id)
+        assigned = network_assignments.get(device_id)
         resolved_pipeline = {"lifecycle": deepcopy(lifecycle)}
-        if wifi_params:
-            resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
+        if assigned is not None:
+            _pool, alloc_params = assigned
+            resolved_pipeline = _inject_network_params(resolved_pipeline, alloc_params)
         if suite_params:
             resolved_pipeline = _inject_suite_params(resolved_pipeline, suite_params)
 
@@ -1195,19 +1340,44 @@ def materialize_jobs_and_allocations(
     # the fallback full-job scan until P2 — set it here for both paths.
     pr.total_job_count = len(jobs)
 
-    if wifi_allocations:
-        # Preload the pools once instead of per-device SELECTs.
-        pool_ids = {wifi_allocations[did]["pool_id"] for did in wifi_allocations}
-        pools = {
-            p.id: p for p in db.execute(
-                select(ResourcePool).where(ResourcePool.id.in_(pool_ids))
-            ).scalars().all()
-        }
-        assignment_refs = {
-            did: (pools.get(wifi_allocations[did]["pool_id"]), wifi_allocations[did])
-            for did in wifi_allocations
-        }
-        _sync_create_allocations(db, assignment_refs, job_device_pairs)
+    if network_assignments:
+        _sync_create_allocations(db, network_assignments, job_device_pairs)
+        # ADR-0066 D2.4 Point 1: reserve device_network_session in the same tx.
+        reserved_sessions: list[DeviceNetworkSession] = []
+        for job in jobs:
+            assigned = network_assignments.get(job.device_id)
+            if assigned is None:
+                continue
+            pool, _params = assigned
+            host_id = job.host_id or device_host_map.get(job.device_id)
+            if not host_id:
+                raise AllocationError(
+                    f"device {job.device_id} missing host_id for network session reservation"
+                )
+            reserved_sessions.append(
+                DeviceNetworkSession(
+                    device_id=job.device_id,
+                    host_id=host_id,
+                    resource_pool_id=pool.id,
+                    resource_type=pool.resource_type,
+                    egress=pool_egress(pool.config),
+                    source="job",
+                    plan_run_id=pr.id,
+                    job_instance_id=job.id,
+                    lease_id=None,
+                    generation=None,
+                    legacy_path=reqs.is_legacy_only,
+                    status="RESERVED",
+                    release_reason=None,
+                    created_by=pr.triggered_by,
+                    expires_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        if reserved_sessions:
+            db.add_all(reserved_sessions)
+            db.flush()
 
     return job_device_pairs
 

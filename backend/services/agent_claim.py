@@ -20,14 +20,23 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, StepTrace
+from backend.models.network_session import DeviceNetworkSession
 from backend.models.plan_run import PlanRun, PlanRunHost
+from backend.models.resource_pool import ResourceAllocation
 from backend.services.device_return import handle_job_lease_release
 from backend.services.errors import UpgradeRequired
 from backend.services.host_maintenance import in_maintenance_window
 from backend.services.lease_manager import _DEFAULT_LEASE_SECONDS, acquire_lease
+from backend.services.network_grant import (
+    UsbnetEgressCooldownError,
+    UsbnetGrantError,
+    sign_usbnet_grant,
+)
+from backend.services.network_supply import resolve_device_usb_devpath
 from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
     extract_dispatch_host_watcher_admin_states,
+    lifecycle_has_setup_network,
 )
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 from backend.services.vbus_flash_admission import is_vbus_flash_pipeline
@@ -90,6 +99,9 @@ class JobOut(BaseModel):
     plan_run_host_total_job_count: Optional[int] = None
     # claim 时写入的 job.started_at；Agent 用于派生 AEE run_date_stamp。
     started_at: Optional[str] = None
+    # ADR-0066 D2.4 / B13 U1：若本任务绑定了受管网络供给会话，随 JobOut 下发
+    # session_id/generation 与（对 usb_net）控制面签名短期 usbnet_grant。
+    network_session: Optional[Dict[str, Any]] = None
 
 
 async def enrich_job_metadata(
@@ -173,6 +185,112 @@ def _device_healthy_for_vbus_claim(device: Device | None) -> bool:
     return True
 
 
+async def _bind_network_session_on_claim(
+    db: AsyncSession,
+    *,
+    job: JobInstance,
+    lease: DeviceLease,
+    host_row: Host,
+    now: datetime,
+) -> Optional[Dict[str, Any]]:
+    """ADR-0066 D2.4 Point 2: bind RESERVED session to JOB lease & sign initial usbnet_grant.
+
+    Raises :class:`LockAcquireFailed` to roll back the claim savepoint when:
+    - an expected reserved session is missing or already released/non-RESERVED;
+    - a ``usb_net`` host egress is in ``usbnet-teardown`` cooldown (defers claim);
+    - a ``usb_net`` device lacks a heartbeat ``usb_devpath`` or signing fails.
+    """
+    net_session = (await db.execute(
+        select(DeviceNetworkSession)
+        .where(DeviceNetworkSession.job_instance_id == job.id)
+        .with_for_update()
+    )).scalars().first()
+
+    if net_session is None:
+        lifecycle = (job.pipeline_def or {}).get("lifecycle") or {}
+        if lifecycle_has_setup_network(lifecycle):
+            has_alloc = (await db.execute(
+                select(ResourceAllocation.id)
+                .where(ResourceAllocation.job_instance_id == job.id)
+                .limit(1)
+            )).first()
+            if has_alloc is not None:
+                logger.warning(
+                    "claim_rollback_missing_network_session host=%s job=%s device=%s",
+                    host_row.id, job.id, job.device_id,
+                )
+                raise LockAcquireFailed()
+        return None
+
+    if net_session.source != "job" or net_session.status != "RESERVED":
+        logger.warning(
+            "claim_rollback_invalid_network_session host=%s job=%s session=%s status=%s",
+            host_row.id, job.id, net_session.id, net_session.status,
+        )
+        raise LockAcquireFailed()
+
+    grant_token: Optional[str] = None
+    grant_exp: Optional[int] = None
+    usb_devpath: Optional[str] = None
+
+    if net_session.resource_type == "usb_net":
+        device = await db.get(Device, job.device_id)
+        if device is None:
+            raise LockAcquireFailed()
+        usb_devpath = resolve_device_usb_devpath(device, host_row)
+        if not usb_devpath:
+            logger.warning(
+                "claim_deferred_missing_usb_devpath host=%s job=%s device=%s serial=%s",
+                host_row.id, job.id, job.device_id, device.serial,
+            )
+            raise LockAcquireFailed()
+        try:
+            signed = sign_usbnet_grant(
+                session_id=net_session.id,
+                generation=int(lease.lease_generation),
+                host_id=host_row.id,
+                device_serial=device.serial,
+                usb_devpath=usb_devpath,
+                egress=net_session.egress,
+                min_allowed_iat_by_egress=host_row.usbnet_min_allowed_iat_by_egress,
+            )
+            grant_token = signed.token
+            grant_exp = signed.exp
+        except UsbnetEgressCooldownError as exc:
+            logger.info(
+                "claim_deferred_usbnet_egress_cooldown host=%s job=%s session=%s egress=%s retry_after=%ss",
+                host_row.id, job.id, net_session.id, net_session.egress, exc.retry_after_seconds,
+            )
+            raise LockAcquireFailed() from exc
+        except UsbnetGrantError as exc:
+            logger.warning(
+                "claim_rollback_usbnet_grant_failed host=%s job=%s session=%s err=%s",
+                host_row.id, job.id, net_session.id, exc,
+            )
+            raise LockAcquireFailed() from exc
+
+    net_session.lease_id = lease.id
+    net_session.generation = lease.lease_generation
+    net_session.status = "PROVISIONING"
+    if usb_devpath is not None:
+        net_session.usb_devpath = usb_devpath
+    net_session.updated_at = now
+    await db.flush()
+
+    payload: Dict[str, Any] = {
+        "session_id": net_session.id,
+        "generation": int(lease.lease_generation),
+        "resource_pool_id": net_session.resource_pool_id,
+        "resource_type": net_session.resource_type,
+        "egress": net_session.egress,
+        "usb_devpath": net_session.usb_devpath,
+    }
+    if grant_token is not None:
+        payload["usbnet_grant"] = grant_token
+        payload["usbnet_grant_exp"] = grant_exp
+    return payload
+
+
 async def _recover_unconfirmed_claims(
     db: AsyncSession,
     *,
@@ -182,6 +300,8 @@ async def _recover_unconfirmed_claims(
     normal_slots: int,
     vbus_slots: int,
     now: datetime,
+    host_row: Optional[Host] = None,
+    network_session_out: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> tuple[list[JobInstance], Dict[int, str], set[int], int, int, bool]:
     """Re-deliver or release unconfirmed orphan RUNNING claims from the same agent instance (#3931).
 
@@ -336,6 +456,56 @@ async def _recover_unconfirmed_claims(
                 lease.fencing_token = f"{device.id}:{device.lease_generation}"
                 lease.expires_at = lock_now + timedelta(seconds=_DEFAULT_LEASE_SECONDS)
                 job.started_at = lock_now
+
+                net_sess = (await db.execute(
+                    select(DeviceNetworkSession)
+                    .where(
+                        DeviceNetworkSession.job_instance_id == job.id,
+                        DeviceNetworkSession.status == "PROVISIONING",
+                    )
+                    .with_for_update()
+                )).scalars().first()
+                if net_sess is not None:
+                    redeliver_net: Dict[str, Any] = {
+                        "session_id": net_sess.id,
+                        "generation": int(lease.lease_generation),
+                        "resource_pool_id": net_sess.resource_pool_id,
+                        "resource_type": net_sess.resource_type,
+                        "egress": net_sess.egress,
+                        "usb_devpath": net_sess.usb_devpath,
+                    }
+                    if net_sess.resource_type == "usb_net":
+                        devpath = (
+                            resolve_device_usb_devpath(device, host_row)
+                            or net_sess.usb_devpath
+                        )
+                        if not devpath:
+                            raise LockAcquireFailed()
+                        try:
+                            signed = sign_usbnet_grant(
+                                session_id=net_sess.id,
+                                generation=int(lease.lease_generation),
+                                host_id=host_id,
+                                device_serial=device.serial,
+                                usb_devpath=devpath,
+                                egress=net_sess.egress,
+                                min_allowed_iat_by_egress=(
+                                    host_row.usbnet_min_allowed_iat_by_egress
+                                    if host_row is not None
+                                    else None
+                                ),
+                            )
+                        except UsbnetGrantError as exc:
+                            raise LockAcquireFailed() from exc
+                        net_sess.usb_devpath = devpath
+                        redeliver_net["usb_devpath"] = devpath
+                        redeliver_net["usbnet_grant"] = signed.token
+                        redeliver_net["usbnet_grant_exp"] = signed.exp
+                    net_sess.generation = lease.lease_generation
+                    net_sess.updated_at = lock_now
+                    if network_session_out is not None:
+                        network_session_out[job.id] = redeliver_net
+
                 fencing_token_map[job.id] = lease.fencing_token
                 redelivered.append(job)
                 claimed_device_ids.add(job.device_id)
@@ -344,7 +514,7 @@ async def _recover_unconfirmed_claims(
                     "claim_unconfirmed_redelivered host=%s job=%s device=%s generation=%s",
                     host_id, job.id, job.device_id, lease.lease_generation,
                 )
-        except InvalidTransitionError:
+        except (InvalidTransitionError, LockAcquireFailed):
             continue
 
     return redelivered, fencing_token_map, claimed_device_ids, normal_slots, vbus_slots, db_mutated
@@ -357,6 +527,8 @@ async def claim_jobs_for_host(
     agent_instance_id: str = "",
     vbus_slots: int = 0,
     active_job_ids: Optional[List[int]] = None,
+    *,
+    network_session_out: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> tuple[List[JobInstance], Dict[int, str]]:
     """Shared claim logic for ``claim_jobs`` (POST).
 
@@ -424,6 +596,8 @@ async def claim_jobs_for_host(
             normal_slots=effective_capacity,
             vbus_slots=vbus_slots,
             now=now,
+            host_row=host_row,
+            network_session_out=network_session_out,
         )
 
     # 4. Get all device IDs for this host (Phase 3c: filter known-unhealthy devices)
@@ -531,7 +705,16 @@ async def claim_jobs_for_host(
                 if lease is None:
                     claim_lease_failed_total.inc()
                     raise LockAcquireFailed()
+                net_info = await _bind_network_session_on_claim(
+                    db,
+                    job=job,
+                    lease=lease,
+                    host_row=host_row,
+                    now=now,
+                )
                 fencing_token_map[job.id] = lease.fencing_token
+                if net_info is not None and network_session_out is not None:
+                    network_session_out[job.id] = net_info
 
             claimed.append(job)
             claimed_device_ids.add(job.device_id)
@@ -650,10 +833,12 @@ async def claim_agent_jobs(
             "minimum_version": minimum_version,
         })
 
+    network_session_map: Dict[int, Dict[str, Any]] = {}
     claimed, fencing_token_map = await claim_jobs_for_host(
         db, payload.host_id, payload.capacity, payload.agent_instance_id,
         vbus_slots=payload.vbus_slots,
         active_job_ids=payload.active_job_ids,
+        network_session_out=network_session_map,
     )
 
     if not claimed:
@@ -702,6 +887,7 @@ async def claim_agent_jobs(
                 plan_run_host_id=prh_info[0] if prh_info else None,
                 plan_run_host_total_job_count=prh_info[1] if prh_info else None,
                 started_at=_iso_or_none(j.started_at),
+                network_session=network_session_map.get(j.id),
             )
         )
     return out
