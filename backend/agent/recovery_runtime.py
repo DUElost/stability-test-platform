@@ -33,10 +33,10 @@ class ResumeJobSlot:
 
 def build_cancel_recovery_job(
     job_runner_slot: JobRunnerStateSlot,
-) -> Callable[[int], None]:
-    def cancel_recovery_job(jid: int) -> None:
+) -> Callable[..., None]:
+    def cancel_recovery_job(jid: int, force: bool = False) -> None:
         if job_runner_slot.value is not None:
-            job_runner_slot.value.request_abort(jid)
+            job_runner_slot.value.request_abort(jid, force=bool(force))
 
     def is_worker_alive(jid: int) -> bool:
         """True when JobRunnerState still has an active runner for ``jid``."""

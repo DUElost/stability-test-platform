@@ -285,14 +285,25 @@ def _build_complete_payload(payload: Dict[str, Any], fencing_token: str) -> Dict
     """Build the normalized payload for the /complete endpoint."""
     raw_status = str(payload.get("status", "FAILED")).upper()
     normalized_status = RUN_TERMINAL_STATUS_MAP.get(raw_status, "FAILED")
+    update: Dict[str, Any] = {
+        "status": normalized_status,
+        "exit_code": payload.get("exit_code"),
+        "error_code": payload.get("error_code"),
+        "error_message": payload.get("error_message"),
+        "log_summary": payload.get("log_summary"),
+    }
+    # ADR-0065 D5.2 / B12 U5：atomic_commit 终态字段写入 update，供控制面欠账核销。
+    for key in (
+        "atomic_group_completed",
+        "completed_during_abort_drain",
+        "finishing_kind",
+        "abort_mode",
+        "atomic_group_evidence",
+    ):
+        if key in payload and payload.get(key) is not None:
+            update[key] = payload[key]
     complete_payload: Dict[str, Any] = {
-        "update": {
-            "status": normalized_status,
-            "exit_code": payload.get("exit_code"),
-            "error_code": payload.get("error_code"),
-            "error_message": payload.get("error_message"),
-            "log_summary": payload.get("log_summary"),
-        },
+        "update": update,
         "fencing_token": fencing_token,
     }
     artifact = payload.get("artifact")

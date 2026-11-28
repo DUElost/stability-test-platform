@@ -17,6 +17,15 @@ from .contracts.vbus_flash import (
     deferred_flash_init_prefix_len,
     is_deferred_flash_step,
 )
+from .critical_section import (
+    ENV_CRITICAL_SECTION_SOCK,
+    CriticalSectionGate,
+    FinishingGuardHttpClient,
+    build_atomic_group_frozen,
+    skipped_fails_atomic_delivery,
+    terminal_cas,
+)
+from .identity import read_boot_id
 from .contracts.device_return import (
     disarm_execution_budget, probe_result_policy, PLATFORM_INTERRUPTED_EXIT_CODES,
     DISARM_QUEUE_SECONDS, DISARM_JOB_MAX_SECONDS, PROBE_READBACK_VALUES,
@@ -56,6 +65,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .script_packages import PackageUnavailable, inject_required_tools, resolve_script_path
+from .tool_requirements import _load_capabilities_doc
 
 from .contracts.device_return import (
     DISARM_RESULT_CONFIRMED,
@@ -1120,11 +1130,14 @@ class PipelineEngine:
         # 否则快路径（步骤秒级完成）下 trace 批次晚于 job 终态到达控制面
         # 会被拒绝——.20/.81/.83/.84 实测 flash/oobe trace 截断的根因。
         step_trace_uploader=None,
+        # ADR-0065 / B12 U5：activate_permit 需要 host_id（控制面 Query 参数）。
+        host_id: Optional[str] = None,
     ):
         self._adb = adb
         self._serial = serial
         self._run_id = run_id
         self._device_id = device_id
+        self._host_id = str(host_id or "")
         self._scheduler = operation_scheduler
         self._coordinator = coordinator
         self._plan_run_host_id = plan_run_host_id
@@ -1153,6 +1166,7 @@ class PipelineEngine:
         self._patrol_cycle_resume: bool = False
         self._shared: dict = {}
         self._canceled = False
+        self._force_abort = False
         self._process_lock = threading.Lock()
         self._active_process: Optional[subprocess.Popen] = None
         # ADR-0061 / #3723 U1: footprint + disarm tracking
@@ -1167,6 +1181,20 @@ class PipelineEngine:
         self._patrol_cycle_index = 0
         self._patrol_early_complete: bool = False
         self._patrol_early_fail: Optional[str] = None
+        # ADR-0065 / B12 U5：临界区互斥仲裁 + finishing-guard 握手客户端。
+        cs_http = None
+        if api_url:
+            cs_http = FinishingGuardHttpClient(
+                api_url=api_url,
+                agent_secret=agent_secret or "",
+                host_id=self._host_id,
+                boot_id=read_boot_id(),
+            )
+        self._critical_section = CriticalSectionGate(
+            job_id=int(run_id),
+            http=cs_http,
+        )
+        self._terminal_claimant = f"worker:{run_id}"
         self._step_trace_uploader = step_trace_uploader  # #483
 
     def set_patrol_cycle_resume(self, checkpoint: dict) -> None:
@@ -1226,19 +1254,32 @@ class PipelineEngine:
         """
         self._lease_lost_for_disarm = True
 
-    def cancel(self):
-        """Signal cancellation; terminate the running script unless it is teardown.
+    def cancel(self, force: bool = False):
+        """Signal cancellation; terminate the running script unless protected.
 
         ADR-0061 D3 / #3723 §3.2.2 (M2): abort / ABORT_LOCAL / reconnect must not
         kill an in-flight disarm/teardown subprocess — only set the cancel flag.
         Ordinary cancel must not set ``_lease_lost_for_disarm`` (R4).
+
+        ADR-0065 D2.5 / D3.21 / D5.1：普通 abort 在已 ``grant`` 的 atomic_group
+        内不得杀进程组；``force=true`` 立即 ``SIGTERM → SIGKILL`` 整组。
         """
         self._canceled = True
+        if force:
+            self._force_abort = True
+        gate = getattr(self, "_critical_section", None)
+        if gate is not None:
+            gate.signal_abort(force=force)
         with self._process_lock:
             proc = self._active_process
             script_path = getattr(self, "_active_script_path", None)
             phase = getattr(self, "_active_phase", None)
-        if proc is not None and phase != "teardown":
+        protect = (
+            gate is not None
+            and gate.should_protect_from_ordinary_kill()
+            and not force
+        )
+        if proc is not None and phase != "teardown" and not protect:
             _terminate_process_tree(
                 proc, grace_seconds=_script_terminate_grace_seconds(script_path),
             )
@@ -1251,13 +1292,21 @@ class PipelineEngine:
         if not hasattr(self, "_process_lock"):
             self._process_lock = threading.Lock()
             self._active_process = None
+        gate = getattr(self, "_critical_section", None)
+        protect = (
+            gate is not None
+            and gate.should_protect_from_ordinary_kill()
+            and not getattr(self, "_force_abort", False)
+        )
         with self._process_lock:
             self._active_process = proc
             self._active_script_path = script_path
             if phase is not None:
                 self._active_phase = phase
             should_terminate = (
-                getattr(self, "_canceled", False) and not allow_after_cancel
+                getattr(self, "_canceled", False)
+                and not allow_after_cancel
+                and not protect
             )
         if should_terminate:
             _terminate_process_tree(
@@ -1406,22 +1455,41 @@ class PipelineEngine:
     # Lifecycle step execution
     # ==================================================================
 
+    def _atomic_drain_active(self) -> bool:
+        """Ordinary abort after grant: keep running remaining atomic_group members."""
+        gate = getattr(self, "_critical_section", None)
+        return (
+            gate is not None
+            and gate.should_protect_from_ordinary_kill()
+            and not getattr(self, "_force_abort", False)
+        )
+
     def _run_lifecycle_steps(self, phase: str, steps: List[dict]) -> StepResult:
         """Execute one lifecycle phase without terminal side effects."""
         for step in steps or []:
             # Check for lock lost (LeaseRenewer removed us from active set)
-            if self._is_lock_lost() or self._canceled:
+            draining = self._atomic_drain_active()
+            if self._is_lock_lost() or (self._canceled and not draining):
                 return StepResult(
                     success=False,
                     exit_code=1,
-                    error_message="device_lease_lost",
+                    error_message="device_lease_lost" if self._is_lock_lost() else "job_aborted",
                 )
+            # Drain 中跳过非 atomic_group 成员（不得吞并 init 其余步骤）。
+            if draining and phase == "init" and not step.get("atomic_group"):
+                continue
 
             # ADR-0026 Step 5b: gate execution through the per-host
             # OperationScheduler (required in production; tests inject via conftest).
             success = self._run_step_with_permit(phase, step)
             if not success:
-                if self._is_lock_lost() or self._canceled:
+                if getattr(self, "_atomic_delivery_failed", False):
+                    return StepResult(
+                        success=False,
+                        exit_code=1,
+                        error_message="atomic_delivery_skipped",
+                    )
+                if self._is_lock_lost() or (self._canceled and not self._atomic_drain_active()):
                     return StepResult(
                         success=False,
                         exit_code=1,
@@ -1807,7 +1875,11 @@ class PipelineEngine:
                     if self._is_lock_lost() or self._canceled:
                         return False
                     if self._is_aborted is not None and self._is_aborted():
+                        if self._atomic_drain_active():
+                            continue
                         return False
+                    if self._canceled and self._atomic_drain_active():
+                        continue
                 except SchedulerShutdown as exc:
                     # R1: SchedulerShutdown alone ends immediately as incomplete.
                     self._canceled = True
@@ -1827,7 +1899,7 @@ class PipelineEngine:
                     return False
                 except PermitCancelled:
                     # R1: ordinary abort cancel → re-acquire under the original deadline.
-                    if phase == "teardown":
+                    if phase == "teardown" or self._atomic_drain_active():
                         continue
                     self._canceled = True
                     logger.info(
@@ -1937,6 +2009,12 @@ class PipelineEngine:
                         skipped=True,
                         error_message=result.skip_reason or "skipped",
                     )
+                # ADR-0065 D5.1：atomic_group 内 skipped=true（未声明
+                # skip_satisfies_delivery）必须 FAILED，不得伪标成功交付。
+                if skipped_fails_atomic_delivery(step, skipped=True):
+                    self._last_step_error = "atomic_delivery_skipped"
+                    self._atomic_delivery_failed = True
+                    return False
                 return bool(result.success)
             if result.success:
                 self._last_step_error = ""
@@ -2243,6 +2321,40 @@ class PipelineEngine:
         if tool_error:
             return StepResult(success=False, exit_code=2, error_message=tool_error)
 
+        # ADR-0065 / U5：声明 critical_section_guard 的脚本通过 UDS 阻塞等待 grant。
+        cs_sock: Optional[str] = None
+        gate = getattr(self, "_critical_section", None)
+        wants_cs = False
+        if gate is not None and resolved.cwd:
+            try:
+                caps_doc = _load_capabilities_doc(Path(resolved.cwd))
+            except Exception:
+                caps_doc = None
+            if isinstance(caps_doc, dict):
+                caps_list = caps_doc.get("capabilities")
+                wants_cs = (
+                    caps_doc.get("critical_section_guard") is True
+                    or (
+                        isinstance(caps_list, list)
+                        and "critical_section_guard" in caps_list
+                    )
+                )
+        if wants_cs and gate is not None:
+            gate.mark_step_started()
+            if not gate.frozen_members():
+                frozen = getattr(self, "_atomic_group_frozen", None)
+                if frozen:
+                    gate.set_frozen_members(list(frozen))
+            try:
+                cs_sock = gate.start_ipc_server(
+                    sock_dir=ctx.log_dir or None,
+                )
+                env[ENV_CRITICAL_SECTION_SOCK] = cs_sock
+            except OSError as exc:
+                logger.warning(
+                    "critical_section_ipc_bind_failed job=%s: %s", self._run_id, exc,
+                )
+
         timeout_seconds = _resolve_step_wall_clock(step)
         if ctx.phase == "teardown" and getattr(self, "_disarm_tail", None) is not None:
             self._refresh_disarm_guard()
@@ -2295,6 +2407,33 @@ class PipelineEngine:
                     )
                     else "EXECUTING_STEP"
                 )
+
+                def _on_progress_seq(seq: Optional[int]) -> None:
+                    if _progress_state == EXECUTING_DISARM:
+                        self._publish_disarm_phase(step, "execute", progress=True)
+                    gate_ref = getattr(self, "_critical_section", None)
+                    if gate_ref is not None and gate_ref.granted:
+                        gate_ref.note_progress(seq)
+
+                # ADR-0065 D4.22：已 grant 的临界区不得被步骤墙钟/停滞钟独立误杀；
+                # 与服务端 D_atomic 协同——本地绝对截止取 D_atomic。
+                absolute_deadline = None
+                if ctx.phase == "teardown" and getattr(self, "_disarm_tail", None) is not None:
+                    absolute_deadline = (lambda: self._current_disarm_deadline(step))
+                elif (
+                    gate is not None
+                    and gate.granted
+                    and gate.D_atomic is not None
+                ):
+                    # _pump_process 用 monotonic；把服务端 epoch D_atomic 换成同量纲。
+                    def _d_atomic_mono(d=float(gate.D_atomic)) -> float:
+                        return time.monotonic() + max(0.0, d - time.time())
+
+                    absolute_deadline = _d_atomic_mono
+                    # Stall clock disabled while protected; wall clock still
+                    # bounded by absolute_deadline via D_atomic.
+                    stall_seconds = 0
+
                 outcome = _pump_process(
                     proc,
                     wall_clock=timeout_seconds,
@@ -2303,11 +2442,8 @@ class PipelineEngine:
                     # progress-aware barrier 判断同 host 的 peer 是否还在推进。
                     # 解除步骤改报 EXECUTING_DISARM（#3723 §3.2.6 / §3.0.5）。
                     on_progress=lambda: self._update_execution_state(_progress_state),
-                    on_progress_seq=(
-                        lambda _seq: self._publish_disarm_phase(step, "execute", progress=True)
-                    ) if _progress_state == EXECUTING_DISARM else None,
-                    absolute_deadline=(lambda: self._current_disarm_deadline(step))
-                    if ctx.phase == "teardown" and getattr(self, "_disarm_tail", None) is not None else None,
+                    on_progress_seq=_on_progress_seq,
+                    absolute_deadline=absolute_deadline,
                     log_paths=log_paths,
                     terminate_grace_seconds=_script_terminate_grace_seconds(name),
                 )
@@ -2336,6 +2472,9 @@ class PipelineEngine:
                 stdout, stderr = outcome.stdout, outcome.stderr
             finally:
                 self._clear_active_process(proc)
+                # IPC accept 线程在 grant 未递达时已按 request_id 撤销预登记（C9）。
+                if gate is not None and cs_sock is not None:
+                    gate.stop_ipc_server()
         except Exception as exc:
             return StepResult(success=False, exit_code=1, error_message=str(exc))
         stdout = stdout or ""
@@ -2496,6 +2635,18 @@ class PipelineEngine:
         termination_reason = "completed"
         lifecycle_error = ""
         teardown_result = None
+        self._atomic_delivery_failed = False
+
+        # ADR-0065 D3.11：预登记前展开静态 atomic_group + VBUS return_check 二层冻结。
+        self._atomic_group_frozen = build_atomic_group_frozen(list(init_def or []))
+        gate = getattr(self, "_critical_section", None)
+        if gate is not None and self._atomic_group_frozen:
+            gate.set_frozen_members(list(self._atomic_group_frozen))
+        has_patrol = bool(patrol_def)
+        has_static_atomic = any(
+            isinstance(s, dict) and s.get("atomic_group")
+            for s in (init_def or [])
+        )
 
         patrol_resume: Optional[dict] = None
         skip_init = False
@@ -2558,6 +2709,10 @@ class PipelineEngine:
                 # Distinguish lock_lost (abort) from genuine init failure
                 if init_result.error_message in ("device_lease_lost", "job_aborted"):
                     termination_reason = "abort"
+                elif init_result.error_message == "atomic_delivery_skipped":
+                    termination_reason = "init_failure"
+                elif getattr(self, "_force_abort", False):
+                    termination_reason = "abort"
                 else:
                     termination_reason = "init_failure"
                 lifecycle_error = f"lifecycle init failed: {init_result.error_message}"
@@ -2579,7 +2734,39 @@ class PipelineEngine:
                 # Do NOT return here — fall through to finally for teardown,
                 # then to the unified exit block for MQ status + artifact.
 
+            elif (
+                gate is not None
+                and gate.should_skip_patrol_after_atomic()
+                and has_static_atomic
+            ):
+                # ADR-0065 D5.1：普通 abort 后 atomic_group 已闭环 → 跳过 patrol，
+                # 推进屏障；有足迹则 finally 切入 teardown_disarm。
+                # 纯原子交付（无 patrol）→ COMPLETED；混合 Plan → ABORTED。
+                gate.mark_atomic_group_completed(during_abort_drain=True)
+                if has_patrol:
+                    termination_reason = "abort"
+                    lifecycle_error = "atomic_commit_drain_skip_patrol"
+                else:
+                    termination_reason = "completed"
+                    lifecycle_error = "completed_during_abort_drain"
+                logger.info(
+                    "[Lifecycle] run=%d — atomic_commit drain complete "
+                    "has_patrol=%s reason=%s",
+                    self._run_id, has_patrol, termination_reason,
+                )
+                self._arrive_phase_barrier("PATROL")
+                if (
+                    self._coordinator is not None
+                    and self._plan_run_host_id is not None
+                    and not self._barrier_enabled()
+                ):
+                    self._coordinator.advance_phase(
+                        self._plan_run_host_id, "PATROL",
+                    )
+
             elif patrol_def:
+                if gate is not None and gate.granted and has_static_atomic:
+                    gate.mark_atomic_group_completed(during_abort_drain=False)
                 # ADR-0026: align all PlanRunHost devices before patrol so
                 # long-run waves share a common start (INIT→PATROL barrier).
                 # Patrol-checkpoint resume already passed this boundary — skip.
@@ -2618,6 +2805,10 @@ class PipelineEngine:
                         patrol_def, timeout_seconds, init_completed_at=init_completed_at,
                         resume=patrol_resume,
                     )
+            else:
+                # init 成功且无 patrol：纯原子/纯 init 自然完成。
+                if gate is not None and gate.granted and has_static_atomic:
+                    gate.mark_atomic_group_completed(during_abort_drain=False)
 
         finally:
             # ── Phase 3: Teardown / disarm (best-effort) ──
@@ -2674,6 +2865,11 @@ class PipelineEngine:
                 )
 
         success = termination_reason in ("completed", "timeout")
+        if getattr(self, "_force_abort", False):
+            # ADR-0065 D5.1：force 强杀一律 ABORTED。
+            success = False
+            termination_reason = "abort"
+            lifecycle_error = lifecycle_error or "force_abort"
 
         # Map termination_reason to MQ terminal status
         if success:
@@ -2704,6 +2900,21 @@ class PipelineEngine:
             disarm_results = default_not_executed_for_families(self._footprint_families)
         if disarm_results:
             final_metadata["disarm_results"] = disarm_results
+
+        # ADR-0065 D5.2：atomic_commit 终态字段写入 metadata → complete payload。
+        gate = getattr(self, "_critical_section", None)
+        if gate is not None:
+            final_metadata.update(gate.terminal_fields())
+            try:
+                gate.close()
+            except Exception:
+                logger.exception("critical_section_close_failed job=%s", self._run_id)
+
+        # D4.38：worker 路径占领本地 CAS，与 graceful_shutdown 互斥结算。
+        if not terminal_cas().try_claim(self._run_id, self._terminal_claimant):
+            logger.warning(
+                "terminal_cas_lost_to_shutdown job=%s", self._run_id,
+            )
 
         return StepResult(
             success=success,

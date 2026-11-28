@@ -13,13 +13,18 @@ from typing import Iterable
 SCAN_ROUND_V1 = "scan_round_v1"
 FIRMWARE_CACHE_V1 = "firmware_cache_v1"
 
-# ADR-0065 / B12：能力常量预登记。U1 只登记词表；Agent 心跳上报由 U5 完备后开启，
-# 不得提前并入 AGENT_CAPABILITIES（避免半成品协商）。
+# ADR-0065 / B12：U5 完备后开启三向能力上报（控制面 /complete 与 reaper 协商消费）。
 FINISHING_GUARD_V2 = "finishing_guard_v2"
 ATOMIC_COMMIT = "atomic_commit"
 FORCE_ABORT = "force_abort"
 
-AGENT_CAPABILITIES: tuple[str, ...] = (SCAN_ROUND_V1, FIRMWARE_CACHE_V1)
+AGENT_CAPABILITIES: tuple[str, ...] = (
+    SCAN_ROUND_V1,
+    FIRMWARE_CACHE_V1,
+    FINISHING_GUARD_V2,
+    ATOMIC_COMMIT,
+    FORCE_ABORT,
+)
 
 
 def finishing_guard_capability_bundle() -> tuple[str, ...]:

@@ -34,6 +34,8 @@ class JobRunnerState:
     on_job_not_running_recovery: Optional[Callable[[int], None]] = None
     active_runners: MutableMapping[int, tuple[str, Any]] = field(default_factory=dict)
     abort_requested_job_ids: set[int] = field(default_factory=set)
+    #: ADR-0065 D2 / U5：force=true 与普通 abort 分轨；授予临界区后仅 force 立即杀组。
+    force_abort_job_ids: set[int] = field(default_factory=set)
 
     def is_aborted(self, job_id: int, worker_token: str) -> bool:
         with self.active_jobs_lock:
@@ -42,6 +44,10 @@ class JobRunnerState:
                 or job_id not in self.active_job_ids
                 or self.active_job_tokens.get(job_id, "") != worker_token
             )
+
+    def is_force_abort(self, job_id: int) -> bool:
+        with self.active_jobs_lock:
+            return job_id in self.force_abort_job_ids
 
     def is_current_worker(self, job_id: int, worker_token: str) -> bool:
         with self.active_jobs_lock:
@@ -60,6 +66,7 @@ class JobRunnerState:
     def attach_runner(self, job_id: int, worker_token: str, runner: Any) -> None:
         """Attach a cancellable runner if this worker still owns the job."""
         should_cancel = False
+        force = False
         with self.active_jobs_lock:
             if (
                 job_id not in self.active_job_ids
@@ -67,10 +74,11 @@ class JobRunnerState:
                 or job_id in self.abort_requested_job_ids
             ):
                 should_cancel = True
+                force = job_id in self.force_abort_job_ids
             else:
                 self.active_runners[job_id] = (worker_token, runner)
         if should_cancel:
-            runner.cancel()
+            self._invoke_runner_cancel(runner, force=force)
 
     def detach_runner(self, job_id: int, worker_token: str, runner: Any) -> None:
         with self.active_jobs_lock:
@@ -78,15 +86,28 @@ class JobRunnerState:
             if current == (worker_token, runner):
                 self.active_runners.pop(job_id, None)
 
-    def cancel_runner(self, job_id: int) -> bool:
+    @staticmethod
+    def _invoke_runner_cancel(runner: Any, *, force: bool) -> None:
+        cancel = getattr(runner, "cancel", None)
+        if not callable(cancel):
+            return
+        try:
+            cancel(force=force)
+        except TypeError:
+            # Older runners / test doubles without the force kwarg.
+            cancel()
+
+    def cancel_runner(self, job_id: int, *, force: bool = False) -> bool:
         """Signal the current runner without holding the shared state lock."""
         with self.active_jobs_lock:
             current = self.active_runners.get(job_id)
+            if force:
+                self.force_abort_job_ids.add(job_id)
         if current is None:
             return False
         _worker_token, runner = current
         try:
-            runner.cancel()
+            self._invoke_runner_cancel(runner, force=force)
         except Exception:
             logger.exception("run_cancel_failed job_id=%d", job_id)
             return False
@@ -116,13 +137,15 @@ class JobRunnerState:
             return False
         return False
 
-    def request_abort(self, job_id: int) -> bool:
+    def request_abort(self, job_id: int, *, force: bool = False) -> bool:
         """Keep worker ownership until it uploads the post-termination ACK."""
         with self.active_jobs_lock:
             if job_id not in self.active_job_ids:
                 return False
             self.abort_requested_job_ids.add(job_id)
-        self.cancel_runner(job_id)
+            if force:
+                self.force_abort_job_ids.add(job_id)
+        self.cancel_runner(job_id, force=force)
         return True
 
     def release(
@@ -145,6 +168,7 @@ class JobRunnerState:
                 self.active_runners.pop(job_id, None)
             if is_current_worker:
                 self.abort_requested_job_ids.discard(job_id)
+                self.force_abort_job_ids.discard(job_id)
                 # #1006: 恢复动作（ABORT_LOCAL/CLEANUP）可能在 worker 退出前
                 # 先行 clear_fencing_token，使 lock_deregister 经 lease_renewer
                 # 映射取不到 device_id → _active_device_ids 占位残留、同设备
