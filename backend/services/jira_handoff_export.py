@@ -28,7 +28,6 @@ import threading
 from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy.orm import Session
-import xlwt
 
 from backend.agent.contracts.evidence_layout import EvidenceLayoutError, copytree_no_symlinks
 from backend.core.settings.jira_handoff_export import (
@@ -44,10 +43,10 @@ from backend.services.jira_handoff_builder import (
     _atomic_write_bytes,
     _canonical_json_bytes,
     _load_manifest_strict,
+    _render_preview_form_xls,
     compute_manifest_sha256,
     validate_handoff_id,
 )
-from backend.services.jira_handoff_identity import FORM_COLUMNS, safe_xls_cell
 
 logger = logging.getLogger(__name__)
 
@@ -583,28 +582,17 @@ def ensure_dec_for_entry(
             _track_extract_exit()
 
 
-def _render_final_form_xls(
-    dest: Path,
-    *,
-    build: str,
-    folder_name: str,
+def _prepare_final_form_issues(
     issues: Sequence[Mapping[str, Any]],
+    *,
+    folder_name: str,
     vendor_prefix: str,
     export_root: Path,
-) -> tuple[str, list[str]]:
-    """渲染终稿 15 列表单；同时返回已核验的本机 Path 列表。"""
-    wb = xlwt.Workbook(encoding="utf-8")
-    ws = wb.add_sheet("aeeexp", cell_overwrite_ok=True)
-    widths = [1000, 10000, 6000, 7000, 2000, 4000, 7000, 7000, 30000, 30000, 7000, 5000, 7000, 10000, 8000]
-    for col_idx, width in enumerate(widths):
-        ws.col(col_idx).width = width
-    st_hdr = xlwt.easyxf("font: height 200, name Times New Roman, color-index blue, bold on")
-    st_body = xlwt.easyxf("font: name calibri")
-    for col_idx, col_name in enumerate(FORM_COLUMNS):
-        ws.write(0, col_idx, col_name, st_hdr)
-
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """核验代表 DEC/Path 可达，并构造可复用 A 段渲染器的 issue 列表（Path 写入 preview_path）。"""
+    prepared: list[dict[str, Any]] = []
     verified_local_paths: list[str] = []
-    for row_idx, item in enumerate(issues, start=1):
+    for item in issues:
         rep = item["representative"]
         serial = str(rep["serial"])
         entry = str(rep["entry"])
@@ -612,9 +600,12 @@ def _render_final_form_xls(
         exp_main = _find_dec_exp_main(local_entry)
         if exp_main is None:
             raise JiraHandoffError(
-                422,
-                "handoff_dec_missing",
-                f"representative missing *.DEC/__exp_main.txt before final publish: {serial}/{entry}",
+                status_code=422,
+                code="handoff_dec_missing",
+                detail=(
+                    f"representative missing *.DEC/__exp_main.txt before final publish: "
+                    f"{serial}/{entry}"
+                ),
             )
         vendor_path = (
             f"{vendor_prefix}/{folder_name}/{serial}/aee_exp/{entry}/"
@@ -627,54 +618,25 @@ def _render_final_form_xls(
             st = os.lstat(local_mapped)
         except OSError as exc:
             raise JiraHandoffError(
-                422,
-                "handoff_path_unreachable",
-                f"mapped local Path is not reachable: {local_mapped}",
+                status_code=422,
+                code="handoff_path_unreachable",
+                detail=f"mapped local Path is not reachable: {local_mapped}",
             ) from exc
         if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
             raise JiraHandoffError(
-                422,
-                "handoff_path_unreachable",
-                f"mapped local Path must be a regular non-symlink file: {local_mapped}",
+                status_code=422,
+                code="handoff_path_unreachable",
+                detail=f"mapped local Path must be a regular non-symlink file: {local_mapped}",
             )
         if not os.path.isfile(local_mapped):
             raise JiraHandoffError(
-                422,
-                "handoff_path_unreachable",
-                f"mapped local Path isfile=False: {local_mapped}",
+                status_code=422,
+                code="handoff_path_unreachable",
+                detail=f"mapped local Path isfile=False: {local_mapped}",
             )
         verified_local_paths.append(str(local_mapped))
-
-        ff = item["form_fields"]
-        values: list[Any] = [
-            row_idx - 1,
-            vendor_path,
-            build,
-            ff.get("ExpTime", ""),
-            ff.get("ExpClass", ""),
-            ff.get("ExpType", ""),
-            ff.get("CurProcess", ""),
-            ff.get("Package", ""),
-            ff.get("Detail", ""),
-            ff.get("CausedBy", ""),
-            ff.get("extraTag", ""),
-            int(item["count"]),
-            ff.get("Activity", ""),
-            int(item["device_count"]),
-            ff.get("Rom_Ram", ""),
-        ]
-        for col_idx, val in enumerate(values):
-            ws.write(row_idx, col_idx, safe_xls_cell(val), st_body)
-
-    with tempfile.NamedTemporaryFile(dir=str(dest.parent), suffix=".xls", delete=False) as fh:
-        tmp_path = Path(fh.name)
-    try:
-        wb.save(str(tmp_path))
-        data = tmp_path.read_bytes()
-    finally:
-        tmp_path.unlink(missing_ok=True)
-    digest = _atomic_write_bytes(dest, data)
-    return digest, verified_local_paths
+        prepared.append({**dict(item), "preview_path": vendor_path})
+    return prepared, verified_local_paths
 
 
 def _publish_final_xls_with_backup(
@@ -711,13 +673,17 @@ def _publish_final_xls_with_backup(
             )
         backups.append({"original": old.name, "backup": bak_name, "sha256": old_sha})
 
-    digest, verified = _render_final_form_xls(
-        final_path,
-        build=build,
+    # 复用 U1 `_render_preview_form_xls`（已登记 xlwt），避免 export 模块新增 xlwt 耦合（#739）。
+    prepared_issues, verified = _prepare_final_form_issues(
+        issues,
         folder_name=folder_name,
-        issues=issues,
         vendor_prefix=vendor_prefix,
         export_root=export_root,
+    )
+    digest = _render_preview_form_xls(
+        final_path,
+        build=build,
+        issues=prepared_issues,
     )
     return {
         "filename": filename,

@@ -27,6 +27,9 @@ Class: feature
    写入 `Result_None_None_MonkeyAEE_SH_<ts>.xls`（15 列 + `"ExpType "` 尾空格 + B3
    公式中和）。原冻结 `manifest.json` 不可变；审计写入 `export_receipt.json` 并投影
    `EXPORTED`，`record_audit(jira_handoff_bundle_exported)` business 90d。
+5. **Excel 依赖不扩散（#739 / 第 1 轮复核）**：B 段终稿渲染复用 U1 已登记的
+   `_render_preview_form_xls`，`jira_handoff_export.py` 不直接 `import xlwt`，避免
+   触发 `test_excel_dependency_inventory` 台账扩散。
 
 ## Alternatives
 
