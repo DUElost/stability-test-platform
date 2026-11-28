@@ -1519,8 +1519,23 @@ export interface Project {
   source: 'USER' | 'SEED';
   /** 旧版后端（未部署 mapping 端点前）响应不含该字段——消费方需 ?? [] 防御。 */
   match_models?: string[];
+  /** ADR-0067 D1（#4182 Phase 3）：受控白名单项目日志预设（NULL = 未配置）。 */
+  log_profile?: ProjectLogProfile | null;
+  /** ADR-0067 D1：单调递增日志预设版本号（未配置为 0）。 */
+  log_profile_version?: number;
   created_at: string;
   updated_at: string;
+}
+
+/** ADR-0067 D1.2：项目级持续日志预设（仅 7 个白名单键）。 */
+export interface ProjectLogProfile {
+  mobilelog_size_mb?: number | null;
+  mtk_auto_start?: boolean | null;
+  mtk_sublog_cmd?: string | null;
+  aee_mode?: string | null;
+  ylog_size_mb?: number | null;
+  ylog_rotate?: boolean | null;
+  ylog_required_streams?: Array<'android' | 'kernel' | 'uboot' | 'lastlog'> | null;
 }
 
 /** ADR-0029 D6（#405）：专项字典行，与后端 Specialty 表同步。 */
@@ -1592,6 +1607,7 @@ export interface ProjectUpdateInput {
   display_name?: string;
   customer?: string | null;
   jira_project_key?: string | null;
+  log_profile?: ProjectLogProfile | null;
 }
 
 export interface ProjectMapConflict {
