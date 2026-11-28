@@ -1139,9 +1139,13 @@ def apply_override_sync(
         closed_reason=DEBT_CLOSE_OVERRIDDEN,
         now=now,
     )
+    manual_lease_released = False
     if "usb_net" in target:
-        close_usbnet_sessions_on_override_sync(db, device_id=device_id, now=now)
-    released = _maybe_release_debt_lease_sync(db, device, now=now)
+        override_net = close_usbnet_sessions_on_override_sync(
+            db, device=device, now=now,
+        )
+        manual_lease_released = bool(override_net["manual_lease_released"])
+    released = _maybe_release_debt_lease_sync(db, device, now=now) or manual_lease_released
     open_rows = _open_debts_sync(db, device_id)
     _recompute_return_state_from_open_debts(device, open_rows, now=now)
     return {

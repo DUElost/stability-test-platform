@@ -33,7 +33,7 @@ Class: feature
 - 契约守卫与 Agent 归还单测（隔离无库模式，经 `scripts/run_pytest.py`）：
   `tests/test_device_return_u3_sourceguard_3728.py`、`tests/test_admin_only_read_surface_register.py`、`tests/test_lock_order_collection_total_order.py`、`backend/tests/test_audit_resource_type_guard.py`、`backend/tests/test_audit_action_retention_guard_3017.py`、`tests/test_env_inventory.py`、`tests/test_env_example_parity.py`、`tests/test_settings_scheduler.py`、`backend/tests/realtime/test_p3_3_multi_instance.py`、`backend/agent/tests/test_onboarded_gpu_b7_u1_3810.py`、`backend/agent/tests/test_powercycle_disarm_transient_3989.py`、`backend/agent/tests/test_device_return_u1_3726.py` → `185 passed`；
 - 隔离 PostgreSQL 集成测试（`unset TEST_DATABASE_URL`，经 `scripts/run_pytest.py`）：
-  - `backend/tests/services/test_b13_u2_network_return.py`（覆盖 B13 §4.2 U2 全部 5 项反例 + WiFi 无误建债 + 共存欠账审计放行 + 到期巡检）→ `9 passed`；
+  - `backend/tests/services/test_b13_u2_network_return.py`（覆盖 B13 §4.2 U2 全部 5 项反例 + WiFi 无误建债 + 共存欠账审计放行 + 到期巡检 + 通用 `apply_override_sync` 未转欠账手动 `usb_net` 租约收口与 `wifi` 隔离反例）→ `10 passed`；
   - `backend/tests/services/test_b13_u1_network_supply.py`、`backend/tests/services/test_device_return_u3_3728.py`、`backend/tests/services/test_device_return_lock_order_3728.py`、`backend/tests/api/test_onboarded_teardown_shape_u5_3730.py`、`backend/tests/api/test_disarm_policy_u8_3752.py` → `94 passed`；
 - 静态与治理门禁：`compileall -q backend tools scripts`、`ruff check backend tools scripts tests`、`tools/dev/check-internal-ip-leak.py --check`（4450 文件）、`tools/dev/check_governance_surface.py --base origin/main`（S1–S15、S5x）、`env_inventory`（302 个读取名）全部通过；
 - GitHub required checks（`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、`pr-agent-tests`、`pr-migrate-empty-db`）：pending（PR 推送后由 CI 执行）。

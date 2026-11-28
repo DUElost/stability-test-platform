@@ -64,6 +64,7 @@ from backend.services.device_return import (
     DEBT_LEASE_REASON,
     apply_discharge_sync,
     apply_late_confirmed_sync,
+    apply_override_sync,
     handle_job_lease_release,
     handle_job_lease_release_sync,
     is_debt_lease,
@@ -939,3 +940,133 @@ def test_u2_reaper_transitions_expired_manual_session_to_releasing_without_relea
     assert sess_after.released_at is None
     assert lease_after.reason == MANUAL_NETWORK_LEASE_REASON
     assert lease_after.lease_generation == enabled["generation"]
+
+
+def test_u2_generic_return_override_settles_unconverted_manual_usbnet_lease(
+    db_session, ed25519_grant_key,
+):
+    """PR #4235 R1 blocker counterexample: generic ADR-0061 apply_override_sync on an
+    unconverted manual usb_net session must settle its manual_network_supply lease
+    (release when zero remaining debts, convert to debt lease when another family
+    still has open debt) and never touch an unrelated manual wifi lease.
+    """
+    # Case 1: unconverted manual usb_net + zero remaining debts → release lease
+    host_a, dev_a, pool_a = _seed_host_device_pool(db_session, resource_type="usb_net")
+    db_session.commit()
+    enabled_a = enable_manual_network_supply_sync(
+        db_session,
+        device_id=dev_a.id,
+        resource_pool_id=pool_a.id,
+        admin_username="admin",
+        ttl_seconds=3600,
+    )
+    sess_a_id = enabled_a["id"]
+
+    res_a = apply_override_sync(
+        db_session,
+        device_id=dev_a.id,
+        families=None,
+        reason_category="ops_cleanup",
+        evidence_ref="OPS-4235-generic-override",
+    )
+    db_session.commit()
+
+    assert res_a["ok"] is True
+    assert res_a["debt_lease_released"] is True
+    assert res_a["open_debt_count"] == 0
+
+    db_session.expire_all()
+    sess_a = db_session.get(DeviceNetworkSession, sess_a_id)
+    dev_a_ref = db_session.get(Device, dev_a.id)
+    assert sess_a.status == "RELEASED"
+    assert sess_a.release_reason == "manual_override"
+    assert dev_a_ref.return_state["usb_net"]["state"] == "unverified"
+    assert dev_a_ref.return_state["usb_net"]["source"] == "override"
+    assert (
+        db_session.query(DeviceLease)
+        .filter_by(device_id=dev_a.id, status=LeaseStatus.ACTIVE.value)
+        .count()
+    ) == 0
+    revokes_a = pending_usbnet_revokes_for_host_sync(db_session, host_a.id)
+    assert [r["session_id"] for r in revokes_a] == [sess_a_id]
+
+    # Case 2: unconverted manual usb_net + coexisting power-cycle debt → convert N → N+1
+    _, dev_b, pool_b = _seed_host_device_pool(db_session, resource_type="usb_net")
+    db_session.commit()
+    enabled_b = enable_manual_network_supply_sync(
+        db_session,
+        device_id=dev_b.id,
+        resource_pool_id=pool_b.id,
+        admin_username="admin",
+        ttl_seconds=3600,
+    )
+    sess_b_id = enabled_b["id"]
+    gen_b = enabled_b["generation"]
+    db_session.add(
+        DeviceReturnDebt(
+            device_id=dev_b.id,
+            family="power-cycle",
+            source_kind="stock",
+            source_job_id=None,
+            cause="incomplete",
+            state="open",
+        )
+    )
+    db_session.commit()
+
+    res_b = apply_override_sync(
+        db_session,
+        device_id=dev_b.id,
+        families=["usb_net"],
+        reason_category="ops_cleanup",
+        evidence_ref="OPS-4235-generic-coexisting",
+    )
+    db_session.commit()
+
+    assert res_b["ok"] is True
+    assert res_b["debt_lease_released"] is False
+    assert res_b["open_debt_count"] == 1
+
+    db_session.expire_all()
+    sess_b = db_session.get(DeviceNetworkSession, sess_b_id)
+    lease_b = (
+        db_session.query(DeviceLease)
+        .filter_by(device_id=dev_b.id, status=LeaseStatus.ACTIVE.value)
+        .one()
+    )
+    assert sess_b.status == "RELEASED"
+    assert sess_b.release_reason == "manual_override"
+    assert is_debt_lease(lease_b)
+    assert lease_b.reason == DEBT_LEASE_REASON
+    assert lease_b.lease_generation == gen_b + 1
+
+    # Case 3: manual wifi session is NOT touched by generic return-override(families=None)
+    _, dev_c, pool_c = _seed_host_device_pool(db_session, resource_type="wifi")
+    db_session.commit()
+    enabled_c = enable_manual_network_supply_sync(
+        db_session,
+        device_id=dev_c.id,
+        resource_pool_id=pool_c.id,
+        admin_username="admin",
+        ttl_seconds=3600,
+    )
+    res_c = apply_override_sync(
+        db_session,
+        device_id=dev_c.id,
+        families=None,
+        reason_category="ops_cleanup",
+        evidence_ref="OPS-4235-wifi-untouched",
+    )
+    db_session.commit()
+    assert res_c["debt_lease_released"] is False
+
+    db_session.expire_all()
+    sess_c = db_session.get(DeviceNetworkSession, enabled_c["id"])
+    lease_c = (
+        db_session.query(DeviceLease)
+        .filter_by(device_id=dev_c.id, status=LeaseStatus.ACTIVE.value)
+        .one()
+    )
+    assert sess_c.status == "PROVISIONING"
+    assert lease_c.reason == MANUAL_NETWORK_LEASE_REASON
+    assert lease_c.lease_generation == enabled_c["generation"]

@@ -507,15 +507,23 @@ def close_usbnet_sessions_on_discharge_sync(
 def close_usbnet_sessions_on_override_sync(
     db: Session,
     *,
-    device_id: int,
+    device: Device,
     now: datetime,
-) -> int:
-    """Close unreleased bound ``usb_net`` sessions inside generic device ``apply_override_sync``."""
+) -> dict[str, Any]:
+    """Close unreleased bound ``usb_net`` sessions inside generic ``apply_override_sync``.
+
+    Mirrors ``audit_override_network_session_sync`` for unconverted manual ``usb_net``
+    sessions whose bound ``manual_network_supply`` lease has not yet been converted to
+    an ADR-0061 debt lease: releases that lease when zero open debts remain across all
+    families, or converts it in-place to a standard debt lease (``N → N+1``) when
+    another family still holds open debt. Never touches leases bound to non-``usb_net``
+    (e.g. manual ``wifi``) sessions.
+    """
     sessions = list(
         db.execute(
             select(DeviceNetworkSession)
             .where(
-                DeviceNetworkSession.device_id == device_id,
+                DeviceNetworkSession.device_id == device.id,
                 DeviceNetworkSession.resource_type == "usb_net",
                 DeviceNetworkSession.lease_id.is_not(None),
                 DeviceNetworkSession.generation.is_not(None),
@@ -525,7 +533,10 @@ def close_usbnet_sessions_on_override_sync(
             .with_for_update()
         ).scalars().all()
     )
+    closed_lease_ids: set[int] = set()
     for sess in sessions:
+        if sess.lease_id is not None:
+            closed_lease_ids.add(int(sess.lease_id))
         _mark_usbnet_revoke_pending(sess, now=now)
         sess.status = "RELEASED"
         sess.release_reason = "manual_override"
@@ -533,7 +544,31 @@ def close_usbnet_sessions_on_override_sync(
         sess.updated_at = now
     if sessions:
         db.flush()
-    return len(sessions)
+
+    manual_lease_released = False
+    manual_lease_converted_to_debt = False
+    if closed_lease_ids:
+        lease = _active_lease_sync(db, device.id)
+        if (
+            lease is not None
+            and _is_manual_network_lease(lease)
+            and int(lease.id) in closed_lease_ids
+        ):
+            remaining_debts = _open_debts_sync(db, device.id)
+            if not remaining_debts:
+                lease.status = LeaseStatus.RELEASED.value
+                lease.released_at = now
+                db.flush()
+                manual_lease_released = True
+            else:
+                _convert_lease_to_debt_sync(db, device, lease, now=now)
+                manual_lease_converted_to_debt = True
+
+    return {
+        "closed_sessions": len(sessions),
+        "manual_lease_released": manual_lease_released,
+        "manual_lease_converted_to_debt": manual_lease_converted_to_debt,
+    }
 
 
 def close_usbnet_session_on_late_confirmed_sync(
