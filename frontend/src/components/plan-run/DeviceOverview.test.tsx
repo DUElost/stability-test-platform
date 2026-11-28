@@ -378,6 +378,46 @@ describe('DeviceOverview', () => {
     expect(screen.getByTestId('device-wait-3010')).toHaveTextContent('认领 90s');
   });
 
+  it('shows finishing kind in wait column; null deadline 不渲染假倒计时 (#4206 U3)', () => {
+    const data: PlanRunDevicesPayload = {
+      ...fixture,
+      by_status: { all: 1, finishing: 1 },
+      devices: [
+        {
+          device_id: 12,
+          device_serial: 'DEV-FIN',
+          device_model: 'Pixel 8',
+          host_id: 'host-101',
+          job_id: 3012,
+          job_status: 'RUNNING',
+          ui_status: 'finishing',
+          job_exec_status: 'finishing',
+          device_link_status: 'online',
+          current_stage: 'teardown',
+          current_step: 'gpu_finish',
+          patrol_cycle_count: 1,
+          patrol_success_cycle_count: 1,
+          patrol_failed_cycle_count: 0,
+          current_failure_streak: 0,
+          next_retry_at: null,
+          manual_action: null,
+          log_signal_count: 0,
+          last_heartbeat_at: '2026-05-08T12:30:00Z',
+          started_at: '2026-05-08T12:00:00Z',
+          ended_at: null,
+          finishing_kind: 'teardown_disarm',
+          finishing_trigger: 'natural_end',
+          finishing_deadline_at: null,
+        },
+      ],
+    };
+    renderInTableView({ data });
+    // badge + filter chip 都会出现「收尾中」；断言徽章 data-status 与等待列即可。
+    expect(document.querySelector('[data-kind="device-ui"][data-status="finishing"]')).toBeTruthy();
+    expect(screen.getByTestId('device-wait-3012')).toHaveTextContent('解除配置中');
+    expect(screen.getByTestId('device-wait-3012')).not.toHaveTextContent('截止');
+  });
+
   it('shows pending claim SLA countdown in status tooltip', () => {
     const createdAt = new Date(Date.now() - 30_000).toISOString();
     const data: PlanRunDevicesPayload = {

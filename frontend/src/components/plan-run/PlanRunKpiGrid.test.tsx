@@ -16,15 +16,49 @@ const makeDevices = (
 } as unknown as PlanRunDevicesPayload);
 
 describe('PlanRunKpiGrid', () => {
-  it('renders all 7 cells', () => {
-    render(<PlanRunKpiGrid devices={makeDevices({ total: 10, running: 3, completed: 5, failed: 2, unknown: 0, backoff: 0 })} currentStage="patrol" patrolCycle={4} />);
+  it('renders KPI cells including finishing (#4206 U3)', () => {
+    render(
+      <PlanRunKpiGrid
+        devices={makeDevices({
+          total: 10,
+          running: 3,
+          finishing: 2,
+          completed: 5,
+          failed: 2,
+          unknown: 0,
+          backoff: 0,
+        })}
+        currentStage="patrol"
+        patrolCycle={4}
+      />,
+    );
     expect(screen.getByTestId('kpi-total').textContent).toContain('10');
     expect(screen.getByTestId('kpi-running').textContent).toContain('3');
+    expect(screen.getByTestId('kpi-finishing').textContent).toContain('2');
+    expect(screen.getByTestId('kpi-finishing')).toHaveTextContent('收尾中');
     expect(screen.getByTestId('kpi-completed').textContent).toContain('5');
     expect(screen.getByTestId('kpi-failed').textContent).toContain('2');
     expect(screen.getByTestId('kpi-disconnected-backoff')).toHaveTextContent('Job 失联/退避');
     expect(screen.getByTestId('kpi-disconnected-backoff').textContent).toContain('0');
     expect(screen.getByTestId('kpi-link-abnormal')).toHaveTextContent('设备连接异常');
+  });
+
+  it('点击收尾中 KPI 触发 finishing 筛选 (#4206 U3)', () => {
+    const onSelectStatus = vi.fn();
+    render(
+      <PlanRunKpiGrid
+        facets={{
+          total: 4,
+          by_status: { all: 4, running: 1, finishing: 2, completed: 1 },
+          by_link_status: { all: 4, online: 4 },
+          by_host: {},
+        }}
+        statusFilter="all"
+        onSelectStatus={onSelectStatus}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('kpi-finishing'));
+    expect(onSelectStatus).toHaveBeenCalledWith('finishing');
   });
 
   it('shows patrol stage label in Chinese', () => {

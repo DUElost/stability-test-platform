@@ -33,6 +33,10 @@ import {
   UNASSIGNED_HOST_BUCKET,
 } from './deviceUiStatus';
 import { DEVICE_LINK_STATUS } from './deviceLinkStatus';
+import {
+  finishingKindLabel,
+  formatFinishingDeadlineCountdown,
+} from './planRunStatus';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAllHosts } from '@/utils/api';
 import { hostKeys } from '@/utils/api/queryKeys';
@@ -181,6 +185,15 @@ function execTooltip(d: DeviceMatrixItem, now: number): string | undefined {
   }
   if (exec === 'running' && d.last_heartbeat_at) {
     return `最近 patrol 心跳：${fmtRelative(d.last_heartbeat_at, now)}`;
+  }
+  if (exec === 'finishing') {
+    // 子类型文案仅来自表格/详情字段；Minimap 7 字段无 finishing_*，此处自然缺省。
+    const kindLabel = finishingKindLabel(d.finishing_kind);
+    const countdown = formatFinishingDeadlineCountdown(d.finishing_deadline_at, now);
+    const parts = ['收尾中'];
+    if (kindLabel) parts.push(kindLabel);
+    if (countdown != null) parts.push(`保护剩余 ${countdown}`);
+    return parts.join(' — ');
   }
   return undefined;
 }
@@ -370,8 +383,18 @@ function DeviceTable({
                 : d.current_failure_streak >= 1
                 ? 'text-warning'
                 : 'text-muted-foreground/70';
+            const execStatus = d.job_exec_status ?? d.ui_status;
+            const kindText = finishingKindLabel(d.finishing_kind);
+            const deadlineText = formatFinishingDeadlineCountdown(
+              d.finishing_deadline_at,
+              now,
+            );
             const waitLabel =
-              d.ui_status === 'unknown' && d.grace_remaining_seconds != null
+              execStatus === 'finishing'
+                ? [kindText, deadlineText != null ? `截止 ${deadlineText}` : null]
+                    .filter(Boolean)
+                    .join(' · ') || '收尾中'
+                : d.ui_status === 'unknown' && d.grace_remaining_seconds != null
                 ? `grace ${fmtCountdown(d.grace_remaining_seconds)}`
                 : d.ui_status === 'pending' && d.pending_claim_remaining_seconds != null
                 ? `认领 ${fmtCountdown(d.pending_claim_remaining_seconds)}`
@@ -687,7 +710,6 @@ export default function DeviceOverview({
           onSearchQueryChange={onSearchQueryChange}
           hostLabelFor={(hostId) => hostLabelFor(hostId)}
         />
-
         {/* Body */}
         {activeError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">

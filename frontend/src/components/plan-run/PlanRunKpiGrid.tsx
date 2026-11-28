@@ -89,6 +89,7 @@ export default function PlanRunKpiGrid({
   const byLinkStatus = facets?.by_link_status ?? devices?.by_link_status;
   const total = facets?.total ?? devices?.total ?? 0;
   const running = byStatus.running ?? 0;
+  const finishing = byStatus.finishing ?? 0;
   const completed = byStatus.completed ?? 0;
   const failed = byStatus.failed ?? 0;
   const unknown = byStatus.unknown ?? 0;
@@ -152,6 +153,15 @@ export default function PlanRunKpiGrid({
           active={statusFilter === 'running'}
           onClick={toggleStatus ? () => toggleStatus('running') : undefined}
           title={toggleStatus ? '点击筛选运行中设备' : undefined}
+        />
+        <Cell
+          value={finishing}
+          label="收尾中"
+          tone={finishing > 0 ? 'info' : 'default'}
+          testId="kpi-finishing"
+          active={statusFilter === 'finishing'}
+          onClick={toggleStatus ? () => toggleStatus('finishing') : undefined}
+          title={toggleStatus ? '点击筛选收尾中设备' : undefined}
         />
         <Cell
           value={completed}

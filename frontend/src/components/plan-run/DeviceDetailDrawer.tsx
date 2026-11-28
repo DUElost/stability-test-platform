@@ -48,6 +48,11 @@ import type {
   PlanRunJobDetail,
 } from '@/utils/api/types';
 import { formatScriptIdentity } from './scriptIdentity';
+import {
+  finishingKindLabel,
+  finishingTriggerLabel,
+  formatFinishingDeadlineCountdown,
+} from './planRunStatus';
 import { formatDateTimeShort } from '@/utils/format';
 import {
   DEVICE_LINK_STATUS,
@@ -302,8 +307,16 @@ function DeviceDetailDrawerInner({
               kind="device-ui"
               status={execStatus}
               size="sm"
-              spin={execStatus === 'running'}
+              spin={execStatus === 'running' || execStatus === 'finishing'}
             />
+            {execStatus === 'finishing' && finishingKindLabel(device.finishing_kind) && (
+              <span
+                className={cn('text-xs font-semibold', TEXT.subtitle)}
+                data-testid="device-drawer-finishing-kind"
+              >
+                · {finishingKindLabel(device.finishing_kind)}
+              </span>
+            )}
             <span className={cn('text-xs font-semibold', TEXT.subtitle)}>
               · {device.current_stage.toUpperCase()}
             </span>
@@ -358,6 +371,20 @@ function DeviceDetailDrawerInner({
                 : []),
               ...(device.pending_claim_remaining_seconds != null
                 ? [['认领 SLA 剩余', `${device.pending_claim_remaining_seconds}s`, false] as KvRow]
+                : []),
+              ...(execStatus === 'finishing' && finishingKindLabel(device.finishing_kind)
+                ? [['收尾子类型', finishingKindLabel(device.finishing_kind)!, false] as KvRow]
+                : []),
+              ...(execStatus === 'finishing' && finishingTriggerLabel(device.finishing_trigger)
+                ? [['收尾触发', finishingTriggerLabel(device.finishing_trigger)!, false] as KvRow]
+                : []),
+              ...(execStatus === 'finishing' &&
+              formatFinishingDeadlineCountdown(device.finishing_deadline_at) != null
+                ? [[
+                    '收尾截止',
+                    formatFinishingDeadlineCountdown(device.finishing_deadline_at)!,
+                    false,
+                  ] as KvRow]
                 : []),
               ...(device.busy_reason
                 ? [[

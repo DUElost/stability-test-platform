@@ -574,3 +574,44 @@ describe('DeviceDetailDrawer — 解除结果（ADR-0061 D1.2 / U6）', () => {
     expect(api.planRuns.getJobWatcherSignals).toHaveBeenCalledWith(1, 3011, { skip: 0, limit: 50 });
   });
 });
+
+describe('DeviceDetailDrawer — finishing 投影 (#4206 U3)', () => {
+  it('展示收尾中徽章与子类型，并渲染截止倒计时', () => {
+    const deadline = new Date(Date.now() + 120_000).toISOString();
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          ui_status: 'finishing',
+          job_exec_status: 'finishing',
+          finishing_kind: 'teardown_disarm',
+          finishing_trigger: 'manual_abort',
+          finishing_deadline_at: deadline,
+        })}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByText('收尾中')).toBeInTheDocument();
+    expect(screen.getByTestId('device-drawer-finishing-kind')).toHaveTextContent('解除配置中');
+    expect(screen.getByText('收尾触发')).toBeInTheDocument();
+    expect(screen.getByText('手动中止')).toBeInTheDocument();
+    expect(screen.getByText('收尾截止')).toBeInTheDocument();
+  });
+
+  it('finishing_deadline_at=null 时不渲染假倒计时（纯采集 teardown）', () => {
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          ui_status: 'finishing',
+          job_exec_status: 'finishing',
+          finishing_kind: 'teardown_disarm',
+          finishing_trigger: 'natural_end',
+          finishing_deadline_at: null,
+        })}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByText('收尾中')).toBeInTheDocument();
+    expect(screen.getByTestId('device-drawer-finishing-kind')).toHaveTextContent('解除配置中');
+    expect(screen.queryByText('收尾截止')).toBeNull();
+  });
+});
