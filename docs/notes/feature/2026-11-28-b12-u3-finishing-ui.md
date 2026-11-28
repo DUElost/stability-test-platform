@@ -38,7 +38,10 @@ Class: feature
   DeviceOverview / DeviceDetailDrawer / PlanRunListPage / PlanRunDetailPage）
   → 155 passed
 - `./scripts/project_python.sh scripts/run_gates.py check:quick` → 16 gates OK
-- ui-preview / Playwright 截图自检 →（见 PR 正文；`ui_review_env.py up --sha 3dac7ebfe`）
+- `ui_review_env.py up --sha 3dac7ebfe` + 定向 Playwright
+  （`/execution/plan-runs` 收尾中 tab 空闲/激活态）：
+  `docOverflow=0`（1440/1280），筛选控件高度差 0px；
+  截图 `/tmp/ui-review-probe-u3/plan_runs_*_finishing_*.png`
 
 ## Revisit
 
