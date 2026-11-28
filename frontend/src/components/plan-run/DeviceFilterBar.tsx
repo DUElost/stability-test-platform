@@ -38,7 +38,6 @@ interface Props {
 const STATUS_DEF: Array<{ key: DeviceUiStatus | 'all'; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'running', label: '运行中' },
-  { key: 'finishing', label: '收尾中' },
   { key: 'completed', label: '完成' },
   { key: 'unknown', label: '已断开' },
   { key: 'failed', label: '失败' },
