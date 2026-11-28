@@ -1,5 +1,5 @@
 # ADR-0060: 计划参数的含义与生效值——分层投影与说明登记表
-- 状态：Accepted v1.1（2026-10-10 #3652 Owner 裁决修订 D3 hard-max 示例与 §5 对应边界反例；其余决策相对 v1.0 不变；落地仍按 §5 走 ADR-0058 批次）
+- 状态：Accepted v1.2（2026-11-28 随 [ADR-0067](./ADR-0067-project-log-profile-and-param-layering.md) v1.0 同步修订 D1.5 `ParamSource` 五值、D1.8 共享夹具与 D5 确认指纹输入，接入项目级日志预设 `project_preset`；其余决策相对 v1.1 不变）
 - 版本记录：
   - v0.1 2026-10-09 起草（[#3637](https://github.com/DUElost/stability-test-platform/issues/3637)）。
   - v0.2 2026-10-10 按 #3638 独立复核修订：
@@ -10,6 +10,7 @@
     - R2：不改 D2 语义，记入 §5 的批次测试边界。
   - v1.0 2026-10-10 定向复核通过（#3638），Owner 裁决接受 v0.2 全文，决策无改动；归属域登记为语义归属索引的 `plan-param-projection`。
   - v1.1 2026-10-10 [#3652](https://github.com/DUElost/stability-test-platform/issues/3652) Owner 裁决：`barrier_max_wait_seconds=NULL` 表示继承主机安全策略（`env_fallback`），不是 `unset_definite`「无硬顶」。修订 D3-1 / D3-2 示例与 §5 对应边界反例；对齐现行 `pipeline_engine._default_barrier_max_wait_seconds`（`STP_BARRIER_MAX_WAIT_SECONDS` → 1800s；非法环境变量回落 1800s；非正值环境变量表示无硬顶）。不改 Agent 执行、env、状态、数据库、回报协议或 B5 Appetite。
+  - v1.2 2026-11-28 随 [ADR-0067](./ADR-0067-project-log-profile-and-param-layering.md)（Accepted v1.0，`#4182` Phase 3）同步修订：D1.5 `ParamSource` 由四值扩展为五值（新增 `project_preset`），D1.8 共享一致性测试夹具纳入 `project_preset`，D5 确认指纹输入纳入已解析的 `project_log_profile` 块（指纹协议由 ADR-0067 D4 升级至 `stp-l1-v2:`）。
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-10-09
@@ -113,16 +114,16 @@ ADR-0023 的 2026-09-25 裁决已撤销 `run_context.wifi_assignments` 冗余副
 4. L2 必须只从 `plan_snapshot` 与 `run_context` 冻结决定重建，不得回读当前 PlanStep / Script 行（ADR-0023 D2 口径）。
    L2 不得包含逐设备的注入值；这些值属于 L3。
 5. L3 必须从 `JobInstance.pipeline_def`、`ResourceAllocation` 与 claim 口径派生，不得写回或伪装为 `plan_snapshot` 的固有值。
-   参数来源取以下四值之一：
-   - `schema_default` / `script_default` / `step_override`；
-   - `dispatch_injection`：只在注入实际填入了值时使用。显式值优先而未被覆盖的键，保留原来源。
+   参数来源取以下五值之一（v1.2 随 [ADR-0067](./ADR-0067-project-log-profile-and-param-layering.md) 增补 `project_preset`）：
+   - `schema_default` / `script_default` / `project_preset` / `step_override`；
+   - `dispatch_injection`：只在注入实际填入了值时使用。未被覆盖的键，保留原来源。
 6. watcher 是独立的「采集策略」值，不是步骤参数：
    - L1 / L2 展示 Plan 的 `watcher_policy` 与主机管控说明；
    - L3 按 host 展示下发策略，口径同 `agent_claim.enrich_job_metadata`；
    - 实施者不得把 watcher 计入参数注入，不得用 `pipeline_def` 比对 watcher。
 7. 已保存的 Plan、执行前确认与运行快照，前端必须读投影，不得自行合并参数。
 8. 编辑中未保存的草稿是例外：编辑器可以在本地合并 L1 以即时回显。
-   前后端必须共用同一份一致性测试夹具（输入 schema / default_params / step.params，期望合并值），
+   前后端必须共用同一份一致性测试夹具（输入 schema / default_params / project_preset / step.params，期望合并值），
    由 pytest 与 vitest 同时消费；夹具不一致时以后端为准。
 
 ### D2 参数说明登记表：与脚本发布单元解耦
@@ -196,7 +197,7 @@ ADR-0023 的 2026-09-25 裁决已撤销 `run_context.wifi_assignments` 冗余副
 ### D5 执行前确认与派发的一致性
 
 1. 执行前确认展示的 L1 基线必须携带配置指纹。指纹由后端根据确认所依据的配置计算：
-   Plan 直列字段、PlanStep 行，以及引用的脚本 `(name, version)` 身份。
+   Plan 直列字段、PlanStep 行、引用的脚本 `(name, version)` 身份，以及已解析的 `project_log_profile` 块（v1.2 随 [ADR-0067](./ADR-0067-project-log-profile-and-param-layering.md) D4 增补，指纹协议升级至 `stp-l1-v2:`）。
 2. 提交派发时，后端必须用 prepare 实际读取的配置重新计算指纹并比较。
    - 不一致时，后端必须拒绝本次派发并返回可识别的错误；
    - 前端必须提示配置已变化，并要求重新预览、重新确认；
@@ -298,7 +299,8 @@ ADR-0023 的 2026-09-25 裁决已撤销 `run_context.wifi_assignments` 冗余副
   - ADR-0029（参数分层）；
   - ADR-0051（发布单元不可变）；
   - ADR-0058（批次交付）；
-  - ADR-0059（写作约定）
+  - ADR-0059（写作约定）；
+  - ADR-0067（项目级日志预设与五层参数合并序）
 - 代码锚点：
   - `backend/services/script_params.py`；
   - `backend/services/plan_dispatcher_core.py`；
