@@ -1,13 +1,14 @@
 # ADR-0067：项目级日志预设（`TestProject.log_profile`）与五层参数合并序
 
-- 状态：**Proposed** v0.2（2026-11-28 按 PR #4214 第 1 轮权威独立复核修订，待第 2 轮复核与 Owner 裁决；承接 [#4182](https://github.com/DUElost/stability-test-platform/issues/4182) Phase 3，并落实 [ADR-0066](./ADR-0066-unified-network-supply-and-usb-net.md) D1.6 预留的统一参数合并序）
+- 状态：**Accepted** v1.0（2026-11-28 经 PR #4214 第 2 轮权威独立复核通过（`41810324e`）并由 Owner 同日裁决接受——采纳 D1–D6 全文，§7 终裁维持最小边界（首批仅 `log_profile`，`timezone` 继续由 `sync_device_time` 显式配置；`#3823` 与 `#4042` 继续外置承接）；归属域 `project-taxonomy`；按 ADR-0058 批次待实施）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-11-27
 - 版本记录：
+  - v1.0（2026-11-28）：PR #4214 第 2 轮权威独立复核通过（`41810324e`），Owner 同日裁决转 `Accepted`（§7 终裁确认首批仅 `log_profile`、`timezone` 留于 `sync_device_time`、`#3823`/`#4042` 继续由各自关联单外置承接）；同步吸收第 2 轮两项非阻塞措辞收紧（D2.6 明确 `scan` 永不覆写已有 `default_params` 且 `changed_from_empty` 补齐包校验字段，U2 共享夹具钉死 `param_schema` 容量上限），并在同 PR 完成 §6 传播清单（ADR-0029 v2.6、ADR-0060 v1.2、`docs/design/2026-semantic-ownership.md` 与 `docs/adr/README.md`）。
   - v0.2（2026-11-28）：按 PR #4214 第 1 轮权威独立复核（`07bea96d`）全面收口 5 项 P1/P2 阻塞项与 1 项非阻塞建议：① D3/D4 统一预览与 `prepare_plan_run` 的 `#2649` `serial_conflict` 有效目标集口径，区分请求设备集与判定设备集并保持 `PlanRunTrigger.device_ids` `min_length=1`（`pending_devices` 仅限无设备静态投影）；② 纠偏 §1.2.3 与 D2.5——`script_catalog` 扫描新建写入空 `param_schema`/`default_params`，改由新版本 `log_prepare@1.1.0` + Alembic 种子迁移建立可冻结控制面默认后再清理 9 套常规模板冗余 `4096`，明确 U2→U3 激活序与存量 Plan/复制草稿保留语义；③ 校准 D1.2 `mobilelog_size_mb` 下限至 `256`（与 `log_prepare.py` 一致），规定 `ylog_required_streams` 必含 `{"android", "kernel"}` 且仅允许追加已实证子流（`uboot`、`lastlog`），堵死 A57 静默漏采回退口；④ D2 细化第 5 层各消费方（WiFi / 套件 / ADR-0066）缺键/`null`/`""`/`0`/`false` 填空契约与 `#975` 冲突硬拒优先序；⑤ D3.4 补齐服务端 `DraftParameterProjectionIn.project_key` 严格 schema 契约与前端防旧响应覆盖规则；⑥ D4/D5 明确单次解析复用与归属判定冻结时点（`READ COMMITTED` 读快照边界），并新增 §7 登记 `timezone` 待 Owner 终裁项及 `#3823`/`#4042` 外置边界。
-  - v0.1（2026-11-27）：初稿，基于 `#4182` Owner 确认决策基线、Phase 2（PR #4191）与 Phase 1（PR #4209 / PR #4211）生产实证及代码基线 `origin/main@cccb0d6a0` 起草。本 PR 为纯文档提案，不改业务代码、数据库、API 或既有 Accepted ADR；待 Owner 裁决转 `Accepted` 时按 §6 传播清单同步修订 ADR-0029、ADR-0060 与 `docs/design/2026-semantic-ownership.md`。
-- 决策者：Owner（待裁决）；起草：Antigravity（本地工作面）
+  - v0.1（2026-11-27）：初稿，基于 `#4182` Owner 确认决策基线、Phase 2（PR #4191）与 Phase 1（PR #4209 / PR #4211）生产实证及代码基线 `origin/main@cccb0d6a0` 起草。
+- 决策者：Owner（2026-11-28 裁决接受）；起草：Antigravity（本地工作面）
 - 标签：项目域, 日志配置, 参数分层, 确认指纹, 投影
 - 归属域：semantic-ownership project-taxonomy
 - 关联：
@@ -92,7 +93,7 @@
 
 3. 若未来需要在 `ylog_required_streams` 白名单中扩展新子流，维护者必须先完成真机 `ylogctl query` 回读与重启持久验证，再通过普通代码 PR 扩展白名单集合（无需数据库迁移），且任何配置均不得移除基础子流 `{"android", "kernel"}`。
 4. 控制面不得将以下配置纳入首期 `log_profile`：
-   - `timezone`（本草案沿用 `#4182` 早期裁决，继续由 `sync_device_time` 步骤显式配置；转 `Accepted` 前由 Owner 按 §7 终裁）；
+   - `timezone`（2026-11-28 Owner 终裁维持最小边界，继续由 `sync_device_time` 步骤显式配置，见 §7）；
    - `unisoc_sysdump_config` 开关与参数（继续由 `#4181` 独立步骤管理）；
    - 网络供给池与凭据（WiFi / `usb_net`，按 ADR-0066 D1.6 与项目保持正交）；
    - `#3823`（`AutoTestTool.apk` 路径）与 `#4042`（固件 `version_prop`）相关配置；
@@ -125,8 +126,8 @@
    - **来源标注（ADR-0060 D1.5）**：仅当第 5 层实际写入了该键时，L3 投影才可以将其 `source` 标为 `dispatch_injection`；未被覆盖的键必须保留其第 1–4 层原来源。
 6. **控制面可冻结默认值的版本化与模板清理前置**（解决 `script_catalog` 扫描默认为空字典的问题）：
    - 实施者不得原地修改已发布 `log_prepare@1.0.0` 的 `default_params` 或 `param_schema`（`AGENTS.md` 硬不变量），也不得在模板仍指向 `log_prepare@1.0.0` 时移除 9 套常规模板的 `4096` 键；
-   - 实施者必须在清理常规模板前，按 ADR-0051 流程登记并发布新版本 **`log_prepare@1.1.0`**（不改变脚本执行语义与协议），并配套 1 份遵循 `backend/services/script_seed_governance.py`（`#942`）的幂等 Alembic 种子迁移，为 `script(name='log_prepare', version='1.1.0')` 写入权威且不可变的 `param_schema` 与 `default_params`（`mobilelog_size_mb=4096`、`mtk_auto_start=true`、`ylog_size_mb=4096`、`ylog_rotate=true`、`ylog_required_streams=["android", "kernel"]`；`aee_mode` 与 `mtk_sublog_cmd` 不写入 `default_params`，仅在 `param_schema` 中声明类型与约束）；
-   - 新站初始化（`alembic upgrade head` + `--publish` + `POST /api/v1/scripts/scan`）通过 `script_catalog.py` 既有的空维度回填路径（`changed_from_empty`）保留种子 `param_schema`/`default_params` 并补齐包校验字段；
+   - 实施者必须在清理常规模板前，按 ADR-0051 流程登记并发布新版本 **`log_prepare@1.1.0`**（不改变脚本执行语义与协议），并配套 1 份遵循 `backend/services/script_seed_governance.py`（`#942`）的幂等 Alembic 种子迁移，为 `script(name='log_prepare', version='1.1.0')` 写入权威且不可变的 `param_schema` 与 `default_params`（`mobilelog_size_mb=4096`、`mtk_auto_start=true`、`ylog_size_mb=4096`、`ylog_rotate=true`、`ylog_required_streams=["android", "kernel"]`；`aee_mode` 与 `mtk_sublog_cmd` 不写入 `default_params`，仅在 `param_schema` 中声明类型与约束；U2 共享夹具与种子 `param_schema` 必须明确钉死容量上下限，防止步骤覆写与脚本钳制再次漂移）；
+   - 新站初始化（`alembic upgrade head` + `--publish` + `POST /api/v1/scripts/scan`）中，`POST /api/v1/scripts/scan` 永不覆写已存在的 `param_schema`/`default_params`，同时经 `script_catalog.py` 既有的 `changed_from_empty` 路径补齐 `support_files_manifest`、`capabilities` 与 `package_sha256`；
    - 仅在 `log_prepare@1.1.0` 完成种子迁移、发包与生产 `scan` 后，U3 才可以将全部 10 套稳定性模板的版本升级至 `log_prepare@1.1.0`、移除 9 套常规模板 `log_prepare` 步骤中的冗余 `4096` 键（使其在无预设或混跑回退时由第 2 层 `script_default` 确定性产出 `4096` 并冻结进 `plan_snapshot`），并继续在 `gpu.json` 保留显式 `10240` MB 作为第 4 层 `step_override`；
    - **存量 Plan 与复制草稿兼容**：已保存的存量 Plan（引用 `log_prepare@1.0.0` 或在 `PlanStep.params` 中持久化了显式 `4096`）及从其复制生成的草稿，控制面必须原样保留其脚本版本与显式 `PlanStep.params`（L1/L2/L3 按 `step_override` 展示 `4096`），不得在升级迁移中静默删改存量步骤参数。
 
@@ -198,7 +199,7 @@
    - 本 ADR 不复活 ADR-0029 D5 跨项目派发硬拒门禁；
    - 本 ADR 不修改 Agent 进程代码或 `STP_STEP_PARAMS` 协议，也不原地修改已发布的 `log_prepare@1.0.0`（为建立控制面可冻结的 `default_params`/`param_schema`，仅按 D2.6 与 ADR-0051 流程登记发布 `log_prepare@1.1.0` 及配套种子迁移，不改动脚本执行逻辑）；
    - 本 ADR 不为存量 `TestProject` 自动回填 `log_profile`（全量默认 `NULL`，零存量行为漂移），也不自动改写存量 Plan 的 `PlanStep.params` 或 `script_version`；
-   - 本起草 PR 不新增迁移、不改业务代码或 API，也不提前改写既有 Accepted ADR 正文。
+   - 本 ADR PR 不新增迁移、不改业务代码或 API（实施交付按 §5 批次推进）。
 2. **复议触发条件**：
    - 若出现跨多个项目且经真机证实的 `unisoc_sysdump_config` 项目级策略分化 → 规划者可以复议将 `sysdump_enabled` 纳入 `log_profile` 白名单（并同步评估 `#4181` 边界）；
    - 若除 `log_prepare` 之外出现第二类需要项目级默认参数的非 APK 脚本族 → 规划者可以复议按领域增设受控 profile 列或结构化命名空间，但不得退化为无 schema 自由字典；
@@ -285,18 +286,19 @@
 
 ---
 
-## 6. 转 Accepted 时的同步传播清单
+## 6. 转 Accepted 同步传播清单（2026-11-28 已完成）
 
-本 ADR 当前为 `Proposed`，作者不得在本起草 PR 中提前修改以下文档，必须在 Owner 裁决本 ADR 转 `Accepted` 的同一 PR 中逐一完成：
+本 ADR 已于 2026-11-28 经 Owner 裁决转 `Accepted` v1.0，以下四处同步已在同 PR（#4214）中逐一完成：
 
-1. [ADR-0029](./ADR-0029-project-taxonomy-and-param-layering.md)（v2.6）：在 D4 挂起注记中补录「非 APK 持续日志参数已由 ADR-0067 以结构化 `TestProject.log_profile` 收敛启用；通用 `variables` 与 `${project.x}` 仍保持挂起」，并同步其传播清单的既有位置；
-2. [ADR-0060](./ADR-0060-plan-parameter-meaning-and-effective-values.md)（v1.2）：D1.5 `ParamSource` 增补 `project_preset`，D5 确认指纹输入增补已解析的 `project_log_profile` 块，并指向 ADR-0067；
-3. [`docs/design/2026-semantic-ownership.md`](../design/2026-semantic-ownership.md)：更新 `project-taxonomy` 与 `plan-param-projection` 表行说明与修订记录，登记 ADR-0067 `## 2. 决策` 锚点（S15③/⑤）；
-4. [`docs/adr/README.md`](./README.md)：将 ADR-0067 主表与 M7 里程碑看板状态翻转为 `Accepted`。
+1. [ADR-0029](./ADR-0029-project-taxonomy-and-param-layering.md)（v2.6）：在 D4 挂起注记与修订记录中补录「非 APK 持续日志参数已由 ADR-0067 以结构化 `TestProject.log_profile` 收敛启用；通用 `variables` 与 `${project.x}` 仍保持挂起」，并补齐头部 `归属域：semantic-ownership project-taxonomy`；
+2. [ADR-0060](./ADR-0060-plan-parameter-meaning-and-effective-values.md)（v1.2）：D1.5 `ParamSource` 增补 `project_preset`、D1.8 共享夹具增补 `project_preset`、D5 确认指纹输入增补已解析的 `project_log_profile` 块，并指向 ADR-0067；
+3. [`docs/design/2026-semantic-ownership.md`](../design/2026-semantic-ownership.md)：更新 `project-taxonomy` 与 `plan-param-projection` 表行说明与修订记录，登记 ADR-0067 决策节实锚（S15③/⑤）；
+4. [`docs/adr/README.md`](./README.md)：将 ADR-0067 主表与 M7 里程碑看板状态翻转为 `Accepted` v1.0，并同步 ADR-0029 v2.6 / ADR-0060 v1.2 版本注记。
 
 ---
 
-## 7. 待 Owner 转 Accepted 时终裁事项
+## 7. Owner 裁决记录（2026-11-28）
 
-1. **`timezone` 是否保持在 `log_profile` 之外**：`#4182` 历史记录中存在两处不同口径——早期确认评论（`#7188172814`）裁定「首批只做 `log_profile`，`timezone` 继续由 `sync_device_time` 步骤显式配置」，后续跨轨协调记录（`#7197113409`）曾写「首批收敛 `log_profile` + `timezone`」。本草案当前采用早期最小边界（不包含 `timezone`）；请 Owner 在本 ADR 转 `Accepted` 时给出最终裁定并留痕。
-2. **`#3823` 与 `#4042` 边界确认**：确认继续按 `#7197113409` 裁决将 `#3823`（`AutoTestTool.apk` 走冻结 `project_key` 上下文 + 脚本侧路由 + `step_trace` sha256，不存 NFS 路径进项目预设）与 `#4042`（`version_prop` 真源归固件包 `manifest.json`）留在各自关联单中独立承接，不并入 `TestProject.log_profile`。
+1. **`timezone` 归属终裁（已采纳最小边界）**：针对 `#4182` 历史记录中的两条口径（`#7188172814`「首批仅 `log_profile`，`timezone` 留于 `sync_device_time`」vs `#7197113409`「`log_profile + timezone`」），Owner 于 2026-11-28 终裁**维持最小边界**——首批仅包含 `log_profile`，`timezone` 继续由 `sync_device_time` 步骤显式配置，不纳入 `TestProject.log_profile`。
+2. **`#3823` 与 `#4042` 边界终裁（确认外置）**：Owner 同日确认 `#3823`（`AutoTestTool.apk` 走冻结 `project_key` 上下文 + 脚本侧路由 + `step_trace` sha256，不存 NFS 路径进项目预设）与 `#4042`（`version_prop` 真源归固件包 `manifest.json`）继续由各自关联单独立承接，不并入 `TestProject.log_profile`。
+3. **转 `Accepted` 裁决**：Owner 同日裁决接受 ADR-0067 v1.0 全文，按 §6 完成传播同步并将 PR #4214 翻为 Ready；代码实施按 §5 批次规划（U1–U3）在日志参数稳定后推进。
