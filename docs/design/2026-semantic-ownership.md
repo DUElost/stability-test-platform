@@ -138,7 +138,7 @@
 | 会话 / 安全 | 0024 | 已填 |
 | 主机身份 / 提权 / 退役 / 安装 | 0035, 0037, 0038, 0040, 0044 | 已填关键行 |
 | 可观测 / 通知 | 0011, 0036 | 已填关键行 |
-| 项目 / 套件 / AI | 0029, 0030, 0031 | 已填 |
+| 项目 / 套件 / AI | 0029, 0030, 0031, 0067 | 已填（ADR-0067 项目级日志预设与五层参数合并序 = §5.2 `project-taxonomy` 增补锚） |
 | 配置 / 词表 / 站点 | 0042, 0045, 0041 | 已填 |
 | 多 Harness 执行 | 0034, 0058；细则 `execution-contract` | 已填 |
 | Schema / 审计 / 前端扩展 | 0008, 0015, 0013 | 0008/0015 已填；0013 见 TBD 触发 |
@@ -162,7 +162,7 @@
 | `script-runtime-catalog` | concept | 可派发 `(name, version)` 运行时权威（仅 `kind=script`；`kind=tool` 外部工具不入 catalog，ADR-0033 v1.15 / ADR-0051 v1.3） | `docs/adr/ADR-0033-tool-kit-ecosystem-integration.md :: ### D3：代码仓与工具资产包物理解耦（Manifest + Package Store）` | 第二套版本体系 |
 | `script-meta-freeze` | concept | `plan_snapshot` 步骤身份冻结面；非独立权威（**无** `script_meta` 键；inventory key 名保留） | `docs/adr/ADR-0021-script-content-alignment-gate.md :: ## 引用 / 关联` | 再称「唯一权威」或把假键写成第三权威 |
 | `script-version-immutability` | concept | 已发布**发布单元**「不可原地修改 / 删除」契约的**范围**（ADR-0051 D1：不可变性属于内容寻址包——脚本包与 `kind=tool` 工具包同一口径（D7），站点 `packages/` 只增不改由发布守卫执法（#3369 打包器 / #3379 `--publish`）；删除按 D5 继承 ADR-0039 D2/D3） | `docs/adr/ADR-0051-release-unit-and-content-addressing.md :: ### D1（核心）：发布单元 = 内容寻址包` | 多站点交付（ADR-0041）引入站点间包复制或 Package Store 迁出中心存储 → 复核「只增不改」执法点是否随迁（发布守卫只守本站点写入）（前两条触发器 Phase 2a / Phase 3 已兑现：script-versioning 改包口径、immutability 门禁退役、2026-09-26 去过渡句） |
-| `plan-param-projection` | concept | 计划参数的生效值分层投影（L1 计划基线 / L2 冻结设计 / L3 逐 Job 下发 / L4 运行期解析）、显示状态与服务端安全投影，以及参数说明与 Plan 级设置登记表；参数值的分层本身仍归 `project-taxonomy`（ADR-0029） | `docs/adr/ADR-0060-plan-parameter-meaning-and-effective-values.md :: ## 2. 决策` | 说明需由非开发人员高频编辑（重议 ADR-0060 方案丙）；出现新的派发期决定类型；新增 Agent 回报运行期取值的通路 |
+| `plan-param-projection` | concept | 计划参数的生效值分层投影（L1 计划基线 / L2 冻结设计 / L3 逐 Job 下发 / L4 运行期解析）、显示状态与服务端安全投影、五值来源与确认指纹输入（ADR-0060 v1.2），以及参数说明与 Plan 级设置登记表；参数值的五层合并序本身仍归 `project-taxonomy`（ADR-0029 / ADR-0067） | `docs/adr/ADR-0060-plan-parameter-meaning-and-effective-values.md :: ## 2. 决策` | 说明需由非开发人员高频编辑（重议 ADR-0060 方案丙）；出现新的派发期决定类型；新增 Agent 回报运行期取值的通路 |
 | `device-return` | concept | 设备归还状态（设备 × 专项）、六值解除结果、欠账条目与占用不变量：任何结束路径后设备是否回到受控状态以经验证的设备侧回读为准，与 job 终态和租约状态正交；欠账由 `MAINTENANCE` 租约承载（租约机制本身仍归 `device-lease`） | `docs/adr/ADR-0061-device-return-contract.md :: ## 3. 决策` | 出现绕过统一入口释放 ACTIVE 租约的路径；专项接入不再要求设备侧回读；设备侧工具普遍支持执行体到期；人工放行或回读失败比例持续偏高 |
 | `finishing-guard` | concept | 统一「收尾中（`finishing`）」过渡态投影集合（持久化 `status` 维持 `RUNNING`）、双子类型（`teardown_disarm` / `atomic_commit`）、`FinishingGuard` 两段同步许可仲裁与有界保护、两层冻结 `atomic_group` 及 `flash_integrity` 欠账隔离不变量（与 `device-return`、`run-terminal-semantics` 协同划界） | `docs/adr/ADR-0065-graceful-abort-critical-section-and-finishing-projection.md :: ## 2. 决策` | 在数据库 `status` 枚举新增过渡状态值；出现绕过 `FinishingGuard` 同步许可仲裁的刷机临界区；`#4198` 裁决引入机器级全进程树停止证明或宿主内核重启替代证明 |
 | `network-supply` | concept | 统一网络供给模块（沿用 `resource_pool` 并列 `wifi`/`usb_net` 子模块、正交 `config.egress` 出口策略）、受管供网会话 `device_network_session`（任务三时点租约交接 + 手动 `MAINTENANCE` 租约原子互斥 + 池全局并集去重配额）、`usbnet_grant` 签发/续签/撤销屏障与宿主网桥三层隔离（与 `device-lease`、`device-return`、`host-privilege-wrapper`、`finishing-guard` 协同划界） | `docs/adr/ADR-0066-unified-network-supply-and-usb-net.md :: ## 2. 决策` | Phase 1 非 root 设备引入本地 `VpnService` 回退；Phase 2 激活 `usb_net` 的 `vpn` 出口透明代理链路；出现绕过 `stp-agent-priv` 或 `DeviceLease` 互斥的供网路径 |
@@ -186,7 +186,7 @@
 | `batch-delivery` | concept | 批次交付流程：Owner / 规划者 / 实施者 / 复核者 / 集成观察者的职责分层，与 Registry 协调域划界（只登记协调域内实施者；M2 域外实施走 PR 可见性） | `docs/adr/ADR-0058-planned-batch-execution.md :: ### D8 职责与工作面` | 复核前合入再次发生；helper 副本模型裁为 A/B；协调域外 PR 与域内实施者反复同文件冲突；D11 生效后同一单元复核超三轮未闭合 |
 | `settings-bare-read` | concept | 配置读取收敛与裸读边界 | `docs/adr/ADR-0042-settings-convergence-and-bare-read-boundary.md :: ## 决策` | 新域绕过分域 settings |
 | `risk-level-vocab` | concept | 风险对外词表 S/A/B | `docs/adr/ADR-0045-risk-level-vocabulary.md :: ## 2. 决策` | 多词表回流 |
-| `project-taxonomy` | concept | TestProject / specialty 分类 | `docs/adr/ADR-0029-project-taxonomy-and-param-layering.md :: ### D2：项目实体 \`test_project\` — 单层身份 + 正交 facet` | 改 facet / 派生归属 |
+| `project-taxonomy` | concept | TestProject / specialty 分类（ADR-0029 v2.6）与受控项目级日志预设 `TestProject.log_profile` 及唯一五层参数合并序（ADR-0067 v1.0） | `docs/adr/ADR-0029-project-taxonomy-and-param-layering.md :: ### D2：项目实体 \`test_project\` — 单层身份 + 正交 facet`；项目日志预设与五层参数合并序 `docs/adr/ADR-0067-project-log-profile-and-param-layering.md :: ## 2. 决策` | 改 facet / 派生归属 / 扩展 `log_profile` 白名单或五层合并序 |
 | `multi-case-suite` | concept | test_suite / test_case 多用例 | `docs/adr/ADR-0030-multi-case-suite-management.md :: ### D1：用例集/用例建模为配置层实体，不进调度模型` | 用例进调度模型 |
 | `platform-ai-assistant` | concept | 平台 AI 助手自治边界 | `docs/adr/ADR-0031-platform-ai-assistant.md :: ### D1：自治边界 = 运维风险四级（T0–T3）` | 越级自动执行 |
 | `agent-host-identity` | concept | Agent 主机身份与凭据（现行接受边界） | `docs/adr/ADR-0035-agent-host-identity.md :: ## 3. 当前状态决策（立即生效）` | §6 升级触发 |
@@ -285,6 +285,8 @@
 
 | 日期 | 变更 |
 |---|---|
+| 2026-11-28 | **ADR-0037 v0.9 Accepted（`host-privilege-wrapper`）与 ADR-0066 v1.1 Accepted（`network-supply`）（#4212 / PR #4213）**：Owner 依据 PR #4213 四轮独立复核通过（`fd3b30640`）裁决采纳 ADR-0037 D10（`usbnet-*` 受限提权子命令、禁用全拒与 `usbnet-status` 暴露撤销屏障、仅按 `device_serial` 单调水位与按出口 `min_allowed_iat_by_egress` 屏障、可执行 sysfs 校验、隔离前置两阶段提交与 `usbnet-teardown` 零残留关闭、三层网桥隔离；§4 不变量随 U3 实现合入转正）及 ADR-0066 v1.1 D6 勘误；`host-privilege-wrapper` 与 `network-supply` 锚点不变 |
+| 2026-11-28 | **ADR-0067 入表（Accepted v1.0，归属域 `project-taxonomy`）并同步 ADR-0029 v2.6 / ADR-0060 v1.2**：经 PR #4214 第 2 轮权威独立复核通过（`41810324e`）并由 Owner 同日裁决接受（§7 终裁首批仅 `log_profile`、`timezone` 留于 `sync_device_time`、`#3823`/`#4042` 继续外置）；§5.1「项目 / 套件 / AI」补 `0067`，§5.2 `project-taxonomy` 行补 ADR-0067 `## 2. 决策` 实锚，`plan-param-projection` 行同步 ADR-0060 v1.2（五值 `ParamSource` 与 `stp-l1-v2` 指纹输入） |
 | 2026-11-27 | **ADR-0066 入表（Accepted v1.0，归属域 `network-supply`）**：经 PR #4185 第四轮独立复核通过（`f6e9252e1`）并由 Owner 同日裁决接受（含 Phase 1 允许登记 `wifi+vpn` 池）；§5.1 新增「网络供给 / 资源池」补 `0066`，§5.2 补 `network-supply` 行锚定 `## 2. 决策`（与 `device-lease`、`device-return`、`host-privilege-wrapper`、`finishing-guard` 协同划界） |
 | 2026-11-27 | **ADR-0065 入表（Accepted v1.0，归属域 `finishing-guard`）**：经 PR #4178 最终收口独立复核通过（`7208809580`、`207f298f4`）并由 Owner 同日裁决接受；§5.1「状态机 / 租约 / 调度」补 `0065`，§5.2 补 `finishing-guard` 行锚定 `## 2. 决策`（与 `device-return`、`run-terminal-semantics` 协同划界；P1-3 深度停止证明拆出至 `#4198`） |
 | 2026-11-23 | ADR-0062 v2.0（Accepted，归属域 `center-storage-model`）：经六轮独立复核通过并于同日由 Owner 裁决接受，增补 UNISOC 并入 `DEDUP_FIRST`、中心挂载强门控与阶段 D 退出（按 §9.2 阶段 A–D 分阶段激活）；`center-storage-model` 行按 S15⑤ 恢复 `## 5. 决策（按流转环节 S1–S11）` 实锚 |

@@ -6,6 +6,9 @@
 
 默认状态库（主 Agent 的 BASE_DIR/agent_state.db）与显式 STP_AGENT_STATE_DB
 两组都覆盖；目标缺失/哈希不符/路径含 symlink 的拒绝由 Agent 单元探针覆盖。
+
+B11-U4：恢复路径可在同父目录建 ``.stp-evidence-recover-*`` scratch 复算含可选
+``.DEC`` 的发布身份；本探针允许该 scratch 复制，仍禁止写入正式 destination 叶子。
 """
 
 from __future__ import annotations
@@ -198,10 +201,17 @@ async def test_restart_revalidates_landed_destination_and_resends_verified(
         agent_evidence_route, "refresh_delivery_and_archive",
         lambda *args, **kwargs: refreshes.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        uploader_module, "copytree_no_symlinks",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not copy")),
-    )
+    real_copytree = uploader_module.copytree_no_symlinks
+
+    def refuse_destination_copy(src, dest, *, dest_root):
+        dest_path = Path(dest).resolve()
+        # B11-U4：允许 `.stp-evidence-recover-*` scratch 复算发布身份，
+        # 但不得把内容复制进正式 destination 叶子（不覆盖、不第六次发布）。
+        if dest_path == destination.resolve() or destination.resolve() in dest_path.parents:
+            raise AssertionError("must not copy into destination")
+        return real_copytree(src, dest, dest_root=dest_root)
+
+    monkeypatch.setattr(uploader_module, "copytree_no_symlinks", refuse_destination_copy)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=fastapi_app),
         base_url="http://cp",
