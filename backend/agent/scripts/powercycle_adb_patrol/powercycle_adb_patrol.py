@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*-
 """宿主侧 ADB 驱动开关机专项——巡检与循环推进器（patrol 阶段）。
 
+v1.0.1（2026-11-28，PlanRun 1765 dev=901 第 607 轮取证）：
+- 新增有界补发重试 ``reboot_retry_attempts``（默认 2，0=禁用）：当某轮下发
+  ``adb reboot`` 遭遇瞬态 USB/adbd 抖动（如 ``error: device ... not found``）
+  且在 ``reboot_confirm_timeout_seconds`` 后仍观测到设备在线、内核 ``boot_id``
+  未变化时，先补发 ``adb reboot`` 并重置确认计时，耗尽重试仍未生效才判
+  ``reboot_not_effective`` 终止，避免 7 天数千轮长跑被单次瞬态抖动误杀。
+
 以短时步进状态机驱动整轮开关机压测，不长期占用 Agent 执行 permit：
 - ``IDLE``：记录初始 boot_id → 下发第 1 轮 ``adb reboot`` → 切到 ``WAIT_REBOOT``；
 - ``WAIT_REBOOT``：
   - 设备离线或 ``sys.boot_completed != 1``：未超 ``boot_timeout_seconds`` 正常返回，
     超时则写失败明细并输出 ``patrol_fail=true`` 提前终止 Job；
   - 设备在线且 ``sys.boot_completed == 1``：核对内核 ``boot_id``：
-    - 未变化：在 ``reboot_confirm_timeout_seconds`` 内继续等待，超时则判重启未生效
-      并输出 ``patrol_fail=true``；
+    - 未变化：在 ``reboot_confirm_timeout_seconds`` 内继续等待；超时后若未耗尽
+      ``reboot_retry_attempts`` 则补发 ``adb reboot`` 并重置确认计时，耗尽仍未
+      变化则判重启未生效并输出 ``patrol_fail=true``；
     - 已变化：确认真实重启 → 执行唤醒/解锁/回主界面 → 记账本轮 PASS：
       - 若 ``test_times > 0`` 且已达目标次数 → 输出 ``patrol_complete=true`` 结束巡检；
       - 否则切到 ``WAIT_INTERVAL``（若 ``wait_seconds <= inline_wait_max_seconds``，
@@ -22,6 +30,7 @@ STP_STEP_PARAMS（均可省略，默认继承 powercycle_adb_setup 落盘配置�
     "wait_seconds": 30,
     "boot_timeout_seconds": 300,
     "reboot_confirm_timeout_seconds": 30,
+    "reboot_retry_attempts": 2,
     "unlock_to_home": true,
     "inline_wait_max_seconds": 15
 }
@@ -55,6 +64,9 @@ from _lib import (
     trigger_adb_reboot,
     unlock_to_home,
 )
+
+
+_DEFAULT_REBOOT_RETRY_ATTEMPTS = 2
 
 
 def _resolve_override(
@@ -105,6 +117,17 @@ def _effective_settings(cfg: dict[str, Any], state: dict[str, Any]) -> dict[str,
         name="reboot_confirm_timeout_seconds",
         minimum=5,
     )
+    reboot_retry_attempts = parse_int(
+        _resolve_override(
+            cfg,
+            state,
+            "reboot_retry_attempts",
+            "STP_POWER_CYCLE_REBOOT_RETRY_ATTEMPTS",
+            _DEFAULT_REBOOT_RETRY_ATTEMPTS,
+        ),
+        name="reboot_retry_attempts",
+        minimum=0,
+    )
     unlock = parse_bool(
         _resolve_override(cfg, state, "unlock_to_home", "STP_POWER_CYCLE_UNLOCK_TO_HOME", True),
         default=True,
@@ -124,6 +147,7 @@ def _effective_settings(cfg: dict[str, Any], state: dict[str, Any]) -> dict[str,
         "wait_seconds": wait_seconds,
         "boot_timeout_seconds": boot_timeout_seconds,
         "reboot_confirm_timeout_seconds": reboot_confirm_timeout_seconds,
+        "reboot_retry_attempts": reboot_retry_attempts,
         "unlock_to_home": unlock,
         "inline_wait_max_seconds": inline_wait_max_seconds,
     }
@@ -197,6 +221,7 @@ def _dispatch_next_reboot(
     state["reboot_sent_at"] = sent_at
     state["ready_at"] = None
     state["phase"] = "WAIT_REBOOT"
+    state["reboot_retries_used"] = 0
     state["last_reboot_rc"] = rc
     state["last_reboot_err"] = err.strip()[:200] if err else ""
     return {"rc": rc, "err": state["last_reboot_err"]}
@@ -287,6 +312,7 @@ def _run(
     state["wait_seconds"] = settings["wait_seconds"]
     state["boot_timeout_seconds"] = settings["boot_timeout_seconds"]
     state["reboot_confirm_timeout_seconds"] = settings["reboot_confirm_timeout_seconds"]
+    state["reboot_retry_attempts"] = settings["reboot_retry_attempts"]
     state["unlock_to_home"] = settings["unlock_to_home"]
 
     phase = str(state.get("phase") or "IDLE")
@@ -411,15 +437,41 @@ def _run(
         last_boot_id = str(state.get("last_boot_id") or "")
         if last_boot_id and cur_boot_id == last_boot_id:
             if elapsed >= settings["reboot_confirm_timeout_seconds"]:
+                retries_used = int(state.get("reboot_retries_used", 0))
+                max_retries = settings["reboot_retry_attempts"]
+                if retries_used < max_retries:
+                    retries_used += 1
+                    rc, _, err = trigger_adb_reboot()
+                    state["reboot_sent_at"] = now_fn()
+                    state["reboot_retries_used"] = retries_used
+                    state["reboot_retry_count"] = int(state.get("reboot_retry_count", 0)) + 1
+                    state["last_reboot_rc"] = rc
+                    state["last_reboot_err"] = err.strip()[:200] if err else ""
+                    payload = _progress_payload(
+                        state,
+                        settings,
+                        device_online=True,
+                        observed=f"reboot_retry_{retries_used}",
+                    )
+                    payload["reboot_retries_used"] = retries_used
+                    payload["reboot_retry_attempts"] = max_retries
+                    save_state(state, serial=serial)
+                    progress_stamp(payload)
+                    return {"success": True, "progress": payload}
+
                 cycle = int(state.get("current_cycle", 1))
+                attempts = 1 + retries_used
+                last_err = str(state.get("last_reboot_err") or "").strip()
+                err_suffix = f", err={last_err!r}" if last_err else ""
                 return _fail_terminal(
                     state,
                     settings,
                     serial=serial,
                     reason_code="reboot_not_effective",
                     message=(
-                        f"第 {cycle} 轮 adb reboot 未生效（{elapsed:.1f}s 后内核 boot_id "
-                        f"仍为 {cur_boot_id}，rc={state.get('last_reboot_rc')}）"
+                        f"第 {cycle} 轮 adb reboot 未生效（已尝试 {attempts} 次，"
+                        f"{elapsed:.1f}s 后内核 boot_id 仍为 {cur_boot_id}，"
+                        f"rc={state.get('last_reboot_rc')}{err_suffix}）"
                     ),
                     elapsed=elapsed,
                     now=now,
@@ -433,6 +485,7 @@ def _run(
             return {"success": True, "progress": payload}
 
         # boot_id 已变化 → 确认完成一次真实重启！
+        state["reboot_retries_used"] = 0
         unlock_applied = unlock_to_home() if settings["unlock_to_home"] else False
         ready_at = now_fn()
         boot_duration_s = round(max(0.0, ready_at - reboot_sent_at), 2)
