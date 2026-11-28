@@ -2165,7 +2165,7 @@
         },
         {
           "artifact": "packages/powercycle_check/1.0.13.tar.gz",
-          "package_sha256": "47198de89497283e9be9a011ffc0bfc3a0647fa0876e4fa4a0d2901a8b23a03d",
+          "package_sha256": "02494c97bb95ebf39551ec5da2f4fbc74ef3f4000d59c7f1e862c960814e2db2",
           "python": null,
           "retired": false,
           "script": "powercycle_check.py",

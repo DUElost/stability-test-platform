@@ -952,4 +952,11 @@ class TestPowercycleCheckV1013BootHangAndBounds:
         assert r_fail["patrol_fail"] is True
         assert "连续 ADB 离线" in r_fail["error_message"]
 
+    def test_missing_adb_binary_returns_none_without_crashing(self, monkeypatch):
+        mod = _load("powercycle_check_mod_v1013_noadb", "powercycle_check/powercycle_check.py")
+        monkeypatch.setattr(mod, "device_serial", lambda: "S-NO-ADB")
+        monkeypatch.setattr(mod, "adb_path", lambda: "nonexistent-adb-binary-4222")
+        assert mod._boot_completed() is None
+
+
 

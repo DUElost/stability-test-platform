@@ -296,16 +296,20 @@ def _wait_online_short(timeout_s: int) -> bool:
     return False
 
 
-def _boot_completed() -> bool:
-    """检查 Android 系统是否完成启动（getprop sys.boot_completed == '1'）。"""
+def _boot_completed() -> bool | None:
+    """检查 Android 系统是否完成启动；未检测到 adb 或非 0 返回 None。"""
     try:
         result = subprocess.run(
             [adb_path(), "-s", device_serial(), "shell", "getprop", "sys.boot_completed"],
             capture_output=True, text=True, timeout=15,
         )
-        return result.returncode == 0 and (result.stdout or "").strip() == "1"
+        if result.returncode != 0:
+            return None
+        return (result.stdout or "").strip() == "1"
     except subprocess.TimeoutExpired:
         return False
+    except OSError:
+        return None
 
 
 def _int_param(cfg: dict, key: str, env_key: str, default: int) -> int:
@@ -497,9 +501,9 @@ def _run(cfg: dict) -> dict:
         if last_boot_check <= 0 or (now - last_boot_check) >= boot_check_interval or hang_due:
             boot_completed_now = _boot_completed()
             state["last_boot_check_at"] = now
-            if boot_completed_now:
+            if boot_completed_now is True:
                 state["boot_hang_since"] = None
-            elif not isinstance(hang_since_raw, (int, float)) or hang_since_raw <= 0:
+            elif boot_completed_now is False and (not isinstance(hang_since_raw, (int, float)) or hang_since_raw <= 0):
                 state["boot_hang_since"] = now
 
     boot_hang_since = state.get("boot_hang_since")
