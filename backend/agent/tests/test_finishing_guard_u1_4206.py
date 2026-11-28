@@ -52,14 +52,14 @@ def _gpu_execute_guard(*, now: float = 0.0):
     return receive_disarm_evidence(g, evidence, now=now, via_coordinator=True)
 
 
-def test_capability_constants_registered_but_not_in_agent_heartbeat_set():
+def test_capability_constants_enabled_in_agent_heartbeat_set():
     assert FINISHING_GUARD_V2 == "finishing_guard_v2"
     assert ATOMIC_COMMIT == "atomic_commit"
     assert FORCE_ABORT == "force_abort"
-    # U1 不得提前开启心跳上报（U5 完备后再并入 AGENT_CAPABILITIES）
-    assert FINISHING_GUARD_V2 not in AGENT_CAPABILITIES
-    assert ATOMIC_COMMIT not in AGENT_CAPABILITIES
-    assert FORCE_ABORT not in AGENT_CAPABILITIES
+    # U5 完备：三向能力已正式并入心跳 / 握手同源词表
+    assert FINISHING_GUARD_V2 in AGENT_CAPABILITIES
+    assert ATOMIC_COMMIT in AGENT_CAPABILITIES
+    assert FORCE_ABORT in AGENT_CAPABILITIES
 
 
 def test_c1_multi_subject_intensity_max_and_clock_min():

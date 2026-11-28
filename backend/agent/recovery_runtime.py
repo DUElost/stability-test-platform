@@ -36,7 +36,11 @@ def build_cancel_recovery_job(
 ) -> Callable[..., None]:
     def cancel_recovery_job(jid: int, force: bool = False) -> None:
         if job_runner_slot.value is not None:
-            job_runner_slot.value.request_abort(jid, force=bool(force))
+            # 仅 force=True 时带关键字，保持 request_abort(jid) 零参断言兼容。
+            if force:
+                job_runner_slot.value.request_abort(jid, force=True)
+            else:
+                job_runner_slot.value.request_abort(jid)
 
     def is_worker_alive(jid: int) -> bool:
         """True when JobRunnerState still has an active runner for ``jid``."""

@@ -12,6 +12,7 @@ Class: feature
 3. **两层冻结与步骤调度**：引擎在 init 启动时 `build_atomic_group_frozen`（静态 `atomic_group` + VBUS `return_check` 插在刷机前缀后，遵守 ADR-0063 D5.3）；普通 abort 对已 grant 组跑完必跑成员后跳过 patrol；`skipped=true` 未声明 `skip_satisfies_delivery` 判 `FAILED`；`force=true` 立即杀进程组。
 4. **≤15s 护盾存活心跳**：grant 后独立线程上报；仅真实新 `PROGRESS` seq 推进 `progress_seq`；本地绝对截止与 `D_atomic` 协同。
 5. **终态落盘 / 停机 CAS / 能力上报**：`/complete` update 携带 `atomic_group_*` 字段；`graceful_shutdown` 每 `job_id` CAS + SIGTERM→SIGKILL + 未核实 outbox；`AGENT_CAPABILITIES` 启用三向能力（不改控制面 `heartbeat.py`）。
+6. **CI 兼容修补（PR #4239）**：`ABORT_LOCAL` / `cancel_recovery_job` 仅在 `force=True` 时向下游带 `force=` 关键字，保持零参签名向后兼容；同步更新 U5 启用后的能力词表断言。
 
 ### 偏离说明（IPC 协议，供 U6 消费）
 
@@ -29,9 +30,7 @@ Class: feature
 ## Verification
 
 ```bash
-./scripts/project_python.sh scripts/run_pytest.py \
-  backend/agent/tests/test_b12_u5_critical_section_4206.py \
-  backend/agent/tests/test_vbus_init_check_order_3892.py -q
+./scripts/project_python.sh scripts/run_pytest.py backend/agent/tests/ -q
 ./scripts/project_python.sh scripts/run_gates.py check:quick
 ```
 
