@@ -43,7 +43,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+_DEFAULT_MAX_OFFLINE_SECONDS = 1800  # 30 分钟：休眠唤醒非预期长时间 ADB 离线判 fail 阈值（0=关闭）
 
 from _lib import (
     adb_path,
@@ -143,6 +146,20 @@ def _run_finished() -> bool:
 
 def _run(cfg: dict) -> dict:
     grace = max(1, int(str(param_or_env(cfg, "dead_grace_cycles", "STP_SLEEP_DEAD_GRACE_CYCLES", "2")) or 2))
+    max_offline = max(
+        0,
+        int(
+            str(
+                param_or_env(
+                    cfg,
+                    "max_offline_seconds",
+                    "STP_SLEEP_MAX_OFFLINE_SECONDS",
+                    _DEFAULT_MAX_OFFLINE_SECONDS,
+                )
+            ).strip()
+            or _DEFAULT_MAX_OFFLINE_SECONDS
+        ),
+    )
     injected = int(str(cfg.get("expected_cycles") or 0) or 0)
 
     alive = service_alive()
@@ -161,9 +178,9 @@ def _run(cfg: dict) -> dict:
         state = {"job_id": job_id}
         _save_state(state)
 
-
     if _run_finished():
         # 自然收尾：报完成（成败由 teardown 解析 final_status 定）
+        state["offline_since"] = None
         payload = {
             "seq": int(state.get("seq", 0)) + 1,
             "step": "sleep_check",
@@ -178,14 +195,49 @@ def _run(cfg: dict) -> dict:
         progress_stamp(payload)
         return {"success": True, "progress": payload}
 
+    now = time.time()
+    offline_elapsed: int | None = None
     if alive:
         state["dead_streak"] = 0
+        state["offline_since"] = None
     elif not device_online():
-        # #814：设备离线/adb 拥塞属正常重启窗口——不累计 dead_streak，也不判死。
-        # #1693：仍须把键归一入 state——新 Job 首拍 state 无此键，跳过写入
-        # 会让下方判死比较的无条件读抛 KeyError，离线豁免反而必判失败。
+        # #814 / #1693：短暂离线（偶发重启/USB 抖动）仍不累计 dead_streak；
+        # 但休眠唤醒不像 Aging DDR / 开关机以离线为正常测试阶段，连续离线超
+        # max_offline_seconds（默认 1800s）必须发 patrol_fail 判失败，避免死机/Sysdump
+        # 长期显示运行中。
         state["dead_streak"] = int(state.get("dead_streak", 0))
+        offline_since = state.get("offline_since")
+        if not isinstance(offline_since, (int, float)) or offline_since <= 0:
+            offline_since = now
+            state["offline_since"] = offline_since
+        offline_elapsed = int(max(0.0, now - float(offline_since)))
+        _save_state(state)
+        if max_offline > 0 and offline_elapsed >= max_offline:
+            fail_progress = {
+                "seq": int(state.get("seq", 0)) + 1,
+                "step": "sleep_check",
+                "cycles_done": cycles_done,
+                "expected_cycles": expected,
+                "result_bytes": result_bytes,
+                "service_alive": False,
+                "online": False,
+                "offline_elapsed_seconds": offline_elapsed,
+                "max_offline_seconds": max_offline,
+            }
+            state["seq"] = fail_progress["seq"]
+            _save_state(state)
+            progress_stamp(fail_progress)
+            return {
+                "success": False,
+                "patrol_fail": True,
+                "error_message": (
+                    f"设备连续 ADB 离线 {offline_elapsed}s（超过阈值 {max_offline}s），"
+                    "休眠唤醒测试异常（可能睡死/死机/进入 Sysdump）"
+                ),
+                "progress": fail_progress,
+            }
     else:
+        state["offline_since"] = None
         state["dead_streak"] = int(state.get("dead_streak", 0)) + 1
     _save_state(state)
 
@@ -209,6 +261,10 @@ def _run(cfg: dict) -> dict:
         "result_bytes": result_bytes,
         "service_alive": alive,
     }
+    if offline_elapsed is not None:
+        payload["online"] = False
+        payload["offline_elapsed_seconds"] = offline_elapsed
+        payload["max_offline_seconds"] = max_offline
     state["seq"] = payload["seq"]
     _save_state(state)
     progress_stamp(payload)

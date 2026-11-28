@@ -746,4 +746,99 @@ describe('B3-3 双视图分离：1,000 格全量 Minimap 与表格真分页', ()
     fireEvent.click(screen.getByTestId('plan-run-page-size-100'));
     expect(onPageSizeChange).toHaveBeenCalledWith(100);
   });
+
+  it('highlights offline_failed_job_ids in red on Minimap and exposes abnormal link filter', () => {
+    const onLinkFilterChange = vi.fn();
+    renderWithClient(
+      <DeviceOverview
+        minimapData={{
+          plan_run_id: 1747,
+          facets: {
+            total: 2,
+            by_status: { all: 2, running: 2 },
+            by_link_status: { all: 2, online: 1, adb_error: 1 },
+            by_host: { 'host-a': 2 },
+          },
+          hosts: { 'host-a': '机柜 A' },
+          stuck_job_ids: [],
+          offline_failed_job_ids: [210658],
+          offline_expected: false,
+          devices: [
+            {
+              job_id: 210658,
+              device_id: 1288,
+              device_serial: 'AUXMNX6A08000213',
+              host_id: 'host-a',
+              job_exec_status: 'running',
+              device_link_status: 'adb_error',
+              log_signal_count: 1,
+            },
+            {
+              job_id: 210659,
+              device_id: 1289,
+              device_serial: 'AUXMNX6A08000214',
+              host_id: 'host-a',
+              job_exec_status: 'running',
+              device_link_status: 'online',
+              log_signal_count: 0,
+            },
+          ],
+        }}
+        viewMode="grid"
+        onLinkFilterChange={onLinkFilterChange}
+      />,
+    );
+
+    const failedCell = screen.getByTestId('minimap-cell-210658');
+    expect(failedCell).toHaveAttribute('data-offline-failed', 'true');
+    expect(failedCell.className).toContain('bg-destructive/90');
+    expect(failedCell.getAttribute('aria-label')).toContain('长时间离线失败');
+
+    const healthyCell = screen.getByTestId('minimap-cell-210659');
+    expect(healthyCell).not.toHaveAttribute('data-offline-failed');
+    expect(healthyCell.className).toContain('bg-warning');
+
+    expect(screen.getByTestId('minimap-offline-failed-banner')).toHaveTextContent(
+      '检测到 1 台设备长时间 ADB 离线异常',
+    );
+    fireEvent.click(screen.getByTestId('minimap-filter-offline-failed-btn'));
+    expect(onLinkFilterChange).toHaveBeenCalledWith('abnormal');
+  });
+
+  it('does not mark offline cells red when offline_failed_job_ids is empty (e.g. power-cycle / aging DDR)', () => {
+    renderWithClient(
+      <DeviceOverview
+        minimapData={{
+          plan_run_id: 1758,
+          facets: {
+            total: 1,
+            by_status: { all: 1, running: 1 },
+            by_link_status: { all: 1, adb_error: 1 },
+            by_host: { 'host-a': 1 },
+          },
+          hosts: { 'host-a': '机柜 A' },
+          stuck_job_ids: [],
+          offline_failed_job_ids: [],
+          offline_expected: true,
+          devices: [
+            {
+              job_id: 210700,
+              device_id: 2300,
+              device_serial: '0008NX26BE000001',
+              host_id: 'host-a',
+              job_exec_status: 'running',
+              device_link_status: 'adb_error',
+              log_signal_count: 0,
+            },
+          ],
+        }}
+        viewMode="grid"
+      />,
+    );
+
+    const cell = screen.getByTestId('minimap-cell-210700');
+    expect(cell).not.toHaveAttribute('data-offline-failed');
+    expect(cell.className).toContain('bg-warning');
+    expect(screen.queryByTestId('minimap-offline-failed-banner')).toBeNull();
+  });
 });
