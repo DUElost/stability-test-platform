@@ -6,6 +6,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PlanRunDetailPage from './PlanRunDetailPage';
 import { PLAN_RUN_SOCKET_COALESCE_MS } from '@/hooks/plan-run/planRunDetailUtils';
 import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { formatDateTimeFull } from '@/utils/format';
 
 // #2369：JOB_STATUS / PRECHECK_UPDATE 的 REST 失效**合流 2s**（`PLAN_RUN_SOCKET_COALESCE_MS`）。
 // 断言必须等过合流窗口——等 1s（waitFor 默认）测的是「立即失效」这个已经不存在的行为，
@@ -562,6 +563,31 @@ beforeEach(() => {
 });
 
 describe('PlanRunDetailPage', () => {
+  it.each([
+    ['finishing', '收尾中', '剩余设备'],
+    ['running', '运行中', '部分设备收尾中'],
+  ])('uses the %s projection as the sole Run status with a separate device summary', async (uiStatus, label, prefix) => {
+    const deadline = '2026-11-28T06:01:30Z';
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'RUNNING',
+      ui_status: uiStatus,
+      finishing_kind_counts: { teardown_disarm: 1, atomic_commit: 2 },
+      finishing_deadline_at: deadline,
+    });
+    renderPage();
+
+    const pill = await screen.findByTestId('plan-run-status-pill');
+    expect(pill).toHaveTextContent(label);
+    expect(pill).not.toHaveTextContent('RUNNING');
+    const summary = screen.getByTestId('plan-run-finishing-summary');
+    expect(summary).toHaveTextContent(`${prefix}：解除配置 ×1 · 刷机临界区保护 ×2`);
+    expect(summary).toHaveTextContent(`最近截止 ${formatDateTimeFull(deadline)}`);
+    expect(summary).not.toHaveTextContent(/解除配置中|刷机临界区保护中|\d+s|已到期/);
+    expect(summary.querySelector('[data-kind="plan-run"]')).toBeNull();
+  });
+
   it('#2623：详情页显式 opt-out 内嵌 jobs（占 detail 响应 98.9%，本页不消费）', async () => {
     renderPage();
     await waitFor(() =>
@@ -572,7 +598,7 @@ describe('PlanRunDetailPage', () => {
   it('renders Hero / Minimap / Stepper / DeviceTable / Watcher without duplicate dispatch/stepper blocks', async () => {
     renderPage();
     await waitFor(() =>
-      expect(screen.getByTestId('plan-run-status-pill')).toHaveTextContent('RUNNING'),
+      expect(screen.getByTestId('plan-run-status-pill')).toHaveTextContent('运行中'),
     );
     // #447：hero 显示归属项目 key（plan_run 快照归属）
     expect(screen.getByTitle('归属项目 MLD')).toBeInTheDocument();

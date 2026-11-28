@@ -112,6 +112,9 @@ export const PLAN_RUN_HERO_SURFACE = {
   FAILED: 'border-destructive/25 bg-gradient-to-br from-destructive/10 to-card',
 } as const;
 
+export const FINISHING_BADGE_COLORS =
+  'bg-sky-100 text-sky-900 hover:bg-sky-100 dark:bg-sky-950 dark:text-sky-200 dark:hover:bg-sky-950';
+
 export const PLAN_RUN_HERO_BADGE = {
   QUEUED: 'border-border bg-card text-muted-foreground',
   PRECHECK: 'border-info/40 bg-card text-info',

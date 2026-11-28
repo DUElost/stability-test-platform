@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { FINISHING_BADGE_COLORS } from "@/design-system/colors";
 import { cn } from "@/lib/utils";
 
 type BadgeVariant =
@@ -33,7 +34,15 @@ interface StatusEntry {
   label: string;
   variant: BadgeVariant;
   Icon: LucideIcon;
+  className?: string;
 }
+
+const FINISHING_ENTRY: StatusEntry = {
+  label: "收尾中",
+  variant: "info",
+  Icon: ShieldCheck,
+  className: FINISHING_BADGE_COLORS,
+};
 
 export type StatusBadgeKind =
   | "device"
@@ -72,6 +81,8 @@ const DEVICE_UI: Record<string, StatusEntry> = {
   // #786：后端 `_job_exec_status_for_job`（routes/plan_runs.py）含 aborted 分支，
   // 该值以 kind="device-ui" 渲染；缺键时落到 FALLBACK「未知」，与「已断开」混淆。
   ABORTED: { label: "已中止", variant: "warning", Icon: Ban },
+  // ADR-0065 / #4206 U3：统一「收尾中」投影（持久化仍为 RUNNING；与 running 的 Loader2 区分）。
+  FINISHING: FINISHING_ENTRY,
 };
 
 const DEVICE_LINK: Record<string, StatusEntry> = {
@@ -129,6 +140,8 @@ const PLAN_RUN: Record<string, StatusEntry> = {
   SUCCESS: { label: "成功", variant: "success", Icon: CheckCircle2 },
   PARTIAL_SUCCESS: { label: "部分成功", variant: "warning", Icon: AlertTriangle },
   FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
+  // ADR-0065 / #4206 U3：列表/详情消费 Run 级 ui_status="finishing"（非 DB 枚举）。
+  FINISHING: FINISHING_ENTRY,
 };
 
 /**
@@ -241,7 +254,7 @@ export function StatusBadge({
   return (
     <Badge
       variant={entry.variant}
-      className={cn("shrink-0 whitespace-nowrap gap-1", sizeCls, className)}
+      className={cn("shrink-0 whitespace-nowrap gap-1", sizeCls, entry.className, className)}
       data-status={status ?? "UNKNOWN"}
       data-kind={kind}
     >

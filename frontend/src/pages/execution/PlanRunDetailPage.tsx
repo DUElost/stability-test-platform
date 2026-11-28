@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { ALERT_BANNER, PANEL, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { getRunFinishingSummary } from '@/components/plan-run/planRunStatus';
 import { ErrorState } from '@/components/ui/error-state';
 import { normalizeWatcherTimeScope, shouldShowDispatchGate, normalizeDispatchStateForRun } from '@/hooks/plan-run/planRunDetailUtils';
 import { usePlanRunDetailData } from '@/hooks/plan-run/usePlanRunDetailData';
@@ -353,6 +354,7 @@ export default function PlanRunDetailPage() {
     dispatchState?.status === 'failed' || admissionDispatchFailed;
   const gateFailed = precheck?.phase === 'failed' || dispatchFailed;
   const showDispatchGate = shouldShowDispatchGate(runQ.data);
+  const finishingSummary = getRunFinishingSummary(runQ.data);
   const showDiag = diagOpen || gateFailed;
 
   return (
@@ -401,6 +403,24 @@ export default function PlanRunDetailPage() {
                   }
                 }}
               />
+            )}
+            {(finishingSummary.counts || finishingSummary.deadline) && (
+              <div
+                data-testid="plan-run-finishing-summary"
+                className={cn(
+                  'mt-2 space-y-1 rounded-lg border border-info/30 bg-info/5 px-2.5 py-2 text-xs',
+                  TEXT.body,
+                )}
+              >
+                {finishingSummary.counts && (
+                  <p data-testid="plan-run-finishing-kind-counts">{finishingSummary.counts}</p>
+                )}
+                {finishingSummary.deadline && (
+                  <p className={cn('text-[11px]', TEXT.subtitle)} data-testid="plan-run-finishing-deadline">
+                    {finishingSummary.deadline}
+                  </p>
+                )}
+              </div>
             )}
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">

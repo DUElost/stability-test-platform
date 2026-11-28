@@ -130,6 +130,18 @@ describe("StatusBadge", () => {
     expect(screen.getByText("等待")).toBeInTheDocument();
   });
 
+  it("renders device-ui finishing with info variant + 收尾中 label (#4206 U3)", () => {
+    render(<StatusBadge kind="device-ui" status="finishing" />);
+    expect(screen.getByText("收尾中")).toBeInTheDocument();
+    expect(resolveStatusEntry("device-ui", "finishing").variant).toBe("info");
+  });
+
+  it("renders plan-run finishing with info variant + 收尾中 label (#4206 U3)", () => {
+    render(<StatusBadge kind="plan-run" status="finishing" />);
+    expect(screen.getByText("收尾中")).toBeInTheDocument();
+    expect(resolveStatusEntry("plan-run", "FINISHING").label).toBe("收尾中");
+  });
+
   it("renders precheck-phase verifying with info variant + 校验中 label", () => {
     render(<StatusBadge kind="precheck-phase" status="verifying" />);
     expect(screen.getByText("校验中")).toBeInTheDocument();
