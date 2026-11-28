@@ -90,6 +90,82 @@ def list_dbg_files(root: Path | str) -> list[Path]:
     return found
 
 
+def resolve_valid_aee_extract_exp_main(
+    work_dir: Path | str,
+    *,
+    dbg_name: str,
+) -> Path:
+    """四重产出实证：唯一合法 ``*.DEC`` + 全树零 symlink + 非空可读 ``__exp_main.txt``。
+
+    供控制面补解与 Agent 代表解包共用（#4199 v1.2 B11-U5 / ADR-0054）。
+    优先 ``{dbg_name}.DEC``；否则要求 ``work_dir`` 下恰有唯一普通 ``*.DEC`` 目录。
+    任一核验失败抛 ``EvidenceLayoutError``（fail-closed）。
+    """
+    base = Path(work_dir)
+    if not dbg_name or base.is_symlink() or not base.is_dir():
+        raise EvidenceLayoutError(
+            f"aee_extract work dir invalid for {dbg_name!r}: {base}"
+        )
+
+    preferred = base / f"{dbg_name}.DEC"
+    if preferred.exists() or preferred.is_symlink():
+        if preferred.is_symlink() or not preferred.is_dir():
+            raise EvidenceLayoutError(
+                f"aee_extract .DEC is not a plain directory: {preferred}"
+            )
+        dec_dir = preferred
+    else:
+        found = [
+            path
+            for path in sorted(base.glob("*.DEC"))
+            if path.is_dir() and not path.is_symlink()
+        ]
+        symlink_hits = [path for path in base.glob("*.DEC") if path.is_symlink()]
+        if symlink_hits:
+            raise EvidenceLayoutError(
+                f"aee_extract .DEC must not be a symlink: {symlink_hits[0]}"
+            )
+        if not found:
+            raise EvidenceLayoutError(
+                f"aee_extract produced no .DEC directory for {dbg_name}"
+            )
+        if len(found) > 1:
+            raise EvidenceLayoutError(
+                f"aee_extract produced ambiguous .DEC directories for {dbg_name}: "
+                f"{[path.name for path in found]}"
+            )
+        dec_dir = found[0]
+
+    assert_no_symlinks(dec_dir)
+
+    exp_main = dec_dir / EXP_MAIN_NAME
+    if exp_main.is_symlink() or not exp_main.is_file():
+        raise EvidenceLayoutError(
+            f"aee_extract missing plain {EXP_MAIN_NAME}: {exp_main}"
+        )
+    try:
+        size = exp_main.stat().st_size
+    except OSError as exc:
+        raise EvidenceLayoutError(
+            f"aee_extract {EXP_MAIN_NAME} unstatable: {exp_main}"
+        ) from exc
+    if size <= 0:
+        raise EvidenceLayoutError(
+            f"aee_extract {EXP_MAIN_NAME} is empty: {exp_main}"
+        )
+    try:
+        text = exp_main.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise EvidenceLayoutError(
+            f"aee_extract {EXP_MAIN_NAME} not UTF-8 readable: {exp_main}"
+        ) from exc
+    if not text.strip():
+        raise EvidenceLayoutError(
+            f"aee_extract {EXP_MAIN_NAME} is blank: {exp_main}"
+        )
+    return exp_main
+
+
 def _require_component(value: str, field: str) -> str:
     if not value or value in (".", "..") or not _SAFE_COMPONENT_RE.match(value):
         raise EvidenceLayoutError(f"{field} is not a safe path component: {value!r}")
