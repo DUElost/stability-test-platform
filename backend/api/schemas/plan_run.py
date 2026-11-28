@@ -158,6 +158,10 @@ class PlanRunAbortSummaryOut(BaseModel):
     phase: str
     aborted_jobs: list[int] = Field(default_factory=list)
     abort_requested_jobs: list[int] = Field(default_factory=list)
+    # ADR-0065 / B12 U4
+    already_terminal: bool = False
+    force_requested_before_complete_settled: bool = False
+    force_unsupported_hosts: list[str] = Field(default_factory=list)
 
 
 class PlanRunDispatchRetrySummaryOut(BaseModel):
@@ -208,6 +212,7 @@ class PlanRunListPageOut(BaseModel):
 
 class PlanRunAbortIn(BaseModel):
     reason: Optional[str] = None
+    force: bool = False
 
 
 class JobManualActionIn(BaseModel):

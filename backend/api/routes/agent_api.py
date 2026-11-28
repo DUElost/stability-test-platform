@@ -8,7 +8,7 @@ Authentication: X-Agent-Secret via ``auth.verify_agent_secret``（本模块别�
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -91,6 +91,17 @@ from backend.services.agent_archive_status import get_agent_archive_status
 from backend.services.agent_completion import (
     _RunCompleteIn,
     complete_agent_job,
+)
+from backend.services.finishing_guard import (
+    ActivatePermitIn,
+    CancelPreRegistrationIn,
+    FinishingGuardError,
+    GuardHeartbeatIn,
+    PreRegisterIn,
+    activate_permit_sync,
+    cancel_pre_registration_sync,
+    pre_register_atomic_commit_sync,
+    record_guard_heartbeat_sync,
 )
 
 logger = logging.getLogger(__name__)
@@ -359,6 +370,72 @@ async def recovery_sync(
     否则 Agent 每轮重发且永不被 ack——回收类数据在 D5 下允许触达退役机。
     """
     return ok(await sync_agent_recovery(db, payload))
+
+
+def _finishing_guard_http(exc: FinishingGuardError) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"code": exc.code, **exc.extra},
+    )
+
+
+@router.post("/jobs/{job_id}/finishing-guard/pre-register")
+def pre_register_finishing_guard(
+    job_id: int,
+    payload: PreRegisterIn,
+    db: Session = Depends(get_db),
+    _=Depends(_verify_agent),
+):
+    try:
+        return ok(pre_register_atomic_commit_sync(db, job_id=job_id, payload=payload))
+    except FinishingGuardError as exc:
+        raise _finishing_guard_http(exc) from exc
+
+
+@router.post("/jobs/{job_id}/finishing-guard/activate-permit")
+def activate_finishing_guard_permit(
+    job_id: int,
+    payload: ActivatePermitIn,
+    host_id: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    _=Depends(_verify_agent),
+):
+    try:
+        return ok(
+            activate_permit_sync(
+                db, job_id=job_id, host_id=host_id, payload=payload,
+            )
+        )
+    except FinishingGuardError as exc:
+        raise _finishing_guard_http(exc) from exc
+
+
+@router.post("/jobs/{job_id}/finishing-guard/cancel-pre-registration")
+def cancel_finishing_guard_pre_registration(
+    job_id: int,
+    payload: CancelPreRegistrationIn,
+    db: Session = Depends(get_db),
+    _=Depends(_verify_agent),
+):
+    try:
+        return ok(
+            cancel_pre_registration_sync(db, job_id=job_id, payload=payload),
+        )
+    except FinishingGuardError as exc:
+        raise _finishing_guard_http(exc) from exc
+
+
+@router.post("/jobs/{job_id}/finishing-guard/heartbeat")
+def finishing_guard_heartbeat(
+    job_id: int,
+    payload: GuardHeartbeatIn,
+    db: Session = Depends(get_db),
+    _=Depends(_verify_agent),
+):
+    try:
+        return ok(record_guard_heartbeat_sync(db, job_id=job_id, payload=payload))
+    except FinishingGuardError as exc:
+        raise _finishing_guard_http(exc) from exc
 
 
 @router.get("/{host_id}/archive-status")
