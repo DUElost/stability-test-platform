@@ -25,6 +25,10 @@
 | `STP_CONSOLE_CANCEL_TTL_SECONDS` | 取消请求位/ack 的 TTL（默认 60，下限 10） |
 | `STP_FIRMWARE_TRANSFER_MAX_HOSTS` | 控制面 Redis 固件源传输并发上限（默认 `2`，池 `firmware_nfs`；ADR-0064 D3 / B10 U3） |
 | `STP_FIRMWARE_TRANSFER_PERMIT_TTL_SECONDS` | 单次传输许可 TTL（默认 `60`；持有者按 TTL/3 续期，崩溃未释放时到期自动回收） |
+| `STP_JIRA_HANDOFF_EXPORT_ROOT` | Jira handoff B 段 15.4 本机导出根（默认 `/mnt/jxtinno-sonic`；#4199 B11-U3） |
+| `STP_JIRA_HANDOFF_VENDOR_PATH_PREFIX` | 表单 `Path` 厂商机挂载前缀（默认 `/home/jxtinno/sonic_tinno`；映射回本机导出根做可达校验） |
+| `STP_JIRA_HANDOFF_DEC_EXTRACT_MAX_CONCURRENT` | 过渡期代表 `.DEC` 补解全局并发硬上限（默认 `1`，Settings 层 `le=1`；#4174 §5.3） |
+| `STP_JIRA_HANDOFF_DEC_EXTRACT_LOCK_DIR` | 跨进程 `flock` 锁目录（默认 `/tmp/stp-jira-handoff-dec-extract`） |
 | `JWT_SECRET_KEY` | JWT 签名；生产必改 |
 | `AGENT_SECRET` | Agent HTTP/SocketIO 共用密钥；与 Agent 侧一致 |
 | `ENV` | `development` / `internal` / `production`。内网 HTTP 正式环境用 `internal`；HTTPS 才用 `production` |
@@ -464,6 +468,10 @@ B8 G0-a 的脚本子进程兼容：已发布的 MTBF、Sleep、PowerCycle、GPU 
 | `STP_INITIAL_ADMIN_PASSWORD` | `` | — | 运行时 | `backend/scripts/bootstrap_admin.py:34` |
 | `STP_INITIAL_ADMIN_USER` | `` | — | 运行时 | `backend/scripts/bootstrap_admin.py:33` |
 | `STP_JIRA_BASE_URL` | `-` | ✅ | 运行时 | `backend/services/jira_project_key.py:36` |
+| `STP_JIRA_HANDOFF_DEC_EXTRACT_LOCK_DIR` | `/tmp/stp-jira-handoff-dec-extract` | ✅ | 运行时 | `backend/core/settings/jira_handoff_export.py:22` |
+| `STP_JIRA_HANDOFF_DEC_EXTRACT_MAX_CONCURRENT` | `1` | ✅ | 运行时 | `backend/core/settings/jira_handoff_export.py:21` |
+| `STP_JIRA_HANDOFF_EXPORT_ROOT` | `/mnt/jxtinno-sonic` | ✅ | 运行时 | `backend/core/settings/jira_handoff_export.py:18` |
+| `STP_JIRA_HANDOFF_VENDOR_PATH_PREFIX` | `/home/jxtinno/sonic_tinno` | ✅ | 运行时 | `backend/core/settings/jira_handoff_export.py:19` |
 | `STP_JIRA_TOKEN` | `-` | ✅ | 运行时 | `backend/services/jira_project_key.py:39` |
 | `STP_JOB_WORKER_POOL_SIZE` | `50` | ✅ | 运行时 | `backend/agent/job_runtime.py:112` |
 | `STP_LEGACY_LOG_STORAGE_ROOT` | `-` | ✅ | 运行时 | `backend/core/storage_root.py:30` |

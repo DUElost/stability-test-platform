@@ -1,9 +1,9 @@
-"""B11-U1（#4199 v1.1 / #4174）A 段只读提单表单生成 API 的 Pydantic v2 Schema。"""
+"""B11-U1/U3（#4199 v1.1 / #4174）Jira handoff A/B 段 API 的 Pydantic v2 Schema。"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -180,5 +180,52 @@ class HandoffBundleOut(BaseModel):
     unbound_rows: list[dict[str, Any]]
     builds: list[HandoffBuildBundleOut]
     manifest_sha256: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class HandoffExportBuildTargetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    build: str = Field(..., min_length=1, max_length=256)
+    target_folder_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="人工显式 15.4 目标目录名；禁止路径穿越与内网 IP",
+    )
+    merge_strategy: Literal["create_new", "merge_existing"] = Field(
+        ...,
+        description="字面 create_new | merge_existing；不得自动推断",
+    )
+
+
+class HandoffExportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest_sha256: str = Field(..., min_length=64, max_length=64)
+    builds: list[HandoffExportBuildTargetIn] = Field(..., min_length=1)
+
+
+class HandoffExportBuildResultOut(BaseModel):
+    build: str
+    target_folder_name: str
+    merge_strategy: str
+    representatives: list[dict[str, Any]]
+    final_xls: dict[str, Any]
+    verified_path_count: int
+
+
+class HandoffExportOut(BaseModel):
+    schema_name: str = Field(alias="schema")
+    schema_version: str
+    handoff_id: str
+    status: str
+    exported_at: str
+    exported_by: str
+    manifest_sha256: str
+    export_root: str
+    vendor_path_prefix: str
+    builds: list[HandoffExportBuildResultOut]
 
     model_config = ConfigDict(populate_by_name=True)
