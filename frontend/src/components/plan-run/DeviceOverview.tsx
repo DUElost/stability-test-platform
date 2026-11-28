@@ -196,10 +196,12 @@ function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
 
 function DeviceGrid({
   devices,
+  offlineFailedIds,
   onSelectJobId,
   selectedJobId,
 }: {
   devices: readonly MinimapCellItem[];
+  offlineFailedIds?: ReadonlySet<number>;
   onSelectJobId?: (jobId: number) => void;
   selectedJobId?: number | null;
 }) {
@@ -217,8 +219,16 @@ function DeviceGrid({
       >
         {devices.map((d) => {
           // 方块着色跟随「执行」维度,与筛选 chip / 表格执行列同源;
-          // 连接维度另行拼进 label,避免两处口径打架。
+          // 仅对「非预期长时间离线」专项（休眠/Monkey 等，非 Aging DDR/开关机）的超时离线设备
+          // 由后端 offline_failed_job_ids 投影标红提示 fail。
           const exec = d.job_exec_status ?? d.ui_status ?? 'unknown';
+          const isOfflineFailed =
+            Boolean(offlineFailedIds?.has(d.job_id)) &&
+            exec !== 'failed' &&
+            exec !== 'completed' &&
+            exec !== 'aborted';
+          const visualStyle = isOfflineFailed ? DEVICE_UI_STATUS.failed : DEVICE_UI_STATUS[exec];
+          const statusLabel = isOfflineFailed ? '长时间离线失败' : DEVICE_UI_STATUS[exec].label;
           const link = d.device_link_status;
           const linkSuffix =
             link && link !== 'online' ? ` · ${DEVICE_LINK_STATUS[link].label}` : '';
@@ -227,20 +237,21 @@ function DeviceGrid({
           const isSelected = selectedJobId != null && selectedJobId === d.job_id;
           const label =
             `${d.device_serial || `Device #${d.device_id}`} — ` +
-            `${DEVICE_UI_STATUS[exec].label}${linkSuffix}${signalSuffix}`;
+            `${statusLabel}${linkSuffix}${signalSuffix}`;
           return (
             <button
               key={d.job_id}
               type="button"
               data-testid={`minimap-cell-${d.job_id}`}
               data-selected={isSelected ? 'true' : undefined}
+              data-offline-failed={isOfflineFailed ? 'true' : undefined}
               onClick={() => onSelectJobId?.(d.job_id)}
               aria-label={label}
               aria-pressed={isSelected}
               title={label}
               className={cn(
                 'relative aspect-square rounded-sm border border-transparent transition-transform hover:z-10 hover:scale-[1.12] hover:ring-2 hover:ring-primary/45',
-                DEVICE_UI_STATUS[exec].cellCls,
+                visualStyle.cellCls,
                 isSelected && 'z-10 scale-[1.08] ring-2 ring-primary ring-offset-1 ring-offset-card',
               )}
             />
@@ -586,6 +597,12 @@ export default function DeviceOverview({
       ? 0
       : Math.min(tableFilteredTotal, (currentPage - 1) * pageSize + tableDevices.length);
 
+  const offlineFailedIds = useMemo(
+    () => new Set<number>(minimapData?.offline_failed_job_ids ?? []),
+    [minimapData?.offline_failed_job_ids],
+  );
+  const offlineFailedCount = offlineFailedIds.size;
+
   const hosts = useMemo(
     () => Object.keys(byHost).sort((a, b) => a.localeCompare(b)),
     [byHost],
@@ -690,11 +707,37 @@ export default function DeviceOverview({
             该过滤条件下暂无设备
           </div>
         ) : viewMode === 'grid' ? (
-          <DeviceGrid
-            devices={gridDevices}
-            onSelectJobId={handleGridSelectJobId}
-            selectedJobId={selectedJobId}
-          />
+          <>
+            {offlineFailedCount > 0 && (
+              <div
+                data-testid="minimap-offline-failed-banner"
+                className="flex flex-wrap items-center justify-between gap-2 border-b border-destructive/20 bg-destructive/5 px-3 py-1.5 text-xs text-destructive"
+              >
+                <span className="inline-flex items-center gap-1.5 font-medium">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    检测到 {offlineFailedCount} 台设备长时间 ADB 离线异常（当前专项非预期离线，已在缩略图标红提示）
+                  </span>
+                </span>
+                {onLinkFilterChange && linkFilter !== 'abnormal' && (
+                  <button
+                    type="button"
+                    data-testid="minimap-filter-offline-failed-btn"
+                    onClick={() => onLinkFilterChange('abnormal')}
+                    className="rounded border border-destructive/30 bg-background px-2 py-0.5 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/10"
+                  >
+                    仅看离线异常
+                  </button>
+                )}
+              </div>
+            )}
+            <DeviceGrid
+              devices={gridDevices}
+              offlineFailedIds={offlineFailedIds}
+              onSelectJobId={handleGridSelectJobId}
+              selectedJobId={selectedJobId}
+            />
+          </>
         ) : (
           <>
             <DeviceTable
