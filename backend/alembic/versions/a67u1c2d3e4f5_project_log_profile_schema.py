@@ -5,10 +5,10 @@ Adds structured project-level continuous-logging preset columns to
 - ``log_profile`` (JSONB, nullable, default NULL — zero existing behavior drift)
 - ``log_profile_version`` (INTEGER, NOT NULL, server_default 0, CHECK >= 0)
 
-Pure additive; ``downgrade()`` fully reverses. Head prior: ``b12u1a2b3c4d5``.
+Pure additive; ``downgrade()`` fully reverses. Head prior: ``b13u1c2d3e4f5``.
 
 Revision ID: a67u1c2d3e4f5
-Revises:    b12u1a2b3c4d5
+Revises:    b13u1c2d3e4f5
 Create Date: 2026-11-28
 """
 
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "a67u1c2d3e4f5"
-down_revision = "b12u1a2b3c4d5"
+down_revision = "b13u1c2d3e4f5"
 branch_labels = None
 depends_on = None
 

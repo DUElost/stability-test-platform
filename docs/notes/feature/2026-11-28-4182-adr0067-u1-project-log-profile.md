@@ -10,7 +10,7 @@ ADR: ADR-0067（Accepted v1.0，D1 / §5 U1）
 
 按 ADR-0067 §5 落地第一交付单元（U1：数据模型与项目预设写面）：
 
-1. **加性 Schema 迁移**（`backend/alembic/versions/a67u1c2d3e4f5_project_log_profile_schema.py`，`down_revision = b12u1a2b3c4d5`）：为 `test_project` 新增 `log_profile`（`JSONB NULL`）与 `log_profile_version`（`INTEGER NOT NULL DEFAULT 0`，附 `CHECK (log_profile_version >= 0)`），`downgrade()` 完整可逆，不回填存量行。
+1. **加性 Schema 迁移**（`backend/alembic/versions/a67u1c2d3e4f5_project_log_profile_schema.py`，`down_revision = b13u1c2d3e4f5`）：为 `test_project` 新增 `log_profile`（`JSONB NULL`）与 `log_profile_version`（`INTEGER NOT NULL DEFAULT 0`，附 `CHECK (log_profile_version >= 0)`），`downgrade()` 完整可逆，不回填存量行。
 2. **单一白名单校验与规范化模块**（`backend/api/schemas/project_log_profile.py`）：
    - `ProjectLogProfile`（`ConfigDict(extra="forbid")`）仅允许 7 个已实证 `log_prepare` 键：`mobilelog_size_mb`（`256..20480`）、`mtk_auto_start`、`mtk_sublog_cmd`、`aee_mode`、`ylog_size_mb`（`64..10240`）、`ylog_rotate`、`ylog_required_streams`（必含 `{"android", "kernel"}` 且限实证白名单 `{"android", "kernel", "uboot", "lastlog"}`）。
    - `normalize_log_profile` 将全空/`None`/全 `null` 统一归一为 `None` 并去重归一化子流列表，确保无实质变更时不误推进 `log_profile_version`；`@model_serializer(mode="wrap")` 输出稀疏 JSON。
