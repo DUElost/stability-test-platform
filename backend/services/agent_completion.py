@@ -41,8 +41,17 @@ from backend.realtime.socketio_server import broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.agent_recovery import resume_expired_lease_for_recovery
 from backend.services.errors import BadRequest, Conflict, NotFound
-from backend.services.device_return import handle_job_lease_release, try_apply_late_confirmed, verify_job_results
+from backend.services.device_return import (
+    close_flash_integrity_debts_sync,
+    handle_job_lease_release,
+    try_apply_late_confirmed,
+    verify_job_results,
+)
 from backend.services.disarm_derive import derive_disarm_results_from_traces
+
+
+def _close_flash_on_atomic_delivery(sync_db, job: JobInstance) -> None:
+    close_flash_integrity_debts_sync(sync_db, device_id=job.device_id)
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -571,6 +580,11 @@ async def complete_agent_job(
             # 与 reconciler 桥接同处 not-already_terminal 守卫内,每 Job 仅计一次。
             record_watcher_capability(job.watcher_capability or "unknown")
         # ADR-0061 D5 / #3723 U3：JOB 租约经统一欠账入口处理（可能转换为欠账租约）。
+        update_fields = payload.update if isinstance(payload.update, dict) else {}
+        if update_fields.get("atomic_group_completed") is True:
+            await db.run_sync(
+                lambda sync_db: _close_flash_on_atomic_delivery(sync_db, job),
+            )
         lease_outcome = await handle_job_lease_release(
             db, device_id=job.device_id, job_id=job_id, job=job,
         )

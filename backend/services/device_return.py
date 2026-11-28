@@ -991,6 +991,23 @@ async def handle_job_lease_release(
 # ── discharge / override / late complete ──────────────────────────────────
 
 
+def close_flash_integrity_debts_sync(
+    db: Session,
+    *,
+    device_id: int,
+    closed_reason: str = "discharged",
+    now: datetime | None = None,
+) -> int:
+    """Close only ``flash_integrity`` open debts (C8: must not touch B6 families)."""
+    return _close_family_debts_sync(
+        db,
+        device_id=device_id,
+        families=("flash_integrity",),
+        closed_reason=closed_reason,
+        now=now or datetime.now(timezone.utc),
+    )
+
+
 def _close_family_debts_sync(
     db: Session,
     *,

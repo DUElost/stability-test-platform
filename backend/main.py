@@ -54,6 +54,8 @@ from backend.api.routes.pipeline import router as pipeline_router
 from backend.api.routes.scripts import router as scripts_router
 from backend.api.routes.script_presence import router as script_presence_router
 from backend.api.routes.agent_api import router as agent_api_router
+from backend.api.routes.agent_finishing_guard import router as agent_finishing_guard_router
+from backend.api.routes.finishing_guard_admin import router as finishing_guard_admin_router
 from backend.api.routes.agent_evidence import router as agent_evidence_router
 from backend.api.routes.agent_device_return import router as agent_device_return_router
 from backend.api.routes.agent_network_supply import router as agent_network_supply_router
@@ -512,8 +514,10 @@ _fastapi_app.include_router(pipeline_router)
 _fastapi_app.include_router(scripts_router)
 _fastapi_app.include_router(script_presence_router)
 _fastapi_app.include_router(agent_api_router)
+_fastapi_app.include_router(agent_finishing_guard_router)
 _fastapi_app.include_router(agent_evidence_router)
 _fastapi_app.include_router(agent_device_return_router)
+_fastapi_app.include_router(finishing_guard_admin_router)
 _fastapi_app.include_router(agent_network_supply_router)
 _fastapi_app.include_router(network_supply_router)
 _fastapi_app.include_router(transfer_permits_router)
