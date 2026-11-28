@@ -32,7 +32,10 @@ from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
     extract_dispatch_host_watcher_admin_states,
 )
-from backend.services.plan_run_context import abort_pending_job_ids
+from backend.services.plan_run_context import (
+    abort_pending_job_ids,
+    effective_abort_force,
+)
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -433,6 +436,7 @@ async def sync_agent_recovery(
                 await rotate_recovery_lease_token(
                     db, lease, agent_instance_id=payload.agent_instance_id,
                 )
+            abort_force = effective_abort_force(run_ctx, job.id, job.host_id)
             job_actions.append(_RecoveryAction(
                 job_id=entry.job_id,
                 device_id=entry.device_id,
@@ -440,6 +444,7 @@ async def sync_agent_recovery(
                 fencing_token=lease.fencing_token,
                 device_serial=actual_serial,
                 reason="abort_requested",
+                job_payload={"force": abort_force},
             ))
             continue
 
