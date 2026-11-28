@@ -843,3 +843,120 @@ class TestInstallApkV103:
 
         assert "INSTALL_FAILED_INSUFFICIENT_STORAGE" in str(exc.value)
 
+
+class TestPowercycleCheckV1013BootHangAndBounds:
+    """v1.0.13 (#4222 问题 1): sys.boot_completed 抽检、有界零结果与持续离线兜底。"""
+
+    def _patch(
+        self,
+        monkeypatch,
+        tmp_path,
+        *,
+        online=True,
+        alive=False,
+        boot_completed=False,
+        result_bytes=0,
+        mtime=0,
+        prefs=None,
+    ):
+        mod = _load("powercycle_check_mod_v1013", "powercycle_check/powercycle_check.py")
+        clock = {"now": 1_000_000.0}
+        boot_calls: list[float] = []
+        monkeypatch.setattr(mod.time, "time", lambda: clock["now"])
+        monkeypatch.setattr(mod.time, "sleep", lambda s: clock.__setitem__("now", clock["now"] + float(s)))
+        monkeypatch.setattr(mod, "device_serial", lambda: "S-V1013")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: False)
+        monkeypatch.setattr(mod, "device_online", lambda: online["v"] if isinstance(online, dict) else online)
+        monkeypatch.setattr(mod, "service_alive", lambda: alive["v"] if isinstance(alive, dict) else alive)
+        monkeypatch.setattr(
+            mod,
+            "_boot_completed",
+            lambda: (boot_calls.append(clock["now"]) or (boot_completed["v"] if isinstance(boot_completed, dict) else boot_completed)),
+        )
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: result_bytes["v"] if isinstance(result_bytes, dict) else result_bytes)
+        monkeypatch.setattr(mod, "_result_mtime", lambda: mtime["v"] if isinstance(mtime, dict) else mtime)
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+        return mod, clock, boot_calls
+
+    def test_boot_hang_triggers_patrol_fail_and_respects_check_interval(self, monkeypatch, tmp_path):
+        mod, clock, boot_calls = self._patch(monkeypatch, tmp_path, online=True, alive=False, boot_completed=False)
+        cfg = {"boot_check_interval_seconds": 120, "boot_hang_timeout_seconds": 600, "zero_result_timeout_seconds": 900}
+
+        # t=0: first sample sees boot_completed=False
+        r1 = mod._run(cfg)
+        assert r1["success"] is True
+        assert len(boot_calls) == 1
+
+        # t=60: within 120s interval -> no extra ADB probe
+        clock["now"] += 60
+        r2 = mod._run(cfg)
+        assert r2["success"] is True
+        assert len(boot_calls) == 1
+
+        # t=600: timeout reached -> re-probes once and fails fast with patrol_fail=True
+        clock["now"] += 540
+        r3 = mod._run(cfg)
+        assert len(boot_calls) == 2
+        assert r3["success"] is False
+        assert r3["patrol_fail"] is True
+        assert "sys.boot_completed" in r3["error_message"]
+        assert r3["progress"]["boot_completed"] is False
+
+    def test_healthy_service_alive_skips_boot_completed_probe(self, monkeypatch, tmp_path):
+        mod, clock, boot_calls = self._patch(monkeypatch, tmp_path, online=True, alive=True, boot_completed=False, result_bytes=256, mtime=100)
+        for _ in range(3):
+            assert mod._run({"boot_hang_timeout_seconds": 600})["success"] is True
+            clock["now"] += 300
+        assert boot_calls == []
+
+    def test_zero_result_timeout_breaks_permanent_exemption(self, monkeypatch, tmp_path):
+        online = {"v": True}
+        mod, clock, _ = self._patch(monkeypatch, tmp_path, online=online, alive=False, boot_completed=True, result_bytes=0, mtime=0)
+        cfg = {"dead_grace_cycles": 2, "boot_hang_timeout_seconds": 0, "zero_result_timeout_seconds": 900, "max_offline_seconds": 0}
+
+        # t=0, t=300: still inside 900s early-boot exemption
+        assert mod._run(cfg)["success"] is True
+        clock["now"] += 300
+        assert mod._run(cfg)["success"] is True
+
+        # t=900: exceeds zero_result_timeout -> dead_streak increments (1/2)
+        clock["now"] += 600
+        assert mod._run(cfg)["success"] is True
+
+        # Brief offline->online transition in bootloop does not clear zero_result_since
+        online["v"] = False
+        clock["now"] += 60
+        assert mod._run(cfg)["success"] is True
+
+        # t=1200: second check while zero_result_timed_out -> dead_streak=2 >= grace -> fails
+        online["v"] = True
+        clock["now"] += 240
+        r_fail = mod._run(cfg)
+        assert r_fail["success"] is False
+        assert "结果文件持续为空" in r_fail["error_message"]
+
+    def test_prolonged_offline_triggers_patrol_fail(self, monkeypatch, tmp_path):
+        mod, clock, _ = self._patch(monkeypatch, tmp_path, online=False)
+        cfg = {"max_offline_seconds": 1800}
+
+        assert mod._run(cfg)["success"] is True
+        clock["now"] += 900
+        assert mod._run(cfg)["success"] is True
+        clock["now"] += 900
+        r_fail = mod._run(cfg)
+        assert r_fail["success"] is False
+        assert r_fail["patrol_fail"] is True
+        assert "连续 ADB 离线" in r_fail["error_message"]
+
+    def test_missing_adb_binary_returns_none_without_crashing(self, monkeypatch):
+        mod = _load("powercycle_check_mod_v1013_noadb", "powercycle_check/powercycle_check.py")
+        monkeypatch.setattr(mod, "device_serial", lambda: "S-NO-ADB")
+        monkeypatch.setattr(mod, "adb_path", lambda: "nonexistent-adb-binary-4222")
+        assert mod._boot_completed() is None
+
+
+
