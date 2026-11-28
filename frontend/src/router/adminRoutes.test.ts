@@ -36,25 +36,27 @@ function adminRouteBlock(src: string): string {
   return src.slice(start, end);
 }
 
-describe('admin-only 面：入口隐藏 + 路由门控（#2360）', () => {
-  it('/wifi 与 /storage 都在 AdminRoute 块内', () => {
+describe('admin-only 面：入口隐藏 + 路由门控（#2360 / ADR-0066 D7.1）', () => {
+  it('/network-supply、/wifi 与 /storage 都在 AdminRoute 块内', () => {
     const block = adminRouteBlock(routerSource());
+    expect(block).toContain('path="network-supply"');
     expect(block).toContain('path="wifi"');
     expect(block).toContain('path="storage"');
   });
 
-  it('/wifi 与 /storage 的导航项都标了 adminOnly', () => {
+  it('/network-supply 与 /storage 的导航项都标了 adminOnly', () => {
     const items = navGroups.flatMap((group) => group.items);
-    const wifi = items.find((item) => item.path === '/wifi');
+    const networkSupply = items.find((item) => item.path === '/network-supply');
     const storage = items.find((item) => item.path === '/storage');
-    expect(wifi?.adminOnly, 'WiFi 资源池入口未按角色隐藏（#2360 裁决 A）').toBe(true);
+    expect(networkSupply?.adminOnly, '网络供给入口未按角色隐藏（#2360 裁决 A）').toBe(true);
     expect(storage?.adminOnly, '文件服务器入口未按角色隐藏').toBe(true);
   });
 
-  it('AdminRoute 块外的路由不得出现 wifi（防止又挪回去）', () => {
+  it('AdminRoute 块外的路由不得出现 network-supply 或 wifi（防止又挪回去）', () => {
     const src = routerSource();
     const block = adminRouteBlock(src);
     const outside = src.replace(block, '');
+    expect(outside).not.toContain('path="network-supply"');
     expect(outside).not.toContain('path="wifi"');
   });
 });

@@ -2381,9 +2381,12 @@ export interface PlanRunCreate {
   /** Optional operator note → PlanRun.run_context.note */
   note?: string;
   /**
-   * Per-execution WiFi choice → PlanRun.run_context.wifi_pool_id.
-   * Omit / null = do not connect (default). Credentials are never sent
-   * inline — pick a pre-configured wifi ResourcePool instead.
+   * Per-execution network supply choice → PlanRun.run_context.network_pool_id
+   * (ADR-0066 D3.1: wifi / usb_net ResourcePool id; credentials stay server-side).
+   */
+  network_pool_id?: number | null;
+  /**
+   * Backward-compatible WiFi alias → PlanRun.run_context.wifi_pool_id.
    */
   wifi_pool_id?: number | null;
   /**
@@ -3364,6 +3367,73 @@ export interface ResourcePoolCreatePayload {
   max_concurrent_devices?: number;
   host_group?: string | null;
   is_active?: boolean;
+}
+
+// ─── Network Supply Sessions (ADR-0066 D2/D7) ──────────────────────────────────
+
+export type NetworkResourceType = 'wifi' | 'usb_net';
+export type NetworkEgressType = 'direct' | 'vpn';
+export type NetworkSessionStatus =
+  | 'RESERVED'
+  | 'PROVISIONING'
+  | 'ACTIVE'
+  | 'RELEASING'
+  | 'RELEASE_FAILED'
+  | 'RELEASED';
+export type NetworkSessionSource = 'job' | 'manual';
+
+export interface NetworkSession {
+  id: number;
+  device_id: number;
+  device_serial: string | null;
+  host_id: string;
+  resource_pool_id: number;
+  pool_name: string | null;
+  resource_type: NetworkResourceType | string;
+  egress: NetworkEgressType | string;
+  source: NetworkSessionSource | string;
+  plan_run_id: number | null;
+  job_instance_id: number | null;
+  lease_id: number | null;
+  generation: number | null;
+  legacy_path: boolean;
+  status: NetworkSessionStatus | string;
+  release_reason: string | null;
+  assigned_ip: string | null;
+  usb_devpath: string | null;
+  created_by: string | null;
+  expires_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  released_at: string | null;
+  usbnet_grant?: string;
+  usbnet_grant_exp?: number | null;
+}
+
+export interface ManualNetworkEnablePayload {
+  device_id: number;
+  resource_pool_id: number;
+  ttl_seconds?: number;
+}
+
+export interface NetworkSessionAuditOverridePayload {
+  reason_category: string;
+  evidence_ref: string;
+}
+
+export interface NetworkSessionAuditOverrideResult {
+  session: NetworkSession;
+  closed_debt_count: number;
+  lease_released: boolean;
+  lease_converted_to_debt: boolean;
+  open_debt_count: number;
+  usbnet_revoke_directive: {
+    session_id: number;
+    generation: number;
+    device_serial: string;
+    host_id: string;
+    usb_devpath: string | null;
+  } | null;
 }
 
 // ─── 平台 AI 助手（ADR-0031，/api/v1/ai-assistant）─────────────────────────────
