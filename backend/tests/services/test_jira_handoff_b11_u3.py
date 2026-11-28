@@ -475,3 +475,176 @@ def test_b11_u3_05_missing_dec_blocks_final_xls_and_exported(tmp_path, monkeypat
     # 冻结 manifest 状态仍为 PENDING_EXPORT
     frozen = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
     assert frozen["status"] == HANDOFF_STATUS_PENDING_EXPORT
+
+
+# ── B11-U5（#4199 v1.2）：rc=255 产出实证判据 ─────────────────────────────
+
+
+class _FakeProc:
+    def __init__(self, returncode: int, *, stderr: bytes = b"mtk-rc255", stdout: bytes = b""):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = stdout
+
+
+def _install_fake_aee_extract(monkeypatch, tmp_path: Path, *, rc: int, mode: str):
+    """模拟 aee_extract：按 mode 写产物并返回给定 rc（不走 _EXTRACT_HOOK）。"""
+    tool = tmp_path / "fake_aee_extract"
+    tool.write_text("#!/bin/true\n", encoding="utf-8")
+    tool.chmod(0o755)
+
+    def _run(cmd, cwd=None, capture_output=True, timeout=None, check=False):  # noqa: ARG001
+        work = Path(cwd)
+        dbg = Path(cmd[-1])
+        dec = work / f"{dbg.name}.DEC"
+        if mode == "ok":
+            dec.mkdir(parents=True, exist_ok=True)
+            (dec / "__exp_main.txt").write_text("Exception Class: JE\n", encoding="utf-8")
+        elif mode == "missing_dec":
+            pass
+        elif mode == "missing_exp":
+            dec.mkdir(parents=True, exist_ok=True)
+        elif mode == "empty":
+            dec.mkdir(parents=True, exist_ok=True)
+            (dec / "__exp_main.txt").write_bytes(b"")
+        elif mode == "blank":
+            dec.mkdir(parents=True, exist_ok=True)
+            (dec / "__exp_main.txt").write_text("  \n\t  ", encoding="utf-8")
+        elif mode == "symlink_inside":
+            dec.mkdir(parents=True, exist_ok=True)
+            (dec / "__exp_main.txt").write_text("ok\n", encoding="utf-8")
+            (dec / "evil.link").symlink_to(dec / "__exp_main.txt")
+        else:
+            raise AssertionError(f"unknown fake extract mode: {mode}")
+        return _FakeProc(rc)
+
+    monkeypatch.setattr(
+        "backend.services.jira_handoff_export.subprocess.run",
+        _run,
+    )
+    return tool
+
+
+def _export_u5(
+    storage: Path,
+    export_root: Path,
+    *,
+    tool: Path,
+    digest: str,
+    handoff_id: str,
+    folder: str = "MLD_V100_1128_MonkeyAEEinfo_U5",
+):
+    return export_handoff_bundle(
+        _DummyDB(),
+        handoff_id,
+        manifest_sha256=digest,
+        builds=[{"build": "V100", "target_folder_name": folder, "merge_strategy": "create_new"}],
+        storage_root=str(storage),
+        export_root=str(export_root),
+        aee_extract_tool=str(tool),
+    ), folder
+
+
+def test_b11_u5_u3_rc255_full_dec_exports_with_warning(tmp_path, monkeypatch, caplog):
+    """① 正例：rc=255 + 完整合法 __exp_main → 终稿 .xls / EXPORTED，并记 WARNING。"""
+    import logging
+
+    storage = tmp_path / "center"
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(storage))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_EXPORT_ROOT", str(export_root))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_VENDOR_PATH_PREFIX", "/home/jxtinno/sonic_tinno")
+
+    bundle_dir, manifest, digest, _ = _seed_frozen_manifest(storage, handoff_id="hf_u5_ok")
+    tool = _install_fake_aee_extract(monkeypatch, tmp_path, rc=255, mode="ok")
+
+    with caplog.at_level(logging.WARNING, logger="backend.services.jira_handoff_export"):
+        receipt, folder = _export_u5(
+            storage, export_root, tool=tool, digest=digest, handoff_id=manifest["handoff_id"],
+        )
+
+    assert receipt["status"] == HANDOFF_STATUS_EXPORTED
+    assert (bundle_dir / "export_receipt.json").is_file()
+    assert list((export_root / folder).glob("Result_None_None_MonkeyAEE_SH_*.xls"))
+    assert any("aee_extract_nonzero_rc" in r.message for r in caplog.records)
+
+
+def test_b11_u5_u3_rc255_missing_dec_or_exp_fail_closed(tmp_path, monkeypatch):
+    """② 反例 A：rc=255 + 缺 .DEC / 缺 __exp_main → 502，不转 EXPORTED。"""
+    storage = tmp_path / "center"
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(storage))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_EXPORT_ROOT", str(export_root))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_VENDOR_PATH_PREFIX", "/home/jxtinno/sonic_tinno")
+
+    for mode, handoff_id in (("missing_dec", "hf_u5_miss_dec"), ("missing_exp", "hf_u5_miss_exp")):
+        bundle_dir, manifest, digest, _ = _seed_frozen_manifest(storage, handoff_id=handoff_id)
+        tool = _install_fake_aee_extract(monkeypatch, tmp_path, rc=255, mode=mode)
+        with pytest.raises(JiraHandoffError) as ei:
+            _export_u5(
+                storage,
+                export_root,
+                tool=tool,
+                digest=digest,
+                handoff_id=manifest["handoff_id"],
+                folder=f"MLD_V100_1128_MonkeyAEEinfo_U5_{mode}",
+            )
+        assert ei.value.status_code == 502
+        assert ei.value.code == "handoff_dec_extract_failed"
+        assert "rc=255" in str(ei.value.detail)
+        assert not (bundle_dir / "export_receipt.json").exists()
+        frozen = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert frozen["status"] == HANDOFF_STATUS_PENDING_EXPORT
+
+
+def test_b11_u5_u3_rc255_empty_or_blank_exp_fail_closed(tmp_path, monkeypatch):
+    """③ 反例 B：rc=255 + 0 字节 / 纯空白 __exp_main → fail-closed。"""
+    storage = tmp_path / "center"
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(storage))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_EXPORT_ROOT", str(export_root))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_VENDOR_PATH_PREFIX", "/home/jxtinno/sonic_tinno")
+
+    for mode, handoff_id in (("empty", "hf_u5_empty"), ("blank", "hf_u5_blank")):
+        bundle_dir, manifest, digest, _ = _seed_frozen_manifest(storage, handoff_id=handoff_id)
+        tool = _install_fake_aee_extract(monkeypatch, tmp_path, rc=255, mode=mode)
+        with pytest.raises(JiraHandoffError) as ei:
+            _export_u5(
+                storage,
+                export_root,
+                tool=tool,
+                digest=digest,
+                handoff_id=manifest["handoff_id"],
+                folder=f"MLD_V100_1128_MonkeyAEEinfo_U5_{mode}",
+            )
+        assert ei.value.code == "handoff_dec_extract_failed"
+        assert "rc=255" in str(ei.value.detail)
+        assert not (bundle_dir / "export_receipt.json").exists()
+
+
+def test_b11_u5_u3_rc255_symlink_inside_dec_fail_closed(tmp_path, monkeypatch):
+    """④ 反例 C：rc=255 + *.DEC 内含 symlink → fail-closed。"""
+    storage = tmp_path / "center"
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(storage))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_EXPORT_ROOT", str(export_root))
+    monkeypatch.setenv("STP_JIRA_HANDOFF_VENDOR_PATH_PREFIX", "/home/jxtinno/sonic_tinno")
+
+    bundle_dir, manifest, digest, _ = _seed_frozen_manifest(storage, handoff_id="hf_u5_symlink")
+    tool = _install_fake_aee_extract(monkeypatch, tmp_path, rc=255, mode="symlink_inside")
+    with pytest.raises(JiraHandoffError) as ei:
+        _export_u5(
+            storage, export_root, tool=tool, digest=digest, handoff_id=manifest["handoff_id"],
+        )
+    assert ei.value.code == "handoff_dec_extract_failed"
+    assert "rc=255" in str(ei.value.detail)
+    assert not (bundle_dir / "export_receipt.json").exists()
+    folder = export_root / "MLD_V100_1128_MonkeyAEEinfo_U5"
+    if folder.exists():
+        # 不得把含 symlink 的 .DEC 复制进导出目录
+        for dec in folder.rglob("*.DEC"):
+            assert not any(p.is_symlink() for p in dec.rglob("*"))

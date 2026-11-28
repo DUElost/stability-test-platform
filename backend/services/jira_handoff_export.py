@@ -29,7 +29,11 @@ from typing import Any, Mapping, Optional, Sequence
 
 from sqlalchemy.orm import Session
 
-from backend.agent.contracts.evidence_layout import EvidenceLayoutError, copytree_no_symlinks
+from backend.agent.contracts.evidence_layout import (
+    EvidenceLayoutError,
+    copytree_no_symlinks,
+    resolve_valid_aee_extract_exp_main,
+)
 from backend.core.settings.jira_handoff_export import (
     get_jira_handoff_export_settings,
     reset_jira_handoff_export_settings_cache,
@@ -458,13 +462,21 @@ def resolve_aee_extract_tool(*, override: Optional[str] = None) -> Path:
     return tool
 
 
+def _truncate_aee_extract_output(raw: Optional[bytes], *, limit: int = 500) -> str:
+    return (raw or b"").decode("utf-8", "ignore")[:limit]
+
+
 def _run_aee_extract_isolated(
     dbg_file: Path,
     *,
     tool: Optional[Path],
     work_dir: Path,
 ) -> Path:
-    """在隔离目录对单个 ``.dbg`` 执行补解；返回产出的 ``__exp_main.txt``。"""
+    """在隔离目录对单个 ``.dbg`` 执行补解；返回产出的 ``__exp_main.txt``。
+
+    ``returncode == 0`` 仍须过四重产出核验；``returncode != 0`` 时先记 WARNING，
+    再按产出实证判据判定（#4199 v1.2 B11-U5，兼容 MTK 原厂 ``rc=255`` 满产出）。
+    """
     if _EXTRACT_HOOK is not None:
         return _EXTRACT_HOOK(dbg_file, work_dir)
     if tool is None:
@@ -495,32 +507,21 @@ def _run_aee_extract_isolated(
             f"aee_extract timed out for {dbg_file.name}",
         ) from exc
     if proc.returncode != 0:
+        logger.warning(
+            "aee_extract_nonzero_rc dbg=%s rc=%s stderr=%r stdout=%r",
+            dbg_file.name,
+            proc.returncode,
+            _truncate_aee_extract_output(proc.stderr),
+            _truncate_aee_extract_output(proc.stdout),
+        )
+    try:
+        return resolve_valid_aee_extract_exp_main(work_dir, dbg_name=dbg_file.name)
+    except EvidenceLayoutError as exc:
         raise JiraHandoffError(
             502,
             "handoff_dec_extract_failed",
-            f"aee_extract failed for {dbg_file.name} (rc={proc.returncode})",
-        )
-    # 约定：aee_extract 在同目录产出 <dbg>.DEC/__exp_main.txt
-    dec_dir = work_dir / f"{dbg_file.name}.DEC"
-    if not dec_dir.is_dir():
-        # 有的工具产出去掉 .dbg 后缀的名字；兜底扫描
-        found = list(work_dir.glob("*.DEC"))
-        if len(found) == 1 and found[0].is_dir():
-            dec_dir = found[0]
-        else:
-            raise JiraHandoffError(
-                502,
-                "handoff_dec_extract_failed",
-                f"aee_extract produced no .DEC directory for {dbg_file.name}",
-            )
-    exp_main = dec_dir / "__exp_main.txt"
-    if not exp_main.is_file() or exp_main.is_symlink():
-        raise JiraHandoffError(
-            502,
-            "handoff_dec_extract_failed",
-            f"aee_extract missing __exp_main.txt for {dbg_file.name}",
-        )
-    return exp_main
+            f"aee_extract failed for {dbg_file.name} (rc={proc.returncode}): {exc}",
+        ) from exc
 
 
 def ensure_dec_for_entry(
