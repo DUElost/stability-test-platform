@@ -110,6 +110,11 @@ FAMILY_STEPS: dict[str, dict[str, tuple[str, ...]]] = {
         "disarm": ("monkey_teardown",),
         "disarm_onboarded": ("monkey_teardown",),
     },
+    "usb_net": {
+        "footprint": ("setup_network",),
+        "disarm": ("teardown_network",),
+        "disarm_onboarded": ("teardown_network",),
+    },
 }
 
 # 已接入专项契约（#3723 / #3809 §3.1）。
@@ -141,6 +146,13 @@ def _gpu_disarm_min_wall(params: Mapping[str, Any] | None) -> int:
     p = params or {}
     wait = max(0, int(p.get("wait_device_online_seconds", 600) or 600))
     return wait + 600
+
+
+def _usbnet_disarm_min_wall(params: Mapping[str, Any] | None) -> int:
+    """usb_net teardown_network wall-clock floor (ADR-0066 D4.4 / B13 U2)."""
+    p = params or {}
+    wait = max(0, int(p.get("wait_device_online_seconds", 60) or 60))
+    return wait + 60
 
 
 # Tool identity is family-specific; combination values remain evidence-owned.
@@ -227,6 +239,21 @@ ONBOARDED: dict[str, Any] = {
         ],
         "disarm_budget_seconds": _gpu_disarm_min_wall(None),
         "min_wall_clock_seconds": {"gpu_disarm": _gpu_disarm_min_wall},
+    },
+    "usb_net": {
+        "footprints": (
+            "usb:sys.usb.state == adb (no rndis/ncm composite gadget)",
+            "host_bridge:no active stp-agent-priv usbnet binding for device/session",
+        ),
+        "disarm_script": "teardown_network",
+        "disarm_min_version": "1.0.0",
+        "probe_modes": ("probe", "disarm"),
+        "verified_device_classes": [],
+        # U2 registers usb_net in ONBOARDED (ADR-0066 D4.4 / B13 U2); U4 enables
+        # Agent init_check once teardown_network@1.0.0 & host opt-in capability land.
+        "init_check_enabled": False,
+        "disarm_budget_seconds": _usbnet_disarm_min_wall(None),
+        "min_wall_clock_seconds": {"teardown_network": _usbnet_disarm_min_wall},
     },
 }
 
@@ -562,7 +589,7 @@ def validate_onboarded_teardown_shape(
         finish_steps: list[Mapping[str, Any]] = []
         for s in step_list:
             name = str(s.get("script_name") or script_name_from_step(s) or "")
-            if name not in (disarm_script, finish_script):
+            if not name or name not in (disarm_script, finish_script):
                 continue
             stage = _step_stage(s)
             if stage and stage not in ("teardown",):
@@ -579,7 +606,7 @@ def validate_onboarded_teardown_shape(
             related.append(entry)
             if name == disarm_script:
                 disarm_steps.append(s)
-            if name == finish_script:
+            if finish_script and name == finish_script:
                 finish_steps.append(s)
 
         enabled_disarm = [s for s in disarm_steps if _step_enabled(s)]
@@ -726,6 +753,53 @@ def probe_result_policy(
     registry = ONBOARDED if onboarded is None else onboarded
     evidence = entry.get("evidence")
     evidence = evidence if isinstance(evidence, Mapping) else {}
+    if family == "usb_net":
+        # ADR-0066 D4.4 / B13 U2: usb_net has no device test APK; trust requires
+        # dual-side readback confirming device sys.usb.state == "adb" AND host
+        # bridge detachment via stp-agent-priv usbnet-detach.
+        raw = evidence.get("readback")
+        mode = evidence.get("mode")
+        successful = evidence.get("success") is True
+        kind = evidence.get("kind")
+        device_usb_state = str(evidence.get("device_usb_state") or "").strip().lower()
+        host_bridge_detached = evidence.get("host_bridge_detached") is True
+        observed_usbnet = {
+            "device_usb_state": device_usb_state or None,
+            "host_bridge_detached": evidence.get("host_bridge_detached"),
+            "readback": raw,
+            "kind": kind,
+            "mode": mode,
+            "script_name": script_name or evidence.get("script_name"),
+            "script_version": script_version or evidence.get("script_version"),
+        }
+        reason = ""
+        if not token_valid:
+            reason = "token_invalid"
+        elif mode not in ("probe", "disarm"):
+            reason = "mode_missing"
+        elif device_usb_state != "adb" or not host_bridge_detached:
+            reason = "usbnet_dual_readback_incomplete"
+        elif raw not in PROBE_READBACK_VALUES:
+            reason = "readback_invalid"
+        elif raw != "clear" or kind != "ok":
+            reason = "readback_not_clear"
+        elif mode == "disarm" and not successful:
+            reason = "disarm_not_successful"
+        verified = not reason
+        result = DISARM_RESULT_CONFIRMED if verified else DISARM_RESULT_FAILED
+        code = entry.get("exit_code")
+        if code in PLATFORM_INTERRUPTED_EXIT_CODES:
+            result = DISARM_RESULT_INCOMPLETE
+            verified = False
+            reason = reason or "platform_interrupted"
+        return {
+            "result": result,
+            "trusted": verified,
+            "reason": reason,
+            "expected": [{"device_usb_state": "adb", "host_bridge_detached": True, "readback": "clear", "kind": "ok"}],
+            "observed": observed_usbnet,
+            "report_ref": None,
+        }
     observed = {
         "platform": platform,
         "model": model,

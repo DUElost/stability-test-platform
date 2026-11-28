@@ -2540,6 +2540,8 @@ export interface PlanRunAbortRequest {
   deadline_at?: string | null;
   requested_job_ids?: number[];
   acknowledged_job_ids?: number[];
+  /** ADR-0065 / #4206 U4：主体中止强度（force > graceful，单调不降级）。 */
+  force?: boolean;
 }
 
 /** #300 P3-2: merge_task 落 run_context.upload_summary 的事件上送进度。 */
@@ -3302,6 +3304,13 @@ export interface JobManualActionResult {
   current_failure_streak: number;
 }
 
+/** `POST /plan-runs/{id}/abort` 请求体（`PlanRunAbortIn`）。 */
+export interface PlanRunAbortInput {
+  reason?: string | null;
+  /** ADR-0065 / #4206 U4 */
+  force?: boolean;
+}
+
 export interface PlanRunAbortResult {
   // #1520 写侧正规化：后端模型五键**恒在**（QUEUED/PRECHECK 分支的
   // abort_requested_jobs 由缺键统一为空数组——「空」用值表达，#2089 判据）；
@@ -3311,6 +3320,10 @@ export interface PlanRunAbortResult {
   phase: 'precheck' | 'running' | 'queued';
   aborted_jobs: number[];
   abort_requested_jobs: number[];
+  /** ADR-0065 / #4206 U4 */
+  already_terminal?: boolean;
+  force_requested_before_complete_settled?: boolean;
+  force_unsupported_hosts?: string[];
 }
 
 export interface PlanRunDispatchRetryResult {

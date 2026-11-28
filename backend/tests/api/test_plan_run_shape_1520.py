@@ -190,11 +190,18 @@ class TestWriteSideSummaryBranches:
         data = body["data"]
         assert set(data) == {
             "plan_run_id", "status", "phase", "aborted_jobs", "abort_requested_jobs",
+            # ADR-0065 / #4206 U4：abort 摘要新增三键恒在
+            "already_terminal",
+            "force_requested_before_complete_settled",
+            "force_unsupported_hosts",
         }
         assert data["phase"] == "queued"
         assert data["status"] == "FAILED"
         assert data["aborted_jobs"] == []
         assert data["abort_requested_jobs"] == []
+        assert data["already_terminal"] is False
+        assert data["force_requested_before_complete_settled"] is False
+        assert data["force_unsupported_hosts"] == []
 
     def test_running_branch_abort_keys_present_with_values(
         self, client, auth_headers, db_session, sample_device
@@ -213,9 +220,13 @@ class TestWriteSideSummaryBranches:
         data = resp.json()["data"]
         assert set(data) == {
             "plan_run_id", "status", "phase", "aborted_jobs", "abort_requested_jobs",
+            "already_terminal",
+            "force_requested_before_complete_settled",
+            "force_unsupported_hosts",
         }
         assert data["phase"] == "running"
         assert job.id in data["aborted_jobs"]
+        assert data["force_unsupported_hosts"] == []
 
     def test_archive_trigger_response_keys(
         self, client, auth_headers, db_session, sample_device, monkeypatch

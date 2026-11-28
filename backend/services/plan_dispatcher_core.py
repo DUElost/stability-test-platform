@@ -796,6 +796,12 @@ def build_plan_snapshot(
                 "retry": step.retry,
                 "enabled": step.enabled is not False,
                 "sort_order": step.sort_order,
+                # ADR-0065 / B12 U4：派发快照冻结 atomic_group 与 skip 交付口径，
+                # 供预登记第二层冻结与 Agent 展开校验（U5/U6）消费。
+                "atomic_group": getattr(step, "atomic_group", None),
+                "skip_satisfies_delivery": bool(
+                    getattr(step, "skip_satisfies_delivery", False)
+                ),
             }
             for step in sorted(steps, key=lambda s: (s.stage, s.sort_order))
         ],

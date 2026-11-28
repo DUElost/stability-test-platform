@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import User, require_admin
 from backend.core.database import get_db
+from backend.services.network_return import (
+    audit_override_network_session_sync,
+    request_manual_network_release_sync,
+)
 from backend.services.network_supply import (
     enable_manual_network_supply_sync,
     list_network_sessions_sync,
@@ -32,6 +36,13 @@ class ManualNetworkRenewIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     extend_seconds: int = Field(default=3600, ge=300)
+
+
+class NetworkSessionAuditOverrideIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason_category: str = Field(..., min_length=1, max_length=64)
+    evidence_ref: str = Field(..., min_length=1, max_length=512)
 
 
 @router.get("/sessions", response_model=ApiResponse[list[dict[str, Any]]])
@@ -92,6 +103,50 @@ def renew_manual_network_session(
             db,
             session_id=session_id,
             extend_seconds=body.extend_seconds,
+            admin_username=current_user.username,
+            admin_user_id=current_user.id,
+            request=request,
+        )
+    )
+
+
+@router.post("/sessions/{session_id}/release", response_model=ApiResponse[dict[str, Any]])
+def request_manual_network_release(
+    session_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Initiate force release on a manual network-supply session (marks RELEASING)."""
+    return ok(
+        request_manual_network_release_sync(
+            db,
+            session_id=session_id,
+            admin_username=current_user.username,
+            admin_user_id=current_user.id,
+            request=request,
+        )
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/audit-override",
+    response_model=ApiResponse[dict[str, Any]],
+)
+def audit_override_network_session(
+    session_id: int,
+    body: NetworkSessionAuditOverrideIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Dedicated admin audit-override closing session, usb_net debt & eligible lease."""
+    return ok(
+        audit_override_network_session_sync(
+            db,
+            session_id=session_id,
+            reason_category=body.reason_category,
+            evidence_ref=body.evidence_ref,
             admin_username=current_user.username,
             admin_user_id=current_user.id,
             request=request,

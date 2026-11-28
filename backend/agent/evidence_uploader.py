@@ -34,7 +34,6 @@ try:
         resolve_path_under_aee_local,
     )
     from .contracts.evidence_layout import (
-        EXP_MAIN_NAME,
         EvidenceLayoutError,
         assert_no_symlinks,
         copytree_no_symlinks,
@@ -42,6 +41,7 @@ try:
         list_dbg_files,
         list_dec_exp_mains,
         parse_evidence_rel_path,
+        resolve_valid_aee_extract_exp_main,
     )
     from .tool_cache import resolve_packaged_scan_tool
 except ImportError:  # pragma: no cover - 兼容脚本式导入
@@ -51,7 +51,6 @@ except ImportError:  # pragma: no cover - 兼容脚本式导入
         resolve_path_under_aee_local,
     )
     from agent.contracts.evidence_layout import (
-        EXP_MAIN_NAME,
         EvidenceLayoutError,
         assert_no_symlinks,
         copytree_no_symlinks,
@@ -59,6 +58,7 @@ except ImportError:  # pragma: no cover - 兼容脚本式导入
         list_dbg_files,
         list_dec_exp_mains,
         parse_evidence_rel_path,
+        resolve_valid_aee_extract_exp_main,
     )
     from agent.tool_cache import resolve_packaged_scan_tool
 
@@ -295,25 +295,51 @@ class EvidenceUploader:
         return None
 
     @staticmethod
+    def _purge_new_dec_dirs(work_dir: Path, before_names: set[str]) -> None:
+        """删除本次解包新产生的 ``*.DEC``，避免半成品被误当合法产物发布。"""
+        for path in list(work_dir.glob("*.DEC")):
+            if path.name in before_names:
+                continue
+            try:
+                if path.is_symlink() or path.is_file():
+                    path.unlink(missing_ok=True)
+                elif path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+            except OSError:
+                continue
+
+    @staticmethod
     def _unpack_dbg_in_place(dbg: Path, tool: Path) -> Path:
-        """在 dbg 所在目录调用 aee_extract，产出 ``{dbg.name}.DEC/__exp_main.txt``。"""
+        """在 dbg 所在目录调用 aee_extract，产出 ``{dbg.name}.DEC/__exp_main.txt``。
+
+        ``returncode == 0`` 仍须过四重产出核验；``returncode != 0`` 时先记 WARNING，
+        再按产出实证判据判定（#4199 v1.2 B11-U5，兼容 MTK 原厂 ``rc=255`` 满产出）。
+        """
+        work_dir = dbg.parent
+        before_names = {path.name for path in work_dir.glob("*.DEC")}
         cmd = [str(tool), str(dbg)]
         result = subprocess.run(
             cmd,
-            cwd=str(dbg.parent),
+            cwd=str(work_dir),
             capture_output=True,
             timeout=_AEE_EXTRACT_TIMEOUT_SECONDS,
             check=False,
         )
         if result.returncode != 0:
-            detail = (result.stderr or result.stdout or b"").decode("utf-8", "ignore")[:200]
-            raise EvidenceLayoutError(
-                f"aee_extract failed for {dbg}: rc={result.returncode} {detail}"
+            stderr = (result.stderr or b"").decode("utf-8", "ignore")[:500]
+            stdout = (result.stdout or b"").decode("utf-8", "ignore")[:500]
+            logger.warning(
+                "aee_extract_nonzero_rc dbg=%s rc=%s stderr=%r stdout=%r",
+                dbg.name,
+                result.returncode,
+                stderr,
+                stdout,
             )
-        exp_main = dbg.parent / f"{dbg.name}.DEC" / EXP_MAIN_NAME
-        if exp_main.is_symlink() or not exp_main.is_file():
-            raise EvidenceLayoutError(f"aee_extract produced no {EXP_MAIN_NAME}: {dbg}")
-        return exp_main
+        try:
+            return resolve_valid_aee_extract_exp_main(work_dir, dbg_name=dbg.name)
+        except EvidenceLayoutError:
+            EvidenceUploader._purge_new_dec_dirs(work_dir, before_names)
+            raise
 
     def _materialize_dec_in_temp(self, temp: Path) -> None:
         """方案 A：仅在隔离 temp 内并入 / 生成 ``*.DEC/__exp_main.txt``，不触碰 src。"""

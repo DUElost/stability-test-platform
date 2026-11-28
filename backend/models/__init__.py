@@ -3,6 +3,7 @@ from backend.models.ai_assistant import AiAssistantAction, AiAssistantConfig, Ai
 from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
 from backend.models.device_return_debt import DeviceReturnDebt
+from backend.models.finishing_guard_admission import FinishingGuardAdmission
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.network_session import DeviceNetworkSession
 from backend.models.host import Device, Host
@@ -57,6 +58,7 @@ __all__ = [
     "DeviceLease",
     "DeviceNetworkSession",
     "DeviceReturnDebt",
+    "FinishingGuardAdmission",
     "DeviceLogEvent",
     "CompatRerun",
     "DeliveryVersion",
