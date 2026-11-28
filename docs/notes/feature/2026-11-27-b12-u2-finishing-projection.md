@@ -23,6 +23,9 @@ Class: feature
 7. 同 PR 同步 `frontend/src/utils/api/types.ts` 可选字段（B6）；契约 §5.1 第 4
    条拆成一句一规则（B7）。
 8. Minimap 保持精确 7 字段；仅扩展词表含 `"finishing"`。
+9. finishing 投影对 StepTrace 走 `attach_finishing_trace_hints` 一次预取，避免
+   `/devices` 在 abort 覆盖路径上 N+1；同 PR 补登记 `monkey_check@2.0.4`
+   `max_offline_seconds`（rebase 汇入离线 fail 后 informational 红项）。
 
 ## Alternatives
 
@@ -32,9 +35,10 @@ Class: feature
 
 ## Verification
 
-- `scripts/run_pytest.py backend/tests/services/test_finishing_projection_u2_4206.py backend/tests/api/test_finishing_projection_api_u2_4206.py backend/tests/services/test_plan_run_devices.py backend/tests/services/test_host_upgrade_gate.py backend/tests/api/test_plan_runs_api.py tests/test_api_response_shape_contract.py -q`
-- 独立复核夹具（B1–B5）
-- `scripts/run_gates.py check:quick`
+- `scripts/run_pytest.py backend/tests/services/test_finishing_projection_u2_4206.py backend/tests/api/test_finishing_projection_api_u2_4206.py backend/tests/services/test_host_upgrade_gate.py backend/tests/api/test_plan_runs_api.py tests/test_api_response_shape_contract.py::test_model_fields_are_declared_in_ts -q` → 29 passed
+- `scripts/run_pytest.py backend/tests/api/test_disarm_policy_u8_3752.py::test_devices_endpoint_query_count_is_constant_for_unguarded_jobs backend/tests/services/test_param_docs_content.py::test_head_version_documents_every_key_the_script_reads[monkey_check] -q` → 2 passed（N+1 批量 StepTrace + `max_offline_seconds` 登记）
+- 独立复核夹具 `/tmp/test_u2_review_b12u2.py` → 25 passed
+- `scripts/run_gates.py check:quick` → 16 gates OK
 
 ## Revisit
 

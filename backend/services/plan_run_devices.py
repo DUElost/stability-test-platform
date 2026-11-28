@@ -168,32 +168,20 @@ def _teardown_has_disarm_role_steps(pipeline_def: object) -> bool:
     return False
 
 
-def _job_has_teardown_started(job: Any, db: Optional[Session]) -> bool:
-    """真实阶段：teardown STARTED 足迹，或单元测试 stub ``lifecycle_stage``。"""
-    if getattr(job, "lifecycle_stage", None) == "teardown":
-        return True
-    if getattr(job, "execution_state", None) == EXECUTING_DISARM:
-        return True
-    job_id = getattr(job, "id", None)
-    if db is None or job_id is None:
-        return False
-    row = db.execute(
-        select(StepTrace.id).where(
-            StepTrace.job_id == int(job_id),
-            StepTrace.stage == "teardown",
-            StepTrace.event_type == "STARTED",
-        ).limit(1)
-    ).first()
-    return row is not None
-
-
-def _footprint_families_for_job(job: Any, db: Optional[Session]) -> set[str]:
+def _seed_footprint_families_from_disarm_results(job: Any) -> set[str]:
     families: set[str] = set()
     results = getattr(job, "disarm_results", None)
     if isinstance(results, dict):
         families.update(str(k) for k in results.keys())
-    job_id = getattr(job, "id", None)
-    if db is None or job_id is None:
+    return families
+
+
+def _footprint_families_from_init_traces(
+    job: Any,
+    init_started_step_ids: Sequence[str],
+) -> set[str]:
+    families = _seed_footprint_families_from_disarm_results(job)
+    if not init_started_step_ids:
         return families
     init_by_id: dict[str, dict] = {}
     for step in _init_steps(getattr(job, "pipeline_def", None)):
@@ -202,14 +190,7 @@ def _footprint_families_for_job(job: Any, db: Optional[Session]) -> set[str]:
         key = str(step.get("step_id") or step.get("step_key") or "")
         if key:
             init_by_id[key] = step
-    rows = db.execute(
-        select(StepTrace.step_id, StepTrace.stage, StepTrace.event_type).where(
-            StepTrace.job_id == int(job_id),
-        )
-    ).all()
-    for step_id, stage, event_type in rows:
-        if stage != "init" or event_type != "STARTED":
-            continue
+    for step_id in init_started_step_ids:
         step = init_by_id.get(str(step_id or ""))
         if step is None:
             continue
@@ -217,6 +198,81 @@ def _footprint_families_for_job(job: Any, db: Optional[Session]) -> set[str]:
         if fam:
             families.add(fam)
     return families
+
+
+def attach_finishing_trace_hints(db: Optional[Session], jobs: Sequence[Any]) -> None:
+    """一次预取 StepTrace，避免 finishing 投影对每 Job 反复查询（N+1）。"""
+    pending: list[Any] = []
+    for job in jobs:
+        if getattr(job, "_finishing_trace_hints_ready", False):
+            continue
+        pending.append(job)
+    if not pending:
+        return
+
+    teardown_started_ids: set[int] = set()
+    init_started_by_job: dict[int, list[str]] = {}
+    job_ids = [
+        int(j.id) for j in pending if getattr(j, "id", None) is not None
+    ]
+    if db is not None and job_ids:
+        rows = db.execute(
+            select(
+                StepTrace.job_id, StepTrace.step_id, StepTrace.stage, StepTrace.event_type,
+            ).where(
+                StepTrace.job_id.in_(job_ids),
+                StepTrace.event_type == "STARTED",
+                StepTrace.stage.in_(("teardown", "init")),
+            )
+        ).all()
+        for job_id, step_id, stage, _event in rows:
+            jid = int(job_id)
+            if stage == "teardown":
+                teardown_started_ids.add(jid)
+            elif stage == "init":
+                init_started_by_job.setdefault(jid, []).append(str(step_id or ""))
+
+    for job in pending:
+        jid = getattr(job, "id", None)
+        started = (
+            getattr(job, "lifecycle_stage", None) == "teardown"
+            or getattr(job, "execution_state", None) == EXECUTING_DISARM
+            or (jid is not None and int(jid) in teardown_started_ids)
+        )
+        job._finishing_teardown_started = bool(started)
+        job._finishing_footprint_families = _footprint_families_from_init_traces(
+            job,
+            init_started_by_job.get(int(jid), []) if jid is not None else [],
+        )
+        job._finishing_trace_hints_ready = True
+
+
+def _job_has_teardown_started(job: Any, db: Optional[Session]) -> bool:
+    """真实阶段：teardown STARTED 足迹，或单元测试 stub ``lifecycle_stage``。"""
+    if getattr(job, "_finishing_trace_hints_ready", False):
+        return bool(getattr(job, "_finishing_teardown_started", False))
+    if getattr(job, "lifecycle_stage", None) == "teardown":
+        return True
+    if getattr(job, "execution_state", None) == EXECUTING_DISARM:
+        return True
+    job_id = getattr(job, "id", None)
+    if db is None or job_id is None:
+        return False
+    attach_finishing_trace_hints(db, [job])
+    return bool(getattr(job, "_finishing_teardown_started", False))
+
+
+def _footprint_families_for_job(job: Any, db: Optional[Session]) -> set[str]:
+    if getattr(job, "_finishing_trace_hints_ready", False):
+        cached = getattr(job, "_finishing_footprint_families", None)
+        return set(cached) if isinstance(cached, set) else set(cached or ())
+    families = _seed_footprint_families_from_disarm_results(job)
+    job_id = getattr(job, "id", None)
+    if db is None or job_id is None:
+        return families
+    attach_finishing_trace_hints(db, [job])
+    cached = getattr(job, "_finishing_footprint_families", None)
+    return set(cached) if isinstance(cached, set) else set(cached or ())
 
 
 def _is_pure_collection_teardown(
@@ -570,6 +626,7 @@ def aggregate_plan_run_finishing(
                 select(Host).where(Host.id.in_(host_ids))
             ).scalars().all():
                 host_by_id[host.id] = host
+    attach_finishing_trace_hints(db, jobs)
     finishing_jobs: list[JobFinishingProjection] = []
     other_active = 0
     for job in jobs:
@@ -932,10 +989,10 @@ def _load_lightweight_plan_run_rows(
 
     coord_heartbeat_by_host = _load_coord_heartbeats(db, run_id) if include_stuck else {}
     light_rows: List[_LightPlanRunRow] = []
-
+    row_views: List[Any] = []
     for row in raw_rows:
-        # Row proxies need ``id`` for abort coverage / finishing projection.
-        row_view = SimpleNamespace(
+        # Row proxies need ``id``/``device_id`` for abort coverage / finishing / U1 deadline.
+        row_views.append(SimpleNamespace(
             id=int(row.job_id),
             device_id=int(row.device_id),
             status=row.status,
@@ -949,7 +1006,10 @@ def _load_lightweight_plan_run_rows(
             host_id=row.host_id,
             host_status=row.host_status,
             host_last_heartbeat=row.host_last_heartbeat,
-        )
+        ))
+    attach_finishing_trace_hints(db, row_views)
+
+    for row, row_view in zip(raw_rows, row_views, strict=True):
         dev_stub = (
             _LightweightDeviceStub(
                 adb_state=row.adb_state,
@@ -1338,6 +1398,8 @@ def _hydrate_device_matrix_items(
             JobInstance.id.in_(ordered_job_ids),
         )
     ).all()
+    jobs = [j for j, *_rest in joined]
+    attach_finishing_trace_hints(db, jobs)
     by_job_id: Dict[int, DeviceMatrixItem] = {}
     for j, dev, host_st, host_hb, lease_job_id in joined:
         by_job_id[int(j.id)] = build_device_matrix_item(
