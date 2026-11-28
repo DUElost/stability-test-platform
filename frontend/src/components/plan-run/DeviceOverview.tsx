@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/table';
 import { ClickableRow } from '@/components/ui/clickable-row';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { FILTER_CHIP, PANEL, SEGMENTED, TEXT } from '@/design-system';
+import { PANEL, SEGMENTED, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import DeviceFilterBar from './DeviceFilterBar';
 import SectionHeader from './SectionHeader';
@@ -710,23 +710,6 @@ export default function DeviceOverview({
           onSearchQueryChange={onSearchQueryChange}
           hostLabelFor={(hostId) => hostLabelFor(hostId)}
         />
-        {/* DeviceFilterBar 不在 U3 scope；KPI 切到 finishing 时在此补激活态指示。 */}
-        {statusFilter === 'finishing' && (
-          <div className="flex flex-wrap items-center gap-1 border-b bg-card px-3 py-1.5">
-            <button
-              type="button"
-              data-testid="device-status-filter-finishing-active"
-              onClick={() => onStatusFilterChange?.('all')}
-              className={cn('rounded-md px-2 py-0.5 text-xs transition', FILTER_CHIP.active)}
-              title="点击清除收尾中筛选"
-            >
-              收尾中
-              <span className={cn('ml-1', FILTER_CHIP.count)}>
-                {byStatus.finishing ?? 0}
-              </span>
-            </button>
-          </div>
-        )}
         {/* Body */}
         {activeError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
