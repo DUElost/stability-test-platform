@@ -1,4 +1,4 @@
-"""Resource pool CRUD + allocation status."""
+"""Resource pool CRUD + allocation status (ADR-0066 unified network supply)."""
 
 from __future__ import annotations
 
@@ -11,17 +11,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse
-from backend.api.routes.auth import get_current_active_user, require_admin, User
-from backend.services.audit_writer import record_audit_async
+from backend.api.routes.auth import User, get_current_active_user, require_admin
 from backend.core.database import get_async_db
+from backend.models.network_session import DeviceNetworkSession
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
-from backend.services.resource_pool import get_pool_load_summary, public_pool_config
+from backend.services.audit_writer import record_audit_async
+from backend.services.resource_pool import (
+    VALID_EGRESSES,
+    VALID_RESOURCE_TYPES,
+    get_pool_load_summary,
+    pool_egress,
+    public_pool_config,
+    validate_resource_pool_spec,
+)
 
 router = APIRouter(prefix="/api/v1/resource-pools", tags=["resource-pools"])
-
-# #955: 普通用户可选的池列表不得携带凭据。白名单只放非机密展示字段——
-# 保守方向：白名单外的新增 config 键默认不返回（防未来机密字段泄漏）。
-_PUBLIC_CONFIG_KEYS = ("ssid", "band", "router_ip", "mac_filter")
 
 
 class ResourcePoolIn(BaseModel):
@@ -75,41 +79,82 @@ async def list_pools(
 @router.get("/available")
 async def list_available_pools(
     resource_type: Optional[str] = None,
+    required_type: Optional[str] = None,
+    required_egress: Optional[str] = None,
     db: AsyncSession = Depends(get_async_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """#955: 普通登录用户可选池列表——只含 active 池，config 白名单剥密。
+    """#955 / ADR-0066 D3.5: 普通登录用户可选网络供给池列表——只含 active 池，config 白名单剥密。
 
-    管理接口（GET /resource-pools）保持 admin + 完整 config（含凭据）；
-    Plan 执行的 WiFi 选择器用本端点，不泄漏 password 等机密。
+    支持 ``resource_type``（兼容）、``required_type`` 与 ``required_egress`` 交集过滤，
+    自动排除 Phase 1 禁用的 ``usb_net + vpn`` 组合。
     """
+    req_type = (required_type or "").strip() or None
+    req_egress = (required_egress or "").strip() or None
+    res_type = (resource_type or "").strip() or None
+
+    if req_type is not None and req_type not in VALID_RESOURCE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_REQUIRED_TYPE",
+                "message": f"Unsupported required_type {req_type!r}",
+            },
+        )
+    if req_egress is not None and req_egress not in VALID_EGRESSES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_REQUIRED_EGRESS",
+                "message": f"Unsupported required_egress {req_egress!r}",
+            },
+        )
+
+    # Intersection of resource_type and required_type
+    effective_type: Optional[str] = res_type or req_type
+    if res_type and req_type and res_type != req_type:
+        return ApiResponse(data=[])
+
     clauses = [ResourcePool.is_active.is_(True)]
-    if resource_type:
-        clauses.append(ResourcePool.resource_type == resource_type)
+    if effective_type:
+        clauses.append(ResourcePool.resource_type == effective_type)
+    else:
+        clauses.append(ResourcePool.resource_type.in_(sorted(VALID_RESOURCE_TYPES)))
+
     result = await db.execute(
         select(ResourcePool).where(*clauses).order_by(ResourcePool.id)
     )
     pools = result.scalars().all()
-    return ApiResponse(data=[
-        ResourcePoolOut(
-            id=p.id,
-            name=p.name,
-            resource_type=p.resource_type,
-            config=public_pool_config(p.config),
-            max_concurrent_devices=p.max_concurrent_devices,
-            host_group=p.host_group,
-            is_active=p.is_active,
+
+    filtered = []
+    for p in pools:
+        egress = pool_egress(p.config)
+        # Phase 1 hard gate: never advertise usb_net + vpn
+        if p.resource_type == "usb_net" and egress == "vpn":
+            continue
+        if req_egress is not None and egress != req_egress:
+            continue
+        filtered.append(
+            ResourcePoolOut(
+                id=p.id,
+                name=p.name,
+                resource_type=p.resource_type,
+                config=public_pool_config(p.config),
+                max_concurrent_devices=p.max_concurrent_devices,
+                host_group=p.host_group,
+                is_active=p.is_active,
+            )
         )
-        for p in pools
-    ])
+    return ApiResponse(data=filtered)
 
 
 @router.get("/loads")
 async def pool_loads(
+    resource_type: Optional[str] = None,
     db: AsyncSession = Depends(get_async_db),
     _current_user: User = Depends(require_admin),
 ):
-    summary = await get_pool_load_summary(db)
+    summary = await get_pool_load_summary(db, resource_type=resource_type)
     return ApiResponse(data=[ResourcePoolLoad(**s) for s in summary])
 
 
@@ -132,10 +177,11 @@ async def create_pool(
     current_user: User = Depends(require_admin),
     request: Request = None,
 ):
+    validated_config = validate_resource_pool_spec(body.resource_type, body.config)
     pool = ResourcePool(
         name=body.name,
-        resource_type=body.resource_type,
-        config=body.config,
+        resource_type=body.resource_type.strip(),
+        config=validated_config,
         max_concurrent_devices=body.max_concurrent_devices,
         host_group=body.host_group,
         is_active=body.is_active,
@@ -147,7 +193,12 @@ async def create_pool(
         action="create",
         resource_type="resource_pool",
         resource_id=pool.id,
-        details={"name": pool.name, "resource_type": pool.resource_type, "host_group": pool.host_group},
+        details={
+            "name": pool.name,
+            "resource_type": pool.resource_type,
+            "egress": pool_egress(pool.config),
+            "host_group": pool.host_group,
+        },
         user_id=current_user.id,
         username=current_user.username,
         request=request,
@@ -169,9 +220,10 @@ async def update_pool(
     if not pool:
         raise HTTPException(status_code=404, detail="Resource pool not found")
 
+    validated_config = validate_resource_pool_spec(body.resource_type, body.config)
     pool.name = body.name
-    pool.resource_type = body.resource_type
-    pool.config = body.config
+    pool.resource_type = body.resource_type.strip()
+    pool.config = validated_config
     pool.max_concurrent_devices = body.max_concurrent_devices
     pool.host_group = body.host_group
     pool.is_active = body.is_active
@@ -180,7 +232,12 @@ async def update_pool(
         action="update",
         resource_type="resource_pool",
         resource_id=pool.id,
-        details={"name": pool.name, "resource_type": pool.resource_type, "host_group": pool.host_group},
+        details={
+            "name": pool.name,
+            "resource_type": pool.resource_type,
+            "egress": pool_egress(pool.config),
+            "host_group": pool.host_group,
+        },
         user_id=current_user.id,
         username=current_user.username,
         request=request,
@@ -216,12 +273,29 @@ async def delete_pool(
             detail=f"资源池有 {alloc_count} 条分配记录，不可删除",
         )
 
+    session_count = (
+        await db.execute(
+            select(func.count(DeviceNetworkSession.id)).where(
+                DeviceNetworkSession.resource_pool_id == pool_id,
+            )
+        )
+    ).scalar() or 0
+    if session_count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"资源池有 {session_count} 条受管供网会话记录，不可删除",
+        )
+
     await record_audit_async(
         db,
         action="delete",
         resource_type="resource_pool",
         resource_id=pool.id,
-        details={"name": pool.name, "resource_type": pool.resource_type, "host_group": pool.host_group},
+        details={
+            "name": pool.name,
+            "resource_type": pool.resource_type,
+            "host_group": pool.host_group,
+        },
         user_id=current_user.id,
         username=current_user.username,
         request=request,

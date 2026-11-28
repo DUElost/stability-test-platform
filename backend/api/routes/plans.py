@@ -26,6 +26,8 @@ from backend.core.device_serial import is_placeholder_serial
 from backend.core.database import get_db
 from backend.agent.contracts.pipeline_validator import validate_pipeline_def
 from backend.agent.contracts import device_return as _device_return_contract
+from backend.models.device_lease import DeviceLease
+from backend.models.enums import LeaseStatus, LeaseType
 from backend.models.host import Device
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
@@ -37,8 +39,9 @@ from backend.services.script_params import merge_effective_params
 from backend.services.plan_dispatcher_core import apply_step_timing_fields
 from backend.services.vbus_flash_admission import is_vbus_flash_plan_steps
 from backend.services.plan_wifi import (
-    require_active_wifi_pool,
-    require_wifi_pool_matches_plan,
+    require_network_pool_matches_plan,
+    resolve_requested_network_pool_id,
+    validate_plan_steps_network_compatibility,
 )
 from backend.services.plan_confirmation import (
     PlanConfirmationChanged,
@@ -241,10 +244,10 @@ class PlanRunTrigger(BaseModel):
     device_ids: List[int] = Field(min_length=1)
     # Optional operator note stored in PlanRun.run_context["note"] (no DB column).
     note: Optional[str] = Field(default=None, max_length=500)
-    # Optional per-execution WiFi choice. ``None`` = do not connect (default).
-    # Credentials are NOT accepted inline — the operator picks a pre-configured
-    # ``resource_pool`` (resource_type='wifi'), so ssid/password live in exactly
-    # one place instead of being copied into every run's stored payload.
+    # Optional per-execution network supply pool choice (ADR-0066 D3.1).
+    # ``wifi_pool_id`` is preserved as a backward-compatible alias; passing both
+    # with different values returns 400.
+    network_pool_id: Optional[int] = Field(default=None, gt=0)
     wifi_pool_id: Optional[int] = Field(default=None, gt=0)
     # #3653 §3.2：可选。缺省/NULL 不比较；空串或格式错误为 422。
     confirmation_fingerprint: Optional[str] = None
@@ -916,6 +919,7 @@ def create_plan(
     _validate_onboarded_teardown(payload.steps)
     # §3.3.2 C：登记预算须在通用 lifecycle 对 0/负数抢先拦截之前执行
     _validate_onboarded_wall_clock(payload.steps, db)
+    validate_plan_steps_network_compatibility(payload.steps, as_unprocessable=True)
     _validate_assembled_lifecycle(
         payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds,
         payload.barrier_timeout_seconds, payload.barrier_max_wait_seconds,
@@ -1072,6 +1076,7 @@ def append_chain_tail(
     _validate_stall_seconds_capability(payload.steps, db)
     _validate_onboarded_teardown(payload.steps)
     _validate_onboarded_wall_clock(payload.steps, db)
+    validate_plan_steps_network_compatibility(payload.steps, as_unprocessable=True)
     _validate_assembled_lifecycle(
         payload.steps, None, None, None, None,
     )
@@ -1347,6 +1352,7 @@ def update_plan(
         _validate_stall_seconds_capability(payload.steps, db)
         _validate_onboarded_teardown(payload.steps)
         _validate_onboarded_wall_clock(payload.steps, db)
+        validate_plan_steps_network_compatibility(payload.steps, as_unprocessable=True)
         _validate_assembled_lifecycle(
             payload.steps,
             plan.patrol_interval_seconds,
@@ -1527,7 +1533,29 @@ def _dispatch_warnings(db: Session, device_ids: list[int]) -> list[dict]:
     )
     warnings: list[dict] = []
     debt_ids = devices_with_open_debt_sync(db, device_ids)
+    manual_net_holders = {
+        row.device_id: row.holder
+        for row in db.execute(
+            select(DeviceLease.device_id, DeviceLease.holder).where(
+                DeviceLease.device_id.in_(device_ids),
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+                DeviceLease.lease_type == LeaseType.MAINTENANCE.value,
+                DeviceLease.reason == "manual_network_supply",
+            )
+        ).all()
+    }
     for dev_id, serial, host_id, status in rows:
+        if dev_id in manual_net_holders:
+            holder = manual_net_holders[dev_id] or "unknown"
+            warnings.append({
+                "device_id": dev_id, "serial": serial, "host_id": host_id,
+                "code": "manual_network_supply_occupied",
+                "holder": holder,
+                "message": (
+                    f"设备正由管理员 {holder} 手动调试供网占用——"
+                    "请先在「网络供给」页释放后再派发（ADR-0066 D2.5）"
+                ),
+            })
         if dev_id in debt_ids:
             warnings.append({
                 "device_id": dev_id, "serial": serial, "host_id": host_id,
@@ -1559,9 +1587,10 @@ def preview_plan_run(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    if payload.wifi_pool_id is not None:
-        require_active_wifi_pool(db, payload.wifi_pool_id)
-        require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
+    pool_id, alias_name = resolve_requested_network_pool_id(
+        payload.network_pool_id, payload.wifi_pool_id,
+    )
+    require_network_pool_matches_plan(db, plan_id, pool_id, alias_name=alias_name)
     try:
         preview = preview_plan_dispatch_sync(
             plan_id=plan_id,
@@ -1601,10 +1630,18 @@ def run_plan(
             plan_id, len(payload.device_ids), len(dispatch_warnings),
             dispatch_warnings[0].get("code"),
         )
-    if payload.wifi_pool_id is not None:
-        require_active_wifi_pool(db, payload.wifi_pool_id)
-        require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
-        run_context["wifi_pool_id"] = payload.wifi_pool_id
+    pool_id, alias_name = resolve_requested_network_pool_id(
+        payload.network_pool_id, payload.wifi_pool_id,
+    )
+    pool = require_network_pool_matches_plan(
+        db, plan_id, pool_id, alias_name=alias_name,
+    )
+    if pool_id is not None:
+        run_context["network_pool_id"] = pool_id
+        if payload.wifi_pool_id is not None or (
+            pool is not None and pool.resource_type == "wifi"
+        ):
+            run_context["wifi_pool_id"] = pool_id
 
     try:
         pr = prepare_plan_run(

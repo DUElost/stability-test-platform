@@ -762,9 +762,13 @@ TOOLS: dict[str, ToolSpec] = {
                     "description": "目标设备 id 列表（须唯一）",
                 },
                 "note": {"type": "string", "description": "可选备注，写入 run_context.note"},
+                "network_pool_id": {
+                    "type": "integer",
+                    "description": "含 setup_network/connect_wifi/monkey_setup 步骤时可选网络供给池 id（必须显式指定，不自动推断）",
+                },
                 "wifi_pool_id": {
                     "type": "integer",
-                    "description": "含 connect_wifi/monkey_setup 步骤时可选 WiFi 资源池 id",
+                    "description": "network_pool_id 的兼容别名（含 connect_wifi/monkey_setup 步骤时可选 WiFi 资源池 id）",
                 },
             }, ["plan_id", "device_ids"]),
             tier="T2", kind="service",

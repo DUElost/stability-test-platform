@@ -7,7 +7,8 @@ sync/async wrappers only retain I/O differences.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +16,12 @@ from sqlalchemy.orm import Session
 from backend.agent.contracts.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.host import Device, Host
 from backend.models.plan import Plan, PlanStep
+from backend.services.resource_pool import (
+    DEFAULT_EGRESS,
+    VALID_EGRESSES,
+    VALID_RESOURCE_TYPES,
+    pool_egress,
+)
 from backend.services.script_params import merge_effective_params
 
 
@@ -363,6 +370,143 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
 
 
 _WIFI_CONSUMER_SCRIPT_NAMES = frozenset({"connect_wifi", "monkey_setup"})
+_NETWORK_CONSUMER_SCRIPT_NAMES = frozenset(
+    {"connect_wifi", "monkey_setup", "setup_network"}
+)
+
+
+@dataclass(frozen=True)
+class PlanNetworkRequirements:
+    """Intersection of enabled network-supply steps in a Plan or lifecycle (ADR-0066 D3.3)."""
+
+    has_network_steps: bool
+    has_setup_network: bool
+    has_connect_wifi: bool
+    has_monkey_setup: bool
+    allowed_types: frozenset[str]
+    allowed_egresses: frozenset[str]
+    setup_network_required: bool
+    conflict_reason: Optional[str] = None
+
+    @property
+    def is_legacy_only(self) -> bool:
+        return self.has_network_steps and not self.has_setup_network
+
+    @property
+    def is_contradictory(self) -> bool:
+        return self.conflict_reason is not None or (
+            self.has_network_steps
+            and (not self.allowed_types or not self.allowed_egresses)
+        )
+
+
+def _compute_network_requirements(
+    enabled_steps: Iterable[tuple[str, dict[str, Any]]],
+) -> PlanNetworkRequirements:
+    has_setup_network = False
+    has_connect_wifi = False
+    has_monkey_setup = False
+    setup_required = False
+    allowed_types: set[str] = set(VALID_RESOURCE_TYPES)
+    allowed_egresses: set[str] = set(VALID_EGRESSES)
+    conflict_reason: Optional[str] = None
+
+    for script_name, params in enabled_steps:
+        if script_name == "setup_network":
+            has_setup_network = True
+            raw_type = (params.get("required_type") or "").strip()
+            if raw_type == "":
+                step_types = set(VALID_RESOURCE_TYPES)
+            elif raw_type in VALID_RESOURCE_TYPES:
+                step_types = {raw_type}
+            else:
+                step_types = set()
+                conflict_reason = f"unsupported setup_network required_type {raw_type!r}"
+            raw_egress = params.get("required_egress")
+            egress_val = DEFAULT_EGRESS if raw_egress in (None, "") else str(raw_egress).strip()
+            if egress_val in VALID_EGRESSES:
+                step_egresses = {egress_val}
+            else:
+                step_egresses = set()
+                conflict_reason = f"unsupported setup_network required_egress {egress_val!r}"
+            if bool(params.get("required", False)):
+                setup_required = True
+            allowed_types &= step_types
+            allowed_egresses &= step_egresses
+        elif script_name == "connect_wifi":
+            has_connect_wifi = True
+            allowed_types &= {"wifi"}
+            allowed_egresses &= set(VALID_EGRESSES)
+        elif script_name == "monkey_setup":
+            has_monkey_setup = True
+            allowed_types &= {"wifi"}
+            allowed_egresses &= set(VALID_EGRESSES)
+
+    has_network = has_setup_network or has_connect_wifi or has_monkey_setup
+    if has_network and conflict_reason is None:
+        if not allowed_types:
+            conflict_reason = (
+                "conflicting network supply types across enabled steps "
+                "(e.g. setup_network(required_type='usb_net') combined with connect_wifi/monkey_setup)"
+            )
+        elif not allowed_egresses:
+            conflict_reason = (
+                "conflicting network egress policies across enabled steps "
+                "(direct vs vpn)"
+            )
+        elif allowed_types == {"usb_net"} and allowed_egresses == {"vpn"}:
+            conflict_reason = (
+                "network step intersection requires usb_net + vpn which is disabled in Phase 1"
+            )
+
+    return PlanNetworkRequirements(
+        has_network_steps=has_network,
+        has_setup_network=has_setup_network,
+        has_connect_wifi=has_connect_wifi,
+        has_monkey_setup=has_monkey_setup,
+        allowed_types=frozenset(allowed_types) if has_network else frozenset(),
+        allowed_egresses=frozenset(allowed_egresses) if has_network else frozenset(),
+        setup_network_required=setup_required,
+        conflict_reason=conflict_reason,
+    )
+
+
+def analyze_plan_steps_network_requirements(
+    steps: Iterable[Any],
+) -> PlanNetworkRequirements:
+    """Compute intersection requirements from ``PlanStep`` or ``PlanStepIn`` objects."""
+    items: list[tuple[str, dict[str, Any]]] = []
+    for step in steps:
+        if getattr(step, "enabled", True) is False:
+            continue
+        script_name = getattr(step, "script_name", "") or ""
+        if script_name in _NETWORK_CONSUMER_SCRIPT_NAMES:
+            params = getattr(step, "params", None)
+            items.append((script_name, dict(params) if isinstance(params, dict) else {}))
+    return _compute_network_requirements(items)
+
+
+def _script_name_from_action(action: str | None) -> str:
+    raw = (action or "").strip()
+    if raw.startswith("script:"):
+        return raw[len("script:"):]
+    return raw
+
+
+def analyze_lifecycle_network_requirements(lifecycle: dict) -> PlanNetworkRequirements:
+    """Compute intersection requirements from a materialized ``lifecycle`` dict."""
+    items: list[tuple[str, dict[str, Any]]] = []
+    for _, step in iter_lifecycle_steps({"lifecycle": lifecycle}):
+        script_name = _script_name_from_action(step.get("action"))
+        if script_name in _NETWORK_CONSUMER_SCRIPT_NAMES:
+            params = step.get("params")
+            items.append((script_name, dict(params) if isinstance(params, dict) else {}))
+    return _compute_network_requirements(items)
+
+
+def plan_steps_consumes_network(steps: Iterable[Any]) -> bool:
+    """True when any enabled step consumes network supply (setup_network/connect_wifi/monkey_setup)."""
+    return analyze_plan_steps_network_requirements(steps).has_network_steps
 
 
 def plan_steps_consumes_wifi(steps: list[PlanStep]) -> bool:
@@ -383,6 +527,16 @@ def plan_steps_has_connect_wifi(steps: list[PlanStep]) -> bool:
         if step.script_name == "connect_wifi":
             return True
     return False
+
+
+def lifecycle_consumes_network(lifecycle: dict) -> bool:
+    """True when any lifecycle step targets a network-supply script."""
+    return analyze_lifecycle_network_requirements(lifecycle).has_network_steps
+
+
+def lifecycle_has_setup_network(lifecycle: dict) -> bool:
+    """True when any lifecycle step targets ``script:setup_network``."""
+    return analyze_lifecycle_network_requirements(lifecycle).has_setup_network
 
 
 def lifecycle_consumes_wifi(lifecycle: dict) -> bool:
@@ -450,6 +604,47 @@ def inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
                 wifi_cfg["password"] = password
             params["wifi"] = wifi_cfg
             step["params"] = params
+    return pipeline
+
+
+def inject_network_params(pipeline: dict, network_params: dict | None) -> dict:
+    """Inject allocated network-supply pool parameters into ``setup_network`` & legacy steps.
+
+    - For ``wifi`` pools: populates ``setup_network`` plus legacy ``connect_wifi`` /
+      ``monkey_setup`` (preserving ``inject_wifi_params`` semantics).
+    - For ``usb_net`` pools: populates ``setup_network`` only (never injects into
+      legacy WiFi steps).
+    """
+    if not network_params:
+        return pipeline
+    resource_type = (network_params.get("resource_type") or "wifi").strip()
+    egress = pool_egress(network_params)
+    pool_id = network_params.get("pool_id")
+    pool_name = network_params.get("pool_name", "")
+
+    if resource_type == "wifi":
+        inject_wifi_params(pipeline, network_params)
+
+    for _, step in iter_lifecycle_steps(pipeline):
+        if _script_name_from_action(step.get("action")) != "setup_network":
+            continue
+        params = dict(step.get("params") or {})
+        params["resource_type"] = resource_type
+        params["egress"] = egress
+        if pool_id is not None:
+            params["network_pool_id"] = pool_id
+        if pool_name:
+            params["pool_name"] = pool_name
+        if resource_type == "wifi":
+            if network_params.get("ssid") and not params.get("ssid"):
+                params["ssid"] = network_params["ssid"]
+            if network_params.get("password") and not params.get("password"):
+                params["password"] = network_params["password"]
+        elif resource_type == "usb_net":
+            for key in ("bridge_name", "subnet_cidr", "max_devices_per_host"):
+                if network_params.get(key) is not None:
+                    params[key] = network_params[key]
+        step["params"] = params
     return pipeline
 
 
